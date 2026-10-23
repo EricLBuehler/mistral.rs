@@ -2072,7 +2072,7 @@ METAL_FUNC void qvm_impl(const device uint32_t *w, const device T *scales,
 
 template <typename T, const int group_size, const int bits,
           const bool aligned_N, const int BM = 32, const int BK = 32,
-          const int BN = 32>
+          const int BN = 32, const int WM = 2, const int WN = 2>
 METAL_FUNC void qmm_t_impl(const device uint32_t *w, const device T *scales,
                            const device T *biases, const device T *x,
                            device T *y, threadgroup T *Xs, threadgroup T *Ws,
@@ -2087,8 +2087,6 @@ METAL_FUNC void qmm_t_impl(const device uint32_t *w, const device T *scales,
 
   (void)lid;
 
-  constexpr int WM = 2;
-  constexpr int WN = 2;
   constexpr int pack_factor = bits == 3    ? 8
                               : bits == 6  ? 4
                               : bits == 40 ? 2
@@ -2723,6 +2721,185 @@ template <typename T, int group_size, int bits, bool batched>
                                      out_vec_size, tid, simd_gid, simd_lid);
 }
 
+// Multi-row qmv_fast: each threadgroup dequantizes a weight block once and applies it to up to ROWS input rows,
+// so a small decode batch reads the quantized weights once per row group instead of once per row.
+template <typename T, int group_size, int bits, int ROWS>
+[[kernel]] void qmv_fast_rows(const device uint32_t *w [[buffer(0)]],
+                              const device T *scales [[buffer(1)]],
+                              const device T *biases [[buffer(2)]],
+                              const device T *x [[buffer(3)]],
+                              device T *y [[buffer(4)]],
+                              const constant int &in_vec_size [[buffer(5)]],
+                              const constant int &out_vec_size [[buffer(6)]],
+                              const constant int &num_rows [[buffer(7)]],
+                              uint3 tid [[threadgroup_position_in_grid]],
+                              uint simd_gid [[simdgroup_index_in_threadgroup]],
+                              uint simd_lid [[thread_index_in_simdgroup]]) {
+  static_assert(bits == 2 || bits == 4 || bits == 8, "power-of-two bit widths only");
+  constexpr int num_simdgroups = 2;
+  constexpr int results_per_simdgroup = 4;
+  // 8 values per lane keeps ROWS activation slices and the dequantized block in registers.
+  constexpr int values_per_thread = 8;
+  constexpr int bytes_per_thread = values_per_thread * bits / 8;
+  constexpr int block_size = values_per_thread * SIMD_SIZE;
+  constexpr int scale_step_per_thread = group_size / values_per_thread;
+  constexpr int values_per_byte = 8 / bits;
+  constexpr uint mask = (1u << bits) - 1;
+
+  float x_thread[ROWS][values_per_thread];
+  float result[ROWS][results_per_simdgroup];
+  for (int r = 0; r < ROWS; ++r) {
+    for (int o = 0; o < results_per_simdgroup; ++o) {
+      result[r][o] = 0;
+    }
+  }
+
+  const int in_vec_size_w = in_vec_size * bits / 8;
+  const int in_vec_size_g = in_vec_size / group_size;
+  const int out_row = tid.x * (num_simdgroups * results_per_simdgroup) +
+                      simd_gid * results_per_simdgroup;
+  const int row0 = tid.y * ROWS;
+  const int rows = min(ROWS, num_rows - row0);
+
+  const device uint8_t *ws = (const device uint8_t *)w + out_row * in_vec_size_w +
+                             simd_lid * bytes_per_thread;
+  scales += out_row * in_vec_size_g + simd_lid / scale_step_per_thread;
+  biases += out_row * in_vec_size_g + simd_lid / scale_step_per_thread;
+  x += row0 * in_vec_size + simd_lid * values_per_thread;
+  y += row0 * out_vec_size + out_row;
+
+  constexpr int ws_block_step = block_size * bits / 8;
+  constexpr int sb_block_step = block_size / group_size;
+
+  for (int k = 0; k < in_vec_size; k += block_size) {
+#pragma unroll
+    for (int r = 0; r < ROWS; ++r) {
+      // Rows past the batch reread the last real row so every loop unrolls; only the store is guarded.
+      const device T *xr = x + min(r, rows - 1) * in_vec_size;
+#pragma unroll
+      for (int i = 0; i < values_per_thread; ++i) {
+        x_thread[r][i] = static_cast<float>(xr[i]);
+      }
+    }
+    for (int o = 0; o < results_per_simdgroup; ++o) {
+      const device uint8_t *wl = ws + o * in_vec_size_w;
+      const float sc = static_cast<float>(scales[o * in_vec_size_g]);
+      const float bi = static_cast<float>(biases[o * in_vec_size_g]);
+      float wf[values_per_thread];
+      for (int byte = 0; byte < bytes_per_thread; ++byte) {
+        const uint packed = wl[byte];
+        for (int j = 0; j < values_per_byte; ++j) {
+          wf[byte * values_per_byte + j] =
+              fma(sc, static_cast<float>((packed >> (bits * j)) & mask), bi);
+        }
+      }
+#pragma unroll
+      for (int r = 0; r < ROWS; ++r) {
+        float acc = 0;
+#pragma unroll
+        for (int i = 0; i < values_per_thread; ++i) {
+          acc = fma(wf[i], x_thread[r][i], acc);
+        }
+        result[r][o] += acc;
+      }
+    }
+    ws += ws_block_step;
+    scales += sb_block_step;
+    biases += sb_block_step;
+    x += block_size;
+  }
+
+  for (int r = 0; r < ROWS; ++r) {
+    if (r < rows) {
+      for (int o = 0; o < results_per_simdgroup; ++o) {
+        const float total = simd_sum(result[r][o]);
+        if (simd_lid == 0) {
+          y[r * out_vec_size + o] = static_cast<T>(total);
+        }
+      }
+    }
+  }
+}
+
+// Decode batches of 5-8 rows as y^T = W x^T on 8x8 simdgroup MMA with no threadgroup staging. K is permuted
+// (logical column c of tile t is k = c * S + t) so each lane's two A columns are one contiguous run of 2S weights.
+template <typename T, int group_size, int bits>
+[[kernel]] void qmm_t_rows8(const device uint32_t *w [[buffer(0)]],
+                            const device T *scales [[buffer(1)]],
+                            const device T *biases [[buffer(2)]],
+                            const device T *x [[buffer(3)]],
+                            device T *y [[buffer(4)]],
+                            const constant int &K [[buffer(5)]],
+                            const constant int &N [[buffer(6)]],
+                            const constant int &M [[buffer(7)]],
+                            uint3 tid [[threadgroup_position_in_grid]],
+                            uint simd_gid [[simdgroup_index_in_threadgroup]],
+                            uint simd_lid [[thread_index_in_simdgroup]]) {
+  constexpr int S = 16;
+  constexpr int SG = 4;
+  static_assert(bits == 2 || bits == 4 || bits == 8, "power-of-two bit widths only");
+  static_assert(group_size % (2 * S) == 0, "a lane's run must stay inside one group");
+  constexpr int chunk = 8 * S;
+  constexpr int lane_vals = 2 * S;
+  constexpr int lane_words = lane_vals * bits / 32;
+  constexpr int vals_per_word = 32 / bits;
+  constexpr uint mask = (1u << bits) - 1;
+
+  const short qid = simd_lid / 4;
+  const short fm = (qid & 4) + ((simd_lid / 2) % 4);
+  const short fn = (qid & 2) * 2 + (simd_lid % 2) * 2;
+
+  const int out0 = (tid.x * SG + simd_gid) * 8;
+  if (out0 >= N) {
+    return;
+  }
+  const int out_row = out0 + fm;
+  const int k_words = K * bits / 32;
+  const int k_groups = K / group_size;
+  const device uint32_t *wl = w + out_row * k_words + fn * S * bits / 32;
+  const device T *sl = scales + out_row * k_groups;
+  const device T *bl = biases + out_row * k_groups;
+  // Rows past the batch reread the last real row; only the store is guarded.
+  const device T *x0 = x + min(int(fn), M - 1) * K + fm * S;
+  const device T *x1 = x + min(int(fn) + 1, M - 1) * K + fm * S;
+
+  simdgroup_matrix<float, 8, 8> acc = make_filled_simdgroup_matrix<float, 8, 8>(0.f);
+  for (int k = 0; k < K; k += chunk) {
+    const int g = (k + fn * S) / group_size;
+    const float sc = static_cast<float>(sl[g]);
+    const float bi = static_cast<float>(bl[g]);
+    float wv[lane_vals];
+#pragma unroll
+    for (int i = 0; i < lane_words; ++i) {
+      const uint word = wl[i];
+#pragma unroll
+      for (int j = 0; j < vals_per_word; ++j) {
+        wv[i * vals_per_word + j] = fma(sc, static_cast<float>((word >> (bits * j)) & mask), bi);
+      }
+    }
+#pragma unroll
+    for (int t = 0; t < S; ++t) {
+      simdgroup_matrix<float, 8, 8> a;
+      simdgroup_matrix<float, 8, 8> b;
+      a.thread_elements()[0] = wv[t];
+      a.thread_elements()[1] = wv[S + t];
+      b.thread_elements()[0] = static_cast<float>(x0[t]);
+      b.thread_elements()[1] = static_cast<float>(x1[t]);
+      simdgroup_multiply_accumulate(acc, a, b, acc);
+    }
+    wl += chunk * bits / 32;
+    x0 += chunk;
+    x1 += chunk;
+  }
+
+  if (fn < M) {
+    y[fn * N + out_row] = static_cast<T>(acc.thread_elements()[0]);
+  }
+  if (fn + 1 < M) {
+    y[(fn + 1) * N + out_row] = static_cast<T>(acc.thread_elements()[1]);
+  }
+}
+
 template <typename T, const int group_size, const int bits, bool batched>
 [[kernel]] void qmv(const device uint32_t *w [[buffer(0)]],
                     const device T *scales [[buffer(1)]],
@@ -2846,6 +3023,32 @@ qmm_t(const device uint32_t *w [[buffer(0)]],
                              w_strides, s_strides, b_strides, tid);
   }
   qmm_t_impl<T, group_size, bits, aligned_N, BM, BK, BN>(
+      w, scales, biases, x, y, Xs, Ws, K, N, M, K, tid, lid, simd_gid,
+      simd_lid);
+}
+
+// Small-M qmm_t: 8- or 16-row tiles so a decode batch pads the MMA far less than the 32-row default while each
+// threadgroup still dequantizes its weight tile once for every row.
+template <typename T, const int group_size, const int bits,
+          const bool aligned_N, const int BM, const int WM, const int WN>
+[[kernel]] void
+qmm_t_small(const device uint32_t *w [[buffer(0)]],
+            const device T *scales [[buffer(1)]],
+            const device T *biases [[buffer(2)]], const device T *x [[buffer(3)]],
+            device T *y [[buffer(4)]], const constant int &K [[buffer(5)]],
+            const constant int &N [[buffer(6)]], const constant int &M [[buffer(7)]],
+            uint3 tid [[threadgroup_position_in_grid]],
+            uint lid [[thread_index_in_threadgroup]],
+            uint simd_gid [[simdgroup_index_in_threadgroup]],
+            uint simd_lid [[thread_index_in_simdgroup]]) {
+  constexpr int BK = 32;
+  constexpr int BN = 32;
+  constexpr int BK_padded = (BK + 16 / sizeof(T));
+
+  threadgroup T Xs[BM * BK_padded];
+  threadgroup T Ws[BN * BK_padded];
+
+  qmm_t_impl<T, group_size, bits, aligned_N, BM, BK, BN, WM, WN>(
       w, scales, biases, x, y, Xs, Ws, K, N, M, K, tid, lid, simd_gid,
       simd_lid);
 }
@@ -3659,6 +3862,85 @@ template <typename T, const int group_size, const int bits>
   }
 }
 
+template <typename T, const int group_size, const int bits>
+[[kernel]] void affine_embedding(const device uint8_t *w [[buffer(0)]],
+                                 const device T *scales [[buffer(1)]],
+                                 const device T *biases [[buffer(2)]],
+                                 const device uint32_t *indices [[buffer(3)]],
+                                 device T *out [[buffer(4)]],
+                                 const constant int &num_indices [[buffer(5)]],
+                                 const constant int &hidden_size [[buffer(6)]],
+                                 uint2 index [[thread_position_in_grid]],
+                                 uint2 grid_dim [[threads_per_grid]]) {
+  constexpr int packs_per_int = bits == 3    ? 8
+                                : bits == 6  ? 4
+                                : bits == 40 ? 2
+                                             : 8 / bits;
+  constexpr int power_of_2_bits = (bits & (bits - 1)) == 0;
+  constexpr int bytes_per_pack = bits == 40 ? 1 : (power_of_2_bits ? 1 : 3);
+
+  size_t offset = index.x + grid_dim.x * size_t(index.y);
+  size_t packs_per_row = hidden_size / packs_per_int;
+  size_t out_row = offset / packs_per_row;
+  if (out_row >= num_indices) {
+    return;
+  }
+  size_t pack = offset - out_row * packs_per_row;
+  size_t col = pack * packs_per_int;
+  size_t source_row = indices[out_row];
+  size_t bytes_per_row = packs_per_row * bytes_per_pack;
+  size_t groups_per_row = hidden_size / group_size;
+
+  const device uint8_t *row_w = w + source_row * bytes_per_row + pack * bytes_per_pack;
+  const device T *row_scales = scales + source_row * groups_per_row;
+  const device T *row_biases = biases + source_row * groups_per_row;
+  device T *row_out = out + out_row * hidden_size + col;
+
+  size_t gindex = col / group_size;
+  T scale = load_scale<T, T, bits>(row_scales + gindex);
+  T bias = bits == 40 ? T(0) : row_biases[gindex];
+
+  if (bits == 3) {
+    row_out[0] = (row_w[0] & 0x7) * scale + bias;
+    row_out[1] = ((row_w[0] & 0x38) >> 3) * scale + bias;
+    row_out[2] =
+        (((row_w[0] & 0xc0) >> 6) + ((row_w[1] & 0x1) << 2)) * scale + bias;
+    row_out[3] = ((row_w[1] & 0xe) >> 1) * scale + bias;
+    row_out[4] = ((row_w[1] & 0x70) >> 4) * scale + bias;
+    row_out[5] =
+        (((row_w[1] & 0x80) >> 7) + ((row_w[2] & 0x3) << 1)) * scale + bias;
+    row_out[6] = ((row_w[2] & 0x1c) >> 2) * scale + bias;
+    row_out[7] = ((row_w[2] & 0xe0) >> 5) * scale + bias;
+  } else if (bits == 6) {
+    row_out[0] = (row_w[0] & 0x3f) * scale + bias;
+    row_out[1] = (((row_w[0] >> 6) & 0x03) + ((row_w[1] & 0x0f) << 2)) * scale + bias;
+    row_out[2] = (((row_w[1] >> 4) & 0x0f) + ((row_w[2] & 0x03) << 4)) * scale + bias;
+    row_out[3] = ((row_w[2] >> 2) & 0x3f) * scale + bias;
+  } else {
+    uint val = row_w[0];
+#pragma clang loop unroll(full)
+    for (int i = 0; i < packs_per_int; i++) {
+      uint8_t d;
+      if (bits == 2) {
+        d = (val >> (bits * i)) & 0x03;
+      } else if (bits == 4) {
+        d = (val >> (bits * i)) & 0x0f;
+      } else if (bits == 8) {
+        d = val;
+      } else if (bits == 40) {
+        if (i == 0) {
+          d = val & 0x0f;
+        } else {
+          d = (val >> 4) & 0x0f;
+        }
+        row_out[i] = static_cast<T>(scale * fp4_to_float(d));
+        continue;
+      }
+      row_out[i] = scale * d + bias;
+    }
+  }
+}
+
 #define instantiate_quantized(name, type, group_size, bits)                    \
   instantiate_kernel(#name "_" #type "_gs_" #group_size "_b_" #bits, name,     \
                      type, group_size, bits)
@@ -3700,13 +3982,20 @@ template <typename T, const int group_size, const int bits>
               instantiate_quantized_batched_wrap(qmm_n, type, group_size,      \
                                                  bits)
 
+#define instantiate_quantized_rows(type, group_size, bits, rows)               \
+  instantiate_kernel("qmv_fast_rows_" #type "_gs_" #group_size "_b_" #bits     \
+                     "_r_" #rows,                                              \
+                     qmv_fast_rows, type, group_size, bits, rows)
+
 #define instantiate_quantized_all_single(type, group_size, bits)               \
   instantiate_quantized(affine_quantize, type, group_size, bits)               \
       instantiate_quantized(affine_dequantize, type, group_size, bits)         \
-          instantiate_quantized(bs_qmv_fast, type, group_size, bits)           \
-              instantiate_quantized(bs_qmv, type, group_size, bits)            \
-                  instantiate_quantized(bs_qvm, type, group_size, bits)        \
-                      instantiate_quantized(bs_qmm_n, type, group_size, bits)
+          instantiate_quantized(affine_embedding, type, group_size, bits)      \
+              instantiate_quantized(bs_qmv_fast, type, group_size, bits)       \
+                  instantiate_quantized(bs_qmv, type, group_size, bits)        \
+                      instantiate_quantized(bs_qvm, type, group_size, bits)    \
+                          instantiate_quantized(bs_qmm_n, type, group_size,    \
+                                               bits)
 
 #define instantiate_quantized_aligned_batched_bn(name, type, group_size, bits, \
                                                  aligned, batched, BM, BN, BK) \
@@ -3918,3 +4207,68 @@ instantiate_affine_gather_qmm_rhs_for_type(bfloat16_t)
 instantiate_affine_gather_qmm_rhs_for_type(float16_t)
 instantiate_affine_gather_qmm_rhs_for_type(float)
 // clang-format on
+
+#define instantiate_quantized_rows_types(group_size, bits)                     \
+  instantiate_quantized_rows(float, group_size, bits, 2)                       \
+  instantiate_quantized_rows(float, group_size, bits, 4)                       \
+  instantiate_quantized_rows(float16_t, group_size, bits, 2)                   \
+  instantiate_quantized_rows(float16_t, group_size, bits, 4)                   \
+  instantiate_quantized_rows(bfloat16_t, group_size, bits, 2)                  \
+  instantiate_quantized_rows(bfloat16_t, group_size, bits, 4)
+
+#define instantiate_quantized_rows_groups(bits)                                \
+  instantiate_quantized_rows_types(32, bits)                                   \
+  instantiate_quantized_rows_types(64, bits)                                   \
+  instantiate_quantized_rows_types(128, bits)
+
+// clang-format off
+instantiate_quantized_rows_groups(2)
+instantiate_quantized_rows_groups(4)
+instantiate_quantized_rows_groups(8) // clang-format on
+
+#define instantiate_qmm_t_rows8(type, group_size, bits)                        \
+  instantiate_kernel("qmm_t_rows8_" #type "_gs_" #group_size "_b_" #bits,     \
+                     qmm_t_rows8, type, group_size, bits)
+
+#define instantiate_qmm_t_rows8_types(group_size, bits)                        \
+  instantiate_qmm_t_rows8(float, group_size, bits)                             \
+  instantiate_qmm_t_rows8(float16_t, group_size, bits)                         \
+  instantiate_qmm_t_rows8(bfloat16_t, group_size, bits)
+
+#define instantiate_qmm_t_rows8_groups(bits)                                   \
+  instantiate_qmm_t_rows8_types(32, bits)                                      \
+  instantiate_qmm_t_rows8_types(64, bits)                                      \
+  instantiate_qmm_t_rows8_types(128, bits)
+
+// clang-format off
+instantiate_qmm_t_rows8_groups(2)
+instantiate_qmm_t_rows8_groups(4)
+instantiate_qmm_t_rows8_groups(8) // clang-format on
+
+#define instantiate_qmm_t_small(type, group_size, bits, aligned, bm, wm, wn)   \
+  instantiate_kernel("qmm_t_small_" #type "_gs_" #group_size "_b_" #bits      \
+                     "_alN_" #aligned "_bm_" #bm,                              \
+                     qmm_t_small, type, group_size, bits, aligned, bm, wm, wn)
+
+#define instantiate_qmm_t_small_tiles(type, group_size, bits)                  \
+  instantiate_qmm_t_small(type, group_size, bits, true, 8, 1, 4)               \
+  instantiate_qmm_t_small(type, group_size, bits, false, 8, 1, 4)              \
+  instantiate_qmm_t_small(type, group_size, bits, true, 16, 2, 2)              \
+  instantiate_qmm_t_small(type, group_size, bits, false, 16, 2, 2)
+
+#define instantiate_qmm_t_small_types(group_size, bits)                        \
+  instantiate_qmm_t_small_tiles(float, group_size, bits)                       \
+  instantiate_qmm_t_small_tiles(float16_t, group_size, bits)                   \
+  instantiate_qmm_t_small_tiles(bfloat16_t, group_size, bits)
+
+#define instantiate_qmm_t_small_groups(bits)                                   \
+  instantiate_qmm_t_small_types(32, bits)                                      \
+  instantiate_qmm_t_small_types(64, bits)                                      \
+  instantiate_qmm_t_small_types(128, bits)
+
+// clang-format off
+instantiate_qmm_t_small_groups(2)
+instantiate_qmm_t_small_groups(3)
+instantiate_qmm_t_small_groups(4)
+instantiate_qmm_t_small_groups(6)
+instantiate_qmm_t_small_groups(8) // clang-format on

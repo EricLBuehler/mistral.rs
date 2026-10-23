@@ -6,7 +6,7 @@ use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 
 use crate::{
     attention::{AttentionMask, SdpaParams},
-    layers::{embedding, layer_norm, linear, Activation, CausalMasker, Sdpa},
+    layers::{dense_embedding, layer_norm, linear, Activation, CausalMasker, Sdpa},
     pipeline::text_models_inputs_processor::FlashParams,
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -31,7 +31,7 @@ impl VisionEmbeddings {
         let position_embedding_size = (config.num_patches as f64).sqrt() as usize;
         Ok(Self {
             patch_embedding: linear(in_features, config.hidden_size, vb.pp("patch_embedding"))?,
-            position_embedding: embedding(
+            position_embedding: dense_embedding(
                 config.num_patches,
                 config.hidden_size,
                 vb.pp("position_embedding"),

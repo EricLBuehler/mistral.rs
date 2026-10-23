@@ -13,7 +13,10 @@ pub(crate) use drive::{
 };
 pub use online::CalibrationStatus;
 pub(crate) use online::{apply_calibration, begin_calibration, calibration_status};
-pub(crate) use plan::{resolve_and_install_isq_plan, resolve_weight_load_dtype, IsqPlanInputs};
+pub(crate) use plan::{
+    resolve_and_install_isq_plan, resolve_auto_device_map_sizing, resolve_weight_load_dtype,
+    AutoDeviceMapSizing, IsqPlanInputs,
+};
 
 use std::collections::HashMap;
 
@@ -73,7 +76,7 @@ pub(crate) fn complete_isq_capture(
         );
     }
     info!("Quantizing {} layers to {ty} with imatrix.", modules.len());
-    requantize_and_swap(modules, ty, |m| m.ty.unwrap_or(ty), &|key| {
+    requantize_and_swap(modules, ty, |m| m.resolve_type(ty), &|key| {
         imatrix_map.get(key).cloned()
     })
 }
@@ -94,7 +97,7 @@ fn module_imatrix(
     pool_ty: IsqType,
     imatrix_map: &HashMap<String, Vec<f32>>,
 ) -> (IsqType, Option<Vec<f32>>) {
-    let ty = module.ty.unwrap_or(pool_ty);
+    let ty = module.resolve_type(pool_ty);
     let imatrix = ty
         .supports_imatrix()
         .then(|| imatrix_map.get(&module.key).cloned())

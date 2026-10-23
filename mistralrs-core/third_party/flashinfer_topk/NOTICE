@@ -1,0 +1,6 @@
+FlashInfer
+Copyright 2025-2026 NVIDIA
+Copyright 2023-2026 FlashInfer community (https://flashinfer.ai/)
+
+The multi-CTA radix top-k implementation in mistralrs-core is adapted from FlashInfer under the
+Apache License 2.0. The license text is available at ../flashinfer_gdn/LICENSE-APACHE.

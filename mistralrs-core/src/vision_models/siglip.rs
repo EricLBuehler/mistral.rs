@@ -7,7 +7,7 @@ use std::{ops::Mul, sync::Arc};
 
 use crate::{
     attention::{AttentionMask, SdpaParams},
-    layers::{conv2d, embedding, layer_norm, Activation, CausalMasker, Sdpa},
+    layers::{conv2d, dense_embedding, layer_norm, Activation, CausalMasker, Sdpa},
     pipeline::text_models_inputs_processor::FlashParams,
     serde_default_fn,
     utils::unvarbuilder::UnVarBuilder,
@@ -118,7 +118,7 @@ impl VisionEmbeddings {
             patch_size: config.patch_size,
             patch_embedding,
             num_patches_per_side,
-            position_embedding: embedding(
+            position_embedding: dense_embedding(
                 num_patches,
                 config.hidden_size,
                 vb.pp("position_embedding"),

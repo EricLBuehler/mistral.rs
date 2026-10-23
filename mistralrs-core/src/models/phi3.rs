@@ -16,8 +16,8 @@ use crate::{
     device_map::{DeviceMappedMask, DeviceMapper},
     get_delta_from_lora_ab,
     layers::{
-        embedding, Activation, CausalMasker, MatMul, PhiRopeConfig, PhiRopeScalingConfig,
-        PhiRotaryEmbedding, RmsNorm, Sdpa,
+        embedding_with_legacy_tied_uqff, Activation, CausalMasker, MatMul, PhiRopeConfig,
+        PhiRopeScalingConfig, PhiRotaryEmbedding, RmsNorm, Sdpa,
     },
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -46,6 +46,8 @@ pub struct Config {
     pub bos_token_id: Option<u32>,
     pub eos_token_id: Option<u32>,
     pub rope_scaling: Option<PhiRopeScalingConfig>,
+    #[serde(default)]
+    pub rope_scaling_attn_factor: Option<f64>,
     pub max_position_embeddings: usize,
     pub sliding_window: Option<usize>,
     pub original_max_position_embeddings: usize,
@@ -59,6 +61,7 @@ impl From<Config> for PhiRopeConfig {
     fn from(val: Config) -> Self {
         PhiRopeConfig {
             rope_scaling: val.rope_scaling,
+            scaling_attn_factor: val.rope_scaling_attn_factor,
             max_position_embeddings: val.max_position_embeddings,
             original_max_position_embeddings: val.original_max_position_embeddings,
             rope_theta: val.rope_theta,
@@ -372,20 +375,20 @@ impl DecoderLayer {
         let xs = self
             .self_attn
             .forward(&xs, attention_mask, kv_cache, ctx, layer_idx)?;
-        let xs = (xs + residual)?;
-        let residual = &xs;
-        let xs = self
-            .mlp
-            .forward(&xs.apply(&self.post_attention_layernorm)?)?;
+        let (residual, xs) = self
+            .post_attention_layernorm
+            .forward_add_rms_norm(&xs, residual)?;
+        let xs = self.mlp.forward(&xs)?;
         residual + xs
     }
 }
 
 pub struct Model {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
+    dtype: DType,
     device: Device,
     cache: EitherCache,
     max_seq_len: usize,
@@ -411,11 +414,15 @@ impl Model {
         }
         let mapper = normal_loading_metadata.mapper;
         let vb_m = vb.pp("model");
+        let dtype = vb_m.dtype();
 
-        let embed_tokens = embedding(
+        let embed_tokens = embedding_with_legacy_tied_uqff(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            cfg.tie_word_embeddings.then(|| {
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq)
+            }),
             &cfg.quantization_config,
         )?;
         let mut ropes = HashMap::new();
@@ -423,9 +430,30 @@ impl Model {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
+            let location = device.location();
+            if ropes.contains_key(&location) {
+                continue;
+            }
+            let rope_vb = vb_m.clone().set_device(device.clone());
+            let short_factor = if rope_vb.contains_tensor("rope_factors_short.weight") {
+                Some(rope_vb.get_unchecked_dtype("rope_factors_short.weight", DType::F32)?)
+            } else {
+                None
+            };
+            let long_factor = if rope_vb.contains_tensor("rope_factors_long.weight") {
+                Some(rope_vb.get_unchecked_dtype("rope_factors_long.weight", DType::F32)?)
+            } else {
+                None
+            };
             ropes.insert(
-                device.location(),
-                Arc::new(PhiRotaryEmbedding::new(vb.dtype(), cfg.clone(), device)?),
+                location,
+                Arc::new(PhiRotaryEmbedding::new_with_factors(
+                    vb.dtype(),
+                    cfg.clone(),
+                    device,
+                    short_factor.as_ref(),
+                    long_factor.as_ref(),
+                )?),
             );
         }
         let vb_l = vb_m.pp("layers");
@@ -472,22 +500,14 @@ impl Model {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(
-                        embed_tokens.embeddings(),
-                        normal_loading_metadata.loading_isq,
-                    )?,
-                    None,
-                ),
-                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
-            )?
+            embed_tokens.clone()
         };
         Ok(Self {
             embed_tokens,
             layers,
             norm,
             lm_head,
+            dtype,
             device: normal_loading_metadata.real_device,
             cache: EitherCache::Normal(NormalCache::new_sliding(
                 cfg.num_hidden_layers,
@@ -512,7 +532,7 @@ impl Model {
     }
 
     pub fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
-        let mut xs = self.embed_tokens.forward(input_ids)?;
+        let mut xs = self.embed_tokens.embedding_forward(input_ids, self.dtype)?;
         let cache = &mut self.cache.normal().0;
         let mask_cache = ctx.mask_cache(cache);
         let attention_mask = CausalMasker.make_causal_mask(
@@ -539,7 +559,7 @@ impl Model {
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
         let xs = ctx.logits(&xs)?;
-        self.lm_head.forward(&xs)
+        ctx.lm_head(&*self.lm_head, &xs)
     }
 }
 
@@ -602,6 +622,9 @@ impl NormalModel for Model {
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
+    }
+    fn supports_packed_prefill(&self) -> bool {
+        true
     }
 }
 

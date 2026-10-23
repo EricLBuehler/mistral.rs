@@ -50,12 +50,14 @@
 //! let model = ModelBuilder::new("Qwen/Qwen3-4B")
 //!     .with_auto_isq(IsqBits::Four)            // In-situ quantization (auto-selects best type)
 //!     .with_logging()                        // Enable logging
-//!     .with_paged_attn(PagedAttentionMetaBuilder::default().build()?)
 //!     .build()
 //!     .await?;
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! PagedAttention is enabled by default for supported CUDA and Metal models; CPU models use the standard cache.
+//! Use [`ModelBuilder::without_paged_attn`] to disable it or [`ModelBuilder::with_paged_attn`] to set an explicit budget.
 //!
 //! Use [`ModelBuilder::with_auto_isq`] for automatic platform-optimal quantization (e.g., `with_auto_isq(IsqBits::Four)`),
 //! or [`ModelBuilder::with_isq`] with a specific [`IsqType`]: `Q4_0`, `Q4_1`, `Q4K`, `Q5_0`, `Q5_1`, `Q5K`,
@@ -243,6 +245,12 @@ pub use messages::{
     MultimodalMessages, RequestBuilder, RequestLike, TextMessageRole, TextMessages,
 };
 pub use mistralrs_core::{
+    AdapterGenerationId, AdapterSelection, LoraAdapterError, LoraAdapterInfo,
+    LoraAdapterLoadPolicy, LoraAdapterRoute, LoraAdapterSpec, LoraResidentGenerationInfo,
+    LoraRuntimeConfig, LoraRuntimeStatus, DEFAULT_LORA_MAX_ADAPTERS, DEFAULT_LORA_MAX_BYTES,
+    DEFAULT_LORA_MAX_RANK, MAX_LORA_ALIAS_BYTES,
+};
+pub use mistralrs_core::{
     AgentPermission, AgentToolApproval, AgentToolApprovalAsyncCallback, AgentToolApprovalCallback,
     AgentToolApprovalDecision, AgentToolApprovalFuture, AgentToolApprovalHandler, AgentToolKind,
     AgentToolMetadata, AgentToolSource, CodeExecutionApproval, CodeExecutionApprovalCallback,
@@ -286,7 +294,9 @@ pub use mistralrs_core::{
 };
 
 // ========== Request Types ==========
-pub use mistralrs_core::{Constraint, LlguidanceGrammar, MessageContent, NormalRequest, Request};
+pub use mistralrs_core::{
+    Constraint, LlguidanceGrammar, MessageContent, NormalRequest, ReasoningEffort, Request,
+};
 
 // ========== Sampling ==========
 pub use mistralrs_core::{DrySamplingParams, ModelGenerationDefaults, SamplingParams, StopTokens};
@@ -299,8 +309,8 @@ pub use mistralrs_core::{
 
 // ========== Config Types ==========
 pub use mistralrs_core::{
-    DefaultSchedulerMethod, IsqType, MemoryGpuConfig, MistralRsConfig, ModelDType,
-    PagedAttentionConfig, PagedCacheType, SchedulerConfig, WebSearchOptions,
+    DefaultSchedulerMethod, IsqType, MemoryGoal, MistralRsConfig, ModelDType, PagedAttentionConfig,
+    PagedCacheType, SchedulerConfig, WebSearchOptions,
 };
 
 // ========== Audio Types ==========
@@ -333,7 +343,7 @@ pub use mistralrs_core::{
 pub use mistralrs_core::{MtpConfig, SpeculativeConfig};
 
 // ========== Device Mapping ==========
-pub use mistralrs_core::{AutoDeviceMapParams, DeviceMapSetting};
+pub use mistralrs_core::{DeviceLayerMapMetadata, DeviceMapMetadata};
 
 // ========== Topology ==========
 pub use mistralrs_core::{LayerTopology, Topology};

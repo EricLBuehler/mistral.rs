@@ -4,7 +4,9 @@ use crate::layers_masker::CausalMaskConfig;
 use candle_core::{DType, Device, IndexOp, Module, Result, Tensor, D};
 use candle_nn::Linear;
 use mistralrs_quant::{
-    softcap, ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
+    apply_dynamic_lora_delta, is_dynamic_lora_site_active, register_dynamic_lora_site, softcap,
+    ColumnParallelLayer, LoraLinearSpec, LoraSiteHandle, QuantMethod, ReplicatedLayer,
+    RowParallelLayer, ShardedVarBuilder,
 };
 use statrs::distribution::{ContinuousCDF, Normal};
 
@@ -13,16 +15,19 @@ use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     layers::{
-        self, embedding, Activation, CausalMasker, Gemma3nRotaryEmbedding, RmsNorm,
-        RotaryEmbedding, ScaledEmbedding, Sdpa,
+        self, dense_embedding, embedding, embedding_with_legacy_tied_uqff, Activation,
+        CausalMasker, Gemma3nRotaryEmbedding, RmsNorm, RotaryEmbedding, ScaledEmbedding, Sdpa,
     },
     matformer::MatformerSliceConfig,
     paged_attention::{
         AttentionImplementation, KvCacheTopology, ModelConfigLike, ModelConfigMetadata,
+        PagedAttention,
     },
     pipeline::{
-        text_models_inputs_processor::FlashParams, EitherCache, IsqModel, KvCache,
-        ModelForwardContext, MultimodalModel, NormalCache, NormalCacheType, NormalLoadingMetadata,
+        extract_logits,
+        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
+        EitherCache, IsqModel, KvCache, ModelForwardContext, MultimodalModel, NormalCache,
+        NormalCacheType, NormalLoadingMetadata,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -37,21 +42,76 @@ macro_rules! is_sliding {
 
 const EPS: f64 = 1e-8;
 
-fn kv_shared_layer_index(cfg: &Gemma3nTextConfig, layer_idx: usize) -> Option<usize> {
-    if cfg.num_kv_shared_layers == 0 {
+fn sliding_decode_kv_window(
+    use_sliding_window: bool,
+    query_len: usize,
+    sliding_window: Option<usize>,
+    kv_len: usize,
+) -> Option<(usize, usize)> {
+    let window = sliding_window?;
+    if !use_sliding_window || query_len != 1 || kv_len <= window {
         return None;
     }
+    Some((kv_len - window, window))
+}
 
-    let first_kv_shared_layer_idx = cfg.num_hidden_layers - cfg.num_kv_shared_layers;
-    if first_kv_shared_layer_idx == 0 || layer_idx < first_kv_shared_layer_idx {
-        return None;
+fn is_paged_decode_forward(
+    is_paged: bool,
+    query_len: usize,
+    is_first_prompt_chunk: bool,
+    has_prompt_cache_metadata: bool,
+) -> bool {
+    is_paged && query_len > 0 && !is_first_prompt_chunk && !has_prompt_cache_metadata
+}
+
+fn kv_shared_layer_index_for_layout(
+    layer_types: &[String],
+    num_kv_shared_layers: usize,
+    layer_idx: usize,
+) -> Result<Option<usize>> {
+    let first_kv_shared_layer_idx = layer_types
+        .len()
+        .checked_sub(num_kv_shared_layers)
+        .ok_or_else(|| candle_core::Error::msg("Gemma 3n has more shared KV layers than layers"))?;
+    let attention_type = layer_types.get(layer_idx).ok_or_else(|| {
+        candle_core::Error::msg(format!("Gemma 3n layer index {layer_idx} is out of bounds"))
+    })?;
+    if num_kv_shared_layers == 0 || layer_idx < first_kv_shared_layer_idx {
+        return Ok(None);
+    }
+    if first_kv_shared_layer_idx == 0 {
+        candle_core::bail!("Gemma 3n shared KV layers have no donor layers");
     }
 
-    if is_sliding!(layer_idx, cfg) {
-        Some(first_kv_shared_layer_idx - 2)
-    } else {
-        Some(first_kv_shared_layer_idx - 1)
+    layer_types[..first_kv_shared_layer_idx]
+        .iter()
+        .rposition(|candidate| candidate == attention_type)
+        .map(Some)
+        .ok_or_else(|| {
+            candle_core::Error::msg(format!(
+                "Gemma 3n layer {layer_idx} shares KV without a prior `{attention_type}` donor"
+            ))
+        })
+}
+
+fn kv_shared_layer_index(cfg: &Gemma3nTextConfig, layer_idx: usize) -> Result<Option<usize>> {
+    if cfg.layer_types.len() != cfg.num_hidden_layers {
+        candle_core::bail!(
+            "Gemma 3n has {} layer types for {} layers",
+            cfg.layer_types.len(),
+            cfg.num_hidden_layers
+        );
     }
+    kv_shared_layer_index_for_layout(&cfg.layer_types, cfg.num_kv_shared_layers, layer_idx)
+}
+
+struct AttentionForwardContext<'a> {
+    attention_mask: &'a AttentionMask,
+    sliding_attention_mask: &'a AttentionMask,
+    rope_positions: &'a Tensor,
+    kv_caches: &'a mut [KvCache],
+    metadata: Option<((Tensor, Tensor), &'a PagedAttentionInputMetadata)>,
+    flash_params: Option<&'a FlashParams>,
 }
 
 #[derive(Clone)]
@@ -231,6 +291,7 @@ struct Attention {
     rotary_emb_global: Arc<Gemma3nRotaryEmbedding>,
     rotary_emb_local: Arc<RotaryEmbedding>,
     use_sliding_window: bool,
+    paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
     q_norm: RmsNorm,
     k_norm: RmsNorm,
@@ -248,6 +309,7 @@ impl Attention {
         layer_idx: usize,
         mapper: &dyn DeviceMapper,
         vb: ShardedVarBuilder,
+        paged_attn: Option<PagedAttention>,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let hidden_sz = cfg.hidden_size;
@@ -319,7 +381,7 @@ impl Attention {
             mapper.set_device(layer_idx, vb.pp("v_norm"), false),
         )?;
 
-        let kv_shared_layer_index = kv_shared_layer_index(cfg, layer_idx);
+        let kv_shared_layer_index = kv_shared_layer_index(cfg, layer_idx)?;
         Ok(Self {
             q_proj,
             k_proj,
@@ -331,6 +393,7 @@ impl Attention {
             rotary_emb_global,
             rotary_emb_local,
             use_sliding_window: sliding_window.is_some(),
+            paged_attn,
             sdpa_params: SdpaParams {
                 n_kv_groups: mistralrs_quant::compute_n_kv_groups(
                     cfg.num_key_value_heads,
@@ -368,16 +431,7 @@ impl Attention {
         .transpose(1, 2)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn forward(
-        &self,
-        xs: &Tensor,
-        attention_mask: &AttentionMask,
-        sliding_attention_mask: &AttentionMask,
-        kv_caches: &mut [KvCache],
-        ctx: &mut ModelForwardContext<'_>,
-        flash_params: &FlashParams,
-    ) -> Result<Tensor> {
+    fn forward(&self, xs: &Tensor, ctx: &mut AttentionForwardContext<'_>) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
 
         let is_shared = self.kv_shared_layer_index.is_some();
@@ -399,25 +453,11 @@ impl Attention {
         };
         q = q.reshape((b_sz, q_len, self.num_heads, self.head_dim))?;
         q = q.apply(&self.q_norm)?;
-        let rope_positions = ctx
-            .text_positions(q.device(), q.dim(2)?)?
-            .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?
-            .clone();
-        q = self.apply_rope_positions(&q, &rope_positions)?;
+        q = self.apply_rope_positions(&q, ctx.rope_positions)?;
         q = q.transpose(1, 2)?;
 
-        let ((k, v), is_shared_kv) = if let Some(kv_shared_layer_index) = self.kv_shared_layer_index
-        {
-            let shared_cache = &kv_caches[kv_shared_layer_index];
-            // Cast device because kv cache on prev layer might be different device
-            // https://github.com/EricLBuehler/mistral.rs/pull/1650#issuecomment-3393222444
-            (
-                (
-                    shared_cache.k()?.unwrap().to_device(q.device())?,
-                    shared_cache.v()?.unwrap().to_device(q.device())?,
-                ),
-                true,
-            )
+        let (k, v) = if is_shared {
+            (None, None)
         } else {
             let (mut k, mut v) = if let Some((_, k, v)) = qkv {
                 (k, v)
@@ -427,68 +467,121 @@ impl Attention {
 
             k = k.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?;
             k = k.apply(&self.k_norm)?;
-            k = self.apply_rope_positions(&k, &rope_positions)?;
+            k = self.apply_rope_positions(&k, ctx.rope_positions)?;
             k = k.transpose(1, 2)?;
 
             v = v.reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?;
             v = v.apply(&self.v_norm)?;
             v = v.transpose(1, 2)?;
 
-            (kv_caches[self.layer_idx].append(&k, &v)?, false)
+            (Some(k), Some(v))
         };
 
         let mask = if self.use_sliding_window {
-            sliding_attention_mask
+            ctx.sliding_attention_mask
         } else {
-            attention_mask
+            ctx.attention_mask
         };
 
-        // Adjust mask dimensions if using shared KV cache
-        let mask = if is_shared_kv {
-            if let AttentionMask::Custom(mask) = mask {
-                let kv_seq_len = k.dims()[2];
-                let mask_dims = mask.dims();
-
-                // Only narrow when the target dimension is strictly longer; otherwise reuse as-is.
-                let narrowed = match mask.rank() {
-                    2 => {
-                        // 2D masks: (q_len, kv_len)
-                        if mask_dims[1] > kv_seq_len {
-                            mask.narrow(1, 0, kv_seq_len)?
-                        } else {
-                            mask.clone()
-                        }
+        let mut attn_output = match &self.paged_attn {
+            Some(paged_attn) => match &ctx.metadata {
+                Some(((key_cache, value_cache), input_metadata)) if is_shared => paged_attn
+                    .forward_donor_cache(
+                        &q,
+                        key_cache,
+                        value_cache,
+                        mask,
+                        input_metadata,
+                        &self.sdpa_params,
+                        ctx.flash_params,
+                    )?,
+                Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
+                    &q,
+                    k.as_ref().unwrap(),
+                    v.as_ref().unwrap(),
+                    mask,
+                    Some(key_cache.clone()),
+                    Some(value_cache.clone()),
+                    input_metadata,
+                    &self.sdpa_params,
+                    ctx.flash_params,
+                )?,
+                None if is_shared => {
+                    candle_core::bail!("Gemma 3n shared KV attention is missing paged metadata")
+                }
+                None => {
+                    let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
+                    if matches!(mask, AttentionMask::None) {
+                        candle_core::bail!("Gemma 3n paged prompt is missing an attention mask");
                     }
-                    3 => {
-                        // 3D masks: (batch, q_len, kv_len)
-                        if mask_dims[2] > kv_seq_len {
-                            mask.narrow(2, 0, kv_seq_len)?
-                        } else {
-                            mask.clone()
-                        }
-                    }
-                    4 => {
-                        // 4D masks: (batch, heads, q_len, kv_len)
-                        if mask_dims[3] > kv_seq_len {
-                            mask.narrow(3, 0, kv_seq_len)?
-                        } else {
-                            mask.clone()
-                        }
-                    }
-                    _ => mask.clone(),
+                    paged_attn.forward(
+                        &q,
+                        k.as_ref().unwrap(),
+                        v.as_ref().unwrap(),
+                        mask,
+                        None,
+                        None,
+                        &input_metadata,
+                        &self.sdpa_params,
+                        ctx.flash_params,
+                    )?
+                }
+            },
+            None => {
+                let (mut k, mut v) = if let Some(kv_shared_layer_index) = self.kv_shared_layer_index
+                {
+                    let shared_cache = &ctx.kv_caches[kv_shared_layer_index];
+                    let k = shared_cache.appended_k()?.ok_or_else(|| {
+                        candle_core::Error::msg("Gemma 3n shared KV donor has no key cache")
+                    })?;
+                    let v = shared_cache.appended_v()?.ok_or_else(|| {
+                        candle_core::Error::msg("Gemma 3n shared KV donor has no value cache")
+                    })?;
+                    (k.to_device(q.device())?, v.to_device(q.device())?)
+                } else {
+                    ctx.kv_caches[self.layer_idx]
+                        .append(k.as_ref().unwrap(), v.as_ref().unwrap())?
                 };
-                AttentionMask::Custom(narrowed)
-            } else {
-                AttentionMask::None
+
+                if let Some((start, len)) = sliding_decode_kv_window(
+                    self.use_sliding_window,
+                    q_len,
+                    self.sdpa_params.sliding_window,
+                    k.dim(2)?,
+                ) {
+                    k = k.narrow(2, start, len)?;
+                    v = v.narrow(2, start, len)?;
+                }
+
+                let mask = if let AttentionMask::Custom(mask) = mask {
+                    let kv_len = k.dim(2)?;
+                    let mask_dims = mask.dims();
+                    let narrowed = match mask.rank() {
+                        2 if mask_dims[1] > kv_len => {
+                            mask.narrow(1, mask_dims[1] - kv_len, kv_len)?
+                        }
+                        3 if mask_dims[2] > kv_len => {
+                            mask.narrow(2, mask_dims[2] - kv_len, kv_len)?
+                        }
+                        4 if mask_dims[3] > kv_len => {
+                            mask.narrow(3, mask_dims[3] - kv_len, kv_len)?
+                        }
+                        _ => mask.clone(),
+                    };
+                    AttentionMask::Custom(narrowed)
+                } else {
+                    mask.clone()
+                };
+
+                Sdpa.run_attention(&q, &k, &v, &mask, ctx.flash_params, &self.sdpa_params)?
             }
-        } else {
-            mask.clone()
         };
 
-        let mut attn_output =
-            Sdpa.run_attention(&q, &k, &v, &mask, Some(flash_params), &self.sdpa_params)?;
-
-        attn_output = attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?;
+        attn_output = if matches!(mask, AttentionMask::None) {
+            attn_output.reshape((b_sz, q_len, ()))?
+        } else {
+            attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?
+        };
         self.o_proj.forward(&attn_output)
     }
 }
@@ -496,21 +589,37 @@ impl Attention {
 struct TextAltUp {
     correct_output_scale: Tensor,
     correction_coefs: Linear,
+    correction_coefs_lora: Option<Arc<LoraSiteHandle>>,
     prediction_coefs: Linear,
+    prediction_coefs_lora: Option<Arc<LoraSiteHandle>>,
     modality_router: Linear,
+    modality_router_lora: Option<Arc<LoraSiteHandle>>,
     router_norm: RmsNorm,
     router_input_scale: f64,
     altup_active_idx: usize,
     altup_num_inputs: usize,
 }
 
+fn forward_raw_lora(
+    linear: &Linear,
+    site: Option<&LoraSiteHandle>,
+    input: &Tensor,
+) -> Result<Tensor> {
+    let output = linear.forward(input)?;
+    match site {
+        Some(site) => apply_dynamic_lora_delta(site, input, output),
+        None => Ok(output),
+    }
+}
+
 impl TextAltUp {
     fn new(cfg: &Gemma3nTextConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let correct_output_scale = vb.get(cfg.hidden_size, "correct_output_scale")?;
+        let correction_coefs_vb = vb.pp("correction_coefs");
         let mut correction_coefs = layers::linear_no_bias(
             cfg.altup_num_inputs,
             cfg.altup_num_inputs,
-            vb.pp("correction_coefs"),
+            correction_coefs_vb.clone(),
         )?;
         if let Some(altup_coef_clip) = cfg.altup_coef_clip {
             correction_coefs = Linear::new(
@@ -520,15 +629,29 @@ impl TextAltUp {
                 None,
             );
         }
+        let correction_coefs_lora = register_dynamic_lora_site(
+            &correction_coefs_vb,
+            LoraLinearSpec::replicated(cfg.altup_num_inputs, cfg.altup_num_inputs),
+        )?;
+        let prediction_coefs_vb = vb.pp("prediction_coefs");
         let prediction_coefs = layers::linear_no_bias(
             cfg.altup_num_inputs,
             cfg.altup_num_inputs.pow(2),
-            vb.pp("prediction_coefs"),
+            prediction_coefs_vb.clone(),
         )?;
+        let prediction_coefs_lora = register_dynamic_lora_site(
+            &prediction_coefs_vb,
+            LoraLinearSpec::replicated(cfg.altup_num_inputs, cfg.altup_num_inputs.pow(2)),
+        )?;
+        let modality_router_vb = vb.pp("modality_router");
         let modality_router = layers::linear_no_bias(
             cfg.hidden_size,
             cfg.altup_num_inputs,
-            vb.pp("modality_router"),
+            modality_router_vb.clone(),
+        )?;
+        let modality_router_lora = register_dynamic_lora_site(
+            &modality_router_vb,
+            LoraLinearSpec::replicated(cfg.hidden_size, cfg.altup_num_inputs),
         )?;
         let router_norm = RmsNorm::new_gemma_3n(
             cfg.hidden_size,
@@ -540,8 +663,11 @@ impl TextAltUp {
         Ok(Self {
             correct_output_scale,
             correction_coefs,
+            correction_coefs_lora,
             prediction_coefs,
+            prediction_coefs_lora,
             modality_router,
+            modality_router_lora,
             router_norm,
             router_input_scale: 1. / (cfg.hidden_size as f64),
             altup_active_idx: cfg.altup_active_idx,
@@ -554,7 +680,11 @@ impl TextAltUp {
         let router_inputs_normed = self.router_norm.forward(xs)?;
         let router_inputs_f32 = router_inputs_normed.to_dtype(DType::F32)?;
         let router_inputs = (router_inputs_f32 * self.router_input_scale)?.to_dtype(xs.dtype())?;
-        let routed = self.modality_router.forward(&router_inputs)?;
+        let routed = forward_raw_lora(
+            &self.modality_router,
+            self.modality_router_lora.as_deref(),
+            &router_inputs,
+        )?;
         routed.to_dtype(DType::F32)?.tanh()?.to_dtype(xs.dtype())
     }
 
@@ -567,11 +697,13 @@ impl TextAltUp {
             vec![self.altup_num_inputs, self.altup_num_inputs],
         ]
         .concat();
-        let all_coefs = self
-            .prediction_coefs
-            .forward(&modalities)?
-            .reshape(shape)?
-            .permute((0, 1, 3, 2))?;
+        let all_coefs = forward_raw_lora(
+            &self.prediction_coefs,
+            self.prediction_coefs_lora.as_deref(),
+            &modalities,
+        )?
+        .reshape(shape)?
+        .permute((0, 1, 3, 2))?;
 
         // permute hidden_states to [batch_size, num_tokens, hidden_size, altup_num_inputs]
         let mut predictions = xs
@@ -598,7 +730,11 @@ impl TextAltUp {
                 .repeat((self.altup_num_inputs, 1, 1, 1))?;
 
         // Perform coefficient computation in float32
-        let coefs = self.correction_coefs.forward(&modalities)?;
+        let coefs = forward_raw_lora(
+            &self.correction_coefs,
+            self.correction_coefs_lora.as_deref(),
+            &modalities,
+        )?;
         let coefs_f32 = coefs.to_dtype(DType::F32)?;
         let all_coefs = (coefs_f32 + 1.)?
             .to_dtype(coefs.dtype())?
@@ -616,19 +752,42 @@ impl TextAltUp {
             .broadcast_mul(&self.correct_output_scale)?
             .to_dtype(xs.dtype())
     }
+
+    fn has_active_dynamic_lora(&self) -> bool {
+        [
+            &self.correction_coefs_lora,
+            &self.prediction_coefs_lora,
+            &self.modality_router_lora,
+        ]
+        .into_iter()
+        .filter_map(|site| site.as_deref())
+        .any(is_dynamic_lora_site_active)
+    }
 }
 
 struct TextLaurelBlock {
     left: Linear,
+    left_lora: Option<Arc<LoraSiteHandle>>,
     right: Linear,
+    right_lora: Option<Arc<LoraSiteHandle>>,
     post_norm: RmsNorm,
 }
 
 impl TextLaurelBlock {
     fn new(cfg: &Gemma3nTextConfig, vb: ShardedVarBuilder) -> Result<Self> {
+        let left_vb = vb.pp("linear_left");
+        let right_vb = vb.pp("linear_right");
         Ok(Self {
-            left: layers::linear_no_bias(cfg.hidden_size, cfg.laurel_rank, vb.pp("linear_left"))?,
-            right: layers::linear_no_bias(cfg.laurel_rank, cfg.hidden_size, vb.pp("linear_right"))?,
+            left: layers::linear_no_bias(cfg.hidden_size, cfg.laurel_rank, left_vb.clone())?,
+            left_lora: register_dynamic_lora_site(
+                &left_vb,
+                LoraLinearSpec::replicated(cfg.hidden_size, cfg.laurel_rank),
+            )?,
+            right: layers::linear_no_bias(cfg.laurel_rank, cfg.hidden_size, right_vb.clone())?,
+            right_lora: register_dynamic_lora_site(
+                &right_vb,
+                LoraLinearSpec::replicated(cfg.laurel_rank, cfg.hidden_size),
+            )?,
             post_norm: RmsNorm::new_gemma_3n(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
@@ -639,13 +798,20 @@ impl TextLaurelBlock {
     }
 
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let mut laurel_xs = self.left.forward(xs)?;
-        laurel_xs = self.right.forward(&laurel_xs)?;
+        let mut laurel_xs = forward_raw_lora(&self.left, self.left_lora.as_deref(), xs)?;
+        laurel_xs = forward_raw_lora(&self.right, self.right_lora.as_deref(), &laurel_xs)?;
         laurel_xs = self.post_norm.forward(&laurel_xs)?;
         // Perform addition in float32 for precision
         let xs_f32 = xs.to_dtype(DType::F32)?;
         let laurel_xs_f32 = laurel_xs.to_dtype(DType::F32)?;
         (xs_f32 + laurel_xs_f32)?.to_dtype(xs.dtype())
+    }
+
+    fn has_active_dynamic_lora(&self) -> bool {
+        [&self.left_lora, &self.right_lora]
+            .into_iter()
+            .filter_map(|site| site.as_deref())
+            .any(is_dynamic_lora_site_active)
     }
 }
 
@@ -659,7 +825,9 @@ struct DecoderLayer {
     altup: TextAltUp,
     laurel: TextLaurelBlock,
     per_layer_input_gate: Linear,
+    per_layer_input_gate_lora: Option<Arc<LoraSiteHandle>>,
     per_layer_projection: Linear,
+    per_layer_projection_lora: Option<Arc<LoraSiteHandle>>,
     post_per_layer_input_norm: RmsNorm,
     altup_active_idx: usize,
     altup_correct_scale: bool,
@@ -676,6 +844,7 @@ impl DecoderLayer {
         mapper: &dyn DeviceMapper,
         layer_idx: usize,
         loading_isq: bool,
+        paged_attn: Option<PagedAttention>,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let self_attn = Attention::new(
@@ -685,6 +854,7 @@ impl DecoderLayer {
             layer_idx,
             mapper,
             mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq),
+            paged_attn,
             comm,
         )?;
         let mlp = Mlp::new(
@@ -721,15 +891,27 @@ impl DecoderLayer {
         let altup = TextAltUp::new(cfg, mapper.set_device(layer_idx, vb.pp("altup"), false))?;
         let laurel =
             TextLaurelBlock::new(cfg, mapper.set_device(layer_idx, vb.pp("laurel"), false))?;
+        let per_layer_input_gate_vb =
+            mapper.set_device(layer_idx, vb.pp("per_layer_input_gate"), false);
         let per_layer_input_gate = layers::linear_no_bias(
             cfg.hidden_size,
             cfg.hidden_size_per_layer_input,
-            mapper.set_device(layer_idx, vb.pp("per_layer_input_gate"), false),
+            per_layer_input_gate_vb.clone(),
         )?;
+        let per_layer_input_gate_lora = register_dynamic_lora_site(
+            &per_layer_input_gate_vb,
+            LoraLinearSpec::replicated(cfg.hidden_size, cfg.hidden_size_per_layer_input),
+        )?;
+        let per_layer_projection_vb =
+            mapper.set_device(layer_idx, vb.pp("per_layer_projection"), false);
         let per_layer_projection = layers::linear_no_bias(
             cfg.hidden_size_per_layer_input,
             cfg.hidden_size,
-            mapper.set_device(layer_idx, vb.pp("per_layer_projection"), false),
+            per_layer_projection_vb.clone(),
+        )?;
+        let per_layer_projection_lora = register_dynamic_lora_site(
+            &per_layer_projection_vb,
+            LoraLinearSpec::replicated(cfg.hidden_size_per_layer_input, cfg.hidden_size),
         )?;
         let post_per_layer_input_norm = RmsNorm::new_gemma_3n(
             cfg.hidden_size,
@@ -747,7 +929,9 @@ impl DecoderLayer {
             altup,
             laurel,
             per_layer_input_gate,
+            per_layer_input_gate_lora,
             per_layer_projection,
+            per_layer_projection_lora,
             post_per_layer_input_norm,
             altup_active_idx: cfg.altup_active_idx,
             altup_correct_scale: cfg.altup_correct_scale,
@@ -755,16 +939,34 @@ impl DecoderLayer {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
+    fn has_active_dynamic_lora(&self) -> bool {
+        [
+            &self.self_attn.q_proj,
+            &self.self_attn.k_proj,
+            &self.self_attn.v_proj,
+            &self.self_attn.o_proj,
+            &self.mlp.gate,
+            &self.mlp.up,
+            &self.mlp.down,
+        ]
+        .into_iter()
+        .any(|layer| layer.is_dynamic_lora_active())
+            || self.altup.has_active_dynamic_lora()
+            || self.laurel.has_active_dynamic_lora()
+            || [
+                &self.per_layer_input_gate_lora,
+                &self.per_layer_projection_lora,
+            ]
+            .into_iter()
+            .filter_map(|site| site.as_deref())
+            .any(is_dynamic_lora_site_active)
+    }
+
     fn forward(
         &self,
         xs: &Tensor,
         per_layer_input: &Tensor,
-        attention_mask: &AttentionMask,
-        sliding_attention_mask: &AttentionMask,
-        kv_caches: &mut [KvCache],
-        ctx: &mut ModelForwardContext<'_>,
-        flash_params: &FlashParams,
+        ctx: &mut AttentionForwardContext<'_>,
     ) -> Result<Tensor> {
         let predictions = self.altup.predict(xs)?;
         let active_prediction = predictions.i(self.altup_active_idx)?;
@@ -774,14 +976,7 @@ impl DecoderLayer {
 
         let attn = self
             .self_attn
-            .forward(
-                &active_prediction_normed,
-                attention_mask,
-                sliding_attention_mask,
-                kv_caches,
-                ctx,
-                flash_params,
-            )?
+            .forward(&active_prediction_normed, ctx)?
             .apply(&self.post_attention_layernorm)?;
 
         // Perform addition and scaling in float32 for precision
@@ -806,7 +1001,11 @@ impl DecoderLayer {
         if self.altup_correct_scale {
             first_prediction = self.altup.scale_corrected_output(&first_prediction)?;
         }
-        first_prediction = self.per_layer_input_gate.forward(&first_prediction)?;
+        first_prediction = forward_raw_lora(
+            &self.per_layer_input_gate,
+            self.per_layer_input_gate_lora.as_deref(),
+            &first_prediction,
+        )?;
         first_prediction = self.act.forward(&first_prediction)?;
         // Perform multiplication in float32
         let first_pred_f32 = first_prediction.to_dtype(DType::F32)?;
@@ -814,7 +1013,11 @@ impl DecoderLayer {
         first_prediction =
             (first_pred_f32 * per_layer_input_f32)?.to_dtype(first_prediction.dtype())?;
 
-        first_prediction = self.per_layer_projection.forward(&first_prediction)?;
+        first_prediction = forward_raw_lora(
+            &self.per_layer_projection,
+            self.per_layer_projection_lora.as_deref(),
+            &first_prediction,
+        )?;
         first_prediction = self.post_per_layer_input_norm.forward(&first_prediction)?;
 
         // Perform broadcast add in float32 for precision
@@ -945,9 +1148,83 @@ pub(crate) fn handle_matformer_slicing(
     }
 }
 
+enum PerLayerTokenEmbedding {
+    Method(Arc<dyn QuantMethod>),
+    Dense(ScaledEmbedding),
+}
+
+impl PerLayerTokenEmbedding {
+    fn forward(&self, input_ids: &Tensor, dtype: DType, scale: f64) -> Result<Tensor> {
+        match self {
+            Self::Method(embedding) => embedding.embedding_forward(input_ids, dtype)? * scale,
+            Self::Dense(embedding) => embedding.forward(input_ids),
+        }
+    }
+
+    fn dequantize_w(&self) -> Result<Tensor> {
+        match self {
+            Self::Method(embedding) => embedding.dequantize_w(),
+            Self::Dense(embedding) => Ok(embedding.embedding.clone()),
+        }
+    }
+}
+
+fn load_per_layer_token_embedding(
+    vocab_size: usize,
+    hidden_size_per_layer: usize,
+    orig_num_hidden_layers: usize,
+    kept_layers_indices: Option<&Tensor>,
+    scale: f64,
+    vb: ShardedVarBuilder,
+    quantization_config: &Option<mistralrs_quant::QuantizedConfig>,
+) -> Result<(PerLayerTokenEmbedding, bool)> {
+    if let Some(kept_layers_indices) = kept_layers_indices {
+        let mut embedding = ScaledEmbedding::new(
+            scale,
+            dense_embedding(
+                vocab_size,
+                hidden_size_per_layer * orig_num_hidden_layers,
+                vb,
+                quantization_config,
+            )?,
+        );
+        let weight = embedding.embedding.clone();
+        let weight = weight.reshape((
+            weight.dim(0)?,
+            orig_num_hidden_layers,
+            weight.dim(1)? / orig_num_hidden_layers,
+        ))?;
+        embedding.embedding = weight
+            .index_select(&kept_layers_indices.to_device(weight.device())?, 1)?
+            .reshape((weight.dim(0)?, ()))?
+            .contiguous()?;
+        return Ok((PerLayerTokenEmbedding::Dense(embedding), true));
+    }
+
+    let weight_name = format!("{}.weight", vb.prefix());
+    let source_has_weight = vb
+        .weight_source()
+        .is_some_and(|source| source.contains(&weight_name));
+    let tracked = mistralrs_quant::should_apply_immediate_isq(&vb);
+    let embedding = embedding(
+        vocab_size,
+        hidden_size_per_layer * orig_num_hidden_layers,
+        vb,
+        quantization_config,
+    )?;
+    Ok((
+        PerLayerTokenEmbedding::Method(embedding),
+        !source_has_weight && !tracked,
+    ))
+}
+
 pub struct TextModel {
-    embed_tokens: ScaledEmbedding,
-    embed_tokens_per_layer: ScaledEmbedding,
+    embed_tokens: Arc<dyn QuantMethod>,
+    embed_tokens_scale: f64,
+    dtype: DType,
+    embed_tokens_per_layer: PerLayerTokenEmbedding,
+    embed_tokens_per_layer_scale: f64,
+    embed_tokens_per_layer_in_residual: bool,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
@@ -968,6 +1245,64 @@ pub struct TextModel {
     final_logit_softcapping: Option<f64>,
 }
 
+#[derive(Clone)]
+struct PrefillQuerySelection {
+    source_context_lens: Vec<(usize, usize)>,
+    seqlen_offsets: Vec<usize>,
+    num_cached_tokens: Vec<usize>,
+    query_lens: Vec<usize>,
+}
+
+impl PrefillQuerySelection {
+    fn from_logits_context(
+        query_len: usize,
+        context_lens: &[(usize, usize)],
+        seqlen_offsets: &[usize],
+    ) -> Option<Self> {
+        if context_lens.is_empty() || context_lens.len() != seqlen_offsets.len() {
+            return None;
+        }
+
+        let mut tail_offsets = Vec::with_capacity(context_lens.len());
+        let mut num_cached_tokens = Vec::with_capacity(context_lens.len());
+        let mut query_lens = Vec::with_capacity(context_lens.len());
+        for ((start, len), offset) in context_lens.iter().zip(seqlen_offsets) {
+            if *len != 1 || start.checked_add(*len)? != query_len {
+                return None;
+            }
+            tail_offsets.push(offset + start);
+            num_cached_tokens.push(offset + start);
+            query_lens.push(*len);
+        }
+
+        Some(Self {
+            source_context_lens: context_lens.to_vec(),
+            seqlen_offsets: tail_offsets,
+            num_cached_tokens,
+            query_lens,
+        })
+    }
+
+    fn reduce(&self, tensor: &Tensor) -> Result<Tensor> {
+        extract_logits(tensor, self.source_context_lens.clone())
+    }
+
+    fn reduce_altup(&self, tensor: &Tensor) -> Result<Tensor> {
+        let streams = tensor.dim(0)?;
+        let mut reduced = Vec::with_capacity(streams);
+        for stream in 0..streams {
+            reduced.push(self.reduce(&tensor.i(stream)?)?);
+        }
+        Tensor::stack(&reduced, 0)
+    }
+}
+
+struct KvSharingFastPrefillPlan {
+    first_shared_layer: usize,
+    query_selection: PrefillQuerySelection,
+    paged_metadata: Option<PagedAttentionInputMetadata>,
+}
+
 impl TextModel {
     pub fn new(
         cfg: &Gemma3nTextConfig,
@@ -983,9 +1318,6 @@ impl TextModel {
                 quant_cfg.get_bits_name(&vb)
             );
         }
-        if !matches!(attention_mechanism, AttentionImplementation::Eager) {
-            candle_core::bail!("Expected eager attention implementation");
-        }
         let mapper = normal_loading_metadata.mapper;
 
         // Implement the matformer slicing.
@@ -1000,15 +1332,16 @@ impl TextModel {
 
         // Use float32 for embedding scale factor
         let embed_scale = (cfg.hidden_size as f64).sqrt();
-        let embed_tokens = ScaledEmbedding::new(
-            embed_scale,
-            embedding(
-                cfg.vocab_size,
-                cfg.hidden_size,
-                mapper.set_nm_device(vb.pp("embed_tokens"), false),
-                &cfg.quantization_config,
-            )?,
-        );
+        let dtype = vb.dtype();
+        let embed_tokens = embedding_with_legacy_tied_uqff(
+            cfg.vocab_size,
+            cfg.hidden_size,
+            mapper.set_nm_device(vb.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            cfg.tie_word_embeddings.then(|| {
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq)
+            }),
+            &cfg.quantization_config,
+        )?;
         // Use float32 for per-layer embedding scale factor
         let per_layer_embed_scale = (cfg.hidden_size_per_layer_input as f64).sqrt();
         // Keep embed_tokens_per_layer on CPU if not using Metal
@@ -1017,28 +1350,16 @@ impl TextModel {
         } else {
             vb.pp("embed_tokens_per_layer").set_device(Device::Cpu)
         };
-        let mut embed_tokens_per_layer = ScaledEmbedding::new(
-            per_layer_embed_scale,
-            embedding(
+        let (embed_tokens_per_layer, embed_tokens_per_layer_in_residual) =
+            load_per_layer_token_embedding(
                 cfg.vocab_size_per_layer_input,
-                cfg.hidden_size_per_layer_input * orig_num_hidden_layers,
+                cfg.hidden_size_per_layer_input,
+                orig_num_hidden_layers,
+                kept_layers_indices.as_ref(),
+                per_layer_embed_scale,
                 embed_tokens_per_layer_vb,
                 &cfg.quantization_config,
-            )?,
-        );
-        if let Some(kept_layers_indices) = &kept_layers_indices {
-            let embedding = embed_tokens_per_layer.embedding.clone();
-            let embedding_reshaped = embedding.reshape((
-                embedding.dim(0)?,
-                orig_num_hidden_layers,
-                embedding.dim(1)? / orig_num_hidden_layers,
-            ))?;
-
-            embed_tokens_per_layer.embedding = embedding_reshaped
-                .index_select(kept_layers_indices, 1)?
-                .reshape((embedding_reshaped.dim(0)?, ()))?
-                .contiguous()?;
-        }
+            )?;
 
         let mut global_ropes = HashMap::new();
         for layer_idx in 0..orig_num_hidden_layers {
@@ -1120,6 +1441,12 @@ impl TextModel {
                 .get(&device.location())
                 .expect("No RoPE for device location!")
                 .clone();
+            let paged_attn = match &attention_mechanism {
+                AttentionImplementation::Eager => None,
+                AttentionImplementation::PagedAttention => {
+                    Some(PagedAttention::new(cfg.head_dim, device, None)?)
+                }
+            };
             let comm = mapper.get_comm_for(layer_idx)?;
             DecoderLayer::new(
                 rotary_emb_global,
@@ -1129,6 +1456,7 @@ impl TextModel {
                 &*mapper,
                 layer_idx_effective,
                 normal_loading_metadata.loading_isq,
+                paged_attn,
                 &comm,
             )
         })
@@ -1150,16 +1478,7 @@ impl TextModel {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(
-                        embed_tokens.embeddings(),
-                        normal_loading_metadata.loading_isq,
-                    )?,
-                    None,
-                ),
-                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
-            )?
+            embed_tokens.clone()
         };
 
         let per_layer_model_projection = ReplicatedLayer::new_layers_matformer_indices(
@@ -1209,22 +1528,22 @@ impl TextModel {
         let mut kv_cache_layer_owners = Vec::with_capacity(cfg.num_hidden_layers);
         let cache_types = (0..cfg.num_hidden_layers)
             .map(|layer_idx| {
-                if let Some(owner) = kv_shared_layer_index(cfg, layer_idx) {
+                if let Some(owner) = kv_shared_layer_index(cfg, layer_idx)? {
                     kv_cache_layer_owners.push(owner);
-                    NormalCacheType::Shared { owner }
+                    Ok(NormalCacheType::Shared { owner })
                 } else if is_sliding!(layer_idx, cfg) {
                     kv_cache_layer_owners.push(layer_idx);
-                    NormalCacheType::SlidingWindow {
+                    Ok(NormalCacheType::SlidingWindow {
                         window: cfg.sliding_window,
-                    }
+                    })
                 } else {
                     kv_cache_layer_owners.push(layer_idx);
-                    NormalCacheType::Normal {
+                    Ok(NormalCacheType::Normal {
                         max_seq_len: cfg.max_position_embeddings,
-                    }
+                    })
                 }
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()?;
         let cfg_metadata = ModelConfigMetadata {
             max_seq_len: cfg.max_position_embeddings,
             num_layers: cfg.num_hidden_layers,
@@ -1243,7 +1562,11 @@ impl TextModel {
 
         Ok(Self {
             embed_tokens,
+            embed_tokens_scale: embed_scale,
+            dtype,
             embed_tokens_per_layer,
+            embed_tokens_per_layer_scale: per_layer_embed_scale,
+            embed_tokens_per_layer_in_residual,
             layers,
             norm,
             lm_head,
@@ -1271,7 +1594,7 @@ impl TextModel {
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.forward(input_ids)
+        self.embed_tokens.embedding_forward(input_ids, self.dtype)? * self.embed_tokens_scale
     }
 
     fn get_per_layer_inputs(&self, input_ids: &Tensor) -> Result<Tensor> {
@@ -1286,11 +1609,19 @@ impl TextModel {
         // Only cast to CPU if not using Metal
         let per_layer_embeds = if input_ids_device.is_metal() {
             // On Metal, use input_ids directly
-            self.embed_tokens_per_layer.forward(input_ids)?
+            self.embed_tokens_per_layer.forward(
+                input_ids,
+                self.dtype,
+                self.embed_tokens_per_layer_scale,
+            )?
         } else {
             // On non-Metal devices, cast input to CPU for embedding computation
             let input_ids_cpu = input_ids.to_device(&Device::Cpu)?;
-            self.embed_tokens_per_layer.forward(&input_ids_cpu)?
+            self.embed_tokens_per_layer.forward(
+                &input_ids_cpu,
+                self.dtype,
+                self.embed_tokens_per_layer_scale,
+            )?
         };
 
         let original_dtype = per_layer_embeds.dtype();
@@ -1344,6 +1675,65 @@ impl TextModel {
         (result_f32 * self.per_layer_input_scale)?.to_dtype(per_layer_projection.dtype())
     }
 
+    fn kv_sharing_fast_prefill_plan(
+        &self,
+        input_ids: &Tensor,
+        ctx: &ModelForwardContext<'_>,
+    ) -> Result<Option<KvSharingFastPrefillPlan>> {
+        if ctx.requires_full_prefill_queries() {
+            return Ok(None);
+        }
+        let (batch, query_len) = input_ids.dims2()?;
+        if query_len <= 1 || ctx.context_lens().len() != batch {
+            return Ok(None);
+        }
+        let Some(first_shared_layer) = self
+            .layers
+            .iter()
+            .position(|layer| layer.self_attn.kv_shared_layer_index.is_some())
+        else {
+            return Ok(None);
+        };
+        if !self.layers[first_shared_layer..]
+            .iter()
+            .all(|layer| layer.self_attn.kv_shared_layer_index.is_some())
+            || self.layers[first_shared_layer..]
+                .iter()
+                .any(DecoderLayer::has_active_dynamic_lora)
+        {
+            return Ok(None);
+        }
+        let Some(query_selection) = PrefillQuerySelection::from_logits_context(
+            query_len,
+            ctx.context_lens(),
+            ctx.seqlen_offsets(),
+        ) else {
+            return Ok(None);
+        };
+
+        let paged_metadata = if let Some(metadata) = ctx.paged_input_metadata() {
+            if metadata.block_tables.is_none() {
+                return Ok(None);
+            }
+            Some(
+                metadata
+                    .for_reduced_prefill_queries(
+                        &self.mapper.get_unique_devices(),
+                        &query_selection.num_cached_tokens,
+                        &query_selection.query_lens,
+                    )
+                    .map_err(|error| candle_core::Error::Msg(error.to_string()))?,
+            )
+        } else {
+            None
+        };
+        Ok(Some(KvSharingFastPrefillPlan {
+            first_shared_layer,
+            query_selection,
+            paged_metadata,
+        }))
+    }
+
     pub fn forward_embeds(
         &self,
         input_ids: &Tensor,
@@ -1359,13 +1749,13 @@ impl TextModel {
 
         let cache = &mut self.cache.normal().0;
         let mask_cache = ctx.mask_cache(cache);
-        let attention_mask = CausalMasker.make_causal_mask(
+        let mut attention_mask = CausalMasker.make_causal_mask(
             input_ids,
             &mask_cache,
             xs.dtype(),
             &CausalMaskConfig::default(),
         )?;
-        let sliding_attention_mask = CausalMasker.make_causal_mask(
+        let mut sliding_attention_mask = CausalMasker.make_causal_mask(
             input_ids,
             &mask_cache,
             xs.dtype(),
@@ -1374,6 +1764,17 @@ impl TextModel {
                 ..Default::default()
             },
         )?;
+        let is_paged_decode = is_paged_decode_forward(
+            ctx.is_paged(),
+            input_ids.dim(1)?,
+            ctx.is_first_prompt_chunk(),
+            ctx.paged_input_metadata()
+                .is_some_and(|metadata| metadata.num_cached_tokens.is_some()),
+        );
+        if is_paged_decode {
+            attention_mask = AttentionMask::None;
+            sliding_attention_mask = AttentionMask::None;
+        }
 
         // Already using float32 for magnitude calculations
         let target_magnitude = xs
@@ -1404,17 +1805,80 @@ impl TextModel {
 
         let attention_mask = DeviceMappedMask::new(attention_mask, &*self.mapper)?;
         let sliding_attention_mask = DeviceMappedMask::new(sliding_attention_mask, &*self.mapper)?;
+        let fast_prefill_tail = self.kv_sharing_fast_prefill_plan(input_ids, ctx)?;
+        let mut reduced_to_logits = false;
         for (i, layer) in self.layers.iter().enumerate() {
+            if let Some(plan) = fast_prefill_tail
+                .as_ref()
+                .filter(|plan| i == plan.first_shared_layer)
+            {
+                xs = plan.query_selection.reduce_altup(&xs)?;
+                reduced_to_logits = true;
+            }
+
             let per_layer_input = per_layer_inputs.i((.., .., i, ..))?;
+            let per_layer_input = if reduced_to_logits {
+                fast_prefill_tail
+                    .as_ref()
+                    .expect("missing active fast prefill plan")
+                    .query_selection
+                    .reduce(&per_layer_input)?
+            } else {
+                per_layer_input
+            };
             xs = self.mapper.map(xs, i)?;
+            let rope_positions = if reduced_to_logits {
+                let plan = fast_prefill_tail
+                    .as_ref()
+                    .expect("missing active fast prefill plan");
+                if let Some(metadata) = plan.paged_metadata.as_ref() {
+                    crate::pipeline::metadata_rope_positions(metadata, xs.device())
+                        .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?
+                        .clone()
+                } else {
+                    ctx.text_positions_from_offsets(
+                        &plan.query_selection.seqlen_offsets,
+                        xs.dim(2)?,
+                        xs.device(),
+                    )?
+                }
+            } else {
+                ctx.text_positions(xs.device(), xs.dim(2)?)?
+                    .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?
+                    .clone()
+            };
+            let (layer_attention_mask, layer_sliding_attention_mask) = if reduced_to_logits {
+                (AttentionMask::None, AttentionMask::None)
+            } else {
+                (
+                    attention_mask.get(xs.device()),
+                    sliding_attention_mask.get(xs.device()),
+                )
+            };
+            let cache_idx = layer.self_attn.kv_shared_layer_index.unwrap_or(i);
+            let metadata = ctx.paged_layer(cache_idx).map(|(kv_cache, metadata)| {
+                let metadata = if reduced_to_logits {
+                    fast_prefill_tail
+                        .as_ref()
+                        .and_then(|plan| plan.paged_metadata.as_ref())
+                        .unwrap_or(metadata)
+                } else {
+                    metadata
+                };
+                (kv_cache, metadata)
+            });
+            let mut layer_ctx = AttentionForwardContext {
+                attention_mask: &layer_attention_mask,
+                sliding_attention_mask: &layer_sliding_attention_mask,
+                rope_positions: &rope_positions,
+                kv_caches: &mut *cache,
+                metadata,
+                flash_params: (!reduced_to_logits).then_some(&flash_params),
+            };
             xs = layer.forward(
                 &xs,
                 &per_layer_input.to_device(xs.device())?,
-                &attention_mask.get(xs.device()),
-                &sliding_attention_mask.get(xs.device()),
-                &mut *cache,
-                ctx,
-                &flash_params,
+                &mut layer_ctx,
             )?;
         }
         xs = xs.to_device(&self.device)?;
@@ -1449,8 +1913,12 @@ impl TextModel {
         xs = stacked_f32.mean(0)?.to_dtype(stacked.dtype())?;
 
         xs = xs.apply(&self.norm)?;
-        let mut xs = ctx.logits(&xs)?;
-        xs = self.lm_head.forward(&xs)?;
+        let mut xs = if reduced_to_logits {
+            xs
+        } else {
+            ctx.logits(&xs)?
+        };
+        xs = ctx.lm_head(&*self.lm_head, &xs)?;
 
         if let Some(final_logit_softcapping) = self.final_logit_softcapping {
             let dtype = xs.dtype();
@@ -1467,8 +1935,14 @@ impl IsqModel for TextModel {
 
         // Embeddings
         uvb.pp("embed_tokens").add(&self.embed_tokens);
-        uvb.pp("embed_tokens_per_layer")
-            .add(&self.embed_tokens_per_layer);
+        if self.embed_tokens_per_layer_in_residual {
+            let weight = self
+                .embed_tokens_per_layer
+                .dequantize_w()
+                .expect("dense Gemma3n PLE embedding missing");
+            uvb.pp("embed_tokens_per_layer")
+                .add_tensor("weight", weight);
+        }
 
         // Layer components
         for (layer_idx, layer) in self.layers.iter().enumerate() {
@@ -1575,3 +2049,337 @@ impl MultimodalModel for TextModel {
 }
 
 impl AnyMoeBaseModelMixin for TextModel {}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::HashMap,
+        io::Write,
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        },
+    };
+
+    use candle_core::{
+        quantized::{gguf_file, GgmlDType, QTensor},
+        DType, Device, Tensor,
+    };
+    use candle_nn::Linear;
+    use mistralrs_quant::{
+        create_isq_executor, GgufArchive, GgufBindingMap, GgufTensorBinding, GgufWeightSource,
+        ImmediateIsqConfig, IsqCaptureMode, IsqExecutorConfig, QuantMethod, QuantMethodConfig,
+        QuantizedWeightSource, Shard, ShardedSafeTensors, UnquantLinear,
+    };
+    use tempfile::NamedTempFile;
+
+    use super::{
+        is_paged_decode_forward, kv_shared_layer_index_for_layout, load_per_layer_token_embedding,
+        sliding_decode_kv_window, KvCacheTopology, PagedAttentionInputMetadata,
+        PerLayerTokenEmbedding, PrefillQuerySelection,
+    };
+
+    #[derive(Debug)]
+    struct PerLayerEmbeddingSource {
+        weight: Tensor,
+        available: bool,
+        loads: Arc<AtomicUsize>,
+    }
+
+    impl QuantizedWeightSource for PerLayerEmbeddingSource {
+        fn contains(&self, name: &str) -> bool {
+            self.available && name == "model.language_model.embed_tokens_per_layer.weight"
+        }
+
+        fn load_linear(
+            &self,
+            key: &str,
+            device: &Device,
+            _shard: Shard,
+        ) -> candle_core::Result<Option<Arc<dyn QuantMethod>>> {
+            if !self.available || key != "model.language_model.embed_tokens_per_layer" {
+                return Ok(None);
+            }
+            self.loads.fetch_add(1, Ordering::Relaxed);
+            let layer = UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(
+                self.weight.to_device(device)?,
+                None,
+            )))?;
+            Ok(Some(Arc::new(layer)))
+        }
+
+        fn load_optional_tensor(
+            &self,
+            _name: &str,
+            _device: &Device,
+        ) -> candle_core::Result<Option<Tensor>> {
+            Ok(None)
+        }
+
+        fn shard_alignment(&self, _key: &str) -> candle_core::Result<usize> {
+            Ok(1)
+        }
+
+        fn pack_factor(&self, _dtype: DType) -> candle_core::Result<usize> {
+            Ok(if self.available { 2 } else { 1 })
+        }
+
+        fn pack_factor_for(&self, key: &str, _dtype: DType) -> candle_core::Result<Option<usize>> {
+            Ok(self.contains(key).then_some(2))
+        }
+    }
+
+    fn per_layer_weight(rows: usize, cols: usize) -> candle_core::Result<Tensor> {
+        Tensor::from_vec(
+            (0..rows * cols).map(|value| value as f32).collect(),
+            (rows, cols),
+            &Device::Cpu,
+        )
+    }
+
+    #[test]
+    fn default_per_layer_embedding_uses_weight_source_gather() -> candle_core::Result<()> {
+        mistralrs_quant::clear_immediate_isq();
+        let weight = per_layer_weight(4, 32)?;
+        let q_weight = QTensor::quantize(&weight, GgmlDType::Q4_0)?;
+        let expected_weight = q_weight.dequantize(&Device::Cpu)?.narrow(0, 0, 3)?;
+        let mut file = NamedTempFile::new().map_err(candle_core::Error::wrap)?;
+        gguf_file::write(
+            file.as_file_mut(),
+            &[],
+            &[("per_layer_token_embd.weight", &q_weight)],
+        )?;
+        file.as_file_mut()
+            .flush()
+            .map_err(candle_core::Error::wrap)?;
+
+        let archive = Arc::new(GgufArchive::open_file(file.path())?);
+        let bindings = GgufBindingMap::new().with_binding(
+            "model.language_model.embed_tokens_per_layer.weight",
+            GgufTensorBinding::tensor("per_layer_token_embd.weight").slice(0, 0, 3),
+        );
+        let source = Arc::new(GgufWeightSource::new(archive, &bindings, DType::F32)?);
+        let vb = source
+            .sharded_var_builder(Device::Cpu)
+            .pp("model.language_model.embed_tokens_per_layer");
+        let (embedding, in_residual) =
+            load_per_layer_token_embedding(3, 16, 2, None, 2.0, vb, &None)?;
+
+        let PerLayerTokenEmbedding::Method(method) = &embedding else {
+            panic!("default Gemma3n PLE embedding was materialized dense");
+        };
+        assert!(!in_residual);
+        assert_eq!(method.name(), "gguf");
+        let packed = method
+            .get_qtensor()
+            .expect("GGUF PLE embedding lost its packed QTensor");
+        assert_eq!(packed.dtype(), GgmlDType::Q4_0);
+        assert_eq!(packed.shape().dims(), &[3, 32]);
+        let ids = Tensor::new(&[2u32, 0], &Device::Cpu)?;
+        assert_eq!(
+            embedding.forward(&ids, DType::F32, 2.0)?.to_vec2::<f32>()?,
+            expected_weight
+                .index_select(&ids, 0)?
+                .affine(2.0, 0.0)?
+                .to_vec2::<f32>()?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn matformer_per_layer_embedding_selects_dense_layer_groups() -> candle_core::Result<()> {
+        mistralrs_quant::clear_immediate_isq();
+        let prefix = "model.language_model.embed_tokens_per_layer";
+        let vb = ShardedSafeTensors::wrap(
+            HashMap::from([(format!("{prefix}.weight"), per_layer_weight(3, 6)?)]),
+            DType::F32,
+            Device::Cpu,
+        )
+        .pp(prefix);
+        let kept = Tensor::new(&[0u32, 2], &Device::Cpu)?;
+        let (embedding, in_residual) =
+            load_per_layer_token_embedding(3, 2, 3, Some(&kept), 1.0, vb, &None)?;
+
+        assert!(matches!(&embedding, PerLayerTokenEmbedding::Dense(_)));
+        assert!(in_residual);
+        let ids = Tensor::new(&[1u32], &Device::Cpu)?;
+        assert_eq!(
+            embedding.forward(&ids, DType::F32, 1.0)?.to_vec2::<f32>()?,
+            vec![vec![6.0, 7.0, 10.0, 11.0]]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_uqff_per_layer_embedding_stays_in_residual() -> candle_core::Result<()> {
+        mistralrs_quant::clear_immediate_isq();
+        let prefix = "model.language_model.embed_tokens_per_layer";
+        let weight = per_layer_weight(3, 4)?;
+        let source = Arc::new(PerLayerEmbeddingSource {
+            weight: weight.clone(),
+            available: false,
+            loads: Arc::new(AtomicUsize::new(0)),
+        });
+        let vb = ShardedSafeTensors::wrap(
+            HashMap::from([(format!("{prefix}.weight"), weight.clone())]),
+            DType::F32,
+            Device::Cpu,
+        )
+        .with_weight_source(source)
+        .pp(prefix);
+        let (embedding, in_residual) =
+            load_per_layer_token_embedding(3, 2, 2, None, 1.0, vb, &None)?;
+
+        assert!(matches!(&embedding, PerLayerTokenEmbedding::Method(_)));
+        assert!(in_residual);
+        assert_eq!(
+            embedding.dequantize_w()?.to_vec2::<f32>()?,
+            weight.to_vec2::<f32>()?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn uqff_capture_tracks_per_layer_embedding_without_residual() -> candle_core::Result<()> {
+        mistralrs_quant::clear_immediate_isq();
+        let prefix = "model.language_model.embed_tokens_per_layer";
+        let vb = ShardedSafeTensors::wrap(
+            HashMap::from([(format!("{prefix}.weight"), per_layer_weight(3, 4)?)]),
+            DType::F32,
+            Device::Cpu,
+        )
+        .pp(prefix);
+        let tracker = vb.tracker().clone();
+        let (executor, _) = create_isq_executor(IsqExecutorConfig::new(None));
+        mistralrs_quant::set_immediate_isq_config(
+            ImmediateIsqConfig::new(None, Vec::new(), IsqCaptureMode::CaptureAll),
+            executor,
+        );
+        let result = load_per_layer_token_embedding(3, 2, 2, None, 1.0, vb, &None);
+        mistralrs_quant::clear_immediate_isq();
+        let (embedding, in_residual) = result?;
+
+        assert!(!in_residual);
+        let tracked = tracker.get();
+        assert_eq!(tracked.len(), 1);
+        assert_eq!(tracked[0].key, prefix);
+        let ids = Tensor::new(&[1u32], &Device::Cpu)?;
+        assert_eq!(
+            embedding.forward(&ids, DType::F32, 1.0)?.to_vec2::<f32>()?,
+            vec![vec![4.0, 5.0, 6.0, 7.0]]
+        );
+        Ok(())
+    }
+
+    fn layer_types(types: &[&str]) -> Vec<String> {
+        types.iter().map(|ty| (*ty).to_string()).collect()
+    }
+
+    #[test]
+    fn shared_kv_layers_use_the_latest_matching_donor() {
+        let types = layer_types(&[
+            "sliding_attention",
+            "full_attention",
+            "sliding_attention",
+            "full_attention",
+            "sliding_attention",
+            "full_attention",
+        ]);
+        let owners = (0..types.len())
+            .map(|layer| {
+                kv_shared_layer_index_for_layout(&types, 2, layer)
+                    .unwrap()
+                    .unwrap_or(layer)
+            })
+            .collect::<Vec<_>>();
+        let topology = KvCacheTopology::from_layer_owners(owners);
+
+        assert_eq!(topology.owner_for_layer(4), 2);
+        assert_eq!(topology.owner_for_layer(5), 3);
+        assert!(topology.uses_own_kv_cache_for_layer(2));
+        assert!(!topology.uses_own_kv_cache_for_layer(4));
+    }
+
+    #[test]
+    fn malformed_shared_kv_layouts_fail_closed() {
+        let types = layer_types(&["sliding_attention", "full_attention"]);
+        assert!(kv_shared_layer_index_for_layout(&types, 3, 0).is_err());
+        assert!(kv_shared_layer_index_for_layout(&types, 2, 0).is_err());
+        assert!(kv_shared_layer_index_for_layout(&types, 0, 2).is_err());
+
+        let missing_donor =
+            layer_types(&["sliding_attention", "sliding_attention", "full_attention"]);
+        assert!(kv_shared_layer_index_for_layout(&missing_donor, 1, 2).is_err());
+    }
+
+    #[test]
+    fn sliding_donor_decode_uses_the_trailing_window() {
+        assert_eq!(sliding_decode_kv_window(true, 1, Some(4), 11), Some((7, 4)));
+        assert_eq!(sliding_decode_kv_window(true, 2, Some(4), 11), None);
+        assert_eq!(sliding_decode_kv_window(false, 1, Some(4), 11), None);
+        assert_eq!(sliding_decode_kv_window(true, 1, Some(4), 4), None);
+    }
+
+    #[test]
+    fn paged_decode_does_not_depend_on_physical_query_width() {
+        assert!(is_paged_decode_forward(true, 1, false, false));
+        assert!(is_paged_decode_forward(true, 8, false, false));
+        assert!(!is_paged_decode_forward(true, 8, true, false));
+        assert!(!is_paged_decode_forward(true, 8, false, true));
+        assert!(!is_paged_decode_forward(false, 8, false, false));
+    }
+
+    #[test]
+    fn reduced_shared_prefill_keeps_query_rows_and_positions_aligned() {
+        let selection =
+            PrefillQuerySelection::from_logits_context(4, &[(3, 1), (3, 1)], &[5, 10]).unwrap();
+        let source = Tensor::from_vec(
+            (0u32..8).map(|value| value as f32).collect::<Vec<_>>(),
+            (2, 4, 1),
+            &Device::Cpu,
+        )
+        .unwrap();
+        assert_eq!(
+            selection
+                .reduce(&source)
+                .unwrap()
+                .flatten_all()
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap(),
+            vec![3.0, 7.0]
+        );
+        let shifted = (source.clone() + 10.0).unwrap();
+        let altup = Tensor::stack(&[source, shifted], 0).unwrap();
+        assert_eq!(
+            selection.reduce_altup(&altup).unwrap().dims(),
+            &[2, 2, 1, 1]
+        );
+
+        let mut metadata = PagedAttentionInputMetadata::dummy(&Device::Cpu).unwrap();
+        metadata.block_size = Some(16);
+        metadata.block_tables = Some(HashMap::from([(
+            Device::Cpu.location(),
+            Tensor::zeros((2, 1), DType::U32, &Device::Cpu).unwrap(),
+        )]));
+        let reduced = metadata
+            .for_reduced_prefill_queries(
+                &[Device::Cpu],
+                &selection.num_cached_tokens,
+                &selection.query_lens,
+            )
+            .unwrap();
+        assert_eq!(reduced.num_cached_tokens, Some(vec![8, 13]));
+        assert_eq!(reduced.query_lens, Some(vec![1, 1]));
+        assert_eq!(
+            reduced
+                .rope_positions
+                .unwrap()
+                .get(&Device::Cpu.location())
+                .unwrap()
+                .to_vec1::<u32>()
+                .unwrap(),
+            vec![8, 13]
+        );
+    }
+}

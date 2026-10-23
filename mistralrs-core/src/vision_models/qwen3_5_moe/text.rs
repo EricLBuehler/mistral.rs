@@ -6,7 +6,7 @@ use std::{
 };
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::{Embedding, Linear};
+use candle_nn::Linear;
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
@@ -16,19 +16,25 @@ use super::config::{LayerType, TextConfig};
 use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
-    gdn::{GatedDeltaNet, GdnConfig, GdnInputProjectionKind, GdnLayerCache},
+    gdn::{
+        GatedDeltaNet, GdnConfig, GdnInputProjectionKind, GdnLayerCache, GdnVHeadLayout,
+        PackedGdnLayout,
+    },
     kv_cache::{
         HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
     },
     layers::{self, GemmaRmsNorm, Qwen3VLRotaryEmbedding, Sdpa},
     moe::{MoEExperts, MoEExpertsConfig},
-    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
+    paged_attention::{
+        load_fp8_attention_scales, AttentionImplementation, ModelConfigMetadata, PagedAttention,
+    },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, KvCache, ModelForwardContext, NormalLoadingMetadata,
         RecurrentBatchKind,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
+    vision_models::qwen3_5::packed_gdn::{forward_packed_gdn, packed_gdn_layout},
 };
 
 impl GdnConfig for TextConfig {
@@ -55,6 +61,9 @@ impl GdnConfig for TextConfig {
     }
     fn quantization_config(&self) -> &Option<QuantizedConfig> {
         &self.quantization_config
+    }
+    fn v_head_layout(&self) -> GdnVHeadLayout {
+        self.gdn_v_head_layout
     }
 }
 
@@ -85,7 +94,7 @@ impl FullAttention {
         layer_idx: usize,
         loading_isq: bool,
         rotary_emb: Arc<Qwen3VLRotaryEmbedding>,
-        paged_attn: Option<PagedAttention>,
+        use_paged_attention: bool,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let vb_sa = mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq);
@@ -131,8 +140,20 @@ impl FullAttention {
         )?;
 
         let vb_sa_norms = mapper.set_device(layer_idx, vb.pp("self_attn"), false);
-        let q_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("q_norm"))?;
-        let k_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("k_norm"))?;
+        let paged_attn = if use_paged_attention {
+            Some(PagedAttention::new_with_fp8_attention_scales(
+                cfg.head_dim,
+                vb_sa_norms.device(),
+                None,
+                load_fp8_attention_scales(&vb_sa_norms)?,
+            )?)
+        } else {
+            None
+        };
+        let q_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("q_norm"))?
+            .with_storage(cfg.norm_storage)?;
+        let k_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("k_norm"))?
+            .with_storage(cfg.norm_storage)?;
 
         Ok(Self {
             q_proj,
@@ -192,6 +213,10 @@ impl FullAttention {
             (q, k, v)
         };
 
+        let cos_sin = &(
+            cos_sin.0.to_device(q.device())?,
+            cos_sin.1.to_device(q.device())?,
+        );
         (q, k) = self.rotary_emb.forward_qk_norm(
             cos_sin,
             &q,
@@ -264,9 +289,11 @@ impl FullAttention {
 
 struct SparseMoeBlock {
     gate: Linear,
+    gate_lora: Option<Arc<mistralrs_quant::LoraSiteHandle>>,
     experts: MoEExperts,
     shared_expert: layers::Mlp,
     shared_expert_gate: Linear,
+    shared_expert_gate_lora: Option<Arc<mistralrs_quant::LoraSiteHandle>>,
     num_experts_per_tok: usize,
     norm_topk_prob: bool,
 }
@@ -287,10 +314,11 @@ impl SparseMoeBlock {
             .cloned()
             .unwrap_or(real_device);
 
-        let gate = layers::linear_no_bias(
-            cfg.hidden_size,
-            cfg.num_experts,
-            vb.pp("gate").set_device(layer_device.clone()),
+        let gate_vb = vb.pp("gate").set_device(layer_device.clone());
+        let gate = layers::linear_no_bias(cfg.hidden_size, cfg.num_experts, gate_vb.clone())?;
+        let gate_lora = mistralrs_quant::register_dynamic_lora_site(
+            &gate_vb,
+            mistralrs_quant::LoraLinearSpec::replicated(cfg.hidden_size, cfg.num_experts),
         )?;
 
         let moe_cfg = MoEExpertsConfig {
@@ -298,6 +326,7 @@ impl SparseMoeBlock {
             num_experts_per_tok: cfg.num_experts_per_tok,
             hidden_size: cfg.hidden_size,
             moe_intermediate_size: cfg.moe_intermediate_size,
+            expert_proj_names: crate::moe::ExpertProjNames::DEFAULT,
         };
 
         let experts = MoEExperts::new(
@@ -319,19 +348,24 @@ impl SparseMoeBlock {
             comm,
         )?;
 
-        let mut seg_w = vb
-            .pp("shared_expert_gate")
-            .get((1, cfg.hidden_size), "weight")?;
+        let shared_expert_gate_vb = vb.pp("shared_expert_gate");
+        let mut seg_w = shared_expert_gate_vb.get((1, cfg.hidden_size), "weight")?;
         if loading_isq {
             seg_w = seg_w.to_device(&layer_device)?;
         }
         let shared_expert_gate = Linear::new(seg_w, None);
+        let shared_expert_gate_lora = mistralrs_quant::register_dynamic_lora_site(
+            &shared_expert_gate_vb.set_device(layer_device),
+            mistralrs_quant::LoraLinearSpec::replicated(cfg.hidden_size, 1),
+        )?;
 
         Ok(Self {
             gate,
+            gate_lora,
             experts,
             shared_expert,
             shared_expert_gate,
+            shared_expert_gate_lora,
             num_experts_per_tok: cfg.num_experts_per_tok,
             norm_topk_prob: cfg.norm_topk_prob,
         })
@@ -342,6 +376,10 @@ impl SparseMoeBlock {
         let xs_flat = xs.reshape(((), hidden_dim))?;
 
         let router_logits = self.gate.forward(&xs_flat)?;
+        let router_logits = match &self.gate_lora {
+            Some(site) => mistralrs_quant::apply_dynamic_lora_delta(site, &xs_flat, router_logits)?,
+            None => router_logits,
+        };
         let topk = crate::ops::moe_router_topk(
             &router_logits,
             crate::ops::MoeRouterTopKConfig {
@@ -361,11 +399,12 @@ impl SparseMoeBlock {
         y = y.reshape((b_size, seq_len, hidden_dim))?;
 
         let shared_out = self.shared_expert.forward(xs)?;
-        let shared_gate = candle_nn::ops::sigmoid(
-            &self
-                .shared_expert_gate
-                .forward(&xs.reshape(((), hidden_dim))?)?,
-        )?;
+        let shared_gate = self.shared_expert_gate.forward(&xs_flat)?;
+        let shared_gate = match &self.shared_expert_gate_lora {
+            Some(site) => mistralrs_quant::apply_dynamic_lora_delta(site, &xs_flat, shared_gate)?,
+            None => shared_gate,
+        };
+        let shared_gate = candle_nn::ops::sigmoid(&shared_gate)?;
         let shared_gate = shared_gate.reshape((b_size, seq_len, 1))?;
         let shared_out = shared_out.broadcast_mul(&shared_gate)?;
 
@@ -412,9 +451,10 @@ impl DecoderLayer {
             metadata,
             flash_params,
         )?;
-        let x = (attn_out + residual)?;
+        let (x, normed) = self
+            .post_attention_layernorm
+            .forward_add_rms_norm(&attn_out, residual)?;
         let residual = &x;
-        let normed = self.post_attention_layernorm.forward(&x)?;
         let ffn_out = self.moe.forward(&normed)?;
         ffn_out + residual
     }
@@ -424,6 +464,7 @@ impl DecoderLayer {
         x: &Tensor,
         cache: &mut GdnLayerCache,
         batch_kind: RecurrentBatchKind,
+        packed_layout: Option<&PackedGdnLayout>,
     ) -> Result<Tensor> {
         let gdn = match &self.layer_impl {
             LayerImpl::LinearAttention(gdn) => gdn,
@@ -431,10 +472,15 @@ impl DecoderLayer {
         };
         let residual = x;
         let x = self.input_layernorm.forward(x)?;
-        let gdn_out = gdn.forward(&x, cache, batch_kind)?;
-        let x = (gdn_out + residual)?;
+        let gdn_out = if let Some(layout) = packed_layout {
+            forward_packed_gdn(gdn, &x, cache, batch_kind, layout)?
+        } else {
+            gdn.forward(&x, cache, batch_kind)?
+        };
+        let (x, normed) = self
+            .post_attention_layernorm
+            .forward_add_rms_norm(&gdn_out, residual)?;
         let residual = &x;
-        let normed = self.post_attention_layernorm.forward(&x)?;
         let ffn_out = self.moe.forward(&normed)?;
         ffn_out + residual
     }
@@ -443,10 +489,10 @@ impl DecoderLayer {
 // ====================== Text Model ======================
 
 pub struct Qwen3_5MoeTextModel {
-    embed_tokens: Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
     pub(super) norm: GemmaRmsNorm,
     layers: Vec<DecoderLayer>,
-    layer_types: Vec<LayerType>,
+    pub(super) layer_types: Vec<LayerType>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     lm_head: Arc<dyn QuantMethod>,
     pub(super) cache: EitherCache,
@@ -454,6 +500,26 @@ pub struct Qwen3_5MoeTextModel {
     pub(super) device: Device,
     pub(super) dtype: DType,
     pub(super) max_seq_len: usize,
+}
+
+pub(super) fn validate_text_checkpoint_namespace(vb: &ShardedVarBuilder) -> Result<()> {
+    if layers::contains_tensor_or_uqff(vb, "language_model.model.embed_tokens.weight")
+        && vb.lora_registry().is_some()
+    {
+        candle_core::bail!(
+            "dynamic LoRA for Qwen3.5/3.6 MoE requires canonical `model.language_model.*` checkpoint tensor names; `language_model.model.*` is not supported"
+        );
+    }
+    Ok(())
+}
+
+fn text_model_vb(vb: ShardedVarBuilder) -> Result<ShardedVarBuilder> {
+    validate_text_checkpoint_namespace(&vb)?;
+    if layers::contains_tensor_or_uqff(&vb, "language_model.model.embed_tokens.weight") {
+        Ok(vb.pp("language_model").pp("model"))
+    } else {
+        Ok(vb.pp("model").pp("language_model"))
+    }
 }
 
 impl Qwen3_5MoeTextModel {
@@ -464,17 +530,35 @@ impl Qwen3_5MoeTextModel {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        cfg.validate()?;
         let mapper = normal_loading_metadata.mapper;
-        let vb_m = if vb.contains_tensor("language_model.model.embed_tokens.weight") {
-            vb.pp("language_model").pp("model")
+        let vb_m = text_model_vb(vb.clone())?;
+
+        let mut cfg = cfg.clone();
+        if let Some(linear) = cfg
+            .layer_types()
+            .iter()
+            .position(|t| *t == LayerType::LinearAttention)
+        {
+            cfg.norm_storage = crate::gdn::checkpoint_norm_storage(
+                &vb_m.pp("layers").pp(linear).pp("linear_attn"),
+            );
+        }
+        let cfg = &cfg;
+        // MLX conversions nest the head under the language model like the rest of the text weights
+        let vb_head = if layers::contains_tensor_or_uqff(&vb, "language_model.lm_head.weight") {
+            vb.pp("language_model")
         } else {
-            vb.pp("model").pp("language_model")
+            vb.clone()
         };
 
-        let embed_tokens = layers::embedding(
+        let embed_tokens = layers::embedding_with_legacy_tied_uqff(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            tie.then(|| {
+                mapper.set_nm_device(vb_head.pp("lm_head"), normal_loading_metadata.loading_isq)
+            }),
             &cfg.quantization_config,
         )?;
 
@@ -485,6 +569,15 @@ impl Qwen3_5MoeTextModel {
         }
 
         let layer_types = cfg.layer_types();
+        let yarn_rope_config = cfg.yarn_rope_config()?;
+        if let Some(yarn) = &yarn_rope_config {
+            tracing::info!(
+                factor = yarn.factor,
+                original_max_position_embeddings = yarn.original_max_position_embeddings,
+                max_position_embeddings = yarn.max_position_embeddings,
+                "Using Qwen3.5 MoE YaRN rotary embeddings"
+            );
+        }
 
         // Create MRoPE embeddings (one per device, using rot_dim not head_dim)
         let rot_dim = cfg.rot_dim();
@@ -498,12 +591,19 @@ impl Qwen3_5MoeTextModel {
                 .unwrap_or(&normal_loading_metadata.real_device);
             ropes.entry(device.location()).or_insert_with(|| {
                 Arc::new(
-                    Qwen3VLRotaryEmbedding::new(
-                        cfg.rope_theta() as f32,
-                        rot_dim,
-                        device,
-                        cfg.mrope_section().to_vec(),
-                    )
+                    match yarn_rope_config.as_ref() {
+                        Some(yarn) => Qwen3VLRotaryEmbedding::new_yarn(
+                            yarn,
+                            device,
+                            cfg.mrope_section().to_vec(),
+                        ),
+                        None => Qwen3VLRotaryEmbedding::new(
+                            cfg.rope_theta() as f32,
+                            rot_dim,
+                            device,
+                            cfg.mrope_section().to_vec(),
+                        ),
+                    }
                     .expect("Failed to create rotary embedding"),
                 )
             });
@@ -527,12 +627,6 @@ impl Qwen3_5MoeTextModel {
                         .get(&device.location())
                         .expect("No RoPE for device location!")
                         .clone();
-                    let paged_attn = match &attention_mechanism {
-                        AttentionImplementation::Eager => None,
-                        AttentionImplementation::PagedAttention => {
-                            Some(PagedAttention::new(cfg.head_dim, device, None)?)
-                        }
-                    };
                     LayerImpl::FullAttention(FullAttention::load(
                         vb_l.pp(layer_idx),
                         cfg,
@@ -540,7 +634,7 @@ impl Qwen3_5MoeTextModel {
                         layer_idx,
                         normal_loading_metadata.loading_isq,
                         rotary_emb,
-                        paged_attn,
+                        matches!(attention_mechanism, AttentionImplementation::PagedAttention),
                         &comm,
                     )?)
                 }
@@ -559,7 +653,8 @@ impl Qwen3_5MoeTextModel {
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
                 mapper.set_device(layer_idx, vb_l.pp(layer_idx).pp("input_layernorm"), false),
-            )?;
+            )?
+            .with_storage(cfg.norm_storage)?;
             let post_attention_layernorm = GemmaRmsNorm::new(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
@@ -568,7 +663,8 @@ impl Qwen3_5MoeTextModel {
                     vb_l.pp(layer_idx).pp("post_attention_layernorm"),
                     false,
                 ),
-            )?;
+            )?
+            .with_storage(cfg.norm_storage)?;
 
             let moe = SparseMoeBlock::new(
                 cfg,
@@ -596,26 +692,18 @@ impl Qwen3_5MoeTextModel {
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
-        )?;
+        )?
+        .with_storage(cfg.norm_storage)?;
         let lm_head = if !tie {
             ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
                 &cfg.quantization_config,
                 false,
-                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+                mapper.set_nm_device(vb_head.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(
-                        embed_tokens.embeddings(),
-                        normal_loading_metadata.loading_isq,
-                    )?,
-                    None,
-                ),
-                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
-            )?
+            embed_tokens.clone()
         };
 
         // Create pipeline hybrid cache
@@ -633,22 +721,25 @@ impl Qwen3_5MoeTextModel {
             recurrent: RecurrentLayerConfig {
                 conv_dim: cfg.linear_conv_dim(),
                 conv_width: cfg.linear_conv_kernel_dim,
-                state_dims: vec![
-                    cfg.linear_num_value_heads,
-                    cfg.linear_key_head_dim,
-                    cfg.linear_value_head_dim,
-                ],
-                recurrent_dtype: Some(DType::F32),
+                state: crate::kv_cache::RecurrentStateSpec::Gdn {
+                    heads: cfg.linear_num_value_heads,
+                    key_dim: cfg.linear_key_head_dim,
+                    value_dim: cfg.linear_value_head_dim,
+                },
+                recurrent_dtype: Some(cfg.mamba_ssm_dtype.dtype()),
             },
         };
+        let layer_devices = (0..hybrid_cache_config.layer_types.len())
+            .map(|layer_idx| {
+                mapper
+                    .device_for(layer_idx, false)
+                    .unwrap_or(&normal_loading_metadata.real_device)
+                    .clone()
+            })
+            .collect::<Vec<_>>();
 
         let pipeline_cache = Arc::new(Mutex::new(
-            HybridCache::new(
-                hybrid_cache_config,
-                vb_m.dtype(),
-                &normal_loading_metadata.real_device,
-            )
-            .map_err(|e| {
+            HybridCache::new(hybrid_cache_config, vb_m.dtype(), &layer_devices).map_err(|e| {
                 candle_core::Error::Msg(format!("Failed to create hybrid cache: {}", e))
             })?,
         ));
@@ -680,7 +771,7 @@ impl Qwen3_5MoeTextModel {
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.forward(input_ids)
+        self.embed_tokens.embedding_forward(input_ids, self.dtype)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -696,16 +787,20 @@ impl Qwen3_5MoeTextModel {
     ) -> Result<Tensor> {
         let mut hybrid_cache = self.cache.hybrid();
         let recurrent_metadata = ctx.recurrent_metadata().cloned();
-        if self
+        let has_linear_attention = self
             .layer_types
             .iter()
-            .any(|lt| matches!(lt, LayerType::LinearAttention))
-            && recurrent_metadata.is_none()
-        {
+            .any(|lt| matches!(lt, LayerType::LinearAttention));
+        if has_linear_attention && recurrent_metadata.is_none() {
             candle_core::bail!(
                 "Hybrid recurrent metadata is required for linear-attention layers."
             );
         }
+        let packed_layout = if has_linear_attention {
+            packed_gdn_layout(&xs, ctx)?
+        } else {
+            None
+        };
 
         // Compute MRoPE cos/sin using first full-attention layer's rotary embedding
         let cos_sin = {
@@ -767,35 +862,41 @@ impl Qwen3_5MoeTextModel {
                     }
                 }
                 LayerType::LinearAttention => {
+                    let recurrent_metadata = recurrent_metadata.as_ref().expect(
+                        "checked above: linear-attention layers require recurrent metadata",
+                    );
+                    let indices = hybrid_cache.state_indices_for_layer(i)?.ok_or_else(|| {
+                        candle_core::Error::msg(format!(
+                            "Hybrid cache layer {i} is missing recurrent state indices"
+                        ))
+                    })?;
                     if let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(i) {
-                        let recurrent_metadata = recurrent_metadata.as_ref().expect(
-                            "checked above: linear-attention layers require recurrent metadata",
-                        );
-                        let indices = recurrent_metadata.state_indices();
-
-                        let conv_state = pool.gather_conv_state(indices)?;
-                        let recurrent_state = pool.gather_recurrent_state(indices)?;
-
-                        let mut gdn_cache = GdnLayerCache {
-                            conv_state,
-                            recurrent_state,
+                        // Packed prefill slices the gathered rows per logical sequence
+                        let mut gdn_cache = if packed_layout.is_some() {
+                            GdnLayerCache::gathered(
+                                pool.gather_conv_state(&indices)?,
+                                pool.gather_recurrent_state(&indices)?,
+                                pool.state_layout(),
+                            )
+                        } else {
+                            GdnLayerCache::checkout(
+                                pool,
+                                &indices,
+                                recurrent_metadata.batch_kind(),
+                            )?
                         };
 
                         xs = layer.forward_linear(
                             &xs,
                             &mut gdn_cache,
                             recurrent_metadata.batch_kind(),
+                            packed_layout.as_ref(),
                         )?;
 
-                        pool.scatter_conv_state_with_host_indices(
-                            indices,
+                        gdn_cache.commit(
+                            pool,
+                            &indices,
                             recurrent_metadata.state_indices_host(),
-                            &gdn_cache.conv_state,
-                        )?;
-                        pool.scatter_recurrent_state_with_host_indices(
-                            indices,
-                            recurrent_metadata.state_indices_host(),
-                            &gdn_cache.recurrent_state,
                         )?;
                     } else {
                         candle_core::bail!(
@@ -817,7 +918,7 @@ impl Qwen3_5MoeTextModel {
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
         let xs = ctx.logits(&xs)?;
-        self.lm_head.forward(&xs)
+        ctx.lm_head(&*self.lm_head, &xs)
     }
 
     fn deepstack_process(
@@ -895,5 +996,72 @@ impl IsqModel for Qwen3_5MoeTextModel {
         }
 
         uvb.to_safetensors()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn text_config_json() -> serde_json::Value {
+        serde_json::json!({
+            "head_dim": 8,
+            "vocab_size": 32,
+            "hidden_size": 16,
+            "num_hidden_layers": 4,
+            "num_attention_heads": 2,
+            "num_key_value_heads": 1,
+            "hidden_act": "silu",
+            "max_position_embeddings": 128,
+            "rms_norm_eps": 0.00001,
+            "rope_parameters": {
+                "rope_theta": 10000000.0,
+                "mrope_section": [1, 1, 2],
+                "partial_rotary_factor": 0.5
+            },
+            "moe_intermediate_size": 8,
+            "shared_expert_intermediate_size": 16,
+            "num_experts": 4,
+            "num_experts_per_tok": 2,
+            "full_attention_interval": 4,
+            "linear_conv_kernel_dim": 4,
+            "linear_key_head_dim": 4,
+            "linear_value_head_dim": 4,
+            "linear_num_key_heads": 2,
+            "linear_num_value_heads": 4
+        })
+    }
+
+    #[test]
+    fn gdn_head_layout_defaults_to_grouped_and_accepts_tiled_override() {
+        let default: TextConfig = serde_json::from_value(text_config_json()).unwrap();
+        assert_eq!(default.v_head_layout(), GdnVHeadLayout::Grouped);
+
+        let mut tiled = text_config_json();
+        tiled["_mistralrs_gdn_v_head_layout"] = serde_json::json!("tiled");
+        let tiled: TextConfig = serde_json::from_value(tiled).unwrap();
+        assert_eq!(tiled.v_head_layout(), GdnVHeadLayout::Tiled);
+    }
+
+    #[test]
+    fn dynamic_lora_rejects_alternate_text_checkpoint_namespace() -> Result<()> {
+        let vb = mistralrs_quant::ShardedSafeTensors::wrap_with_dummy_regexes(
+            HashMap::from([(
+                "language_model.model.embed_tokens.weight".to_string(),
+                Tensor::zeros((1, 1), DType::F32, &Device::Cpu)?,
+            )]),
+            DType::F32,
+            Device::Cpu,
+            None,
+        )
+        .with_lora_registry(Arc::new(mistralrs_quant::LoraLayerRegistry::new()));
+        let error = match text_model_vb(vb) {
+            Ok(_) => panic!("alternate namespace must be rejected"),
+            Err(error) => error,
+        };
+        assert!(error
+            .to_string()
+            .contains("requires canonical `model.language_model.*`"));
+        Ok(())
     }
 }

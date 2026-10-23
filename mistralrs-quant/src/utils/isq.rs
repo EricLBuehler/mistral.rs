@@ -1,6 +1,6 @@
 use std::sync::{atomic::AtomicUsize, Arc};
 
-use candle_core::{quantized::GgmlDType, Device, Result, Tensor};
+use candle_core::{quantized::GgmlDType, DType, Device, Result, Tensor};
 
 use crate::{
     get_immediate_isq, pending_layer, ImmediateIsqMatch, ImmediateIsqParams, IsqConsumer,
@@ -48,7 +48,12 @@ fn apply_immediate_isq_inner(
         return Ok(layer);
     };
     let prefix = format!("{}.weight", vb.prefix());
-    if let Some(ImmediateIsqMatch { ty, device }) = crate::resolve_immediate_isq(&params, &prefix) {
+    if let Some(ImmediateIsqMatch {
+        ty,
+        device,
+        promote_default,
+    }) = crate::resolve_immediate_isq(&params, &prefix)
+    {
         let device = if params.capture == crate::IsqCaptureMode::CaptureAll {
             Device::Cpu
         } else {
@@ -66,6 +71,7 @@ fn apply_immediate_isq_inner(
             key: module_key,
             ct: layer.clone(),
             ty,
+            promote_default,
             shard,
         });
         Ok(layer)
@@ -81,7 +87,11 @@ pub(crate) fn spawn_pending_isq(
     params: &ImmediateIsqParams,
     module_key: String,
 ) -> Arc<PendingIsqLayer> {
-    let guard = params.guard.clone().with_module_key(module_key.clone());
+    let guard = params
+        .guard
+        .clone()
+        .with_module_key(module_key.clone())
+        .with_consumer(IsqConsumer::ImmediateLoad);
     let request = IsqRequest {
         ty,
         device: device.clone(),
@@ -121,7 +131,43 @@ pub fn quantize_expert_stack(
     device: &Device,
     guard: crate::QuantizeOntoGuard,
 ) -> Result<Arc<dyn QuantMethod>> {
+    quantize_expert_stack_with_bias(
+        stack,
+        None,
+        ty,
+        imatrix,
+        device,
+        &AtomicUsize::new(0),
+        guard,
+    )
+}
+
+pub fn quantize_expert_stack_with_bias(
+    stack: Tensor,
+    bias: Option<Tensor>,
+    ty: IsqType,
+    imatrix: Option<Vec<f32>>,
+    device: &Device,
+    n_quantized: &AtomicUsize,
+    guard: crate::QuantizeOntoGuard,
+) -> Result<Arc<dyn QuantMethod>> {
+    let (experts, output, _) = stack.dims3()?;
+    if let Some(bias) = &bias {
+        if bias.dims() != [experts, output] {
+            candle_core::bail!(
+                "Stacked expert bias shape {:?} does not match weight shape {:?}; expected [{experts}, {output}].",
+                bias.dims(),
+                stack.dims()
+            );
+        }
+    }
+    if !ty.supports_stacked_gather() {
+        candle_core::bail!(
+            "Cannot quantize stacked expert weights to {ty}: that target does not support stacked expert gather. Use a Q*K/Q*_0/Q*_1 target, AFQ, or omit ISQ."
+        );
+    }
     if candle_core::quantized::GgmlDType::try_from(ty).is_ok() {
+        n_quantized.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let w = crate::GgufMatMul::quantize_expert_stack(
             &stack,
             ty,
@@ -129,18 +175,15 @@ pub fn quantize_expert_stack(
             device,
             guard,
         )?;
-        return Ok(Arc::new(crate::GgufMatMul::from_qtensor(w, None)));
+        let bias = bias
+            .map(|bias| bias.to_dtype(DType::F32)?.to_device(device))
+            .transpose()?;
+        return Ok(Arc::new(crate::GgufMatMul::from_qtensor(w, bias)));
     }
     let unquant = Arc::new(crate::UnquantLinear::new(
-        crate::QuantMethodConfig::Unquantized(candle_nn::Linear::new(stack, None)),
+        crate::QuantMethodConfig::Unquantized(candle_nn::Linear::new(stack, bias)),
     )?) as Arc<dyn QuantMethod>;
-    unquant.apply_isq(
-        Some(ty),
-        device.clone(),
-        &AtomicUsize::new(0),
-        imatrix,
-        guard,
-    )
+    unquant.apply_isq(Some(ty), device.clone(), n_quantized, imatrix, guard)
 }
 
 /// Quantize every tracked module on an executor sized for `pool_ty`.
@@ -175,7 +218,8 @@ pub fn requantize_tracked(
         let mut guard = guard
             .clone()
             .with_module_key(module.key.clone())
-            .with_requested(ty.to_string());
+            .with_requested(ty.to_string())
+            .with_consumer(consumer);
         if let Some(report) = &report {
             guard = guard.with_report(report.clone());
         }

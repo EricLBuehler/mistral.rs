@@ -38,7 +38,10 @@ export async function streamChatCompletion(
   if (options.max_tokens != null) body.max_tokens = options.max_tokens;
   if (options.repetition_penalty != null)
     body.repetition_penalty = options.repetition_penalty;
-  if (options.enable_thinking) body.enable_thinking = true;
+  if (options.enable_thinking != null)
+    body.enable_thinking = options.enable_thinking;
+  if (options.reasoning_effort)
+    body.reasoning_effort = options.reasoning_effort;
   if (options.web_search_options)
     body.web_search_options = options.web_search_options;
   if (options.enable_code_execution) {

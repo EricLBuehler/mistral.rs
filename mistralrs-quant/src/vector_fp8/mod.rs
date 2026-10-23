@@ -74,6 +74,10 @@ impl QuantMethod for VectorFP8Linear {
         (DType::F8E4M3, self.weight.device().clone())
     }
 
+    fn has_bias(&self) -> bool {
+        self.bias.is_some()
+    }
+
     fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
         Ok(crate::plan_weight_isq(
             self.dequant_dtype,
@@ -143,7 +147,11 @@ impl QuantMethod for VectorFP8Linear {
 
                 Ok(Arc::new(AfqLayer::new(QuantMethodConfig::Afq {
                     weight: weight.to_device(&device)?,
-                    bias: self.bias.as_ref().map(|b| b.to_device(&device).unwrap()),
+                    bias: self
+                        .bias
+                        .as_ref()
+                        .map(|b| b.to_device(&device))
+                        .transpose()?,
                     bits,
                     group_size: AfqGroupSize::default(),
                 })?))
@@ -173,7 +181,8 @@ impl QuantMethod for VectorFP8Linear {
                     b: self
                         .bias
                         .as_ref()
-                        .map(|b| b.to_dtype(DType::F32).unwrap().to_device(&device).unwrap()),
+                        .map(|b| b.to_dtype(DType::F32)?.to_device(&device))
+                        .transpose()?,
                 })?))
             }
             Some(IsqType::F8E4M3) => {

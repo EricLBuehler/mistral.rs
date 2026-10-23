@@ -138,6 +138,11 @@ impl NormalLoaderType {
                 modalities: m,
                 examples: &[ex!("Qwen/Qwen3-30B-A3B")],
             },
+            Self::Flint => ArchMetadata {
+                families: &["Flint"],
+                modalities: m,
+                examples: &[ex!("RecursiveSI/flint")],
+            },
             Self::SmolLm3 => ArchMetadata {
                 families: &["SmolLM3"],
                 modalities: m,
@@ -170,6 +175,11 @@ impl NormalLoaderType {
                 families: &["Qwen3-Next", "Qwen3-Coder-Next"],
                 modalities: m,
                 examples: &[ex!("Qwen/Qwen3-Next-80B-A3B-Instruct")],
+            },
+            Self::Qwen3_5 => ArchMetadata {
+                families: &["Qwen3.5"],
+                modalities: m,
+                examples: &[],
             },
             Self::Lfm2 => ArchMetadata {
                 families: &["LFM2", "LFM2.5"],
@@ -290,6 +300,11 @@ impl MultimodalLoaderType {
                     ex!("Qwen/Qwen3.6-27B", "3.6"),
                 ],
             },
+            Self::Qwen4Exp => ArchMetadata {
+                families: &["Qwen3.8-Flash-Next"],
+                modalities: &[Text, Vision],
+                examples: &[ex!("Qwen/Qwen3.8-Flash-Next")],
+            },
             Self::Qwen3_5Moe => ArchMetadata {
                 families: &["Qwen 3.5 MoE", "Qwen 3.6 MoE"],
                 modalities: &[Text, Vision],
@@ -301,7 +316,7 @@ impl MultimodalLoaderType {
             Self::Voxtral => ArchMetadata {
                 families: &["Voxtral"],
                 modalities: &[Text, Audio],
-                examples: &[ex!("mistralai/Voxtral-Mini-3B-2507")],
+                examples: &[ex!("mistralai/Voxtral-Mini-4B-Realtime-2602")],
             },
             Self::Gemma4 => ArchMetadata {
                 families: &["Gemma 4"],
@@ -311,6 +326,11 @@ impl MultimodalLoaderType {
                     ex!("google/gemma-4-26B-A4B-it", "26B-A4B MoE"),
                     ex!("google/gemma-4-31B-it", "31B dense"),
                 ],
+            },
+            Self::MuseGlimmer => ArchMetadata {
+                families: &["Muse Glimmer"],
+                modalities: &[Text, Vision, Video],
+                examples: &[ex!("meta-models/Muse-Glimmer-30B")],
             },
             Self::DiffusionGemma => ArchMetadata {
                 families: &["DiffusionGemma"],
@@ -390,12 +410,14 @@ impl NormalLoaderType {
             Self::GLM4MoeLite => "Glm4MoeLiteForCausalLM",
             Self::GLM4Moe => "Glm4MoeForCausalLM",
             Self::Qwen3Moe => "Qwen3MoeForCausalLM",
+            Self::Flint => "FlintForCausalLM",
             Self::SmolLm3 => "SmolLM3ForCausalLM",
             Self::GraniteMoeHybrid => "GraniteMoeHybridForCausalLM",
             Self::GptOss => "GptOssForCausalLM",
             Self::HunYuanDenseV1 => "HunYuanDenseV1ForCausalLM",
             Self::HunYuanMoEV1 => "HunYuanMoEV1ForCausalLM",
             Self::Qwen3Next => "Qwen3NextForCausalLM",
+            Self::Qwen3_5 => "Qwen3_5ForCausalLM",
             Self::Lfm2 => "Lfm2ForCausalLM",
             Self::Lfm2Moe => "Lfm2MoeForCausalLM",
         }
@@ -424,8 +446,10 @@ impl MultimodalLoaderType {
             Self::Qwen3VLMoE => "Qwen3VLMoeForConditionalGeneration",
             Self::Qwen3_5 => "Qwen3_5ForConditionalGeneration",
             Self::Qwen3_5Moe => "Qwen3_5MoeForConditionalGeneration",
-            Self::Voxtral => "VoxtralForConditionalGeneration",
+            Self::Qwen4Exp => "Qwen4ExpForConditionalGeneration",
+            Self::Voxtral => "VoxtralRealtimeForConditionalGeneration",
             Self::Gemma4 => "Gemma4ForConditionalGeneration",
+            Self::MuseGlimmer => "MuseGlimmerForConditionalGeneration",
             Self::DiffusionGemma => "DiffusionGemmaForBlockDiffusion",
         }
     }
@@ -453,28 +477,29 @@ mistral.rs auto-detects the architecture from a repo's `config.json`. To check y
 
 1. Open the model's `config.json` on Hugging Face and read the `architectures` field (e.g. `"Qwen3ForCausalLM"`, `"Gemma4ForConditionalGeneration"`).
 2. Find the matching row below. Each architecture covers every checkpoint that reports that class, including future fine-tunes and sizes, so the families and examples here are a sample, not the full list.
-3. Not listed? You can still try it: force a known architecture with `--arch`, load a [GGUF](/mistral.rs/guides/models/run-any-model/) build, or [request the model](https://github.com/EricLBuehler/mistral.rs/issues/156).
+3. If the architecture is not listed, check the [GGUF compatibility reference](/reference/gguf-support/) or [request model support](https://github.com/EricLBuehler/mistral.rs/issues/156). Use `--arch` only when the checkpoint matches a known architecture.
 
 ```bash
 mistralrs run -m <model>     # interactive
 mistralrs serve -m <model>   # OpenAI-compatible server
 ```
 
-Expand the example in any row to copy a ready-to-run command. One loader often serves several brand names (Qwen 3.5 and 3.6 share `Qwen3_5`; LFM2 and LFM2.5 share `Lfm2`) - the `Model families` column lists them. Behavior that differs from the defaults is collected in [model family notes](/mistral.rs/guides/models/model-family-notes/).
+Expand a listed example to copy a ready-to-run command. One loader often serves several brand names (Qwen 3.5 and 3.6 share `Qwen3_5`; LFM2 and LFM2.5 share `Lfm2`) - the `Model families` column lists them. Behavior that differs from the defaults is collected in [model family notes](/guides/models/model-family-notes/).
 
-The `Architecture` column is the `config.json` `architectures` value. Per-family quantization, thinking, gated-repo, and tool-calling details live in [model family notes](/mistral.rs/guides/models/model-family-notes/).
+The `Architecture` column is the `config.json` `architectures` value. Per-family quantization, thinking, gated-repo, and tool-calling details live in [model family notes](/guides/models/model-family-notes/).
 
 "#;
 
 const FOOTER: &str = r#"## Format and quantization notes
 
-Text, multimodal, speech, and embedding models support ISQ at load time. Diffusion models (FLUX) do not; they load at native precision. Pre-quantized format availability (GGUF, [UQFF](/mistral.rs/reference/uqff-format/), GPTQ, AWQ) is per-model on Hugging Face.
+Text, multimodal, speech, and embedding models support ISQ at load time. Diffusion models (FLUX) do not; they load at native precision. See [GGUF support](/reference/gguf-support/) for GGUF compatibility; availability of [UQFF](/reference/uqff-format/), GPTQ, and AWQ artifacts varies by model on Hugging Face.
 
 ## Speculative decoding
 
 | Mode | Target architecture | Assistant checkpoint family | Guide |
 |---|---|---|---|
-| MTP | `Gemma4` | Gemma 4 assistant checkpoints, PagedAttention required | [Speculative decoding (MTP)](/mistral.rs/guides/perf/speculative-decoding/) |
+| MTP | `Gemma4` | Gemma 4 assistant checkpoints, PagedAttention required | [Speculative decoding (MTP)](/guides/perf/speculative-decoding/) |
+| MTP | `Qwen3_5`, `Qwen3.8`, `Qwen3.8-Flash-Next` | Built-in `mtp.*` head (`--mtp`) from safetensors/UQFF, PagedAttention required | [Speculative decoding (MTP)](/guides/perf/speculative-decoding/) |
 "#;
 
 fn md_cell(s: &str) -> String {
@@ -486,6 +511,9 @@ fn families_cell(meta: &ArchMetadata) -> String {
 }
 
 fn examples_cell(meta: &ArchMetadata) -> String {
+    if meta.examples.is_empty() {
+        return "No published example".to_string();
+    }
     let label = |e: &ModelExample| {
         if e.label.is_empty() {
             format!("<code>{}</code>", e.repo)

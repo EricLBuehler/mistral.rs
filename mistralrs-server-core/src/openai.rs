@@ -5,10 +5,11 @@ use std::{collections::HashMap, ops::Deref};
 use anyhow::{bail, Result};
 use either::Either;
 use mistralrs_core::{
-    AgentPermission, AllowedToolChoice, ApproximateUserLocation, CodeExecutionPermission,
-    ImageGenerationResponseFormat, LlguidanceGrammar, SearchContextSize, Tool, ToolChoice,
-    ToolType, WebSearchContentType, WebSearchFilters, WebSearchImageSettings, WebSearchOptions,
-    WebSearchReturnTokenBudget, WebSearchUserLocation,
+    AdapterGenerationId, AdapterSelection as CoreAdapterSelection, AgentPermission,
+    AllowedToolChoice, ApproximateUserLocation, CodeExecutionPermission,
+    ImageGenerationResponseFormat, LlguidanceGrammar, ReasoningEffort, SearchContextSize, Tool,
+    ToolChoice, ToolType, WebSearchContentType, WebSearchFilters, WebSearchImageSettings,
+    WebSearchOptions, WebSearchReturnTokenBudget, WebSearchUserLocation,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -112,6 +113,14 @@ impl MessageContent {
     /// Create a new MessageContent from multimodal parts
     pub fn from_parts(parts: Vec<HashMap<String, MessageInnerContent>>) -> Self {
         MessageContent(Either::Right(parts))
+    }
+
+    /// Plain text content, if this is not multimodal parts
+    pub fn as_text(&self) -> Option<String> {
+        match &self.0 {
+            Either::Left(text) => Some(text.clone()),
+            Either::Right(_) => None,
+        }
     }
 
     /// Create a text content part for multimodal messages
@@ -292,6 +301,8 @@ pub struct ToolCall {
 ///     role: "user".to_string(),
 ///     name: None,
 ///     tool_calls: None,
+///     tool_call_id: None,
+///     reasoning_content: None,
 /// };
 ///
 /// // System message
@@ -300,6 +311,8 @@ pub struct ToolCall {
 ///     role: "system".to_string(),
 ///     name: None,
 ///     tool_calls: None,
+///     tool_call_id: None,
+///     reasoning_content: None,
 /// };
 /// ```
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
@@ -314,6 +327,9 @@ pub struct Message {
     pub tool_calls: Option<Vec<ToolCall>>,
     /// Tool call ID this message is responding to (for tool messages)
     pub tool_call_id: Option<String>,
+    /// Reasoning emitted with an assistant message (`reasoning` is the OpenAI-compatible alias).
+    #[serde(default, alias = "reasoning", skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
 }
 
 /// Stop token configuration for generation
@@ -327,6 +343,36 @@ pub enum StopTokens {
     Multi(Vec<String>),
     /// Single stop sequence
     Single(String),
+}
+
+/// An exact immutable LoRA adapter generation.
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct AdapterGenerationSelection {
+    /// The 64-character hexadecimal generation ID returned by the adapter management API.
+    #[schema(
+        value_type = String,
+        example = "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+    )]
+    pub generation: AdapterGenerationId,
+}
+
+/// A request-scoped LoRA adapter alias or exact immutable generation.
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+#[serde(untagged)]
+pub enum AdapterSelection {
+    /// Resolve this alias when the request is admitted.
+    Alias(String),
+    /// Pin this exact resident generation.
+    Generation(AdapterGenerationSelection),
+}
+
+impl From<AdapterSelection> for CoreAdapterSelection {
+    fn from(selection: AdapterSelection) -> Self {
+        match selection {
+            AdapterSelection::Alias(alias) => Self::alias(alias),
+            AdapterSelection::Generation(selection) => Self::generation(selection.generation),
+        }
+    }
 }
 
 /// Default value helper
@@ -597,6 +643,12 @@ pub enum OpenAiShellToolType {
     Shell,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema, PartialEq, Eq)]
+pub enum OpenAiNamespaceToolType {
+    #[serde(rename = "namespace")]
+    Namespace,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 #[serde(untagged)]
 pub enum OpenAiTool {
@@ -605,6 +657,32 @@ pub enum OpenAiTool {
     WebSearch(OpenAiWebSearchTool),
     CodeInterpreter(OpenAiCodeInterpreterTool),
     Shell(OpenAiShellTool),
+    Namespace(OpenAiNamespaceTool),
+}
+
+/// A grouping of client-executed tools; the model sees each inner tool as `<namespace>.<name>`.
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
+pub struct OpenAiNamespaceTool {
+    #[serde(rename = "type")]
+    pub tp: OpenAiNamespaceToolType,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub tools: Vec<OpenAiNamespaceEntry>,
+}
+
+impl OpenAiNamespaceTool {
+    pub fn qualified_name(&self, tool_name: &str) -> String {
+        format!("{}.{}", self.name, tool_name)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
+#[serde(untagged)]
+pub enum OpenAiNamespaceEntry {
+    Function(OpenAiResponsesFunctionTool),
+    Unsupported(Value),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
@@ -662,9 +740,6 @@ impl OpenAiWebSearchTool {
         }
         if is_preview && self.return_token_budget.is_some() {
             bail!("tools[].type=\"web_search_preview\" return_token_budget is not supported.");
-        }
-        if !is_preview && self.external_web_access == Some(false) {
-            bail!("tools[].type=\"web_search\" external_web_access=false is not supported.");
         }
         if self.image_settings.is_some()
             || self.search_content_types.as_ref().is_some_and(|types| {
@@ -989,6 +1064,12 @@ fn normalize_openai_tools(
                          use web_search_options with Chat Completions"
                     );
                 }
+                // external_web_access=false means the client disabled search; drop the tool
+                if !matches!(tool.tp, OpenAiWebSearchToolType::WebSearchPreview)
+                    && tool.external_web_access == Some(false)
+                {
+                    continue;
+                }
                 if normalized_web_search_options.is_some() {
                     bail!("Only one web search configuration may be provided.");
                 }
@@ -1004,6 +1085,26 @@ fn normalize_openai_tools(
                 }
                 enable_shell = true;
                 shell_skill_references.extend(tool.into_skill_references()?);
+            }
+            OpenAiTool::Namespace(namespace) => {
+                if matches!(surface, OpenAiToolSurface::ChatCompletions) {
+                    bail!("tools[].type=\"namespace\" is only supported by the Responses API.");
+                }
+                for entry in &namespace.tools {
+                    match entry {
+                        OpenAiNamespaceEntry::Function(tool) => {
+                            let mut tool = tool.clone().into_core_tool();
+                            tool.function.name = namespace.qualified_name(&tool.function.name);
+                            function_tools.push(tool);
+                        }
+                        OpenAiNamespaceEntry::Unsupported(_) => {
+                            tracing::warn!(
+                                "Skipping unsupported non-function tool in namespace `{}`.",
+                                namespace.name
+                            );
+                        }
+                    }
+                }
             }
         }
     }
@@ -1035,6 +1136,9 @@ pub struct ChatCompletionRequest {
     #[schema(example = "mistral")]
     #[serde(default = "default_model")]
     pub model: String,
+    /// Adapter alias or exact generation to activate for this request.
+    #[schema(example = json!("production"))]
+    pub adapter: Option<AdapterSelection>,
     /// Bias added to the logits of these token IDs before sampling.
     #[schema(example = json!(Option::None::<HashMap<u32, f32>>))]
     pub logit_bias: Option<HashMap<u32, f32>>,
@@ -1067,6 +1171,13 @@ pub struct ChatCompletionRequest {
     #[serde(rename = "stop")]
     #[schema(example = json!(Option::None::<StopTokens>))]
     pub stop_seqs: Option<StopTokens>,
+    /// Ignore model EOS tokens while still honoring explicit stops and the token limit.
+    #[serde(default)]
+    #[schema(example = false)]
+    pub ignore_eos: bool,
+    /// Seed for deterministic request-scoped sampling.
+    #[schema(example = json!(Option::None::<u64>))]
+    pub seed: Option<u64>,
     /// Sampling temperature; higher values increase randomness.
     #[schema(example = 0.7)]
     pub temperature: Option<f64>,
@@ -1134,10 +1245,15 @@ pub struct ChatCompletionRequest {
     /// Toggle thinking output for models that support it.
     #[schema(example = json!(Option::None::<bool>))]
     pub enable_thinking: Option<bool>,
-    /// Reasoning effort level for Harmony-format models (GPT-OSS).
-    /// Controls the depth of reasoning/analysis: "low", "medium", or "high".
+    /// Reasoning effort level for models and templates that support it.
+    /// Valid values are "off", "low", "medium", "high", and "xhigh".
+    /// "none" is accepted as an alias for "off".
+    #[schema(value_type = Option<ReasoningEffort>)]
     #[schema(example = json!(Option::None::<String>))]
     pub reasoning_effort: Option<String>,
+    /// vLLM-style template variables; `enable_thinking` and `reasoning_effort` map onto the fields above.
+    #[schema(example = json!(Option::None::<HashMap<String, Value>>))]
+    pub chat_template_kwargs: Option<HashMap<String, Value>>,
     /// Maximum number of tool-call rounds the server will auto-execute.
     #[schema(example = json!(Option::None::<usize>))]
     pub max_tool_rounds: Option<usize>,
@@ -1174,6 +1290,15 @@ pub struct ModelObject {
     pub object: &'static str,
     pub created: u64,
     pub owned_by: &'static str,
+    /// Public source identifier for this model card.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub root: Option<String>,
+    /// Base model that owns this adapter, when the card represents a LoRA adapter.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    /// Current immutable LoRA generation for adapter model cards.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adapter_generation: Option<String>,
     /// Model status: "loaded", "unloaded", or "reloading"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
@@ -1195,6 +1320,129 @@ pub struct ModelObjects {
     pub data: Vec<ModelObject>,
 }
 
+#[derive(Debug, ToSchema)]
+pub struct PromptTokensDetailsResponse {
+    /// Prompt tokens served from the prefix cache, not recomputed.
+    pub cached_tokens: usize,
+}
+
+#[derive(Debug, ToSchema)]
+pub struct CompletionUsageResponse {
+    pub completion_tokens: usize,
+    pub prompt_tokens: usize,
+    pub total_tokens: usize,
+    pub prompt_tokens_details: Option<PromptTokensDetailsResponse>,
+    pub avg_tok_per_sec: f32,
+    pub avg_prompt_tok_per_sec: f32,
+    pub avg_compl_tok_per_sec: f32,
+    pub total_time_sec: f32,
+    pub total_prompt_time_sec: f32,
+    pub total_completion_time_sec: f32,
+}
+
+#[derive(Debug, ToSchema)]
+pub struct ChatCompletionResponseMessage {
+    pub content: Option<String>,
+    pub role: String,
+    pub tool_calls: Option<Vec<Value>>,
+    pub reasoning_content: Option<String>,
+}
+
+#[derive(Debug, ToSchema)]
+pub struct ChatCompletionResponseChoice {
+    pub finish_reason: String,
+    pub index: usize,
+    pub message: ChatCompletionResponseMessage,
+    pub logprobs: Option<Value>,
+}
+
+#[derive(Debug, ToSchema)]
+#[schema(as = ChatCompletionResponse)]
+pub struct ChatCompletionResponseBody {
+    pub id: String,
+    pub choices: Vec<ChatCompletionResponseChoice>,
+    pub created: u64,
+    pub model: String,
+    pub system_fingerprint: String,
+    pub object: String,
+    pub usage: CompletionUsageResponse,
+    pub adapter_generation: Option<String>,
+    pub agentic_tool_calls: Option<Vec<Value>>,
+    pub files: Option<Vec<Value>>,
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, ToSchema)]
+pub struct ChatCompletionChunkDelta {
+    pub content: Option<String>,
+    pub role: String,
+    pub tool_calls: Option<Vec<Value>>,
+    pub reasoning_content: Option<String>,
+}
+
+#[derive(Debug, ToSchema)]
+pub struct ChatCompletionChunkChoice {
+    pub finish_reason: Option<String>,
+    pub index: usize,
+    pub delta: ChatCompletionChunkDelta,
+    pub logprobs: Option<Value>,
+}
+
+#[derive(Debug, ToSchema)]
+#[schema(as = ChatCompletionChunkResponse)]
+pub struct ChatCompletionChunkResponseBody {
+    pub id: String,
+    pub choices: Vec<ChatCompletionChunkChoice>,
+    pub created: u128,
+    pub model: String,
+    pub system_fingerprint: String,
+    pub object: String,
+    pub usage: Option<CompletionUsageResponse>,
+    pub adapter_generation: Option<String>,
+    pub session_id: Option<String>,
+}
+
+#[derive(Debug, ToSchema)]
+pub struct CompletionResponseChoice {
+    pub finish_reason: String,
+    pub index: usize,
+    pub text: String,
+    pub logprobs: Option<Value>,
+}
+
+#[derive(Debug, ToSchema)]
+#[schema(as = CompletionResponse)]
+pub struct CompletionResponseBody {
+    pub id: String,
+    pub choices: Vec<CompletionResponseChoice>,
+    pub created: u64,
+    pub model: String,
+    pub system_fingerprint: String,
+    pub object: String,
+    pub usage: CompletionUsageResponse,
+    pub adapter_generation: Option<String>,
+}
+
+#[derive(Debug, ToSchema)]
+pub struct CompletionChunkChoice {
+    pub text: String,
+    pub index: usize,
+    pub logprobs: Option<Value>,
+    pub finish_reason: Option<String>,
+}
+
+#[derive(Debug, ToSchema)]
+#[schema(as = CompletionChunkResponse)]
+pub struct CompletionChunkResponseBody {
+    pub id: String,
+    pub choices: Vec<CompletionChunkChoice>,
+    pub created: u128,
+    pub model: String,
+    pub system_fingerprint: String,
+    pub object: String,
+    pub adapter_generation: Option<String>,
+}
+
 /// Legacy OpenAI compatible text completion request
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct CompletionRequest {
@@ -1202,6 +1450,9 @@ pub struct CompletionRequest {
     #[schema(example = "mistral")]
     #[serde(default = "default_model")]
     pub model: String,
+    /// Adapter alias or exact generation to activate for this request.
+    #[schema(example = json!("production"))]
+    pub adapter: Option<AdapterSelection>,
     #[schema(example = "Say this is a test.")]
     pub prompt: String,
     #[schema(example = 1)]
@@ -1236,6 +1487,13 @@ pub struct CompletionRequest {
     #[serde(rename = "stop")]
     #[schema(example = json!(Option::None::<StopTokens>))]
     pub stop_seqs: Option<StopTokens>,
+    /// Ignore model EOS tokens while still honoring explicit stops and the token limit.
+    #[serde(default)]
+    #[schema(example = false)]
+    pub ignore_eos: bool,
+    /// Seed for deterministic request-scoped sampling.
+    #[schema(example = json!(Option::None::<u64>))]
+    pub seed: Option<u64>,
     /// Stream the response as server-sent events.
     pub stream: Option<bool>,
     /// Sampling temperature; higher values increase randomness.
@@ -1591,6 +1849,9 @@ pub struct ResponsesCreateRequest {
     #[schema(example = "mistral")]
     #[serde(default = "default_model")]
     pub model: String,
+    /// Adapter alias or exact generation to activate for this request.
+    #[schema(example = json!("production"))]
+    pub adapter: Option<AdapterSelection>,
     /// Input messages or a single raw prompt string.
     pub input: ResponsesMessages,
     /// System instructions prepended to the conversation.
@@ -1631,6 +1892,13 @@ pub struct ResponsesCreateRequest {
     #[serde(rename = "stop")]
     #[schema(example = json!(Option::None::<StopTokens>))]
     pub stop_seqs: Option<StopTokens>,
+    /// Continue generation past EOS until another stop condition is met.
+    #[serde(default = "default_false")]
+    #[schema(example = false)]
+    pub ignore_eos: bool,
+    /// Seed for deterministic request-scoped sampling.
+    #[schema(example = json!(Option::None::<u64>))]
+    pub seed: Option<u64>,
     /// Sampling temperature; higher values increase randomness.
     #[schema(example = 0.7)]
     pub temperature: Option<f64>,
@@ -1702,15 +1970,14 @@ pub struct ResponsesCreateRequest {
     /// Sequences that reset DRY repetition matching.
     #[schema(example = json!(Option::None::<String>))]
     pub dry_sequence_breakers: Option<Vec<String>>,
-    /// Toggle thinking output for models that support it.
+    /// Legacy schema field. The active Responses endpoint ignores this top-level control.
     #[schema(example = json!(Option::None::<bool>))]
     pub enable_thinking: Option<bool>,
     /// Truncate inputs that exceed the model's context length instead of erroring.
     #[schema(example = json!(Option::None::<bool>))]
     #[serde(default)]
     pub truncate_sequence: Option<bool>,
-    /// Reasoning effort level for models that support extended thinking.
-    /// Valid values: "low", "medium", "high"
+    /// Legacy schema field. Use `reasoning.effort` with the active Responses endpoint.
     #[schema(example = json!(Option::None::<String>))]
     pub reasoning_effort: Option<String>,
 }
@@ -1844,6 +2111,62 @@ pub struct ResponsesDeltaContent {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn ignore_eos_defaults_false_and_accepts_true() {
+        let chat: ChatCompletionRequest =
+            serde_json::from_value(json!({"messages": "hello"})).unwrap();
+        let completion: CompletionRequest =
+            serde_json::from_value(json!({"prompt": "hello"})).unwrap();
+        let responses: ResponsesCreateRequest =
+            serde_json::from_value(json!({"input": "hello"})).unwrap();
+        assert!(!chat.ignore_eos);
+        assert!(!completion.ignore_eos);
+        assert!(!responses.ignore_eos);
+
+        let chat: ChatCompletionRequest =
+            serde_json::from_value(json!({"messages": "hello", "ignore_eos": true})).unwrap();
+        let completion: CompletionRequest =
+            serde_json::from_value(json!({"prompt": "hello", "ignore_eos": true})).unwrap();
+        let responses: ResponsesCreateRequest =
+            serde_json::from_value(json!({"input": "hello", "ignore_eos": true})).unwrap();
+        assert!(chat.ignore_eos);
+        assert!(completion.ignore_eos);
+        assert!(responses.ignore_eos);
+    }
+
+    #[test]
+    fn generation_requests_accept_sampling_seed() {
+        let chat: ChatCompletionRequest =
+            serde_json::from_value(json!({"messages": "hello", "seed": 42})).unwrap();
+        let completion: CompletionRequest =
+            serde_json::from_value(json!({"prompt": "hello", "seed": 43})).unwrap();
+        let responses: ResponsesCreateRequest =
+            serde_json::from_value(json!({"input": "hello", "seed": 44})).unwrap();
+
+        assert_eq!(chat.seed, Some(42));
+        assert_eq!(completion.seed, Some(43));
+        assert_eq!(responses.seed, Some(44));
+    }
+
+    #[test]
+    fn adapter_selection_accepts_alias_and_exact_generation() {
+        let alias: AdapterSelection = serde_json::from_value(json!("production")).unwrap();
+        let alias: CoreAdapterSelection = alias.into();
+        assert_eq!(serde_json::to_value(alias).unwrap(), json!("production"));
+
+        let generation = AdapterGenerationId::from_bytes([0x5a; 32]);
+        let wire = json!({"generation": generation.to_string()});
+        let exact: AdapterSelection = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&exact).unwrap(), wire);
+        let exact: CoreAdapterSelection = exact.into();
+        assert_eq!(exact.resolved_generation(), Some(generation));
+
+        assert!(serde_json::from_value::<AdapterSelection>(json!({
+            "generation": "not-a-generation"
+        }))
+        .is_err());
+    }
 
     fn assert_tool_roundtrips(value: serde_json::Value) -> OpenAiTool {
         let tool: OpenAiTool = serde_json::from_value(value.clone()).unwrap();
@@ -2000,6 +2323,35 @@ mod tests {
         assert_eq!(tools[0].function.name, "get_customer");
         assert_eq!(tools[0].function.strict, Some(true));
         assert!(!normalized.enable_code_execution);
+    }
+
+    #[test]
+    fn flattens_namespace_tools() {
+        let tools: Vec<OpenAiTool> = serde_json::from_value(json!([
+            { "type": "function", "name": "exec_command" },
+            {
+                "type": "namespace",
+                "name": "multi_agent_v1",
+                "description": "Tools for spawning and managing sub-agents.",
+                "tools": [
+                    { "type": "function", "name": "spawn_agent", "parameters": { "type": "object" } },
+                    { "type": "custom", "name": "grammar_tool", "format": { "type": "grammar", "syntax": "lark", "definition": "start: x" } }
+                ]
+            }
+        ]))
+        .unwrap();
+
+        let normalized = normalize_responses_tools(Some(tools)).unwrap();
+        let tools = normalized.tools.unwrap();
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0].function.name, "exec_command");
+        assert_eq!(tools[1].function.name, "multi_agent_v1.spawn_agent");
+
+        let chat_tools: Vec<OpenAiTool> = serde_json::from_value(json!([
+            { "type": "namespace", "name": "ns", "tools": [] }
+        ]))
+        .unwrap();
+        assert!(normalize_chat_completion_tools(Some(chat_tools), None).is_err());
     }
 
     #[test]
@@ -2283,7 +2635,8 @@ mod tests {
         let external_access_tools: Vec<OpenAiTool> =
             serde_json::from_value(json!([{ "type": "web_search", "external_web_access": false }]))
                 .unwrap();
-        assert!(normalize_responses_tools(Some(external_access_tools)).is_err());
+        let normalized = normalize_responses_tools(Some(external_access_tools)).unwrap();
+        assert!(normalized.web_search_options.is_none());
 
         let preview_filters_tools: Vec<OpenAiTool> = serde_json::from_value(json!([{
             "type": "web_search_preview",

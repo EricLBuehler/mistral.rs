@@ -34,7 +34,7 @@ Tool calling lets the model request external work via a structured invocation. m
 
 **Client-side loop.** Standard OpenAI flow: the model emits a `tool_calls` field, the caller runs the tool, sends the result back as a `tool` message, and the model produces another response.
 
-**Server-side loop.** mistral.rs runs the entire tool loop inside one request: built-in tools (web search, code execution, shell, OpenAI-compatible Skills), [MCP (Model Context Protocol)](/mistral.rs/guides/agents/connect-mcp-server/) tools, SDK callbacks, or HTTP dispatch. The client sends one request and receives one final reply. See [how the loop runs](/mistral.rs/guides/agents/agentic-runtime/) for the round structure.
+**Server-side loop.** mistral.rs runs the entire tool loop inside one request: built-in tools (web search, code execution, shell, OpenAI-compatible Skills), [MCP (Model Context Protocol)](/guides/agents/connect-mcp-server/) tools, SDK callbacks, or HTTP dispatch. The client sends one request and receives one final reply. See [how the loop runs](/guides/agents/agentic-runtime/) for the round structure.
 
 ## Client-side: defining tools
 
@@ -72,7 +72,7 @@ The caller invokes the real API and sends the result back:
 }
 ```
 
-[Full example](/mistral.rs/examples/server/tool-calling/)
+[Full example](/examples/server/tool-calling/)
 
 </TabItem>
 <TabItem label="Python">
@@ -111,7 +111,7 @@ print(response.choices[0].message.tool_calls)
 
 Run the tool yourself and send the result back as a `tool` message, or register a matching `tool_callbacks` entry on `Runner` to have mistral.rs execute it server-side.
 
-[Full example](/mistral.rs/examples/python/tool-call/)
+[Full example](/examples/python/tool-call/)
 
 </TabItem>
 <TabItem label="Rust">
@@ -164,7 +164,7 @@ async fn main() -> Result<()> {
 
 For server-side execution, register the callback together with the `Tool` definition via `with_tool_callback_and_tool`.
 
-[Full example](/mistral.rs/examples/rust/advanced/tools/)
+[Full example](/examples/rust/advanced/tools/)
 
 </TabItem>
 </Tabs>
@@ -235,7 +235,7 @@ completion = client.chat.completions.create(
 print(completion.choices[0].message.tool_calls[0].function.name)
 ```
 
-[Full example](/mistral.rs/examples/server/allowed-tools/)
+[Full example](/examples/server/allowed-tools/)
 
 </TabItem>
 <TabItem label="OpenAI JavaScript SDK">
@@ -355,7 +355,7 @@ let tool_choice = ToolChoice::AllowedTools(AllowedToolsToolChoice {
 });
 ```
 
-[Full example](/mistral.rs/examples/rust/advanced/allowed-tools/)
+[Full example](/examples/rust/advanced/allowed-tools/)
 
 </TabItem>
 </Tabs>
@@ -384,9 +384,9 @@ Notes:
 mistralrs serve --enable-search --enable-code-execution -m <model>
 ```
 
-`--agent` is shorthand for both flags; see [build an agent](/mistral.rs/guides/agents/build-an-agent/). The built-in tools are covered in [web search](/mistral.rs/guides/agents/web-search/) and [code execution](/mistral.rs/guides/agents/enable-code-execution/).
+`--agent` is shorthand for both flags; see [build an agent](/guides/agents/build-an-agent/). The built-in tools are covered in [web search](/guides/agents/web-search/) and [code execution](/guides/agents/enable-code-execution/).
 
-For custom tools, the cleanest path is to run them as an MCP server and connect mistralrs as a client; see [connect to an MCP server](/mistral.rs/guides/agents/connect-mcp-server/). The SDKs can also register custom callbacks directly: Python uses `Runner(tool_callbacks=...)` ([full example](/mistral.rs/examples/python/custom-tool-call/)); Rust builders use `with_tool_callback(...)` or `with_tool_callback_and_tool(...)` ([full example](/mistral.rs/examples/rust/advanced/tool-callback/)).
+For custom tools, the cleanest path is to run them as an MCP server and connect mistralrs as a client; see [connect to an MCP server](/guides/agents/connect-mcp-server/). The SDKs can also register custom callbacks directly: Python uses `Runner(tool_callbacks=...)` ([full example](/examples/python/custom-tool-call/)); Rust builders use `with_tool_callback(...)` or `with_tool_callback_and_tool(...)` ([full example](/examples/rust/advanced/tool-callback/)).
 
 ## Configuring the tool loop
 
@@ -451,7 +451,7 @@ Request body sent to the dispatch URL:
 {"name": "search", "arguments": {"query": "mistralrs"}}
 ```
 
-Expected response: a bare string (the tool result) or `{"content": "..."}`. The dispatch URL is server-level only; it cannot be set per-request over HTTP. [Full example](/mistral.rs/examples/server/tool-dispatch/)
+Expected response: a bare string (the tool result) or `{"content": "..."}`. The dispatch URL is server-level only; it cannot be set per-request over HTTP. [Full example](/examples/server/tool-dispatch/)
 
 ### Per-request versus server-level
 
@@ -462,7 +462,7 @@ Per-request fields:
 - `tools: [{"type":"code_interpreter","container":{"type":"auto"}}]`: opt into the built-in Python tools when the server has code execution enabled.
 - `max_tool_rounds`: override the server default for one request.
 - `session_id`: reuse persistent agentic state.
-- `agent_permission`: tighten the [permission mode](/mistral.rs/guides/agents/permissions-and-approvals/).
+- `agent_permission`: tighten the [permission mode](/guides/agents/permissions-and-approvals/).
 
 Server-level flags:
 
@@ -472,8 +472,8 @@ Server-level flags:
 - `--code-exec-python`, `--code-exec-workdir`, `--code-exec-timeout`
 - `--agent-permission`
 
-See the [serve CLI reference](/mistral.rs/reference/cli/serve/) for the full flag list.
+See the [serve CLI reference](/reference/cli/serve/) for the full flag list.
 
 ## Response extensions
 
-When the server-side loop runs, the response includes an `agentic_tool_calls` array (one entry per executed round) and, when streaming, `agentic_tool_call_progress` Server-Sent Events (SSE) around each tool execution. The wire format for both is in the [HTTP API reference](/mistral.rs/reference/http-api/).
+When the server-side loop runs, the response includes an `agentic_tool_calls` array (one entry per executed round) and, when streaming, `agentic_tool_call_progress` Server-Sent Events (SSE) around each tool execution. The wire format for both is in the [HTTP API reference](/reference/http-api/).

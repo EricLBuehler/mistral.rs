@@ -91,6 +91,32 @@ impl FP8Linear {
             dtype,
         ))
     }
+
+    fn gather_quantized_rows(&self, ids: &Tensor) -> Result<Tensor> {
+        let weight = self.lin.weight();
+        let ids = ids.flatten_all()?;
+        if !weight.device().is_metal() {
+            return weight.index_select(&ids.to_device(weight.device())?, 0);
+        }
+
+        let ids = ids
+            .to_device(&Device::Cpu)?
+            .to_dtype(DType::U32)?
+            .to_vec1::<u32>()?;
+
+        let row_count = weight.dim(0)?;
+        let mut rows = Vec::with_capacity(ids.len());
+        for id in ids {
+            let id = id as usize;
+            if id >= row_count {
+                candle_core::bail!("embedding index {id} is out of bounds for {row_count} rows");
+            }
+            let row = weight.narrow(0, id, 1)?.force_contiguous()?;
+            rows.push(crate::scalar_fp8::ops::fp8_to_dtype(&row, DType::F32)?);
+        }
+        let rows = rows.iter().collect::<Vec<_>>();
+        Tensor::cat(&rows, 0)
+    }
 }
 
 impl QuantMethod for FP8Linear {
@@ -127,6 +153,21 @@ impl QuantMethod for FP8Linear {
     }
     fn dequantize_w(&self) -> Result<candle_core::Tensor> {
         Ok(self.dequantize(DType::F32)?.weight().clone())
+    }
+
+    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
+        let mut output_shape = ids.dims().to_vec();
+        output_shape.push(self.lin.weight().dim(D::Minus1)?);
+        if ids.elem_count() == 0 && self.lin.weight().device().is_metal() {
+            let row = self.lin.weight().narrow(0, 0, 1)?.force_contiguous()?;
+            let row = crate::scalar_fp8::ops::fp8_to_dtype(&row, DType::F32)?
+                .broadcast_mul(&self.dequant_w_scale)?;
+            return row.narrow(0, 0, 0)?.reshape(output_shape);
+        }
+        self.gather_quantized_rows(ids)?
+            .to_dtype(DType::F32)?
+            .broadcast_mul(&self.dequant_w_scale)?
+            .reshape(output_shape)
     }
 
     fn forward_raw(&self, x: &Tensor) -> Result<Tensor> {
@@ -211,6 +252,10 @@ impl QuantMethod for FP8Linear {
         (DType::F8E4M3, self.lin.weight().device().clone())
     }
 
+    fn has_bias(&self) -> bool {
+        self.lin.bias().is_some()
+    }
+
     fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
         Ok(crate::plan_weight_isq(
             self.dtype,
@@ -225,20 +270,32 @@ impl QuantMethod for FP8Linear {
         self: Arc<Self>,
         dtype: Option<IsqType>,
         device: Device,
-        _n_quantized: &AtomicUsize,
-        _imatrix_weight: Option<Vec<f32>>,
+        n_quantized: &AtomicUsize,
+        imatrix_weight: Option<Vec<f32>>,
         guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
-        match dtype {
-            Some(IsqType::F8Q8) => {
-                let _acquired_quantize_guard = guard.acquire(&device);
-                let dequant = self.dequantize(DType::F32)?;
-                let w = dequant.weight().to_device(&device)?;
-                let b = dequant.bias().map(|b| b.to_device(&device)).transpose()?;
-                Ok(Arc::new(crate::F8Q8Linear::from_weight(&w, b)?))
+        if dtype.is_none() || dtype == Some(IsqType::F8E4M3) && imatrix_weight.is_none() {
+            if self.lin.weight().device().same_device(&device) {
+                return Ok(self);
             }
-            _ => todo!(),
+            return Ok(Arc::new(Self::from_parts(
+                self.lin.weight().to_device(&device)?,
+                self.lin
+                    .bias()
+                    .map(|bias| bias.to_device(&device))
+                    .transpose()?,
+                self.dequant_w_scale.to_device(&device)?,
+                self.dequant_x_scale.to_device(&device)?,
+                self.quant_scale.to_device(&device)?,
+                self.dtype,
+            )));
         }
+
+        let dequant = self.dequantize(DType::F32)?;
+        Arc::new(crate::UnquantLinear::new(QuantMethodConfig::Unquantized(
+            Linear::new(dequant.weight().clone(), dequant.bias().cloned()),
+        ))?)
+        .apply_isq(dtype, device, n_quantized, imatrix_weight, guard)
     }
 }
 
@@ -248,6 +305,9 @@ impl QuantizedSerde for FP8Linear {
     }
     fn name(&self) -> &'static str {
         "fp8-linear"
+    }
+    fn uqff_type(&self) -> Option<IsqType> {
+        Some(IsqType::F8E4M3)
     }
     fn serialize_uqff(&self, prefix: &str, ty: IsqType) -> Result<Vec<UqffTensor>> {
         if ty != IsqType::F8E4M3 {

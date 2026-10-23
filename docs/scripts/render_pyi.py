@@ -33,19 +33,31 @@ GROUPS = [
         "Runner",
         "runner",
         "The main entry point. Load a model and send requests.",
-        ["Runner", "CalibrationStatus"],
+        [
+            "Runner",
+            "CalibrationStatus",
+            "LoraAdapterError",
+            "LoraAdapterInfo",
+            "LoraResidentGenerationInfo",
+            "LoraRuntimeStatus",
+        ],
     ),
     (
         "Which",
         "which",
         "Variants that select which kind of model to load.",
-        ["Which"],
+        ["LoraAdapter", "Which"],
     ),
     (
         "Requests",
         "requests",
         "Request dataclasses passed to Runner methods.",
-        ["ChatCompletionRequest", "CompletionRequest", "EmbeddingRequest"],
+        [
+            "LoraAdapterGeneration",
+            "ChatCompletionRequest",
+            "CompletionRequest",
+            "EmbeddingRequest",
+        ],
     ),
     (
         "Responses",
@@ -133,12 +145,6 @@ GROUPS = [
         "MCP client configuration types.",
         ["McpServerSourcePy", "McpServerConfigPy", "McpClientConfigPy"],
     ),
-    (
-        "Auto-mapping",
-        "automap",
-        "Hints for automatic device mapping.",
-        ["TextAutoMapParams", "MultimodalAutoMapParams"],
-    ),
 ]
 
 SIG_WRAP_THRESHOLD = 70  # wrap arg list onto multiple lines beyond this width
@@ -151,6 +157,26 @@ def _unparse(node) -> str:
         return ast.unparse(node)
     except Exception:
         return ""
+
+
+def _field_default(node: ast.expr | None) -> str:
+    if not isinstance(node, ast.Call):
+        return _unparse(node) if node is not None else ""
+    if not isinstance(node.func, ast.Name) or node.func.id != "field":
+        return _unparse(node)
+
+    values = {keyword.arg: keyword.value for keyword in node.keywords if keyword.arg}
+    default = values.get("default")
+    if default is None and "default_factory" in values:
+        rendered = f"factory: {_unparse(values['default_factory'])}"
+    else:
+        rendered = _unparse(default)
+    if (
+        isinstance(values.get("kw_only"), ast.Constant)
+        and values["kw_only"].value is True
+    ):
+        return f"{rendered} (keyword-only)"
+    return rendered
 
 
 def _is_enum(cls: ast.ClassDef) -> bool:
@@ -194,6 +220,9 @@ def _format_signature_block(func_name: str, func: ast.FunctionDef) -> str:
         return s
 
     parts = [fmt(a) for a in args]
+    if func.args.kwonlyargs:
+        positional_count = sum(arg.arg != "self" for arg in func.args.args)
+        parts.insert(positional_count, "*")
     single = f"{func_name}({', '.join(parts)})"
     if ret:
         single += f" -> {ret}"
@@ -425,7 +454,7 @@ def _render_class(
         if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
             name = item.target.id
             ftype = _unparse(item.annotation)
-            value = _unparse(item.value) if item.value is not None else ""
+            value = _field_default(item.value)
             fields.append((name, ftype, value))
         elif isinstance(item, ast.Assign):
             for t in item.targets:
@@ -510,12 +539,13 @@ def _render_index() -> str:
         "",
         "## Install",
         "",
-        "`pip install mistralrs` covers CPU (Linux, Windows) and Metal (macOS arm64). CUDA wheels are GitHub release assets with `+cudaNNN.smNN` versions. See [Python SDK getting started](/mistral.rs/guides/python/getting-started/#installing) for install commands and [hardware support](/mistral.rs/reference/hardware-support/) for compute capabilities.",
+        "`pip install mistralrs` covers CPU (Linux, Windows) and Metal (macOS arm64). CUDA wheels are GitHub release assets with `+cudaNNN.smNN` versions. See [Python SDK getting started](/guides/python/getting-started/#installing) for install commands and [hardware support](/reference/hardware-support/) for compute capabilities.",
         "",
         "```bash",
         "pip install mistralrs                                   # CPU / Metal (PyPI)",
-        'pip install "mistralrs==0.8.23+cuda128.sm89" \\          # NVIDIA (replace version, CUDA level, and SM)',
-        "  --find-links https://github.com/EricLBuehler/mistral.rs/releases/expanded_assets/v0.8.23",
+        "# NVIDIA (replace version, CUDA level, and SM)",
+        'pip install "mistralrs==0.9.5+cuda128.sm89" \\',
+        "  --find-links https://github.com/EricLBuehler/mistral.rs/releases/expanded_assets/v0.9.5",
         "```",
         "",
         "## Pages",
@@ -524,10 +554,10 @@ def _render_index() -> str:
         "| --- | --- |",
     ]
     for title, slug, desc, _ in GROUPS:
-        lines.append(f"| [{title}](/mistral.rs/reference/python/{slug}/) | {desc} |")
+        lines.append(f"| [{title}](/reference/python/{slug}/) | {desc} |")
     lines.append("")
     lines.append(
-        "See [Python getting started](/mistral.rs/guides/python/getting-started/) for a walkthrough and the [Python guides](/mistral.rs/guides/python/) for task-oriented recipes."
+        "See [Python getting started](/guides/python/getting-started/) for a walkthrough and the [Python guides](/guides/python/) for task-oriented recipes."
     )
     lines.append("")
     lines.append("---")

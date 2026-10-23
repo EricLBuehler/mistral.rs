@@ -17,9 +17,14 @@ pub use server::*;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
-use mistralrs_core::TokenSource;
+use mistralrs_core::{
+    ReasoningEffort, TokenSource, DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL,
+    DEFAULT_MAX_NUM_BATCHED_TOKENS, DEFAULT_MAX_PREFILL_CHUNK_TOKENS,
+};
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::{num::NonZeroUsize, path::PathBuf};
+
+const DEFAULT_RUN_MAX_SEQS: usize = 1;
 
 /// Fast LLM inference engine
 #[derive(Parser)]
@@ -78,9 +83,14 @@ pub enum Command {
 
         /// Control thinking mode for models that support it.
         /// Use --thinking or --thinking true to force on, --thinking false to force off.
-        /// Omit to defer to the chat template default.
+        /// If both reasoning controls are omitted, effort is unspecified and thinking is enabled.
         #[arg(long, num_args = 0..=1, default_missing_value = "true", value_parser = clap::value_parser!(bool))]
         thinking: Option<bool>,
+
+        /// Set reasoning effort without changing the model's sampling parameters.
+        /// Values are off, low, medium, high, or xhigh. "none" is an alias for off.
+        #[arg(long)]
+        reasoning_effort: Option<ReasoningEffort>,
 
         /// One-shot text prompt. When provided, sends a single request and exits
         /// instead of entering interactive mode.
@@ -102,6 +112,10 @@ pub enum Command {
         /// Can be specified multiple times: --audio audio1.wav --audio audio2.mp3
         #[arg(long, requires = "input")]
         audio: Vec<String>,
+
+        /// LoRA adapter alias to use for requests. Omit to run the base model.
+        #[arg(long)]
+        adapter: Option<String>,
     },
 
     /// Generate shell completions
@@ -136,7 +150,8 @@ pub enum Command {
 
     /// Recommend quantization + device mapping for a model.
     /// Rejects `--quant auto`; pass `--quant <level>` or `--isq <level>` to bias
-    /// the recommendation toward a specific quantization target.
+    /// the recommendation toward a specific quantization target. Adapter options
+    /// are rejected because adapter memory is not included in the estimate.
     Tune {
         #[command(subcommand)]
         model_type: Option<ModelType>,
@@ -158,20 +173,20 @@ pub enum Command {
         emit_config: Option<PathBuf>,
     },
 
-    /// Authenticate with HuggingFace Hub
+    /// Authenticate with Hugging Face Hub
     Login {
         /// Provide token directly (non-interactive)
         #[arg(long)]
         token: Option<String>,
     },
 
-    /// Manage the HuggingFace model cache
+    /// Manage the Hugging Face model cache
     Cache {
         #[command(subcommand)]
         cmd: CacheCommand,
     },
 
-    /// Run performance benchmarks for plain model generation.
+    /// Run performance benchmarks for base or LoRA model generation.
     Bench {
         #[command(subcommand)]
         model_type: Option<ModelType>,
@@ -183,15 +198,19 @@ pub enum Command {
         #[command(flatten)]
         runtime: BenchRuntimeOptions,
 
-        /// Number of tokens in prompt. Accepts comma-separated values for sweeps.
+        /// LoRA adapter alias to benchmark. Omit to benchmark the base model.
+        #[arg(long)]
+        adapter: Option<String>,
+
+        /// Input lengths used to measure time to first token. Zero skips TTFT. Accepts comma-separated values for sweeps.
         #[arg(long, value_delimiter = ',', default_value = "512")]
         prompt_len: Vec<usize>,
 
-        /// Number of tokens to generate
+        /// Output tokens per decode request. Values below 2 skip decode metrics.
         #[arg(long, default_value = "128")]
         gen_len: usize,
 
-        /// Number of prompt tokens to prefill before measuring decode. Accepts comma-separated values for sweeps.
+        /// Input context lengths used to measure decode TPOT. Accepts comma-separated values for sweeps.
         #[arg(long, value_delimiter = ',', default_value = "4")]
         depth: Vec<usize>,
 
@@ -199,7 +218,7 @@ pub enum Command {
         #[arg(long, default_value = "3")]
         iterations: usize,
 
-        /// Number of warmup runs (discarded)
+        /// Number of warmup runs per benchmark case (discarded)
         #[arg(long, default_value = "1")]
         warmup: usize,
     },
@@ -214,7 +233,7 @@ pub enum Command {
 
     /// Update or migrate an install using the installer
     Update {
-        /// Install a specific release tag instead of the latest (e.g. v0.8.23)
+        /// Install a specific release tag instead of the latest (e.g. v0.9.5)
         #[arg(long)]
         tag: Option<String>,
     },
@@ -321,7 +340,7 @@ pub enum UqffCommand {
 /// These mirror the Auto variant's options and are used to construct ModelType::Auto.
 #[derive(clap::Args, Clone, Default)]
 pub struct DefaultModelOptions {
-    /// HuggingFace model ID or local path to model directory
+    /// Hugging Face model ID or local model directory; optional when `-f` names local files
     #[arg(short = 'm', long)]
     pub model_id: Option<String>,
 
@@ -336,6 +355,14 @@ pub struct DefaultModelOptions {
     /// Model data type
     #[arg(long, default_value = "auto", value_parser = parse_dtype)]
     pub dtype: mistralrs_core::ModelDType,
+
+    /// Recursively merged JSON overrides for the Hugging Face model config
+    #[arg(long)]
+    pub hf_overrides: Option<mistralrs_core::HfConfigOverrides>,
+
+    /// Runtime model context length
+    #[arg(long, value_parser = crate::args::model::parse_positive_usize)]
+    pub max_model_len: Option<usize>,
 
     #[command(flatten)]
     pub format: FormatOptions,
@@ -358,17 +385,21 @@ pub struct DefaultModelOptions {
 
 impl DefaultModelOptions {
     /// Convert default options into a ModelType::Auto variant.
-    /// Returns an error if model_id is not provided.
-    pub fn into_model_type(self) -> anyhow::Result<ModelType> {
-        let model_id = self
-            .model_id
-            .ok_or_else(|| anyhow::anyhow!("--model-id (-m) is required"))?;
+    /// Returns an error if neither model_id nor a local quantized file is provided.
+    pub fn into_model_type(mut self) -> anyhow::Result<ModelType> {
+        self.format.normalize()?;
+        let model_id = match self.model_id {
+            Some(model_id) => model_id,
+            None => self.format.derive_local_model_root()?,
+        };
         Ok(ModelType::Auto {
             model: ModelSourceOptions {
                 model_id,
                 tokenizer: self.tokenizer,
                 arch: self.arch,
                 dtype: self.dtype,
+                hf_overrides: self.hf_overrides,
+                max_model_len: self.max_model_len,
             },
             format: self.format,
             adapter: self.adapter,
@@ -386,9 +417,23 @@ pub fn resolve_model_type(
     model_type: Option<ModelType>,
     default_model: DefaultModelOptions,
 ) -> anyhow::Result<ModelType> {
+    let mut model_type = match model_type {
+        Some(model_type) => model_type,
+        None => default_model.into_model_type()?,
+    };
+    if let Some(format) = model_format_mut(&mut model_type) {
+        format.normalize()?;
+    }
+    Ok(model_type)
+}
+
+fn model_format_mut(model_type: &mut ModelType) -> Option<&mut FormatOptions> {
     match model_type {
-        Some(mt) => Ok(mt),
-        None => default_model.into_model_type(),
+        ModelType::Auto { format, .. }
+        | ModelType::Text { format, .. }
+        | ModelType::Multimodal { format, .. }
+        | ModelType::Embedding { format, .. } => Some(format),
+        ModelType::Diffusion { .. } | ModelType::Speech { .. } => None,
     }
 }
 
@@ -457,7 +502,7 @@ pub enum ModelType {
         format: FormatOptions,
 
         #[command(flatten)]
-        adapter: AdapterOptions,
+        adapter: MultimodalAdapterOptions,
 
         #[command(flatten)]
         quantization: QuantizationOptions,
@@ -522,7 +567,7 @@ pub struct GlobalOptions {
     #[serde(default)]
     pub log: Option<PathBuf>,
 
-    /// Token source for HuggingFace authentication.
+    /// Token source for Hugging Face authentication.
     /// Formats: `literal:<token>`, `env:<var>`, `path:<file>`, `cache`, `none`
     #[arg(long, default_value = "cache", global = true, value_parser = parse_token_source)]
     #[serde(default = "default_token_source")]
@@ -537,10 +582,25 @@ pub struct GlobalOptions {
 /// Runtime options for inference
 #[derive(clap::Args, Clone, Deserialize)]
 pub struct RuntimeOptions {
-    /// Maximum concurrent sequences
-    #[arg(long, default_value_t = 32)]
-    #[serde(default = "default_max_seqs")]
-    pub max_seqs: usize,
+    /// Maximum concurrent sequences (defaults to 1 for run and 32 for serve)
+    #[arg(long)]
+    #[serde(default)]
+    pub max_seqs: Option<usize>,
+
+    /// Maximum tokens processed in one paged-attention scheduler step
+    #[arg(long, default_value_t = default_max_num_batched_tokens())]
+    #[serde(default = "default_max_num_batched_tokens")]
+    pub max_num_batched_tokens: NonZeroUsize,
+
+    /// CUDA or Metal prompt-token quantum used while decode is resident and for recurrent prefill batching
+    #[arg(long, default_value_t = default_max_prefill_chunk_tokens())]
+    #[serde(default = "default_max_prefill_chunk_tokens")]
+    pub max_prefill_chunk_tokens: NonZeroUsize,
+
+    /// Maximum decode steps before a waiting prefill batch is admitted
+    #[arg(long, default_value_t = default_max_decode_steps_before_prefill())]
+    #[serde(default = "default_max_decode_steps_before_prefill")]
+    pub max_decode_steps_before_prefill: NonZeroUsize,
 
     /// Disable KV cache entirely
     #[arg(long)]
@@ -572,15 +632,25 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub matformer_slice_name: Option<String>,
 
+    /// Enable MTP speculative decoding with the head built into the model checkpoint.
+    #[arg(long, conflicts_with = "mtp_model")]
+    #[serde(default)]
+    pub mtp: bool,
+
     /// MTP assistant model id or path.
     #[arg(long)]
     #[serde(default)]
     pub mtp_model: Option<String>,
 
-    /// Number of MTP draft tokens to propose per target step.
-    #[arg(long)]
+    /// Fixed MTP draft tokens per step; omit to adapt the depth automatically.
+    #[arg(long, value_parser = model::parse_positive_usize)]
     #[serde(default)]
     pub mtp_n_predict: Option<usize>,
+
+    /// MTP draft sampling policy. Auto uses probabilistic DFlash2 drafting when supported.
+    #[arg(long, value_enum, default_value_t)]
+    #[serde(default)]
+    pub mtp_draft_sampling: MtpDraftSamplingArg,
 
     /// Path to an MCP client configuration JSON. Also reads `MCP_CONFIG_PATH` if unset.
     #[arg(long)]
@@ -752,13 +822,21 @@ pub struct BenchRuntimeOptions {
     #[arg(long, requires = "matformer_config_path")]
     pub matformer_slice_name: Option<String>,
 
+    /// Enable MTP speculative decoding with the head built into the model checkpoint.
+    #[arg(long, conflicts_with = "mtp_model")]
+    pub mtp: bool,
+
     /// MTP assistant model id or path.
     #[arg(long)]
     pub mtp_model: Option<String>,
 
-    /// Number of MTP draft tokens to propose per target step.
-    #[arg(long)]
+    /// Fixed MTP draft tokens per step; omit to adapt the depth automatically.
+    #[arg(long, value_parser = model::parse_positive_usize)]
     pub mtp_n_predict: Option<usize>,
+
+    /// MTP draft sampling policy. Auto uses probabilistic DFlash2 drafting when supported.
+    #[arg(long, value_enum, default_value_t)]
+    pub mtp_draft_sampling: MtpDraftSamplingArg,
 }
 
 impl BenchRuntimeOptions {
@@ -770,12 +848,16 @@ impl BenchRuntimeOptions {
     }
 
     pub fn mtp_config(&self) -> Option<mistralrs_core::MtpConfig> {
-        self.mtp_model
-            .clone()
-            .map(|model| mistralrs_core::MtpConfig {
-                model,
-                n_predict: self.mtp_n_predict,
-            })
+        if self.mtp {
+            return Some(
+                mistralrs_core::MtpConfig::builtin(self.mtp_n_predict)
+                    .with_draft_sampling_method(self.mtp_draft_sampling.into()),
+            );
+        }
+        self.mtp_model.clone().map(|model| {
+            mistralrs_core::MtpConfig::new(model, self.mtp_n_predict)
+                .with_draft_sampling_method(self.mtp_draft_sampling.into())
+        })
     }
 }
 
@@ -784,6 +866,25 @@ impl BenchRuntimeOptions {
 #[serde(rename_all = "kebab-case")]
 pub enum SearchEmbeddingModelArg {
     EmbeddingGemma,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum MtpDraftSamplingArg {
+    #[default]
+    Auto,
+    Greedy,
+    Probabilistic,
+}
+
+impl From<MtpDraftSamplingArg> for mistralrs_core::MtpDraftSamplingMethod {
+    fn from(value: MtpDraftSamplingArg) -> Self {
+        match value {
+            MtpDraftSamplingArg::Auto => Self::Auto,
+            MtpDraftSamplingArg::Greedy => Self::Greedy,
+            MtpDraftSamplingArg::Probabilistic => Self::Probabilistic,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum, Deserialize)]
@@ -812,6 +913,15 @@ pub struct MatformerSelection {
 }
 
 impl RuntimeOptions {
+    pub fn max_seqs_for_run(&self) -> usize {
+        self.max_seqs.unwrap_or(DEFAULT_RUN_MAX_SEQS)
+    }
+
+    pub fn max_seqs_for_serve(&self) -> usize {
+        self.max_seqs
+            .unwrap_or(mistralrs_core::memory_plan::DEFAULT_MAX_NUM_SEQS)
+    }
+
     pub fn matformer_selection(&self) -> MatformerSelection {
         MatformerSelection {
             config_path: self.matformer_config_path.clone(),
@@ -820,12 +930,16 @@ impl RuntimeOptions {
     }
 
     pub fn mtp_config(&self) -> Option<mistralrs_core::MtpConfig> {
-        self.mtp_model
-            .clone()
-            .map(|model| mistralrs_core::MtpConfig {
-                model,
-                n_predict: self.mtp_n_predict,
-            })
+        if self.mtp {
+            return Some(
+                mistralrs_core::MtpConfig::builtin(self.mtp_n_predict)
+                    .with_draft_sampling_method(self.mtp_draft_sampling.into()),
+            );
+        }
+        self.mtp_model.clone().map(|model| {
+            mistralrs_core::MtpConfig::new(model, self.mtp_n_predict)
+                .with_draft_sampling_method(self.mtp_draft_sampling.into())
+        })
     }
 }
 
@@ -883,15 +997,20 @@ impl Default for GlobalOptions {
 impl Default for RuntimeOptions {
     fn default() -> Self {
         Self {
-            max_seqs: 32,
+            max_seqs: None,
+            max_num_batched_tokens: default_max_num_batched_tokens(),
+            max_prefill_chunk_tokens: default_max_prefill_chunk_tokens(),
+            max_decode_steps_before_prefill: default_max_decode_steps_before_prefill(),
             no_kv_cache: false,
             prefix_cache_n: 16,
             chat_template: None,
             jinja_explicit: None,
             matformer_config_path: None,
             matformer_slice_name: None,
+            mtp: false,
             mtp_model: None,
             mtp_n_predict: None,
+            mtp_draft_sampling: MtpDraftSamplingArg::default(),
             mcp_config: None,
             agent: false,
             enable_search: false,
@@ -927,10 +1046,623 @@ fn default_token_source() -> TokenSource {
     TokenSource::CacheToken
 }
 
-fn default_max_seqs() -> usize {
-    32
+fn default_max_num_batched_tokens() -> NonZeroUsize {
+    NonZeroUsize::new(DEFAULT_MAX_NUM_BATCHED_TOKENS).unwrap()
+}
+
+fn default_max_prefill_chunk_tokens() -> NonZeroUsize {
+    NonZeroUsize::new(DEFAULT_MAX_PREFILL_CHUNK_TOKENS).unwrap()
+}
+
+fn default_max_decode_steps_before_prefill() -> NonZeroUsize {
+    NonZeroUsize::new(DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL).unwrap()
 }
 
 fn default_prefix_cache_n() -> usize {
     16
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, path::Path};
+
+    use super::*;
+
+    #[test]
+    fn sequence_defaults_follow_command_and_preserve_explicit_limits() {
+        for (command, default) in [
+            ("run", DEFAULT_RUN_MAX_SEQS),
+            ("serve", mistralrs_core::memory_plan::DEFAULT_MAX_NUM_SEQS),
+        ] {
+            for explicit in [None, Some(1), Some(8), Some(32)] {
+                let mut args = vec!["mistralrs".to_owned(), command.to_owned()];
+                if let Some(limit) = explicit {
+                    args.extend(["--max-seqs".to_owned(), limit.to_string()]);
+                }
+                let cli = Cli::try_parse_from(args).unwrap();
+                let (runtime, resolved) = match cli.command {
+                    Command::Run { runtime, .. } => {
+                        let resolved = runtime.max_seqs_for_run();
+                        (runtime, resolved)
+                    }
+                    Command::Serve { runtime, .. } => {
+                        let resolved = runtime.max_seqs_for_serve();
+                        (runtime, resolved)
+                    }
+                    _ => unreachable!(),
+                };
+                assert_eq!(runtime.max_seqs, explicit);
+                assert_eq!(resolved, explicit.unwrap_or(default));
+            }
+        }
+        let runtime = RuntimeOptions::default();
+        assert_eq!(runtime.max_seqs_for_run(), DEFAULT_RUN_MAX_SEQS);
+        assert_eq!(
+            runtime.max_seqs_for_serve(),
+            mistralrs_core::memory_plan::DEFAULT_MAX_NUM_SEQS
+        );
+    }
+
+    fn resolve_default_command(command: &str, args: &[&str]) -> anyhow::Result<ModelType> {
+        let cli = Cli::try_parse_from(
+            ["mistralrs", command]
+                .into_iter()
+                .chain(args.iter().copied()),
+        )?;
+        let (model_type, default_model) = match cli.command {
+            Command::Run {
+                model_type,
+                default_model,
+                ..
+            }
+            | Command::Serve {
+                model_type,
+                default_model,
+                ..
+            }
+            | Command::Bench {
+                model_type,
+                default_model,
+                ..
+            } => (model_type, default_model),
+            _ => unreachable!(),
+        };
+        resolve_model_type(model_type, default_model)
+    }
+
+    fn resolve_run(args: &[&str]) -> anyhow::Result<ModelType> {
+        resolve_default_command("run", args)
+    }
+
+    fn resolve_run_error(args: &[&str]) -> anyhow::Error {
+        match resolve_run(args) {
+            Ok(_) => panic!("expected model resolution to fail"),
+            Err(error) => error,
+        }
+    }
+
+    #[test]
+    fn quantized_file_infers_gguf_and_local_root() {
+        let filename = format!("mistralrs-{}.GGUF", uuid::Uuid::new_v4());
+        fs::write(&filename, []).unwrap();
+        let resolved = resolve_run(&["-f", &filename]).unwrap();
+        let ModelType::Auto { model, format, .. } = resolved else {
+            panic!("expected auto model");
+        };
+        assert_eq!(model.model_id, ".");
+        assert_eq!(format.format, Some(ModelFormat::Gguf));
+        assert_eq!(format.quantized_file.as_deref(), Some(filename.as_str()));
+        assert!(format.direct_file_only);
+        fs::remove_file(filename).unwrap();
+    }
+
+    #[test]
+    fn direct_gguf_shorthand_is_shared_by_run_serve_and_bench() {
+        let root = std::env::temp_dir().join(format!("mistralrs-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(root.join("weights")).unwrap();
+        let model_path = root.join("weights/model.gguf");
+        fs::write(&model_path, []).unwrap();
+        let model_path = model_path.to_string_lossy();
+        for command in ["run", "serve", "bench"] {
+            let resolved = resolve_default_command(command, &["-f", &model_path]).unwrap();
+            let ModelType::Auto { model, format, .. } = resolved else {
+                panic!("expected auto model");
+            };
+            assert_eq!(Path::new(&model.model_id), root.join("weights"));
+            assert_eq!(format.format, Some(ModelFormat::Gguf));
+            assert_eq!(format.quantized_file.as_deref(), Some("model.gguf"));
+            assert!(format.direct_file_only);
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn direct_gguf_shorthand_rebases_an_explicit_projector() {
+        let root = std::env::temp_dir().join(format!("mistralrs-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(root.join("weights")).unwrap();
+        let model_path = root.join("weights/model.gguf");
+        let projector_path = root.join("weights/mmproj-BF16.gguf");
+        fs::write(&model_path, []).unwrap();
+        fs::write(&projector_path, []).unwrap();
+        let model_path = model_path.to_string_lossy();
+        for command in ["run", "serve", "bench"] {
+            let resolved = resolve_default_command(
+                command,
+                &["-f", &model_path, "--mmproj", "mmproj-BF16.gguf"],
+            )
+            .unwrap();
+            let ModelType::Auto { model, format, .. } = resolved else {
+                panic!("expected auto model");
+            };
+            assert_eq!(Path::new(&model.model_id), root.join("weights"));
+            assert_eq!(format.quantized_file.as_deref(), Some("model.gguf"));
+            assert_eq!(format.mmproj.as_deref(), Some("mmproj-BF16.gguf"));
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn direct_text_gguf_accepts_dynamic_lora_options() {
+        let root = std::env::temp_dir().join(format!("mistralrs-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let model_path = root.join("model.gguf");
+        fs::write(&model_path, []).unwrap();
+
+        let resolved = resolve_run(&[
+            "-f",
+            &model_path.to_string_lossy(),
+            "--lora",
+            "code=org/code-lora",
+            "--lora-max-rank",
+            "64",
+        ])
+        .unwrap();
+        let ModelType::Auto {
+            format, adapter, ..
+        } = resolved
+        else {
+            panic!("expected auto model");
+        };
+        assert_eq!(format.format, Some(ModelFormat::Gguf));
+        assert!(format.mmproj.is_none());
+        assert_eq!(adapter.lora.len(), 1);
+        assert_eq!(adapter.lora[0].alias, "code");
+        assert_eq!(adapter.lora[0].source, "org/code-lora");
+        assert_eq!(adapter.lora_max_rank, 64);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn direct_gguf_shorthand_preserves_a_cross_directory_projector() {
+        let root = PathBuf::from(format!(".mistralrs-test-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(root.join("weights")).unwrap();
+        fs::create_dir_all(root.join("projectors")).unwrap();
+        let model_path = root.join("weights/model.gguf");
+        let projector_path = root.join("projectors/mmproj-BF16.gguf");
+        fs::write(&model_path, []).unwrap();
+        fs::write(&projector_path, []).unwrap();
+
+        let resolved = resolve_run(&[
+            "-f",
+            &model_path.to_string_lossy(),
+            "--mmproj",
+            &projector_path.to_string_lossy(),
+        ])
+        .unwrap();
+        let ModelType::Auto { format, .. } = resolved else {
+            panic!("expected auto model");
+        };
+        let expected_projector = std::env::current_dir().unwrap().join(&projector_path);
+        assert_eq!(
+            format.mmproj.as_deref(),
+            Some(expected_projector.to_string_lossy().as_ref())
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn quantized_shards_derive_common_parent() {
+        let root = std::env::temp_dir().join(format!("mistralrs-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let first = root.join("model-00001.gguf");
+        let second = root.join("model-00002.GGUF");
+        fs::write(&first, []).unwrap();
+        fs::write(&second, []).unwrap();
+        let files = format!("{}; {}", first.display(), second.display());
+        let resolved = resolve_run(&["-f", &files]).unwrap();
+        let ModelType::Auto { model, format, .. } = resolved else {
+            panic!("expected auto model");
+        };
+        assert_eq!(Path::new(&model.model_id), root);
+        assert_eq!(
+            format.quantized_file.as_deref(),
+            Some("model-00001.gguf;model-00002.GGUF")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn quantized_shards_without_model_require_common_parent() {
+        let root = std::env::temp_dir().join(format!("mistralrs-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(root.join("one")).unwrap();
+        fs::create_dir_all(root.join("two")).unwrap();
+        let first = root.join("one/model-1.gguf");
+        let second = root.join("two/model-2.gguf");
+        fs::write(&first, []).unwrap();
+        fs::write(&second, []).unwrap();
+        let files = format!("{};{}", first.display(), second.display());
+        let error = resolve_run_error(&["-f", &files]);
+        assert!(error.to_string().contains("one parent directory"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn direct_gguf_shorthand_rejects_a_missing_local_file() {
+        let missing =
+            std::env::temp_dir().join(format!("mistralrs-{}/model.gguf", uuid::Uuid::new_v4()));
+        let error = resolve_run_error(&["-f", &missing.to_string_lossy()]);
+        assert!(error
+            .to_string()
+            .contains("does not exist or is not a file"));
+    }
+
+    #[test]
+    fn remote_quantized_file_infers_ggml() {
+        let resolved = resolve_run(&["-m", "org/model", "-f", "model.GGML"]).unwrap();
+        let ModelType::Auto { model, format, .. } = resolved else {
+            panic!("expected auto model");
+        };
+        assert_eq!(model.model_id, "org/model");
+        assert_eq!(format.format, Some(ModelFormat::Ggml));
+    }
+
+    #[test]
+    fn mmproj_implies_gguf_for_unknown_main_suffix() {
+        let resolved = resolve_run(&[
+            "-m",
+            "org/model",
+            "-f",
+            "model.bin",
+            "--mmproj",
+            "mmproj.gguf",
+        ])
+        .unwrap();
+        let ModelType::Auto { format, .. } = resolved else {
+            panic!("expected auto model");
+        };
+        assert_eq!(format.format, Some(ModelFormat::Gguf));
+    }
+
+    #[test]
+    fn mmproj_rejects_an_explicit_non_gguf_format() {
+        let error = resolve_run_error(&[
+            "-m",
+            "org/model",
+            "--format",
+            "ggml",
+            "-f",
+            "model.ggml",
+            "--mmproj",
+            "mmproj.gguf",
+        ]);
+        assert!(error.to_string().contains("requires GGUF"));
+    }
+
+    #[test]
+    fn format_inference_rejects_mixed_or_unknown_files() {
+        let mixed = resolve_run_error(&["-m", "org/model", "-f", "a.gguf;b.ggml"]);
+        assert!(mixed.to_string().contains("mixed GGUF and GGML"));
+
+        let unknown = resolve_run_error(&["-m", "org/model", "-f", "model.bin"]);
+        assert!(unknown.to_string().contains("Cannot infer model format"));
+    }
+
+    #[test]
+    fn explicit_format_rejects_contradictory_suffix() {
+        let error = resolve_run_error(&["-m", "org/model", "--format", "gguf", "-f", "model.ggml"]);
+        assert!(error.to_string().contains("conflicts"));
+    }
+
+    #[test]
+    fn explicit_ggml_preserves_legacy_bin_filenames() {
+        let resolved =
+            resolve_run(&["-m", "org/model", "--format", "ggml", "-f", "model.bin"]).unwrap();
+        let ModelType::Auto { format, .. } = resolved else {
+            panic!("expected auto model");
+        };
+        assert_eq!(format.format, Some(ModelFormat::Ggml));
+        assert_eq!(format.quantized_file.as_deref(), Some("model.bin"));
+    }
+
+    #[test]
+    fn explicit_model_type_also_infers_format() {
+        let resolved = resolve_run(&["auto", "-m", "org/model", "-f", "model.gguf"]).unwrap();
+        let ModelType::Auto { format, .. } = resolved else {
+            panic!("expected auto model");
+        };
+        assert_eq!(format.format, Some(ModelFormat::Gguf));
+    }
+
+    #[test]
+    fn model_id_is_still_required_without_a_quantized_file() {
+        let error = resolve_run_error(&[]);
+        assert!(error.to_string().contains("--model-id"));
+
+        let resolved = resolve_run(&["-m", "org/plain"]).unwrap();
+        let ModelType::Auto { model, format, .. } = resolved else {
+            panic!("expected auto model");
+        };
+        assert_eq!(model.model_id, "org/plain");
+        assert_eq!(format.format, None);
+    }
+
+    #[test]
+    fn parses_hf_config_overrides_and_max_model_len() {
+        let resolved = resolve_run(&[
+            "-m",
+            "org/model",
+            "--hf-overrides",
+            r#"{"text_config":{"rope_parameters":{"rope_type":"yarn","factor":4.0}}}"#,
+            "--max-model-len",
+            "131072",
+        ])
+        .unwrap();
+        let ModelType::Auto { model, .. } = resolved else {
+            panic!("expected auto model");
+        };
+
+        assert_eq!(model.max_model_len, Some(131072));
+        let overrides = model.hf_overrides.unwrap();
+        assert_eq!(
+            overrides.as_value()["text_config"]["rope_parameters"]["rope_type"],
+            "yarn"
+        );
+    }
+
+    #[test]
+    fn rejects_zero_max_model_len() {
+        assert!(resolve_run(&["-m", "org/model", "--max-model-len", "0"]).is_err());
+    }
+
+    #[test]
+    fn run_parses_explicit_lora_preloads_and_request_selection() {
+        let cli = Cli::try_parse_from([
+            "mistralrs",
+            "run",
+            "-m",
+            "org/base",
+            "--enable-lora",
+            "--lora",
+            "code=org/code-lora",
+            "--lora",
+            "math=./math-lora",
+            "--adapter",
+            "code",
+        ])
+        .unwrap();
+
+        let Command::Run {
+            default_model,
+            adapter,
+            ..
+        } = cli.command
+        else {
+            panic!("expected run command");
+        };
+        assert_eq!(adapter.as_deref(), Some("code"));
+        assert!(default_model.adapter.enable_lora);
+        assert_eq!(default_model.adapter.lora.len(), 2);
+        assert_eq!(default_model.adapter.lora[1].alias, "math");
+    }
+
+    #[test]
+    fn run_parses_reasoning_effort() {
+        let cli = Cli::try_parse_from([
+            "mistralrs",
+            "run",
+            "-m",
+            "org/base",
+            "--reasoning-effort",
+            "XHIGH",
+        ])
+        .unwrap();
+
+        let Command::Run {
+            reasoning_effort, ..
+        } = cli.command
+        else {
+            panic!("expected run command");
+        };
+        assert_eq!(reasoning_effort, Some(ReasoningEffort::XHigh));
+    }
+
+    #[test]
+    fn auto_lora_parses_multimodal_limits() {
+        let cli = Cli::try_parse_from([
+            "mistralrs",
+            "serve",
+            "-m",
+            "Qwen/Qwen3.6-35B-A3B",
+            "--enable-lora",
+            "--max-edge",
+            "2048",
+            "--max-num-images",
+            "5",
+            "--max-image-length",
+            "1536",
+        ])
+        .unwrap();
+
+        let Command::Serve { default_model, .. } = cli.command else {
+            panic!("expected serve command");
+        };
+        assert!(default_model.adapter.enable_lora);
+        assert_eq!(default_model.multimodal.max_edge, Some(2048));
+        assert_eq!(default_model.multimodal.max_num_images, Some(5));
+        assert_eq!(default_model.multimodal.max_image_length, Some(1536));
+    }
+
+    #[test]
+    fn lora_preload_requires_an_explicit_alias() {
+        let result = Cli::try_parse_from([
+            "mistralrs",
+            "run",
+            "-m",
+            "org/base",
+            "--lora",
+            "org/code-lora",
+        ]);
+        let error = match result {
+            Ok(_) => panic!("expected an invalid LoRA preload"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("expected ALIAS=SOURCE"));
+    }
+
+    #[test]
+    fn legacy_raw_lora_does_not_conflict_with_default_runtime_limits() {
+        let cli = Cli::try_parse_from([
+            "mistralrs",
+            "run",
+            "-m",
+            "org/raw-model",
+            "--format",
+            "gguf",
+            "-f",
+            "model.gguf",
+            "--legacy-lora",
+            "org/legacy-lora",
+            "--legacy-lora-order",
+            "order.json",
+        ]);
+        if let Err(error) = cli {
+            panic!("{error}");
+        }
+    }
+
+    #[test]
+    fn explicit_multimodal_accepts_dynamic_lora_options() {
+        let cli = Cli::try_parse_from([
+            "mistralrs",
+            "serve",
+            "multimodal",
+            "-m",
+            "org/vision-model",
+            "--lora",
+            "code=org/code-lora",
+        ])
+        .unwrap();
+
+        let Command::Serve {
+            model_type: Some(ModelType::Multimodal { adapter, .. }),
+            ..
+        } = cli.command
+        else {
+            panic!("expected explicit multimodal model");
+        };
+        assert_eq!(adapter.lora.len(), 1);
+        assert_eq!(adapter.lora[0].alias, "code");
+        assert_eq!(adapter.lora[0].source, "org/code-lora");
+    }
+
+    #[test]
+    fn explicit_multimodal_help_lists_only_dynamic_adapter_options() {
+        let help = match Cli::try_parse_from(["mistralrs", "serve", "multimodal", "--help"]) {
+            Ok(_) => panic!("expected help output"),
+            Err(error) => error.to_string(),
+        };
+
+        assert!(help.contains("--lora"));
+        assert!(help.contains("--enable-lora"));
+        assert!(!help.contains("--legacy-lora"));
+        assert!(!help.contains("--xlora"));
+    }
+
+    #[test]
+    fn mtp_draft_count_must_be_positive() {
+        for command in ["serve", "run", "bench"] {
+            assert!(Cli::try_parse_from([
+                "mistralrs",
+                command,
+                "-m",
+                "org/target",
+                "--mtp",
+                "--mtp-n-predict",
+                "0",
+            ])
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn mtp_draft_sampling_defaults_to_auto_and_accepts_explicit_modes() {
+        let cli = Cli::try_parse_from([
+            "mistralrs",
+            "serve",
+            "-m",
+            "org/target",
+            "--mtp-model",
+            "org/draft",
+        ])
+        .unwrap();
+        let Command::Serve { runtime, .. } = cli.command else {
+            panic!("expected serve command");
+        };
+        assert_eq!(
+            runtime
+                .mtp_config()
+                .expect("missing MTP config")
+                .draft_sampling_method,
+            mistralrs_core::MtpDraftSamplingMethod::Auto
+        );
+
+        let cli = Cli::try_parse_from([
+            "mistralrs",
+            "serve",
+            "-m",
+            "org/target",
+            "--mtp-model",
+            "org/draft",
+            "--mtp-draft-sampling",
+            "probabilistic",
+        ])
+        .unwrap();
+        let Command::Serve { runtime, .. } = cli.command else {
+            panic!("expected serve command");
+        };
+        assert_eq!(
+            runtime
+                .mtp_config()
+                .expect("missing MTP config")
+                .draft_sampling_method,
+            mistralrs_core::MtpDraftSamplingMethod::Probabilistic
+        );
+
+        let cli = Cli::try_parse_from([
+            "mistralrs",
+            "serve",
+            "-m",
+            "org/target",
+            "--mtp-model",
+            "org/draft",
+            "--mtp-draft-sampling",
+            "greedy",
+        ])
+        .unwrap();
+        let Command::Serve { runtime, .. } = cli.command else {
+            panic!("expected serve command");
+        };
+        assert_eq!(
+            runtime
+                .mtp_config()
+                .expect("missing MTP config")
+                .draft_sampling_method,
+            mistralrs_core::MtpDraftSamplingMethod::Greedy
+        );
+        assert_eq!(
+            RuntimeOptions::default().mtp_draft_sampling,
+            MtpDraftSamplingArg::Auto
+        );
+    }
 }

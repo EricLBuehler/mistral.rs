@@ -2,7 +2,7 @@
 name = "mistralrs-pyo3"
 publish = false
 authors = ["Eric Buehler"]
-version = "0.8.23" # release CI appends +cudaNNN.smNN here only
+version = "0.9.5" # release CI appends +cudaNNN.smNN here only
 edition.workspace = true
 rust-version.workspace = true
 description.workspace = true
@@ -41,9 +41,14 @@ itertools.workspace = true
 [build-dependencies]
 pyo3-build-config.workspace = true
 
+[dev-dependencies]
+safetensors.workspace = true
+tempfile.workspace = true
+
 [features]
 default = []
 cuda = ["candle-core/cuda", "mistralrs-core/cuda"]
+cutile = ["cuda", "mistralrs-core/cutile"]
 cudnn = ["candle-core/cudnn", "mistralrs-core/cudnn"]
 metal = ["candle-core/metal", "mistralrs-core/metal"]
 flash-attn = ["cuda", "mistralrs-core/flash-attn"]

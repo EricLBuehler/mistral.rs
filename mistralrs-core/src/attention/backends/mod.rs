@@ -1,13 +1,13 @@
-pub(super) mod cpu;
+pub(crate) mod cpu;
 mod flash;
 #[cfg(feature = "metal")]
 pub(crate) mod metal_flash_attn;
-mod naive;
+pub(super) mod naive;
 mod sinks;
 
-pub(crate) use flash::flash_attn;
-pub(crate) use naive::{maybe_synchronize, naive_sdpa};
-pub(crate) use sinks::sinks_attn;
+pub(crate) use flash::{flash_attn, flash_backend_supports, flash_backend_supports_sdpa};
+pub(crate) use naive::naive_sdpa;
+pub(crate) use sinks::{sinks_attn, sinks_backend_is_available, sinks_backend_supports};
 
 #[cfg(not(feature = "metal"))]
 pub(crate) mod metal_flash_attn {

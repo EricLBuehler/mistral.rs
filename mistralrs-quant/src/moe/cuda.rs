@@ -221,8 +221,12 @@ pub fn act_and_mul(input: &Tensor, d: usize, act: GatedAct, dev: &CudaDevice) ->
 /// Fused SiLU(gate) * up: input [num_tokens, 2*d] -> [num_tokens, d] bf16.
 pub fn silu_and_mul(input: &Tensor, d: usize, dev: &CudaDevice) -> Result<Tensor> {
     let (num_tokens, two_d) = input.dims2()?;
-    assert_eq!(two_d, 2 * d, "silu_and_mul expects last dim == 2*d");
-    assert_eq!(input.dtype(), DType::BF16, "silu_and_mul is bf16-only");
+    if two_d != 2 * d {
+        candle_core::bail!("silu_and_mul expects last dim == 2*d");
+    }
+    if input.dtype() != DType::BF16 {
+        candle_core::bail!("silu_and_mul is bf16-only");
+    }
 
     let mut out = unsafe { dev.alloc::<bf16>(num_tokens * d)? };
     let stream = dev.cuda_stream();
@@ -253,8 +257,12 @@ pub fn silu_and_mul(input: &Tensor, d: usize, dev: &CudaDevice) -> Result<Tensor
 /// Fused GeLU-tanh(gate) * up: input [num_tokens, 2*d] -> [num_tokens, d] bf16.
 pub fn gelu_tanh_and_mul(input: &Tensor, d: usize, dev: &CudaDevice) -> Result<Tensor> {
     let (num_tokens, two_d) = input.dims2()?;
-    assert_eq!(two_d, 2 * d, "gelu_tanh_and_mul expects last dim == 2*d");
-    assert_eq!(input.dtype(), DType::BF16, "cutile gelu path is bf16-only");
+    if two_d != 2 * d {
+        candle_core::bail!("gelu_tanh_and_mul expects last dim == 2*d");
+    }
+    if input.dtype() != DType::BF16 {
+        candle_core::bail!("cutile gelu path is bf16-only");
+    }
 
     let mut out = unsafe { dev.alloc::<bf16>(num_tokens * d)? };
     let stream = dev.cuda_stream();

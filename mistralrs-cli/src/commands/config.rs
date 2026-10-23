@@ -6,16 +6,17 @@ use tracing::info;
 
 use mistralrs_core::initialize_logging;
 use mistralrs_server_core::{
-    metrics::{observe_http, ObservabilityState},
+    metrics::{install_prometheus_recorder, observe_http, ObservabilityState},
     mistralrs_for_server_builder::{MistralRsForServerBuilder, ModelConfig},
     mistralrs_server_router_builder::{MistralRsServerRouterBuilder, DEFAULT_MAX_BODY_LIMIT},
 };
 
 use crate::args::{MatformerSelection, RuntimeOptions};
-use crate::commands::run::interactive_mode;
+use crate::commands::run::{interactive_mode, InteractiveConfig};
 use crate::commands::serve::{
     apply_agent_mode, convert_to_model_selected, extract_sandbox_settings, load_mcp_config,
-    log_agent_runtime, log_api_surfaces, spawn_mcp_server, validate_agent_options,
+    log_agent_runtime, log_api_surfaces, spawn_mcp_server, tcp_nodelay_listener,
+    validate_agent_options,
 };
 #[cfg(feature = "code-execution")]
 use crate::commands::serve::{build_code_exec_config, build_shell_config};
@@ -45,24 +46,24 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
         default_model_id,
     } = cfg;
 
+    if server.observability_config().metrics {
+        install_prometheus_recorder();
+    }
     let global = global.to_global_options()?;
     apply_agent_mode(&mut runtime);
     validate_agent_options(&runtime)?;
     log_agent_runtime(&runtime, server.max_tool_rounds);
 
-    let (
-        paged_attn,
-        paged_attn_gpu_mem,
-        paged_attn_gpu_mem_usage,
-        paged_ctxt_len,
-        paged_attn_block_size,
-        paged_cache_type,
-    ) = paged_attn.into_builder_flags();
+    let (paged_attn, memory_goal, paged_attn_block_size, paged_cache_type) =
+        paged_attn.into_builder_flags()?;
 
     let (model_configs, cpu) = build_model_configs(&models, &runtime, &global.token_source).await?;
 
     let mut builder = MistralRsForServerBuilder::new()
-        .with_max_seqs(runtime.max_seqs)
+        .with_max_seqs(runtime.max_seqs_for_serve())
+        .with_max_num_batched_tokens(runtime.max_num_batched_tokens)
+        .with_max_prefill_chunk_tokens(runtime.max_prefill_chunk_tokens)
+        .with_max_decode_steps_before_prefill(runtime.max_decode_steps_before_prefill)
         .with_no_kv_cache(runtime.no_kv_cache)
         .with_token_source(global.token_source)
         .with_interactive_mode(false)
@@ -84,9 +85,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string()),
         )
-        .with_paged_attn_gpu_mem_optional(paged_attn_gpu_mem)
-        .with_paged_attn_gpu_mem_usage_optional(paged_attn_gpu_mem_usage)
-        .with_paged_ctxt_len_optional(paged_ctxt_len)
+        .with_memory_goal(memory_goal)
         .with_paged_attn_block_size_optional(paged_attn_block_size)
         .with_mtp_config_optional(runtime.mtp_config())
         .with_paged_attn_cache_type(paged_cache_type);
@@ -191,6 +190,7 @@ async fn run_serve_config(cfg: crate::config::ServeConfig) -> Result<()> {
 
     let listener =
         tokio::net::TcpListener::bind(format!("{}:{}", server.host, server.port)).await?;
+    let listener = tcp_nodelay_listener(listener);
 
     info!("Server listening on http://{}:{}", server.host, server.port);
     log_api_surfaces(&server.host, server.port);
@@ -208,26 +208,26 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
         sandbox,
         models,
         thinking,
+        reasoning_effort,
+        adapter,
     } = cfg;
+
+    mistralrs_core::resolve_reasoning_controls(thinking, reasoning_effort)?;
 
     let global = global.to_global_options()?;
     apply_agent_mode(&mut runtime);
     validate_agent_options(&runtime)?;
     log_agent_runtime(&runtime, None);
-
-    let (
-        paged_attn,
-        paged_attn_gpu_mem,
-        paged_attn_gpu_mem_usage,
-        paged_ctxt_len,
-        paged_attn_block_size,
-        paged_cache_type,
-    ) = paged_attn.into_builder_flags();
+    let (paged_attn, memory_goal, paged_attn_block_size, paged_cache_type) =
+        paged_attn.into_builder_flags()?;
 
     let (model_configs, cpu) = build_model_configs(&models, &runtime, &global.token_source).await?;
 
     let mut builder = MistralRsForServerBuilder::new()
-        .with_max_seqs(runtime.max_seqs)
+        .with_max_seqs(runtime.max_seqs_for_run())
+        .with_max_num_batched_tokens(runtime.max_num_batched_tokens)
+        .with_max_prefill_chunk_tokens(runtime.max_prefill_chunk_tokens)
+        .with_max_decode_steps_before_prefill(runtime.max_decode_steps_before_prefill)
         .with_no_kv_cache(runtime.no_kv_cache)
         .with_token_source(global.token_source)
         .with_interactive_mode(true)
@@ -249,9 +249,7 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string()),
         )
-        .with_paged_attn_gpu_mem_optional(paged_attn_gpu_mem)
-        .with_paged_attn_gpu_mem_usage_optional(paged_attn_gpu_mem_usage)
-        .with_paged_ctxt_len_optional(paged_ctxt_len)
+        .with_memory_goal(memory_goal)
         .with_paged_attn_block_size_optional(paged_attn_block_size)
         .with_mtp_config_optional(runtime.mtp_config())
         .with_paged_attn_cache_type(paged_cache_type);
@@ -282,6 +280,12 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
     let _ = sandbox_policy;
 
     let mistralrs = builder.build().await?;
+    if let Some(alias) = adapter.as_deref() {
+        let adapters = mistralrs.list_lora_adapters(None).await?;
+        if !adapters.iter().any(|loaded| loaded.alias == alias) {
+            anyhow::bail!("LoRA adapter alias `{alias}` is not loaded");
+        }
+    }
 
     #[cfg(feature = "code-execution")]
     let do_code_exec = runtime.enable_code_execution;
@@ -296,11 +300,15 @@ async fn run_run_config(cfg: crate::config::RunConfig) -> Result<()> {
 
     interactive_mode(
         mistralrs.clone(),
-        runtime.enable_search,
-        do_code_exec,
-        do_shell,
-        runtime.code_exec_permission.into(),
-        thinking,
+        InteractiveConfig {
+            do_search: runtime.enable_search,
+            do_code_exec,
+            do_shell,
+            agent_permission: runtime.code_exec_permission.into(),
+            enable_thinking: thinking,
+            reasoning_effort,
+            adapter,
+        },
     )
     .await;
 
@@ -349,6 +357,12 @@ async fn build_model_configs(
 
         let resolved_loader_id = crate::commands::serve::model_id_of(&model_type);
         let mut config = ModelConfig::new(entry.model_id.clone(), model_selected);
+        if let Some(max_model_len) = entry.max_model_len {
+            config = config.with_max_model_len(max_model_len);
+        }
+        if let Some(overrides) = entry.hf_overrides.clone() {
+            config = config.with_hf_config_overrides(overrides);
+        }
         if resolved_loader_id != entry.model_id {
             config = config.with_alias(entry.model_id.clone());
         }
@@ -368,9 +382,135 @@ async fn build_model_configs(
         if let Some(isq) = crate::commands::serve::extract_isq_setting(&model_type) {
             config = config.with_in_situ_quant(isq);
         }
+        if let Some(max_bytes) =
+            crate::commands::serve::extract_encoder_cache_memory_bytes(&model_type)?
+        {
+            config = config.with_encoder_cache_memory_bytes(max_bytes);
+        }
 
         configs.push(config);
     }
 
     Ok((configs, cpu))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    #[test]
+    fn toml_sequence_defaults_follow_command_and_preserve_explicit_limits() {
+        for (command, default) in [
+            ("run", RuntimeOptions::default().max_seqs_for_run()),
+            ("serve", RuntimeOptions::default().max_seqs_for_serve()),
+        ] {
+            for runtime_section in ["", "[runtime]\nprefix_cache_n = 4\n"] {
+                let config: CliConfig =
+                    toml::from_str(&format!("command = \"{command}\"\n{runtime_section}")).unwrap();
+                let (runtime, resolved) = match config {
+                    CliConfig::Run(config) => {
+                        let resolved = config.runtime.max_seqs_for_run();
+                        (config.runtime, resolved)
+                    }
+                    CliConfig::Serve(config) => {
+                        let resolved = config.runtime.max_seqs_for_serve();
+                        (config.runtime, resolved)
+                    }
+                };
+                assert_eq!(runtime.max_seqs, None);
+                assert_eq!(resolved, default);
+            }
+            for explicit in [1, 8, 32] {
+                let config: CliConfig = toml::from_str(&format!(
+                    "command = \"{command}\"\n[runtime]\nmax_seqs = {explicit}\n"
+                ))
+                .unwrap();
+                let resolved = match config {
+                    CliConfig::Run(config) => config.runtime.max_seqs_for_run(),
+                    CliConfig::Serve(config) => config.runtime.max_seqs_for_serve(),
+                };
+                assert_eq!(resolved, explicit);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn from_config_infers_gguf_for_an_exact_file() {
+        let root = std::env::temp_dir().join(format!("mistralrs-gguf-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("model.gguf"), []).unwrap();
+        fs::write(root.join("mmproj-BF16.gguf"), []).unwrap();
+        let input = format!(
+            r#"
+command = "run"
+
+[[models]]
+model_id = "{}"
+
+[models.format]
+quantized_file = "model.gguf"
+mmproj = "mmproj-BF16.gguf"
+"#,
+            root.display()
+        );
+        let config: CliConfig = toml::from_str(&input).unwrap();
+        let CliConfig::Run(config) = config else {
+            unreachable!()
+        };
+
+        let (models, cpu) = build_model_configs(
+            &config.models,
+            &config.runtime,
+            &mistralrs_core::TokenSource::None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(models.len(), 1);
+        assert!(!cpu);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn from_config_accepts_dynamic_lora_for_text_gguf() {
+        let root = std::env::temp_dir().join(format!("mistralrs-gguf-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("model-Q4_K_M.gguf"), []).unwrap();
+        let input = format!(
+            r#"
+command = "serve"
+
+[[models]]
+model_id = "{}"
+
+[models.format]
+quantized_file = "model-Q4_K_M.gguf"
+
+[models.adapter]
+lora = [
+  {{ alias = "code", source = "org/code-lora" }},
+]
+"#,
+            root.display()
+        );
+        let config: CliConfig = toml::from_str(&input).unwrap();
+        let CliConfig::Serve(config) = config else {
+            unreachable!()
+        };
+        assert!(config.models[0].adapter.dynamic_lora_enabled());
+
+        let (models, cpu) = build_model_configs(
+            &config.models,
+            &config.runtime,
+            &mistralrs_core::TokenSource::None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(models.len(), 1);
+        assert!(!cpu);
+
+        fs::remove_dir_all(root).unwrap();
+    }
 }

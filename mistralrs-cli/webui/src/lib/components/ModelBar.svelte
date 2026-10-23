@@ -188,11 +188,11 @@
     {@render param("max", "max", settingsStore.maxTokens)}
 
     <button
-      class="rounded px-1.5 py-0.5 hover:bg-gray-100 dark:hover:bg-gray-800 {settingsStore.enableThinking ? 'text-amber-600 dark:text-amber-400' : 'text-gray-400 dark:text-gray-600'}"
-      onclick={() => { settingsStore.enableThinking = !settingsStore.enableThinking; settingsStore.persist(); }}
-      title={settingsStore.enableThinking ? "Click to disable thinking" : "Click to enable thinking"}
+      class="rounded px-1.5 py-0.5 hover:bg-gray-100 dark:hover:bg-gray-800 {settingsStore.reasoningEffort === 'off' ? 'text-gray-400 dark:text-gray-600' : 'text-amber-600 dark:text-amber-400'}"
+      onclick={() => (settingsStore.settingsOpen = true)}
+      title="Set reasoning effort"
     >
-      thinking
+      reasoning:{settingsStore.reasoningEffort || "default"}
     </button>
   </div>
 

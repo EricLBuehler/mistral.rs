@@ -3,7 +3,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use candle_core::{DType, Device, Result, Tensor};
-use candle_nn::{Embedding, Linear, Module};
+use candle_nn::{Linear, Module};
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
@@ -86,6 +86,7 @@ impl Mlp {
 /// MoE MLP layer for Qwen3 VL MoE
 struct MoeMlp {
     gate: Linear,
+    gate_lora: Option<Arc<mistralrs_quant::LoraSiteHandle>>,
     experts: MoEExperts,
     num_experts_per_tok: usize,
     norm_topk_prob: bool,
@@ -99,11 +100,11 @@ impl MoeMlp {
         comm: &Arc<mistralrs_quant::Comm>,
         loading_isq: bool,
     ) -> Result<Self> {
-        // Load gate
-        let gate = layers::linear_no_bias(
-            cfg.hidden_size,
-            cfg.num_experts,
-            vb.pp("gate").set_device(layer_device.clone()),
+        let gate_vb = vb.pp("gate").set_device(layer_device.clone());
+        let gate = layers::linear_no_bias(cfg.hidden_size, cfg.num_experts, gate_vb.clone())?;
+        let gate_lora = mistralrs_quant::register_dynamic_lora_site(
+            &gate_vb,
+            mistralrs_quant::LoraLinearSpec::replicated(cfg.hidden_size, cfg.num_experts),
         )?;
 
         let moe_cfg = MoEExpertsConfig {
@@ -111,6 +112,7 @@ impl MoeMlp {
             num_experts_per_tok: cfg.num_experts_per_tok,
             hidden_size: cfg.hidden_size,
             moe_intermediate_size: cfg.moe_intermediate_size,
+            expert_proj_names: crate::moe::ExpertProjNames::DEFAULT,
         };
 
         // Load experts with automatic backend selection
@@ -126,6 +128,7 @@ impl MoeMlp {
 
         Ok(Self {
             gate,
+            gate_lora,
             experts,
             num_experts_per_tok: cfg.num_experts_per_tok,
             norm_topk_prob: cfg.norm_topk_prob,
@@ -137,6 +140,10 @@ impl MoeMlp {
         let xs_flat = xs.reshape(((), hidden_dim))?;
 
         let router_logits = self.gate.forward(&xs_flat)?;
+        let router_logits = match &self.gate_lora {
+            Some(site) => mistralrs_quant::apply_dynamic_lora_delta(site, &xs_flat, router_logits)?,
+            None => router_logits,
+        };
         let topk = crate::ops::moe_router_topk(
             &router_logits,
             crate::ops::MoeRouterTopKConfig {
@@ -313,6 +320,10 @@ impl Attention {
             (q, k, v)
         };
 
+        let cos_sin = &(
+            cos_sin.0.to_device(q.device())?,
+            cos_sin.1.to_device(q.device())?,
+        );
         (q, k) = self.rotary_emb.forward_qk_norm(
             cos_sin,
             &q,
@@ -469,17 +480,16 @@ impl DecoderLayer {
             metadata,
             flash_params,
         )?;
-        let xs = (xs + residual)?;
-        let residual = &xs;
-        let xs = self
-            .mlp
-            .forward(&xs.apply(&self.post_attention_layernorm)?)?;
+        let (residual, xs) = self
+            .post_attention_layernorm
+            .forward_add_rms_norm(&xs, residual)?;
+        let xs = self.mlp.forward(&xs)?;
         residual + xs
     }
 }
 
 pub struct Qwen3VLMoETextModel {
-    embed_tokens: Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
     pub(super) norm: RmsNorm,
     layers: Vec<DecoderLayer>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
@@ -501,16 +511,20 @@ impl Qwen3VLMoETextModel {
     ) -> Result<Self> {
         let mapper = normal_loading_metadata.mapper;
         // Support both HuggingFace naming (model.language_model.*) and MLX naming (language_model.model.*)
-        let vb_m = if vb.contains_tensor("language_model.model.embed_tokens.weight") {
-            vb.pp("language_model").pp("model")
-        } else {
-            vb.pp("model").pp("language_model")
-        };
+        let vb_m =
+            if layers::contains_tensor_or_uqff(&vb, "language_model.model.embed_tokens.weight") {
+                vb.pp("language_model").pp("model")
+            } else {
+                vb.pp("model").pp("language_model")
+            };
 
-        let embed_tokens = layers::embedding(
+        let embed_tokens = layers::embedding_with_legacy_tied_uqff(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            tie.then(|| {
+                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq)
+            }),
             &cfg.quantization_config,
         )?;
 
@@ -576,16 +590,7 @@ impl Qwen3VLMoETextModel {
                 mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(
-                        embed_tokens.embeddings(),
-                        normal_loading_metadata.loading_isq,
-                    )?,
-                    None,
-                ),
-                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
-            )?
+            embed_tokens.clone()
         };
         Ok(Self {
             embed_tokens,
@@ -616,7 +621,7 @@ impl Qwen3VLMoETextModel {
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.forward(input_ids)
+        self.embed_tokens.embedding_forward(input_ids, self.dtype)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -659,7 +664,7 @@ impl Qwen3VLMoETextModel {
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
         let xs = ctx.logits(&xs)?;
-        self.lm_head.forward(&xs)
+        ctx.lm_head(&*self.lm_head, &xs)
     }
 
     /// Matches transformers `_deepstack_process`:

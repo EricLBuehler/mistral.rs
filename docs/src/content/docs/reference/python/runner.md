@@ -11,7 +11,7 @@ sidebar:
 ```text
 __init__(
     which: Which,
-    max_seqs: int = 16,
+    max_seqs: int = 32,
     no_kv_cache: bool = False,
     prefix_cache_n: int = 16,
     token_source: str = 'cache',
@@ -22,9 +22,7 @@ __init__(
     num_device_layers: list[str] | None = None,
     in_situ_quant: str | None = None,
     anymoe_config: AnyMoeConfig | None = None,
-    pa_gpu_mem: int | None = None,
-    pa_gpu_mem_usage: float | None = None,
-    pa_ctxt_len: int | None = None,
+    memory_goal: str | float | None = None,
     pa_blk_size: int | None = None,
     pa_cache_type: PagedCacheType | None = None,
     no_paged_attn: bool = False,
@@ -59,22 +57,13 @@ Load a model.
     the corresponding number of layers. Note: this is deprecated in favor of automatic device mapping.
 - `in_situ_quant` sets the optional in-situ quantization for a model.
 - `anymoe_config` specifies the AnyMoE config. If this is set, then the model will be loaded as an AnyMoE model.
-- `pa_gpu_mem`: GPU memory to allocate for KV cache with PagedAttention in MBs.
-    PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-    The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
-- `pa_gpu_mem_usage`: Percentage of GPU memory to utilize after allocation of KV cache with PagedAttention, from 0 to 1.
-    If this is not set and the device is CUDA, it will default to `0.9`.
-    PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-    The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
-- `pa_ctxt_len`: Total context length to allocate the KV cache for (total number of tokens which the KV cache can hold).
-    PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-    The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
-    This is the default setting, and it defaults to the `max-seq-len` specified in after the model type.
-- `pa_blk_size` sets the block size (number of tokens per block) for PagedAttention. If this is not set and the device is CUDA,
-    it will default to 32. PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
+- `memory_goal`: Shared model and KV memory goal. Defaults to automatic sizing.
+    Use a fraction such as `0.9` for physical GPU memory utilization, or
+    a KV capacity such as `"4GiB"` or `"65536tokens"`. Explicit goals require paging.
+- `pa_blk_size`: Tokens per block, defaulting to 32 on CUDA and Metal. PagedAttention is enabled by default on both.
 - `pa_cache_type` sets the PagedAttention KV cache type (auto or f8e4m3). Defaults to `auto`.
-- `no_paged_attn` disables PagedAttention on CUDA. Because PagedAttention is already disabled on Metal, this is only applicable on CUDA.
-- `paged_attn` enables PagedAttention on Metal. Because PagedAttention is already enabled on CUDA, this is only applicable on Metal.
+- `no_paged_attn` disables PagedAttention on CUDA and Metal.
+- `paged_attn` forces PagedAttention on; mutually exclusive with `no_paged_attn`.
 - `seed`, used to ensure reproducible random number generation.
 - `enable_search`: Enable searching compatible with the OpenAI `web_search_options` setting. This loads the selected search embedding reranker (EmbeddingGemma by default).
 - `search_embedding_model`: select which built-in search embedding model to load (currently `"embedding_gemma"`).
@@ -188,7 +177,7 @@ Generate audio given a (model specific) prompt. PCM and sampling rate as well as
 send_re_isq(dtype: str, model_id: str | None = None) -> None
 ```
 
-Send a request to re-ISQ the model. If the model was loaded as GGUF or GGML then nothing will happen.
+Re-ISQ a model that was loaded with `in_situ_quant`.
 
 **Parameters**
 
@@ -264,7 +253,7 @@ Tokenize some text, returning raw tokens.
 | --- | --- | --- | --- |
 | `text` | `str` | required | The text to tokenize. |
 | `add_special_tokens` | `bool` | required | Whether to add special tokens. |
-| `enable_thinking` | `bool \| None` | required | Enables thinking for models that support this configuration. |
+| `enable_thinking` | `bool \| None` | required | Compatibility argument; raw text tokenization does not render a chat template. |
 | `model_id` | `str \| None` | `None` | Optional model ID to use for tokenization. If None, uses the default model. |
 
 ### `Runner.detokenize_text`
@@ -383,6 +372,58 @@ Manually reload a previously unloaded model.
 | Name | Type | Default | Description |
 | --- | --- | --- | --- |
 | `model_id` | `str` | required | The model ID to reload. |
+
+### `Runner.load_lora_adapter`
+
+```text
+load_lora_adapter(
+    alias: str,
+    adapter_dir: str | PathLike[str],
+    model_id: str | None = None,
+    load_inplace: bool = False,
+    expected_generation: str | None = None,
+) -> LoraAdapterInfo
+```
+
+Load a local LoRA adapter, optionally replacing with generation CAS.
+
+**Raises:** LoraAdapterError: The operation failed; inspect `error.code` for recovery.
+
+### `Runner.unload_lora_adapter`
+
+```text
+unload_lora_adapter(
+    alias: str,
+    model_id: str | None = None,
+    expected_generation: str | None = None,
+) -> LoraAdapterInfo
+```
+
+Unregister a LoRA alias while in-flight requests retain their generation.
+
+**Raises:** LoraAdapterError: The operation failed; inspect `error.code` for recovery.
+
+### `Runner.list_lora_adapters`
+
+```text
+list_lora_adapters(
+    model_id: str | None = None,
+) -> list[LoraAdapterInfo]
+```
+
+List loaded LoRA adapters for a model.
+
+**Raises:** LoraAdapterError: The operation failed; inspect `error.code` for recovery.
+
+### `Runner.lora_adapter_status`
+
+```text
+lora_adapter_status(model_id: str | None = None) -> LoraRuntimeStatus
+```
+
+Return loaded aliases and complete resident-generation capacity usage.
+
+**Raises:** LoraAdapterError: The operation failed; inspect `error.code` for recovery.
 
 ### `Runner.list_models_with_status`
 
@@ -507,6 +548,67 @@ file was wire-truncated in the response payload.
 | `total_rows` | `int` |
 | `min_rows` | `int` |
 | `max_rows` | `int` |
+
+
+## `LoraAdapterError`
+
+A dynamic LoRA lifecycle operation failed.
+
+| Field | Type |
+| --- | --- |
+| `code` | `str` |
+
+
+## `LoraAdapterInfo`
+
+A loaded alias and the immutable generation it currently selects.
+
+| Field | Type |
+| --- | --- |
+| `alias` | `str` |
+| `source` | `str` |
+| `revision` | `str \| None` |
+| `generation` | `str` |
+| `rank` | `int` |
+| `bytes` | `int` |
+
+### `LoraAdapterInfo.exact`
+
+```text
+exact() -> LoraAdapterGeneration
+```
+
+Select this exact immutable generation in a request.
+
+
+## `LoraResidentGenerationInfo`
+
+One device-resident generation, including retired generations still leased.
+
+| Field | Type |
+| --- | --- |
+| `generation` | `str` |
+| `aliases` | `list[str]` |
+| `rank` | `int` |
+| `bytes` | `int` |
+| `retired` | `bool` |
+| `active_leases` | `int` |
+
+
+## `LoraRuntimeStatus`
+
+Loaded aliases, resident generations, active leases, and capacity limits.
+
+| Field | Type |
+| --- | --- |
+| `adapters` | `list[LoraAdapterInfo]` |
+| `generations` | `list[LoraResidentGenerationInfo]` |
+| `resident_generations` | `int` |
+| `retired_generations` | `int` |
+| `resident_bytes` | `int` |
+| `max_adapters` | `int` |
+| `max_rank` | `int` |
+| `max_bytes` | `int` |
 
 ---
 

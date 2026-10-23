@@ -3,7 +3,7 @@ title: Set up video input
 description: Install FFmpeg so multimodal models can decode video files.
 ---
 
-This page covers the FFmpeg setup that video input depends on. To actually send video (CLI flags, content parts, model notes), see [Send images, audio, and video](/mistral.rs/guides/models/multimodal-input/). Video input works with multimodal models that list video in the [supported models reference](/mistral.rs/reference/supported-models/).
+This page covers the FFmpeg setup that video input depends on. To actually send video (CLI flags, content parts, model notes), see [Send images, audio, and video](/guides/models/multimodal-input/). Video input works with multimodal models that list video in the [supported models reference](/reference/supported-models/).
 
 ## You need FFmpeg on the server PATH
 
@@ -19,6 +19,8 @@ ffmpeg -version
 If that command fails in the same shell, service, or container that starts `mistralrs`, video requests for non-GIF files will fail.
 
 ## Install FFmpeg
+
+The [mistral.rs installer](/reference/installer/) can install FFmpeg through Customize, `--with-ffmpeg` on macOS/Linux, or `-WithFFmpeg` on Windows. FFmpeg is optional and is left untouched by default. To install it separately, use the commands below.
 
 Debian or Ubuntu:
 

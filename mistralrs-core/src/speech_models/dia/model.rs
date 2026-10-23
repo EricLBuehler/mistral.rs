@@ -293,7 +293,7 @@ pub struct DiaEncoder {
 
 impl DiaEncoder {
     fn new(cfg: &DiaConfig, vb: ShardedVarBuilder) -> Result<Self> {
-        let embedding = layers::embedding(
+        let embedding = layers::dense_embedding(
             cfg.model.src_vocab_size,
             cfg.model.encoder.n_embd,
             vb.pp("embedding"),
@@ -490,7 +490,7 @@ impl DiaDecoder {
     fn new(cfg: &DiaConfig, vb: ShardedVarBuilder) -> Result<Self> {
         let mut embeddings = Vec::new();
         for i in 0..cfg.data.channels {
-            let embedding = layers::embedding(
+            let embedding = layers::dense_embedding(
                 cfg.model.tgt_vocab_size,
                 cfg.model.decoder.n_embd,
                 vb.pp("embeddings").pp(i),

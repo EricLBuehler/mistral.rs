@@ -4,11 +4,9 @@ use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
 
 #[cfg(unix)]
-const INSTALL_SH_URL: &str =
-    "https://raw.githubusercontent.com/EricLBuehler/mistral.rs/refs/heads/master/install.sh";
+const INSTALL_SH_URL: &str = "https://mistralrs.dev/install.sh";
 #[cfg(windows)]
-const INSTALL_PS1_URL: &str =
-    "https://raw.githubusercontent.com/EricLBuehler/mistral.rs/refs/heads/master/install.ps1";
+const INSTALL_PS1_URL: &str = "https://mistralrs.dev/install.ps1";
 
 fn managed_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".mistralrs"))
@@ -93,15 +91,19 @@ pub fn run_uninstall(yes: bool) -> Result<()> {
             return Ok(());
         }
         if let Some(bin) = bin_dir() {
-            for name in ["mistralrs", "tileiras"] {
-                let link = bin.join(name);
-                let is_symlink = link
-                    .symlink_metadata()
-                    .map(|m| m.file_type().is_symlink())
-                    .unwrap_or(false);
-                if is_symlink {
-                    let _ = std::fs::remove_file(&link);
-                }
+            let mistralrs_link = bin.join("mistralrs");
+            let is_symlink = mistralrs_link
+                .symlink_metadata()
+                .map(|metadata| metadata.file_type().is_symlink())
+                .unwrap_or(false);
+            if is_symlink {
+                let _ = std::fs::remove_file(&mistralrs_link);
+            }
+
+            let tileiras_link = bin.join("tileiras");
+            let legacy_target = pre.join("bin").join("tileiras");
+            if std::fs::read_link(&tileiras_link).ok().as_deref() == Some(legacy_target.as_path()) {
+                let _ = std::fs::remove_file(&tileiras_link);
             }
         }
         std::fs::remove_dir_all(&pre).with_context(|| format!("removing {}", pre.display()))?;

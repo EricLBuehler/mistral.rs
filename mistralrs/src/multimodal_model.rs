@@ -29,6 +29,8 @@ pub struct MultimodalModelBuilder {
     pub(crate) tokenizer_json: Option<String>,
     pub(crate) device_mapping: Option<DeviceMapSetting>,
     pub(crate) max_edge: Option<u32>,
+    pub(crate) max_model_len: Option<usize>,
+    pub(crate) hf_config_overrides: Option<HfConfigOverrides>,
     pub(crate) hf_cache_path: Option<PathBuf>,
     pub(crate) search_embedding_model: Option<SearchEmbeddingModel>,
     pub(crate) search_callback: Option<Arc<SearchCallback>>,
@@ -39,6 +41,7 @@ pub struct MultimodalModelBuilder {
     pub(crate) matformer_config_path: Option<PathBuf>,
     pub(crate) matformer_slice_name: Option<String>,
     pub(crate) organization: IsqOrganization,
+    pub(crate) encoder_cache_memory_bytes: Option<usize>,
 
     // Model running
     pub(crate) topology: Option<Topology>,
@@ -51,16 +54,19 @@ pub struct MultimodalModelBuilder {
 
     // Other things
     pub(crate) paged_attn_cfg: Option<PagedAttentionConfig>,
+    pub(crate) memory_goal: Option<crate::MemoryGoal>,
+    pub(crate) no_paged_attn: bool,
     pub(crate) max_num_seqs: usize,
     pub(crate) with_logging: bool,
     pub(crate) prefix_cache_n: Option<usize>,
 }
 
 impl MultimodalModelBuilder {
+    /// PagedAttention defaults to enabled on supported CUDA and Metal devices.
     /// A few defaults are applied here:
     /// - Token source is from the cache (.cache/huggingface/token)
     /// - Maximum number of sequences running is 32
-    /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
+    /// - Automatic device mapping using the shared memory goal and execution limits
     /// - By default, web searching compatible with the OpenAI `web_search_options` setting is disabled.
     pub fn new(model_id: impl ToString) -> Self {
         Self {
@@ -72,13 +78,15 @@ impl MultimodalModelBuilder {
             chat_template: None,
             tokenizer_json: None,
             max_edge: None,
+            max_model_len: None,
+            hf_config_overrides: None,
             loader_type: None,
             dtype: ModelDType::Auto,
             force_cpu: false,
             token_source: TokenSource::CacheToken,
             hf_revision: None,
             isq: None,
-            max_num_seqs: 32,
+            max_num_seqs: mistralrs_core::memory_plan::DEFAULT_MAX_NUM_SEQS,
             with_logging: false,
             device_mapping: None,
             calibration_file: None,
@@ -86,6 +94,8 @@ impl MultimodalModelBuilder {
             jinja_explicit: None,
             throughput_logging: false,
             paged_attn_cfg: None,
+            memory_goal: None,
+            no_paged_attn: false,
             hf_cache_path: None,
             search_embedding_model: None,
             search_callback: None,
@@ -96,6 +106,7 @@ impl MultimodalModelBuilder {
             matformer_config_path: None,
             matformer_slice_name: None,
             organization: IsqOrganization::Default,
+            encoder_cache_memory_bytes: None,
             prefix_cache_n: None,
         }
     }
@@ -138,6 +149,28 @@ impl MultimodalModelBuilder {
         self
     }
 
+    /// Set the runtime model context length.
+    pub fn with_max_model_len(mut self, max_model_len: usize) -> Self {
+        assert!(max_model_len > 0, "maximum model length must be nonzero");
+        self.max_model_len = Some(max_model_len);
+        self
+    }
+
+    /// Set recursively merged Hugging Face config.json overrides.
+    pub fn with_hf_config_overrides(mut self, overrides: HfConfigOverrides) -> Self {
+        self.hf_config_overrides = Some(overrides);
+        self
+    }
+
+    pub fn with_encoder_cache_memory_bytes(mut self, max_bytes: usize) -> Self {
+        assert!(
+            max_bytes > 0,
+            "encoder cache memory capacity must be nonzero"
+        );
+        self.encoder_cache_memory_bytes = Some(max_bytes);
+        self
+    }
+
     /// Load the multimodal model and return a ready-to-use [`Model`].
     pub async fn build(self) -> anyhow::Result<Model> {
         let (pipeline, scheduler_config, add_model_config) =
@@ -155,7 +188,7 @@ impl UqffMultimodalModelBuilder {
     /// A few defaults are applied here:
     /// - Token source is from the cache (.cache/huggingface/token)
     /// - Maximum number of sequences running is 32
-    /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
+    /// - Automatic device mapping using the shared memory goal and execution limits
     ///
     /// For sharded UQFF models, you only need to specify the first shard file
     /// (e.g., `q4k-0.uqff`). The remaining shards are auto-discovered from the
@@ -194,5 +227,19 @@ impl DerefMut for UqffMultimodalModelBuilder {
 impl From<UqffMultimodalModelBuilder> for MultimodalModelBuilder {
     fn from(value: UqffMultimodalModelBuilder) -> Self {
         value.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MultimodalModelBuilder;
+
+    #[test]
+    fn max_model_len_is_configurable() {
+        let mut builder = MultimodalModelBuilder::new("model");
+        assert_eq!(builder.max_model_len, None);
+
+        builder = builder.with_max_model_len(8192);
+        assert_eq!(builder.max_model_len, Some(8192));
     }
 }

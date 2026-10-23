@@ -9,7 +9,7 @@ description.workspace = true
 repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
-license.workspace = true
+license = "MIT AND Apache-2.0"
 homepage.workspace = true
 
 [dependencies]
@@ -22,9 +22,11 @@ lazy_static.workspace = true
 paste.workspace = true
 tracing.workspace = true
 indicatif.workspace = true
+indexmap.workspace = true
 rayon.workspace = true
 libc.workspace = true
 byteorder.workspace = true
+bytemuck.workspace = true
 float8.workspace = true
 objc2-metal = { workspace = true, optional = true }
 objc2-foundation = { workspace = true, optional = true }
@@ -35,16 +37,12 @@ yoke.workspace = true
 memmap2.workspace = true
 safetensors.workspace = true
 regex.workspace = true
+fancy-regex.workspace = true
 hf-hub.workspace = true
 tokio.workspace = true
 futures.workspace = true
 sysinfo.workspace = true
-cutile = { workspace = true, optional = true }
-cutile-compiler = { workspace = true, optional = true }
-cutile-ir = { workspace = true, optional = true }
-cuda-core = { workspace = true, optional = true }
-cuda-async = { workspace = true, optional = true }
-cuda-bindings = { workspace = true, optional = true }
+cutile = { workspace = true, optional = true, features = ["experimental-tune"] }
 mistralrs-metal-compile = { workspace = true, optional = true, features = ["metal"] }
 
 [features]
@@ -56,11 +54,6 @@ cuda = [
 cutile = [
     "cuda",
     "dep:cutile",
-    "dep:cutile-compiler",
-    "dep:cutile-ir",
-    "dep:cuda-core",
-    "dep:cuda-async",
-    "dep:cuda-bindings",
 ]
 nccl = ["cuda", "candle-core/nccl"]
 metal = [
@@ -94,6 +87,7 @@ cuda-13000 = []
 cuda-13010 = []
 cuda-13020 = []
 cuda-13030 = []
+cuda-13040 = []
 
 [build-dependencies]
 cudaforge = { workspace = true, optional = true }
@@ -101,3 +95,7 @@ mistralrs-metal-compile = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[[example]]
+name = "nvfp4_bench"
+required-features = ["cuda", "cutile"]

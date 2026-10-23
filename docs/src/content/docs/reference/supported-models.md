@@ -11,16 +11,16 @@ mistral.rs auto-detects the architecture from a repo's `config.json`. To check y
 
 1. Open the model's `config.json` on Hugging Face and read the `architectures` field (e.g. `"Qwen3ForCausalLM"`, `"Gemma4ForConditionalGeneration"`).
 2. Find the matching row below. Each architecture covers every checkpoint that reports that class, including future fine-tunes and sizes, so the families and examples here are a sample, not the full list.
-3. Not listed? You can still try it: force a known architecture with `--arch`, load a [GGUF](/mistral.rs/guides/models/run-any-model/) build, or [request the model](https://github.com/EricLBuehler/mistral.rs/issues/156).
+3. If the architecture is not listed, check the [GGUF compatibility reference](/reference/gguf-support/) or [request model support](https://github.com/EricLBuehler/mistral.rs/issues/156). Use `--arch` only when the checkpoint matches a known architecture.
 
 ```bash
 mistralrs run -m <model>     # interactive
 mistralrs serve -m <model>   # OpenAI-compatible server
 ```
 
-Expand the example in any row to copy a ready-to-run command. One loader often serves several brand names (Qwen 3.5 and 3.6 share `Qwen3_5`; LFM2 and LFM2.5 share `Lfm2`) - the `Model families` column lists them. Behavior that differs from the defaults is collected in [model family notes](/mistral.rs/guides/models/model-family-notes/).
+Expand a listed example to copy a ready-to-run command. One loader often serves several brand names (Qwen 3.5 and 3.6 share `Qwen3_5`; LFM2 and LFM2.5 share `Lfm2`) - the `Model families` column lists them. Behavior that differs from the defaults is collected in [model family notes](/guides/models/model-family-notes/).
 
-The `Architecture` column is the `config.json` `architectures` value. Per-family quantization, thinking, gated-repo, and tool-calling details live in [model family notes](/mistral.rs/guides/models/model-family-notes/).
+The `Architecture` column is the `config.json` `architectures` value. Per-family quantization, thinking, gated-repo, and tool-calling details live in [model family notes](/guides/models/model-family-notes/).
 
 ## Text models
 
@@ -43,12 +43,14 @@ The `Architecture` column is the `config.json` `architectures` value. Per-family
 | `Glm4MoeLiteForCausalLM` | GLM-4.7-Flash | <details><summary><code>zai-org/GLM-4.7-Flash</code></summary><code>mistralrs run -m zai-org/GLM-4.7-Flash</code></details> |
 | `Glm4MoeForCausalLM` | GLM-4.7 | <details><summary><code>zai-org/GLM-4.7</code></summary><code>mistralrs run -m zai-org/GLM-4.7</code></details> |
 | `Qwen3MoeForCausalLM` | Qwen3 MoE | <details><summary><code>Qwen/Qwen3-30B-A3B</code></summary><code>mistralrs run -m Qwen/Qwen3-30B-A3B</code></details> |
+| `FlintForCausalLM` | Flint | <details><summary><code>RecursiveSI/flint</code></summary><code>mistralrs run -m RecursiveSI/flint</code></details> |
 | `SmolLM3ForCausalLM` | SmolLM3 | <details><summary><code>HuggingFaceTB/SmolLM3-3B</code></summary><code>mistralrs run -m HuggingFaceTB/SmolLM3-3B</code></details> |
 | `GraniteMoeHybridForCausalLM` | Granite 4.0 | <details><summary><code>ibm-granite/granite-4.0-micro</code></summary><code>mistralrs run -m ibm-granite/granite-4.0-micro</code></details> |
 | `GptOssForCausalLM` | GPT-OSS | <details><summary><code>openai/gpt-oss-20b</code> (20b), <code>openai/gpt-oss-120b</code> (120b)</summary><code>mistralrs run -m openai/gpt-oss-20b</code><br><code>mistralrs run -m openai/gpt-oss-120b</code></details> |
 | `HunYuanDenseV1ForCausalLM` | HunYuan | <details><summary><code>tencent/Hunyuan-7B-Instruct</code></summary><code>mistralrs run -m tencent/Hunyuan-7B-Instruct</code></details> |
 | `HunYuanMoEV1ForCausalLM` | HunYuan MoE | <details><summary><code>tencent/Hunyuan-A13B-Instruct</code></summary><code>mistralrs run -m tencent/Hunyuan-A13B-Instruct</code></details> |
 | `Qwen3NextForCausalLM` | Qwen3-Next, Qwen3-Coder-Next | <details><summary><code>Qwen/Qwen3-Next-80B-A3B-Instruct</code></summary><code>mistralrs run -m Qwen/Qwen3-Next-80B-A3B-Instruct</code></details> |
+| `Qwen3_5ForCausalLM` | Qwen3.5 | No published example |
 | `Lfm2ForCausalLM` | LFM2, LFM2.5 | <details><summary><code>LiquidAI/LFM2.5-1.2B-Instruct</code> (LFM2.5), <code>LiquidAI/LFM2-1.2B</code> (LFM2)</summary><code>mistralrs run -m LiquidAI/LFM2.5-1.2B-Instruct</code><br><code>mistralrs run -m LiquidAI/LFM2-1.2B</code></details> |
 | `Lfm2MoeForCausalLM` | LFM2 MoE, LFM2.5 MoE | <details><summary><code>LiquidAI/LFM2.5-8B-A1B</code> (LFM2.5), <code>LiquidAI/LFM2-8B-A1B</code> (LFM2)</summary><code>mistralrs run -m LiquidAI/LFM2.5-8B-A1B</code><br><code>mistralrs run -m LiquidAI/LFM2-8B-A1B</code></details> |
 
@@ -75,8 +77,10 @@ The `Architecture` column is the `config.json` `architectures` value. Per-family
 | `Qwen3VLMoeForConditionalGeneration` | Qwen3-VL MoE | <details><summary><code>Qwen/Qwen3-VL-235B-A22B-Instruct</code></summary><code>mistralrs run -m Qwen/Qwen3-VL-235B-A22B-Instruct</code></details> |
 | `Qwen3_5ForConditionalGeneration` | Qwen 3.5, Qwen 3.6 | <details><summary><code>Qwen/Qwen3.5-27B</code> (3.5), <code>Qwen/Qwen3.6-27B</code> (3.6)</summary><code>mistralrs run -m Qwen/Qwen3.5-27B</code><br><code>mistralrs run -m Qwen/Qwen3.6-27B</code></details> |
 | `Qwen3_5MoeForConditionalGeneration` | Qwen 3.5 MoE, Qwen 3.6 MoE | <details><summary><code>Qwen/Qwen3.5-35B-A3B</code> (3.5), <code>Qwen/Qwen3.6-35B-A3B</code> (3.6)</summary><code>mistralrs run -m Qwen/Qwen3.5-35B-A3B</code><br><code>mistralrs run -m Qwen/Qwen3.6-35B-A3B</code></details> |
-| `VoxtralForConditionalGeneration` | Voxtral | <details><summary><code>mistralai/Voxtral-Mini-3B-2507</code></summary><code>mistralrs run -m mistralai/Voxtral-Mini-3B-2507</code></details> |
+| `Qwen4ExpForConditionalGeneration` | Qwen3.8-Flash-Next | <details><summary><code>Qwen/Qwen3.8-Flash-Next</code></summary><code>mistralrs run -m Qwen/Qwen3.8-Flash-Next</code></details> |
+| `VoxtralRealtimeForConditionalGeneration` | Voxtral | <details><summary><code>mistralai/Voxtral-Mini-4B-Realtime-2602</code></summary><code>mistralrs run -m mistralai/Voxtral-Mini-4B-Realtime-2602</code></details> |
 | `Gemma4ForConditionalGeneration` | Gemma 4 | <details><summary><code>google/gemma-4-E4B-it</code> (E4B), <code>google/gemma-4-26B-A4B-it</code> (26B-A4B MoE), <code>google/gemma-4-31B-it</code> (31B dense)</summary><code>mistralrs run -m google/gemma-4-E4B-it</code><br><code>mistralrs run -m google/gemma-4-26B-A4B-it</code><br><code>mistralrs run -m google/gemma-4-31B-it</code></details> |
+| `MuseGlimmerForConditionalGeneration` | Muse Glimmer | <details><summary><code>meta-models/Muse-Glimmer-30B</code></summary><code>mistralrs run -m meta-models/Muse-Glimmer-30B</code></details> |
 | `DiffusionGemmaForBlockDiffusion` | DiffusionGemma | <details><summary><code>google/diffusiongemma-26B-A4B-it</code></summary><code>mistralrs run -m google/diffusiongemma-26B-A4B-it</code></details> |
 
 ## Image generation
@@ -101,10 +105,11 @@ The `Architecture` column is the `config.json` `architectures` value. Per-family
 
 ## Format and quantization notes
 
-Text, multimodal, speech, and embedding models support ISQ at load time. Diffusion models (FLUX) do not; they load at native precision. Pre-quantized format availability (GGUF, [UQFF](/mistral.rs/reference/uqff-format/), GPTQ, AWQ) is per-model on Hugging Face.
+Text, multimodal, speech, and embedding models support ISQ at load time. Diffusion models (FLUX) do not; they load at native precision. See [GGUF support](/reference/gguf-support/) for GGUF compatibility; availability of [UQFF](/reference/uqff-format/), GPTQ, and AWQ artifacts varies by model on Hugging Face.
 
 ## Speculative decoding
 
 | Mode | Target architecture | Assistant checkpoint family | Guide |
 |---|---|---|---|
-| MTP | `Gemma4` | Gemma 4 assistant checkpoints, PagedAttention required | [Speculative decoding (MTP)](/mistral.rs/guides/perf/speculative-decoding/) |
+| MTP | `Gemma4` | Gemma 4 assistant checkpoints, PagedAttention required | [Speculative decoding (MTP)](/guides/perf/speculative-decoding/) |
+| MTP | `Qwen3_5`, `Qwen3.8`, `Qwen3.8-Flash-Next` | Built-in `mtp.*` head (`--mtp`) from safetensors/UQFF, PagedAttention required | [Speculative decoding (MTP)](/guides/perf/speculative-decoding/) |

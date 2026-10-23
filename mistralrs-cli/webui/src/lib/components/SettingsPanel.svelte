@@ -89,20 +89,25 @@
       />
     </label>
 
-    <!-- Thinking toggle -->
     <label class="flex items-center justify-between">
       <div class="flex items-center gap-2">
         <svg class="h-4 w-4 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
         </svg>
-        <span class="text-sm text-gray-700 dark:text-gray-300">Thinking</span>
+        <span class="text-sm text-gray-700 dark:text-gray-300">Reasoning effort</span>
       </div>
-      <input
-        type="checkbox"
-        class="h-4 w-4 rounded border-gray-300 text-blue-600 accent-blue-600"
-        bind:checked={settingsStore.enableThinking}
+      <select
+        class="rounded-md border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300"
+        bind:value={settingsStore.reasoningEffort}
         onchange={handleChange}
-      />
+      >
+        <option value="">Default (on)</option>
+        <option value="off">Off</option>
+        <option value="low">Low</option>
+        <option value="medium">Medium</option>
+        <option value="high">High</option>
+        <option value="xhigh">XHigh</option>
+      </select>
     </label>
 
     <!-- Tool dispatch URL -->

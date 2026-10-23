@@ -16,7 +16,7 @@ const COMMITTED_DIR: &str = concat!(
     "/../docs/src/content/docs/reference/cli"
 );
 const OUT_DIR_ENV: &str = "CLI_DOCS_OUT";
-const LINK_BASE: &str = "/mistral.rs/reference/cli";
+const LINK_BASE: &str = "/reference/cli";
 const REGEN_HINT: &str = "cargo test -p mistralrs-cli regenerate_cli_reference -- --ignored";
 const GENERATED_NOTICE: &str =
     "<!-- Generated from clap definitions by mistralrs-cli docgen. Do not edit. -->\n\n";
@@ -76,6 +76,9 @@ fn arg_description(arg: &Arg) -> String {
         .collect();
     if !possible.is_empty() {
         if !desc.is_empty() {
+            if !matches!(desc.trim_end().chars().last(), Some('.' | '!' | '?')) {
+                desc.push('.');
+            }
             desc.push(' ');
         }
         write!(desc, "Possible values: {}.", possible.join(", ")).unwrap();
@@ -203,6 +206,9 @@ fn rendered_pages() -> Vec<(String, String)> {
         ));
     }
     pages
+        .into_iter()
+        .map(|(name, content)| (name, format!("{}\n", content.trim_end())))
+        .collect()
 }
 
 #[test]

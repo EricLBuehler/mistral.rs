@@ -5,7 +5,7 @@ description: Per-layer placement and quantization via a YAML topology file.
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Topology is a per-layer placement and [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/) mechanism. A YAML file specifies, per layer range, the device and quantization to use.
+Topology is a per-layer placement and [ISQ (in-situ quantization)](/reference/quantization-types/) mechanism. A YAML file specifies, per layer range, the device and quantization to use.
 
 Most cases do not need topology. Defaults work for typical hardware; `mistralrs tune` covers common optimization.
 
@@ -41,7 +41,7 @@ Selectors wrapped in slashes are regexes instead of ranges:
   device: cpu
 ```
 
-Topology ISQ pins also apply when producing [UQFF (Universal Quantized File Format)](/mistral.rs/reference/uqff-format/) files: pinned layers keep their type in every written variant, with the `--isq` value as the default for the rest.
+Topology ISQ pins also apply when producing [UQFF (Universal Quantized File Format)](/reference/uqff-format/) files: pinned layers keep their type in every written variant, with the `--isq` value as the default for the rest.
 
 ## Loading a topology file
 
@@ -78,4 +78,4 @@ let model = mistralrs::ModelBuilder::new("<model>")
 
 Range selectors only address numbered decoder layers (the `N` in `model.layers.N.*`). To target embedding layers, the LM head, or pre/post-norm weights, use a regex selector, e.g. `/lm_head\..*/` as shown above; a device-only regex match relocates the matched weight even when no `isq` is set.
 
-For an introduction to per-layer quantization tradeoffs, see [the quantization guide](/mistral.rs/guides/quantization/quantize-a-model/).
+For an introduction to per-layer quantization tradeoffs, see [the quantization guide](/guides/quantization/quantize-a-model/).

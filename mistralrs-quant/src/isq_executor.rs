@@ -19,6 +19,7 @@ const SIZE_IN_GIB: usize = 1024 * 1024 * 1024;
 const LARGE_JOB_THRESHOLD_BYTES: usize = SIZE_IN_GIB;
 const HOST_BUDGET_NUMERATOR: usize = 9;
 const HOST_BUDGET_DENOMINATOR: usize = 10;
+const FP8_PERSISTENT_SCALE_COUNT: usize = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IsqConsumer {
@@ -364,7 +365,10 @@ fn can_enqueue(state: &ExecutorState, config: &IsqExecutorConfig, job: &QueuedJo
         .saturating_add(resources.input_bytes);
     let no_host_work =
         state.held_input_bytes == 0 && state.active_host_scratch == 0 && state.retained_output == 0;
-    host_next <= config.host_budget_bytes || no_host_work
+    // Batch consumers return their receivers after all jobs are submitted; output permits still
+    // gate when those jobs start, so retained outputs must not block their submission.
+    let no_queued_input = resources.input_bytes == 0 && job.consumer.retains_output();
+    host_next <= config.host_budget_bytes || no_host_work || no_queued_input
 }
 
 fn can_start(state: &ExecutorState, config: &IsqExecutorConfig, job: &QueuedJob) -> bool {
@@ -564,7 +568,8 @@ pub fn estimate_output_bytes(shape: &[usize], source_dtype: DType, ty: IsqType) 
     let source_bytes = tensor_bytes(shape, source_dtype);
     match ty {
         IsqType::F8Q8 => elem_count(shape).div_ceil(32).saturating_mul(33),
-        IsqType::F8E4M3 => elem_count(shape),
+        IsqType::F8E4M3 => elem_count(shape)
+            .saturating_add(FP8_PERSISTENT_SCALE_COUNT.saturating_mul(DType::F32.size_in_bytes())),
         _ => source_bytes
             .checked_div(ty.pack_factor(source_dtype).max(1))
             .unwrap_or(source_bytes)
@@ -691,6 +696,14 @@ mod tests {
     }
 
     #[test]
+    fn fp8_estimate_includes_persistent_scales() {
+        assert_eq!(
+            estimate_output_bytes(&[4, 8], DType::BF16, IsqType::F8E4M3),
+            44
+        );
+    }
+
+    #[test]
     fn executor_waits_for_budget_release() {
         let executor = IsqExecutor::new(IsqExecutorConfig::for_tests(2, 100));
         let started = Arc::new(AtomicUsize::new(0));
@@ -751,6 +764,44 @@ mod tests {
     }
 
     #[test]
+    fn retained_output_does_not_block_batch_submission() {
+        let executor = IsqExecutor::new(IsqExecutorConfig::for_tests(1, 100));
+        let mut output_plan = plan(120);
+        output_plan.resources.host_scratch_bytes = 0;
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let rx1 = executor.submit(output_plan.clone(), IsqConsumer::UqffWrite, move || {
+            done_tx.send(()).unwrap();
+            Ok(1usize)
+        });
+        done_rx.recv_timeout(TEST_RECV_TIMEOUT).unwrap();
+        let first = rx1.recv_timeout(TEST_RECV_TIMEOUT).unwrap().unwrap();
+
+        let (submitted_tx, submitted_rx) = std::sync::mpsc::channel();
+        let submitter = executor.clone();
+        let submitter_handle = std::thread::spawn(move || {
+            let rx2 = submitter.submit(output_plan, IsqConsumer::UqffWrite, || Ok(2usize));
+            submitted_tx.send(rx2).unwrap();
+        });
+
+        let submitted = submitted_rx.recv_timeout(TEST_RECV_TIMEOUT);
+        let submitted_without_release = submitted.is_ok();
+        drop(first);
+        let rx2 = match submitted {
+            Ok(rx) => rx,
+            Err(_) => submitted_rx.recv_timeout(TEST_RECV_TIMEOUT).unwrap(),
+        };
+        assert_eq!(
+            rx2.recv_timeout(TEST_RECV_TIMEOUT).unwrap().unwrap().value,
+            2
+        );
+        submitter_handle.join().unwrap();
+        assert!(
+            submitted_without_release,
+            "batch submission waited for a retained output to be released"
+        );
+    }
+
+    #[test]
     fn retained_out_of_order_output_blocks_later_jobs() {
         let executor = IsqExecutor::new(IsqExecutorConfig::for_tests(2, 170));
         let started = Arc::new(AtomicUsize::new(0));
@@ -782,6 +833,34 @@ mod tests {
         drop(second);
         drop(first);
         assert_eq!(rx3.recv().unwrap().unwrap().value, 3);
+    }
+
+    #[test]
+    fn dropping_receivers_allows_executor_shutdown() {
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let executor = IsqExecutor::new(IsqExecutorConfig::for_tests(2, 100));
+            let started = Arc::new(AtomicUsize::new(0));
+            let first_started = started.clone();
+            let rx1 = executor.submit(plan(60), IsqConsumer::ImmediateLoad, move || {
+                first_started.fetch_add(1, Ordering::SeqCst);
+                Ok(1usize)
+            });
+            let second_started = started.clone();
+            let rx2 = executor.submit(plan(60), IsqConsumer::ImmediateLoad, move || {
+                second_started.fetch_add(1, Ordering::SeqCst);
+                Ok(2usize)
+            });
+
+            while started.load(Ordering::SeqCst) == 0 {
+                std::thread::yield_now();
+            }
+            drop((rx1, rx2));
+            drop(executor);
+            done_tx.send(()).unwrap();
+        });
+
+        done_rx.recv_timeout(TEST_RECV_TIMEOUT).unwrap();
     }
 
     #[test]

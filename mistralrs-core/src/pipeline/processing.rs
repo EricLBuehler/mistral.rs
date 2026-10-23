@@ -6,6 +6,7 @@ use indexmap::IndexMap;
 
 use crate::{
     request::ReasoningEffort,
+    special_text::{defuse_tool_output, SpecialStrings},
     vision_models::{preprocessor_config::PreProcessorConfig, processor_config::ProcessorConfig},
     MessageContent, Pipeline, Tool,
 };
@@ -23,6 +24,8 @@ pub trait ProcessorCreator {
 pub enum MessagesAction {
     // For idefics2, others which use the "new" openai format
     Keep,
+    // Gemma 4 is trained with audio after the instruction.
+    KeepWithAudioAfterText,
     // For everything else
     FlattenOnlyText,
 }
@@ -62,6 +65,14 @@ pub trait Processor {
             self.template_action(),
             tools,
         )?;
+        // Templates own their special tokens (HF apply_chat_template convention): when
+        // the rendered prompt already starts with bos, letting the tokenizer add it
+        // again doubles it (gemma-family tokenizers add bos in their post-processor).
+        let add_special_tokens = add_special_tokens
+            && !pipeline
+                .get_chat_template()
+                .and_then(|t| t.bos_tok())
+                .is_some_and(|bos| prompt.starts_with(&bos));
         let encoding = pipeline
             .tokenizer()
             .with_context(|| {
@@ -72,6 +83,9 @@ pub trait Processor {
         Ok((encoding.get_ids().to_vec(), prompt))
     }
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor>;
+    fn retain_prefix_cached_images(&self) -> bool {
+        false
+    }
     fn get_special_tokens(&self) -> &[&'static str];
     fn template_action(&self) -> MessagesAction;
 }
@@ -103,6 +117,17 @@ fn flatten_content(content: MessageContent) -> MessageContent {
     }
 }
 
+fn move_audio_after_text(content: MessageContent) -> MessageContent {
+    let Either::Right(content_rows) = content else {
+        return content;
+    };
+    let (mut non_audio, audio): (Vec<_>, Vec<_>) = content_rows
+        .into_iter()
+        .partition(|row| row.get("type").and_then(|value| value.as_str()) != Some("audio"));
+    non_audio.extend(audio);
+    Either::Right(non_audio)
+}
+
 pub(crate) fn apply_chat_template(
     pipeline: &dyn Pipeline,
     messages: Vec<IndexMap<String, MessageContent>>,
@@ -112,8 +137,24 @@ pub(crate) fn apply_chat_template(
     action: MessagesAction,
     tools: Vec<Tool>,
 ) -> Result<String> {
-    let messages = match action {
+    let mut messages = match action {
         MessagesAction::Keep => messages,
+        MessagesAction::KeepWithAudioAfterText => messages
+            .into_iter()
+            .map(|message| {
+                message
+                    .into_iter()
+                    .map(|(key, value)| {
+                        let value = if key == "content" {
+                            move_audio_after_text(value)
+                        } else {
+                            value
+                        };
+                        (key, value)
+                    })
+                    .collect()
+            })
+            .collect(),
         MessagesAction::FlattenOnlyText => {
             // This is really only for image models. If they need to flatten it s.t. they only see
             // the text, do that.
@@ -136,10 +177,17 @@ pub(crate) fn apply_chat_template(
         }
     };
 
+    if let Some(tokenizer) = pipeline.tokenizer() {
+        defuse_tool_output(&mut messages, &SpecialStrings::for_tokenizer(&tokenizer));
+    }
+
     let chat_template = pipeline
         .get_chat_template()
         .with_context(|| "`apply_chat_template` expects the pipeline to have a chat template.")?;
-    let template = chat_template.chat_template.as_ref().unwrap();
+    let template = chat_template
+        .chat_template
+        .as_ref()
+        .with_context(|| "The selected model does not define a chat template.")?;
 
     let bos_tok = chat_template.bos_token.as_ref().map(extract_token_string);
     let eos_tok = chat_template.eos_token.as_ref().map(extract_token_string);
@@ -169,5 +217,55 @@ impl Processor for BasicProcessor {
     }
     fn template_action(&self) -> MessagesAction {
         MessagesAction::Keep
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use either::Either;
+    use indexmap::IndexMap;
+    use serde_json::Value;
+
+    use super::move_audio_after_text;
+
+    #[test]
+    fn moves_audio_after_text_without_reordering_other_parts() {
+        let content = Either::Right(vec![
+            IndexMap::from([("type".to_string(), Value::String("image".to_string()))]),
+            IndexMap::from([
+                ("type".to_string(), Value::String("audio".to_string())),
+                ("id".to_string(), Value::String("first".to_string())),
+            ]),
+            IndexMap::from([("type".to_string(), Value::String("video".to_string()))]),
+            IndexMap::from([
+                ("type".to_string(), Value::String("text".to_string())),
+                ("text".to_string(), Value::String("transcribe".to_string())),
+            ]),
+            IndexMap::from([
+                ("type".to_string(), Value::String("audio".to_string())),
+                ("id".to_string(), Value::String("second".to_string())),
+            ]),
+        ]);
+
+        let Either::Right(parts) = move_audio_after_text(content) else {
+            panic!("expected multimodal content");
+        };
+        let types = parts
+            .iter()
+            .map(|part| part.get("type").and_then(Value::as_str).unwrap())
+            .collect::<Vec<_>>();
+        let audio_ids = parts
+            .iter()
+            .filter_map(|part| part.get("id").and_then(Value::as_str))
+            .collect::<Vec<_>>();
+
+        assert_eq!(types, ["image", "video", "text", "audio", "audio"]);
+        assert_eq!(audio_ids, ["first", "second"]);
+    }
+
+    #[test]
+    fn leaves_string_content_unchanged() {
+        let content = Either::Left("hello".to_string());
+        assert_eq!(move_audio_after_text(content.clone()), content);
     }
 }

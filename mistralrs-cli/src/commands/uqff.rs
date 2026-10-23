@@ -16,8 +16,8 @@ use crossterm::{
 };
 use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
 use mistralrs_core::{
-    expand_uqff_shards, list_model_files, read_model_file_range, resolve_uqff_shorthand,
-    try_get_model_file, TokenSource,
+    list_model_files, read_model_file_range, resolve_uqff_shorthand, try_get_model_file,
+    TokenSource,
 };
 use mistralrs_quant::{
     build_uqff_report_from_artifacts, inspect_uqff_artifacts, verify_uqff_artifacts,
@@ -223,6 +223,13 @@ struct ResolvedUqffArtifacts {
     local_write_path: Option<PathBuf>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct UqffFileGroup {
+    quant: String,
+    files: Vec<String>,
+    report_output: Option<usize>,
+}
+
 async fn resolve_uqff_artifacts(
     model_id: &str,
     revision: Option<&str>,
@@ -231,16 +238,15 @@ async fn resolve_uqff_artifacts(
 ) -> Result<ResolvedUqffArtifacts> {
     let revision = revision.unwrap_or(DEFAULT_REVISION);
     let files = list_model_files(model_id, revision, token_source, true).await?;
-    let selected = select_uqff_files(&files, quant)?;
-    let mut grouped: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for file in selected {
-        grouped.entry(uqff_group_key(&file)).or_default().push(file);
-    }
+    let existing_report =
+        read_existing_uqff_report(model_id, revision, &files, token_source).await?;
+    let selected = select_uqff_groups(&files, quant, existing_report.as_ref())?;
+    let selected_report = selected_uqff_report(existing_report, &selected);
 
-    let mut groups = Vec::with_capacity(grouped.len());
-    for (quant, mut files) in grouped {
-        files.sort_by_key(|file| uqff_shard_index(file).unwrap_or(0));
-        let artifact_files = files
+    let mut groups = Vec::with_capacity(selected.len());
+    for group in selected {
+        let artifact_files = group
+            .files
             .into_iter()
             .map(|file| {
                 let model_id = model_id.to_string();
@@ -261,36 +267,28 @@ async fn resolve_uqff_artifacts(
             })
             .collect();
         groups.push(UqffArtifactGroup {
-            quant,
+            quant: group.quant,
             files: artifact_files,
         });
     }
 
-    let selected_quants = groups
-        .iter()
-        .map(|group| group.quant.clone())
-        .collect::<HashSet<_>>();
-    let existing_report = read_existing_uqff_report(model_id, revision, &files, token_source)
-        .await?
-        .map(|mut report| {
-            report
-                .outputs
-                .retain(|output| selected_quants.contains(&output.quant));
-            report
-        });
     let local_write_path = PathBuf::from(model_id)
         .exists()
         .then(|| PathBuf::from(model_id));
     Ok(ResolvedUqffArtifacts {
         artifacts: UqffArtifacts {
             groups,
-            existing_report,
+            existing_report: selected_report,
         },
         local_write_path,
     })
 }
 
-fn select_uqff_files(files: &[String], quant: Option<&str>) -> Result<Vec<String>> {
+fn select_uqff_groups(
+    files: &[String],
+    quant: Option<&str>,
+    report: Option<&UqffReport>,
+) -> Result<Vec<UqffFileGroup>> {
     let uqff_files = files
         .iter()
         .filter(|file| file.ends_with(".uqff"))
@@ -299,47 +297,159 @@ fn select_uqff_files(files: &[String], quant: Option<&str>) -> Result<Vec<String
     if uqff_files.is_empty() {
         return Err(anyhow!("No `.uqff` files were found."));
     }
+    let groups = uqff_groups(&uqff_files, report)?;
     let Some(raw_quant) = quant.map(str::trim).filter(|quant| !quant.is_empty()) else {
-        return Ok(uqff_files);
+        return Ok(groups);
     };
     if raw_quant.eq_ignore_ascii_case("all") {
-        return Ok(uqff_files);
+        return Ok(groups);
     }
 
-    let first = resolve_uqff_shorthand(raw_quant, &uqff_files)
+    let selected = groups
+        .iter()
+        .position(|group| group.files.iter().any(|file| file == raw_quant))
         .or_else(|| {
-            uqff_files
-                .iter()
-                .find(|file| file.as_str() == raw_quant)
-                .cloned()
+            groups.iter().position(|group| {
+                group.report_output.is_some() && group.quant.eq_ignore_ascii_case(raw_quant)
+            })
         })
+        .or_else(|| resolve_report_quant_shorthand(raw_quant, &groups))
         .or_else(|| {
-            let shard = format!("{raw_quant}-0.uqff");
-            uqff_files
-                .iter()
-                .find(|file| file.as_str() == shard)
-                .cloned()
+            groups.iter().position(|group| {
+                group.report_output.is_none() && group.quant.eq_ignore_ascii_case(raw_quant)
+            })
         })
+        .or_else(|| resolve_legacy_quant_shorthand(raw_quant, &groups))
         .ok_or_else(|| {
             anyhow!(
                 "No UQFF files matched `--quant {raw_quant}`. Available: {}",
                 uqff_files.join(", ")
             )
         })?;
-    let expanded = expand_uqff_shards(&first, &uqff_files);
-    let expanded = if expanded.is_empty() {
-        vec![first]
-    } else {
-        expanded
-    };
-    let mut seen = HashSet::new();
-    Ok(expanded
-        .into_iter()
-        .filter(|file| seen.insert(file.clone()))
-        .collect())
+    Ok(vec![groups[selected].clone()])
 }
 
-async fn read_existing_uqff_report(
+fn uqff_groups(uqff_files: &[String], report: Option<&UqffReport>) -> Result<Vec<UqffFileGroup>> {
+    let available = uqff_files
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    let mut claimed = HashMap::new();
+    let mut reported_quants = HashSet::new();
+    let mut groups = Vec::new();
+
+    if let Some(report) = report {
+        if report.outputs.is_empty() {
+            return Err(anyhow!("{UQFF_REPORT_JSON}: report has no outputs"));
+        }
+        groups.reserve(report.outputs.len());
+        for (output_index, output) in report.outputs.iter().enumerate() {
+            if output.quant.trim().is_empty() {
+                return Err(anyhow!(
+                    "{UQFF_REPORT_JSON}: output quant must not be empty"
+                ));
+            }
+            if !reported_quants.insert(output.quant.to_ascii_lowercase()) {
+                return Err(anyhow!(
+                    "{UQFF_REPORT_JSON}: duplicate output quant `{}`",
+                    output.quant
+                ));
+            }
+            if output.shards.is_empty() {
+                return Err(anyhow!(
+                    "{UQFF_REPORT_JSON}: output `{}` has no shards",
+                    output.quant
+                ));
+            }
+            for shard in &output.shards {
+                if !available.contains(shard.as_str()) {
+                    return Err(anyhow!(
+                        "{UQFF_REPORT_JSON}: output `{}` references missing shard `{shard}`",
+                        output.quant
+                    ));
+                }
+                if let Some(previous_quant) = claimed.insert(shard.clone(), output.quant.clone()) {
+                    return Err(anyhow!(
+                        "{UQFF_REPORT_JSON}: shard `{shard}` belongs to both `{previous_quant}` and `{}`",
+                        output.quant
+                    ));
+                }
+            }
+            groups.push(UqffFileGroup {
+                quant: output.quant.clone(),
+                files: output.shards.clone(),
+                report_output: Some(output_index),
+            });
+        }
+    }
+
+    let mut legacy = BTreeMap::<String, Vec<String>>::new();
+    for file in uqff_files {
+        if !claimed.contains_key(file) {
+            legacy
+                .entry(uqff_group_key(file))
+                .or_default()
+                .push(file.clone());
+        }
+    }
+    for (quant, mut files) in legacy {
+        files.sort_by_key(|file| uqff_shard_index(file).unwrap_or(0));
+        groups.push(UqffFileGroup {
+            quant,
+            files,
+            report_output: None,
+        });
+    }
+    Ok(groups)
+}
+
+fn resolve_report_quant_shorthand(raw_quant: &str, groups: &[UqffFileGroup]) -> Option<usize> {
+    let aliases = groups
+        .iter()
+        .filter(|group| group.report_output.is_some())
+        .map(|group| format!("{}-0.uqff", group.quant.to_ascii_lowercase()))
+        .collect::<Vec<_>>();
+    let alias = resolve_uqff_shorthand(raw_quant, &aliases)?;
+    groups.iter().position(|group| {
+        group.report_output.is_some()
+            && format!("{}-0.uqff", group.quant.to_ascii_lowercase()) == alias
+    })
+}
+
+fn resolve_legacy_quant_shorthand(raw_quant: &str, groups: &[UqffFileGroup]) -> Option<usize> {
+    let files = groups
+        .iter()
+        .filter(|group| group.report_output.is_none())
+        .flat_map(|group| group.files.iter().cloned())
+        .collect::<Vec<_>>();
+    let first = resolve_uqff_shorthand(raw_quant, &files)?;
+    groups.iter().position(|group| {
+        group.report_output.is_none() && group.files.iter().any(|file| file == &first)
+    })
+}
+
+fn selected_uqff_report(
+    report: Option<UqffReport>,
+    groups: &[UqffFileGroup],
+) -> Option<UqffReport> {
+    let mut report = report?;
+    let selected = groups
+        .iter()
+        .filter_map(|group| group.report_output)
+        .collect::<HashSet<_>>();
+    if selected.is_empty() {
+        return None;
+    }
+    report.outputs = report
+        .outputs
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, output)| selected.contains(&index).then_some(output))
+        .collect();
+    Some(report)
+}
+
+pub(super) async fn read_existing_uqff_report(
     model_id: &str,
     revision: &str,
     files: &[String],
@@ -1186,6 +1296,36 @@ fn natural_sort_key(name: &str) -> Vec<NaturalSortItem> {
 mod tests {
     use super::*;
 
+    fn uqff_report(outputs: &[(&str, &[&str])]) -> UqffReport {
+        UqffReport {
+            schema: 1,
+            generated_by: UqffGeneratedBy::default(),
+            base_model: None,
+            repo_id: None,
+            uqff_version: "0.3".to_string(),
+            outputs: outputs
+                .iter()
+                .map(|(quant, shards)| mistralrs_quant::UqffOutputReport {
+                    quant: (*quant).to_string(),
+                    shards: shards.iter().map(|shard| (*shard).to_string()).collect(),
+                    layers: 0,
+                    actual_counts: BTreeMap::new(),
+                    fallback_count: 0,
+                    fallbacks: Vec::new(),
+                    layer_details: Vec::new(),
+                })
+                .collect(),
+        }
+    }
+
+    fn file_group(quant: &str, files: &[&str], report_output: Option<usize>) -> UqffFileGroup {
+        UqffFileGroup {
+            quant: quant.to_string(),
+            files: files.iter().map(|file| (*file).to_string()).collect(),
+            report_output,
+        }
+    }
+
     fn tensor(name: &str, size_bytes: usize) -> TensorInfo {
         TensorInfo {
             group: "afq2".to_string(),
@@ -1197,6 +1337,139 @@ mod tests {
             labels: Vec::new(),
             stored: None,
         }
+    }
+
+    #[test]
+    fn report_quant_and_exact_shard_select_custom_named_group() {
+        let files = [
+            UQFF_REPORT_JSON,
+            "release-part-a.uqff",
+            "release-part-b.uqff",
+            "other-quant.uqff",
+        ]
+        .map(str::to_string);
+        let report = uqff_report(&[
+            ("q8_0", &["release-part-a.uqff", "release-part-b.uqff"]),
+            ("q4k", &["other-quant.uqff"]),
+        ]);
+        let expected = vec![file_group(
+            "q8_0",
+            &["release-part-a.uqff", "release-part-b.uqff"],
+            Some(0),
+        )];
+
+        let selected = select_uqff_groups(&files, Some("q8_0"), Some(&report)).unwrap();
+        assert_eq!(selected, expected);
+        let selected_report = selected_uqff_report(Some(report.clone()), &selected).unwrap();
+        assert_eq!(selected_report.outputs.len(), 1);
+        assert_eq!(selected_report.outputs[0].quant, "q8_0");
+        assert_eq!(
+            select_uqff_groups(&files, Some("8"), Some(&report)).unwrap(),
+            expected
+        );
+        assert_eq!(
+            select_uqff_groups(&files, Some("release-part-b.uqff"), Some(&report)).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn omitted_and_all_include_reported_and_legacy_groups() {
+        let files = [
+            UQFF_REPORT_JSON,
+            "custom-a.uqff",
+            "custom-b.uqff",
+            "q4k-1.uqff",
+            "q4k-0.uqff",
+        ]
+        .map(str::to_string);
+        let report = uqff_report(&[("q8_0", &["custom-a.uqff", "custom-b.uqff"])]);
+        let expected = vec![
+            file_group("q8_0", &["custom-a.uqff", "custom-b.uqff"], Some(0)),
+            file_group("q4k", &["q4k-0.uqff", "q4k-1.uqff"], None),
+        ];
+
+        let selected = select_uqff_groups(&files, None, Some(&report)).unwrap();
+        assert_eq!(selected, expected);
+        assert!(selected_uqff_report(Some(report.clone()), &selected).is_some());
+        assert_eq!(
+            select_uqff_groups(&files, Some("all"), Some(&report)).unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn report_rejects_invalid_output_mappings() {
+        let files = ["custom-a.uqff", "custom-b.uqff"].map(str::to_string);
+        let error = select_uqff_groups(&files, None, Some(&uqff_report(&[])))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("report has no outputs"));
+
+        let empty = uqff_report(&[("q8_0", &[])]);
+        let error = select_uqff_groups(&files, None, Some(&empty))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("output `q8_0` has no shards"));
+
+        let missing = uqff_report(&[("q8_0", &["missing.uqff"])]);
+        let error = select_uqff_groups(&files, None, Some(&missing))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("references missing shard `missing.uqff`"));
+
+        let overlapping = uqff_report(&[
+            ("q8_0", &["custom-a.uqff"]),
+            ("q4k", &["custom-a.uqff", "custom-b.uqff"]),
+        ]);
+        let error = select_uqff_groups(&files, None, Some(&overlapping))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("shard `custom-a.uqff` belongs to both `q8_0` and `q4k`"));
+
+        let duplicated = uqff_report(&[("q8_0", &["custom-a.uqff", "custom-a.uqff"])]);
+        let error = select_uqff_groups(&files, None, Some(&duplicated))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("shard `custom-a.uqff` belongs to both `q8_0` and `q8_0`"));
+
+        let duplicate_quant =
+            uqff_report(&[("q8_0", &["custom-a.uqff"]), ("Q8_0", &["custom-b.uqff"])]);
+        let error = select_uqff_groups(&files, None, Some(&duplicate_quant))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("duplicate output quant `Q8_0`"));
+    }
+
+    #[test]
+    fn legacy_only_selection_drops_unrelated_producer_report() {
+        let files = ["custom.uqff", "legacy-0.uqff", "legacy-1.uqff"].map(str::to_string);
+        let report = uqff_report(&[("q8_0", &["custom.uqff"])]);
+        let selected = select_uqff_groups(&files, Some("legacy-1.uqff"), Some(&report)).unwrap();
+
+        assert_eq!(
+            selected,
+            vec![file_group(
+                "legacy",
+                &["legacy-0.uqff", "legacy-1.uqff"],
+                None,
+            )]
+        );
+        assert!(selected_uqff_report(Some(report), &selected).is_none());
+    }
+
+    #[test]
+    fn legacy_selection_without_report_is_unchanged() {
+        let files = ["q4k-1.uqff", "afq3-0.uqff", "q4k-0.uqff"].map(str::to_string);
+
+        assert_eq!(
+            select_uqff_groups(&files, Some("q4k-1.uqff"), None).unwrap(),
+            vec![file_group("q4k", &["q4k-0.uqff", "q4k-1.uqff"], None)]
+        );
+        assert_eq!(
+            select_uqff_groups(&files, Some("3"), None).unwrap(),
+            vec![file_group("afq3", &["afq3-0.uqff"], None)]
+        );
     }
 
     fn child_group<'a>(nodes: &'a [TreeNode], name: &str) -> &'a [TreeNode] {

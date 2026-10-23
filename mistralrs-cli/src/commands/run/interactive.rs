@@ -4,10 +4,10 @@ use directories::ProjectDirs;
 use either::Either;
 use indexmap::IndexMap;
 use mistralrs_core::{
-    speech_utils, AgentPermission, AgentToolKind, Constraint, DiffusionGenerationParams,
-    DrySamplingParams, ImageGenerationResponseFormat, MessageContent, MistralRs, ModelCategory,
-    NormalRequest, Request, RequestMessage, Response, ResponseOk, SamplingParams, Usage,
-    WebSearchOptions, TERMINATE_ALL_NEXT_STEP,
+    speech_utils, AdapterSelection, AgentPermission, AgentToolKind, Constraint,
+    DiffusionGenerationParams, DrySamplingParams, ImageGenerationResponseFormat, MessageContent,
+    MistralRs, ModelCategory, NormalRequest, ReasoningEffort, Request, RequestMessage, Response,
+    ResponseOk, SamplingParams, Usage, WebSearchOptions, TERMINATE_ALL_NEXT_STEP,
 };
 use regex::Regex;
 use rustyline::{error::ReadlineError, history::History, DefaultEditor, Editor, Helper};
@@ -29,6 +29,10 @@ use mistralrs_server_core::video::parse_video_url;
 
 const AGENTIC_PANEL_WIDTH: usize = 50;
 const DENOISING_BAR_WIDTH: usize = 28;
+const INTERACTIVE_FALLBACK_TEMPERATURE: f64 = 0.8;
+const INTERACTIVE_FALLBACK_TOP_K: usize = 40;
+const INTERACTIVE_FALLBACK_TOP_P: f64 = 0.95;
+const INTERACTIVE_FALLBACK_MIN_P: f64 = 0.05;
 
 #[cfg(feature = "code-execution")]
 static RENDERED_CODE_CALLS: LazyLock<Mutex<VecDeque<String>>> =
@@ -83,16 +87,24 @@ fn format_sampling_params(params: &SamplingParams) -> String {
     parts.join(", ")
 }
 
-fn build_prompt(do_search: bool, do_code_exec: bool, do_shell: bool) -> String {
+fn build_prompt(
+    do_search: bool,
+    do_code_exec: bool,
+    do_shell: bool,
+    adapter: Option<&str>,
+) -> String {
     let mut tags = Vec::new();
     if do_code_exec {
-        tags.push("code");
+        tags.push("code".to_string());
     }
     if do_shell {
-        tags.push("shell");
+        tags.push("shell".to_string());
     }
     if do_search {
-        tags.push("search");
+        tags.push("search".to_string());
+    }
+    if let Some(adapter) = adapter {
+        tags.push(format!("lora:{adapter}"));
     }
     if tags.is_empty() {
         "> ".to_string()
@@ -187,6 +199,16 @@ pub struct OneshotInput {
     pub audios: Vec<String>,
 }
 
+pub struct InteractiveConfig {
+    pub do_search: bool,
+    pub do_code_exec: bool,
+    pub do_shell: bool,
+    pub agent_permission: AgentPermission,
+    pub enable_thinking: Option<bool>,
+    pub reasoning_effort: Option<ReasoningEffort>,
+    pub adapter: Option<String>,
+}
+
 struct OneshotCtx {
     do_search: bool,
     do_code_exec: bool,
@@ -194,17 +216,24 @@ struct OneshotCtx {
     agent_permission: AgentPermission,
     agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
     enable_thinking: Option<bool>,
+    reasoning_effort: Option<ReasoningEffort>,
+    adapter: Option<String>,
 }
 
 pub async fn oneshot_mode(
     mistralrs: Arc<MistralRs>,
-    do_search: bool,
-    do_code_exec: bool,
-    do_shell: bool,
-    agent_permission: AgentPermission,
-    enable_thinking: Option<bool>,
     input: OneshotInput,
+    config: InteractiveConfig,
 ) {
+    let InteractiveConfig {
+        do_search,
+        do_code_exec,
+        do_shell,
+        agent_permission,
+        enable_thinking,
+        reasoning_effort,
+        adapter,
+    } = config;
     let agent_approval_callback = cli_agent_approval_callback(agent_permission);
     let has_media =
         !input.images.is_empty() || !input.videos.is_empty() || !input.audios.is_empty();
@@ -215,6 +244,8 @@ pub async fn oneshot_mode(
         agent_permission,
         agent_approval_callback,
         enable_thinking,
+        reasoning_effort,
+        adapter,
     };
 
     if has_media {
@@ -232,6 +263,8 @@ async fn oneshot_text(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, text: String) 
         agent_permission,
         agent_approval_callback,
         enable_thinking,
+        reasoning_effort,
+        adapter,
     } = ctx;
     let sender = mistralrs.get_sender(None).unwrap();
     let sampling_params = interactive_sample_parameters(&mistralrs);
@@ -244,15 +277,17 @@ async fn oneshot_text(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, text: String) 
     let request_messages = RequestMessage::Chat {
         messages,
         enable_thinking,
-        reasoning_effort: None,
+        reasoning_effort,
     };
 
     let (tx, mut rx) = channel(10_000);
     let session_id = (do_code_exec || do_shell).then(|| uuid::Uuid::new_v4().to_string());
     let req = Request::Normal(Box::new(NormalRequest {
         id: mistralrs.next_request_id(),
+        queued_at: None,
         messages: request_messages,
         sampling_params: sampling_params.clone(),
+        seed: None,
         response: tx,
         return_logprobs: false,
         is_streaming: true,
@@ -276,6 +311,7 @@ async fn oneshot_text(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, text: String) 
         max_tool_rounds: None,
         tool_dispatch_url: None,
         model_id: None,
+        adapter: adapter.map(AdapterSelection::alias),
         truncate_sequence: false,
         files: None,
         input_files: Vec::new(),
@@ -306,10 +342,15 @@ async fn oneshot_multimodal(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, input: O
         agent_permission,
         agent_approval_callback,
         enable_thinking,
+        reasoning_effort,
+        adapter: _,
     } = ctx;
     let config = mistralrs.config(None).unwrap();
-    let prefixer = match &config.category {
-        ModelCategory::Multimodal { prefixer } => prefixer,
+    let (prefixer, video_sampling) = match &config.category {
+        ModelCategory::Multimodal {
+            prefixer,
+            video_sampling,
+        } => (prefixer, *video_sampling),
         _ => {
             error!("--image/--video/--audio require a multimodal model, but the loaded model is not multimodal.");
             return;
@@ -358,7 +399,7 @@ async fn oneshot_multimodal(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, input: O
     // Load videos
     let mut video_indexes = Vec::new();
     for url in &input.videos {
-        match parse_video_url(url, None).await {
+        match parse_video_url(url, Some(video_sampling)).await {
             Ok(video) => {
                 info!("Loaded video: {url}");
                 video_indexes.push(videos.len());
@@ -419,15 +460,17 @@ async fn oneshot_multimodal(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, input: O
         videos,
         messages,
         enable_thinking,
-        reasoning_effort: None,
+        reasoning_effort,
     };
 
     let (tx, mut rx) = channel(10_000);
     let session_id = (do_code_exec || do_shell).then(|| uuid::Uuid::new_v4().to_string());
     let req = Request::Normal(Box::new(NormalRequest {
         id: mistralrs.next_request_id(),
+        queued_at: None,
         messages: request_messages,
         sampling_params: sampling_params.clone(),
+        seed: None,
         response: tx,
         return_logprobs: false,
         is_streaming: true,
@@ -451,6 +494,7 @@ async fn oneshot_multimodal(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, input: O
         max_tool_rounds: None,
         tool_dispatch_url: None,
         model_id: None,
+        adapter: None,
         truncate_sequence: false,
         files: None,
         input_files: Vec::new(),
@@ -512,41 +556,25 @@ fn print_stats(
     }
 }
 
-pub async fn interactive_mode(
-    mistralrs: Arc<MistralRs>,
-    do_search: bool,
-    do_code_exec: bool,
-    do_shell: bool,
-    agent_permission: AgentPermission,
-    enable_thinking: Option<bool>,
-) {
-    let agent_approval_callback = cli_agent_approval_callback(agent_permission);
+pub async fn interactive_mode(mistralrs: Arc<MistralRs>, config: InteractiveConfig) {
+    let agent_approval_callback = cli_agent_approval_callback(config.agent_permission);
     match mistralrs.get_model_category(None) {
         Ok(ModelCategory::Text) => {
-            text_interactive_mode(
-                mistralrs,
-                do_search,
-                do_code_exec,
-                do_shell,
-                agent_permission,
-                agent_approval_callback.clone(),
-                enable_thinking,
-            )
-            .await
+            text_interactive_mode(mistralrs, config, agent_approval_callback.clone()).await
         }
         Ok(ModelCategory::Multimodal { .. }) => {
-            multimodal_interactive_mode(
-                mistralrs,
+            multimodal_interactive_mode(mistralrs, config, agent_approval_callback.clone()).await
+        }
+        Ok(ModelCategory::Diffusion) => {
+            let InteractiveConfig {
                 do_search,
                 do_code_exec,
                 do_shell,
                 agent_permission,
-                agent_approval_callback.clone(),
-                enable_thinking,
-            )
-            .await
-        }
-        Ok(ModelCategory::Diffusion) => {
+                enable_thinking: _,
+                reasoning_effort: _,
+                adapter: _,
+            } = config;
             diffusion_interactive_mode(
                 mistralrs,
                 do_search,
@@ -558,6 +586,15 @@ pub async fn interactive_mode(
             .await
         }
         Ok(ModelCategory::Audio) => {
+            let InteractiveConfig {
+                do_search,
+                do_code_exec,
+                do_shell,
+                agent_permission,
+                enable_thinking,
+                reasoning_effort: _,
+                adapter: _,
+            } = config;
             audio_interactive_mode(
                 mistralrs,
                 do_search,
@@ -570,6 +607,15 @@ pub async fn interactive_mode(
             .await
         }
         Ok(ModelCategory::Speech) => {
+            let InteractiveConfig {
+                do_search,
+                do_code_exec,
+                do_shell,
+                agent_permission,
+                enable_thinking: _,
+                reasoning_effort: _,
+                adapter: _,
+            } = config;
             speech_interactive_mode(
                 mistralrs,
                 do_search,
@@ -595,6 +641,10 @@ Commands:
     Add a system message to the chat without running the model.
     Ex: `/system Always respond as a pirate.`
 - `/clear`: Clear the chat history.
+- `/adapter <alias>`: Use a loaded LoRA adapter for subsequent requests.
+- `/adapter use <alias>`: Select an alias named `none` or `list`.
+- `/adapter none`: Use the base model for subsequent requests.
+- `/adapter list`: List loaded LoRA adapters.
 - `/temperature <float>`: Set sampling temperature (0.0 to 2.0).
 - `/topk <int>`: Set top-k sampling value (>0).
 - `/topp <float>`: Set top-p sampling value in (0.0 to 1.0).
@@ -634,6 +684,7 @@ const HELP_CMD: &str = "/help";
 const EXIT_CMD: &str = "/exit";
 const SYSTEM_CMD: &str = "/system";
 const CLEAR_CMD: &str = "/clear";
+const ADAPTER_CMD: &str = "/adapter";
 const TEMPERATURE_CMD: &str = "/temperature";
 const TOPK_CMD: &str = "/topk";
 const TOPP_CMD: &str = "/topp";
@@ -646,16 +697,17 @@ const VIDEO_REGEX: &str =
 
 fn interactive_fallback_sample_parameters() -> SamplingParams {
     SamplingParams {
-        temperature: Some(0.1),
-        top_k: Some(32),
-        top_p: Some(0.1),
-        min_p: Some(0.05),
+        temperature: Some(INTERACTIVE_FALLBACK_TEMPERATURE),
+        top_k: Some(INTERACTIVE_FALLBACK_TOP_K),
+        top_p: Some(INTERACTIVE_FALLBACK_TOP_P),
+        min_p: Some(INTERACTIVE_FALLBACK_MIN_P),
         top_n_logprobs: 0,
         frequency_penalty: None,
         presence_penalty: None,
         repetition_penalty: None,
         max_len: None,
         stop_toks: None,
+        ignore_eos: false,
         logits_bias: None,
         n_choices: 1,
         dry_params: Some(DrySamplingParams::default()),
@@ -689,7 +741,7 @@ fn handle_sampling_command(prompt: &str, sampling_params: &mut SamplingParams) -
         if let [_, value] = parts.as_slice() {
             match value.trim().parse::<f64>() {
                 Ok(v) if (0.0..=2.0).contains(&v) => {
-                    sampling_params.temperature = if v == 0.0 { None } else { Some(v) };
+                    sampling_params.temperature = Some(v);
                     info!("Set temperature to {v}");
                 }
                 Ok(_) => {
@@ -741,15 +793,87 @@ fn handle_sampling_command(prompt: &str, sampling_params: &mut SamplingParams) -
     false
 }
 
+async fn handle_adapter_command(
+    mistralrs: &MistralRs,
+    prompt: &str,
+    adapter: &mut Option<String>,
+) -> bool {
+    let Some(command) = parse_adapter_command(prompt) else {
+        return false;
+    };
+
+    match command {
+        AdapterCommand::Invalid => {
+            println!("Error: format is `{ADAPTER_CMD} <alias|none|list>`")
+        }
+        AdapterCommand::Base => {
+            *adapter = None;
+            info!("Using the base model.");
+        }
+        AdapterCommand::List => match mistralrs.list_lora_adapters(None).await {
+            Ok(adapters) if adapters.is_empty() => println!("No LoRA adapters are loaded."),
+            Ok(adapters) => {
+                println!("Loaded LoRA adapters:");
+                for loaded in adapters {
+                    let selected = adapter.as_deref() == Some(loaded.alias.as_str());
+                    let marker = if selected { " (selected)" } else { "" };
+                    println!("- {}{marker}", loaded.alias);
+                }
+            }
+            Err(error) => println!("Error: {error}"),
+        },
+        AdapterCommand::Select(alias) => match mistralrs.list_lora_adapters(None).await {
+            Ok(adapters) if adapters.iter().any(|loaded| loaded.alias == alias) => {
+                *adapter = Some(alias.to_string());
+                info!("Using LoRA adapter `{alias}`.");
+            }
+            Ok(_) => println!("Error: LoRA adapter alias `{alias}` is not loaded"),
+            Err(error) => println!("Error: {error}"),
+        },
+    }
+    true
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum AdapterCommand<'a> {
+    Invalid,
+    Base,
+    List,
+    Select(&'a str),
+}
+
+fn parse_adapter_command(prompt: &str) -> Option<AdapterCommand<'_>> {
+    let argument = if prompt == ADAPTER_CMD {
+        ""
+    } else {
+        prompt.strip_prefix("/adapter ")?.trim()
+    };
+    Some(match argument {
+        "" => AdapterCommand::Invalid,
+        "none" => AdapterCommand::Base,
+        "list" => AdapterCommand::List,
+        argument => match argument.strip_prefix("use ").map(str::trim) {
+            Some("") => AdapterCommand::Invalid,
+            Some(alias) => AdapterCommand::Select(alias),
+            None => AdapterCommand::Select(argument),
+        },
+    })
+}
+
 async fn text_interactive_mode(
     mistralrs: Arc<MistralRs>,
-    do_search: bool,
-    do_code_exec: bool,
-    do_shell: bool,
-    agent_permission: AgentPermission,
+    config: InteractiveConfig,
     agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
-    enable_thinking: Option<bool>,
 ) {
+    let InteractiveConfig {
+        do_search,
+        do_code_exec,
+        do_shell,
+        agent_permission,
+        enable_thinking,
+        reasoning_effort,
+        mut adapter,
+    } = config;
     let sender = mistralrs.get_sender(None).unwrap();
     let mut messages: Vec<IndexMap<String, MessageContent>> = Vec::new();
     let tool_session_id = uuid::Uuid::new_v4().to_string();
@@ -776,13 +900,19 @@ async fn text_interactive_mode(
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let prompt = read_line(&mut rl, &build_prompt(do_search, do_code_exec, do_shell));
+        let prompt = read_line(
+            &mut rl,
+            &build_prompt(do_search, do_code_exec, do_shell, adapter.as_deref()),
+        );
 
         let prompt_trimmed = prompt.as_str().trim();
         if prompt_trimmed.is_empty() {
             continue;
         }
         if handle_sampling_command(prompt_trimmed, &mut sampling_params) {
+            continue;
+        }
+        if handle_adapter_command(&mistralrs, prompt_trimmed, &mut adapter).await {
             continue;
         }
         match prompt_trimmed {
@@ -831,14 +961,16 @@ async fn text_interactive_mode(
         let request_messages = RequestMessage::Chat {
             messages: messages.clone(),
             enable_thinking,
-            reasoning_effort: None,
+            reasoning_effort,
         };
 
         let (tx, mut rx) = channel(10_000);
         let req = Request::Normal(Box::new(NormalRequest {
             id: mistralrs.next_request_id(),
+            queued_at: None,
             messages: request_messages,
             sampling_params: sampling_params.clone(),
+            seed: None,
             response: tx,
             return_logprobs: false,
             is_streaming: true,
@@ -867,6 +999,7 @@ async fn text_interactive_mode(
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
+            adapter: adapter.clone().map(AdapterSelection::alias),
             truncate_sequence: false,
             files: None,
             input_files: Vec::new(),
@@ -908,11 +1041,7 @@ async fn text_interactive_mode(
             }
             println!("Sampling: {}", format_sampling_params(&sampling_params));
         }
-        let mut assistant_message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
-            IndexMap::new();
-        assistant_message.insert("role".to_string(), Either::Left("assistant".to_string()));
-        assistant_message.insert("content".to_string(), Either::Left(assistant_output));
-        messages.push(assistant_message);
+        messages.push(assistant_output.into_message());
         println!();
     }
 
@@ -1255,11 +1384,33 @@ pub(super) fn agent_approval_callback() -> mistralrs_core::AgentToolApprovalCall
     })
 }
 
+struct AssistantTurn {
+    content: String,
+    reasoning: String,
+}
+
+impl AssistantTurn {
+    fn into_message(self) -> IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> {
+        let mut message = IndexMap::new();
+        message.insert("role".to_string(), Either::Left("assistant".to_string()));
+        message.insert("content".to_string(), Either::Left(self.content));
+        // Thinking models expect their own reasoning back in history (Qwen3.5 preserve_thinking)
+        if !self.reasoning.is_empty() {
+            message.insert(
+                "reasoning_content".to_string(),
+                Either::Left(self.reasoning),
+            );
+        }
+        message
+    }
+}
+
 async fn stream_assistant_response(
     rx: &mut Receiver<Response>,
     start_ttft: Instant,
-) -> Result<(String, Option<std::time::Duration>, Option<Usage>), String> {
+) -> Result<(AssistantTurn, Option<std::time::Duration>, Option<Usage>), String> {
     let mut assistant_output = String::new();
+    let mut assistant_reasoning = String::new();
     let mut first_token_duration = None;
     let mut last_usage = None;
     let mut pending_agentic_files = Vec::new();
@@ -1283,6 +1434,7 @@ async fn stream_assistant_response(
                 }
 
                 if let Some(ref reasoning) = choice.delta.reasoning_content {
+                    assistant_reasoning.push_str(reasoning);
                     print!("{GRAY}{reasoning}{RESET}");
                     io::stdout().flush().unwrap();
                     was_reasoning = true;
@@ -1356,18 +1508,30 @@ async fn stream_assistant_response(
     }
     denoising_progress.clear();
 
-    Ok((assistant_output, first_token_duration, last_usage))
+    Ok((
+        AssistantTurn {
+            content: assistant_output,
+            reasoning: assistant_reasoning,
+        },
+        first_token_duration,
+        last_usage,
+    ))
 }
 
 async fn multimodal_interactive_mode(
     mistralrs: Arc<MistralRs>,
-    do_search: bool,
-    do_code_exec: bool,
-    do_shell: bool,
-    agent_permission: AgentPermission,
+    config: InteractiveConfig,
     agent_approval_callback: Option<mistralrs_core::AgentToolApprovalCallback>,
-    enable_thinking: Option<bool>,
 ) {
+    let InteractiveConfig {
+        do_search,
+        do_code_exec,
+        do_shell,
+        agent_permission,
+        enable_thinking,
+        reasoning_effort,
+        adapter: _,
+    } = config;
     let tool_session_id = uuid::Uuid::new_v4().to_string();
 
     // Capture HTTP/HTTPS URLs and local file paths ending with common image extensions
@@ -1382,8 +1546,11 @@ async fn multimodal_interactive_mode(
     let mut videos = Vec::new();
 
     let config = mistralrs.config(None).unwrap();
-    let prefixer = match &config.category {
-        ModelCategory::Multimodal { prefixer } => prefixer,
+    let (prefixer, video_sampling) = match &config.category {
+        ModelCategory::Multimodal {
+            prefixer,
+            video_sampling,
+        } => (prefixer, *video_sampling),
         _ => {
             panic!("`add_image_message` expects a multimodal model.")
         }
@@ -1413,7 +1580,10 @@ async fn multimodal_interactive_mode(
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let prompt = read_line(&mut rl, &build_prompt(do_search, do_code_exec, do_shell));
+        let prompt = read_line(
+            &mut rl,
+            &build_prompt(do_search, do_code_exec, do_shell, None),
+        );
 
         let prompt_trimmed = prompt.as_str().trim();
         if prompt_trimmed.is_empty() {
@@ -1499,7 +1669,7 @@ async fn multimodal_interactive_mode(
                     // Load videos
                     let mut video_indexes = Vec::new();
                     for url in &urls_video {
-                        match parse_video_url(url, None).await {
+                        match parse_video_url(url, Some(video_sampling)).await {
                             Ok(video) => {
                                 info!("Added video at `{url}`");
                                 video_indexes.push(videos.len());
@@ -1577,14 +1747,16 @@ async fn multimodal_interactive_mode(
             videos: videos.clone(),
             messages: messages.clone(),
             enable_thinking,
-            reasoning_effort: None,
+            reasoning_effort,
         };
 
         let (tx, mut rx) = channel(10_000);
         let req = Request::Normal(Box::new(NormalRequest {
             id: mistralrs.next_request_id(),
+            queued_at: None,
             messages: request_messages,
             sampling_params: sampling_params.clone(),
+            seed: None,
             response: tx,
             return_logprobs: false,
             is_streaming: true,
@@ -1613,6 +1785,7 @@ async fn multimodal_interactive_mode(
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
+            adapter: None,
             truncate_sequence: false,
             files: None,
             input_files: Vec::new(),
@@ -1663,11 +1836,7 @@ async fn multimodal_interactive_mode(
             }
             println!("Sampling: {}", format_sampling_params(&sampling_params));
         }
-        let mut assistant_message: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
-            IndexMap::new();
-        assistant_message.insert("role".to_string(), Either::Left("assistant".to_string()));
-        assistant_message.insert("content".to_string(), Either::Left(assistant_output));
-        messages.push(assistant_message);
+        messages.push(assistant_output.into_message());
         println!();
     }
 
@@ -1718,7 +1887,10 @@ async fn diffusion_interactive_mode(
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let prompt = read_line(&mut rl, &build_prompt(do_search, do_code_exec, do_shell));
+        let prompt = read_line(
+            &mut rl,
+            &build_prompt(do_search, do_code_exec, do_shell, None),
+        );
 
         let prompt = match prompt.as_str().trim() {
             "" => continue,
@@ -1742,6 +1914,7 @@ async fn diffusion_interactive_mode(
         let (tx, mut rx) = channel(10_000);
         let req = Request::Normal(Box::new(NormalRequest {
             id: 0,
+            queued_at: None,
             messages: RequestMessage::ImageGeneration {
                 prompt: prompt.to_string(),
                 format: ImageGenerationResponseFormat::Url,
@@ -1749,6 +1922,7 @@ async fn diffusion_interactive_mode(
                 save_file: None,
             },
             sampling_params: SamplingParams::deterministic(),
+            seed: None,
             response: tx,
             return_logprobs: false,
             is_streaming: false,
@@ -1777,6 +1951,7 @@ async fn diffusion_interactive_mode(
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
+            adapter: None,
             truncate_sequence: false,
             files: None,
             input_files: Vec::new(),
@@ -1837,7 +2012,10 @@ async fn speech_interactive_mode(
         // Set the handler to process exit
         *CTRLC_HANDLER.lock().unwrap() = &exit_handler;
 
-        let prompt = read_line(&mut rl, &build_prompt(do_search, do_code_exec, do_shell));
+        let prompt = read_line(
+            &mut rl,
+            &build_prompt(do_search, do_code_exec, do_shell, None),
+        );
 
         let prompt = match prompt.as_str().trim() {
             "" => continue,
@@ -1861,10 +2039,12 @@ async fn speech_interactive_mode(
         let (tx, mut rx) = channel(10_000);
         let req = Request::Normal(Box::new(NormalRequest {
             id: 0,
+            queued_at: None,
             messages: RequestMessage::SpeechGeneration {
                 prompt: prompt.to_string(),
             },
             sampling_params: SamplingParams::deterministic(),
+            seed: None,
             response: tx,
             return_logprobs: false,
             is_streaming: false,
@@ -1893,6 +2073,7 @@ async fn speech_interactive_mode(
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: None,
+            adapter: None,
             truncate_sequence: false,
             files: None,
             input_files: Vec::new(),
@@ -1931,11 +2112,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn interactive_fallback_uses_broad_sampling_defaults() {
+        let params = interactive_fallback_sample_parameters();
+        assert_eq!(params.temperature, Some(INTERACTIVE_FALLBACK_TEMPERATURE));
+        assert_eq!(params.top_k, Some(INTERACTIVE_FALLBACK_TOP_K));
+        assert_eq!(params.top_p, Some(INTERACTIVE_FALLBACK_TOP_P));
+        assert_eq!(params.min_p, Some(INTERACTIVE_FALLBACK_MIN_P));
+    }
+
+    #[test]
     fn parse_files_and_message_trims_trailing_punctuation() {
         let regex = Regex::new(IMAGE_REGEX).unwrap();
         let input = "Look at this https://example.com/test.png.";
         let (urls, text) = parse_files_and_message(input, &regex);
         assert_eq!(urls, vec!["https://example.com/test.png"]);
         assert_eq!(text, "Look at this .");
+    }
+
+    #[test]
+    fn adapter_command_can_select_reserved_aliases() {
+        assert_eq!(
+            parse_adapter_command("/adapter use none"),
+            Some(AdapterCommand::Select("none"))
+        );
+        assert_eq!(
+            parse_adapter_command("/adapter use list"),
+            Some(AdapterCommand::Select("list"))
+        );
+        assert_eq!(
+            parse_adapter_command("/adapter none"),
+            Some(AdapterCommand::Base)
+        );
     }
 }

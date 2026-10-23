@@ -220,6 +220,14 @@ pub struct VoxtralEncoder {
     model_dtype: DType,
 }
 
+fn encoder_position_ids(batch_size: usize, seq_len: usize) -> Result<Vec<u32>> {
+    (0..batch_size)
+        .flat_map(|_| 0..seq_len)
+        .map(u32::try_from)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(candle_core::Error::wrap)
+}
+
 impl VoxtralEncoder {
     pub fn new(cfg: &WhisperEncoderArgs, vb: ShardedVarBuilder) -> Result<Self> {
         let device = vb.device().clone();
@@ -322,7 +330,8 @@ impl VoxtralEncoder {
         let mut cache = self.cache.lock().expect("Encoder cache lock poisoned");
 
         // Create causal mask with sliding window for the encoder
-        let positions = Tensor::from_vec(vec![0u32; b_sz], b_sz, xs.device())?;
+        let positions = encoder_position_ids(b_sz, seq_len)?;
+        let positions = Tensor::from_vec(positions, b_sz * seq_len, xs.device())?;
         let dummy_toks = Tensor::zeros((b_sz, seq_len), DType::U32, xs.device())?;
         let attention_mask = CausalMasker.make_causal_mask(
             &dummy_toks,
@@ -347,5 +356,16 @@ impl VoxtralEncoder {
         let fresh = NormalCache::new_sliding(self.n_layers, 1_000_000, self.sliding_window);
         let inner = fresh.lock().expect("New cache lock poisoned").clone();
         *self.cache.lock().expect("Encoder cache lock poisoned") = inner;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::encoder_position_ids;
+
+    #[test]
+    fn encoder_positions_repeat_per_request() -> candle_core::Result<()> {
+        assert_eq!(encoder_position_ids(2, 3)?, vec![0, 1, 2, 0, 1, 2]);
+        Ok(())
     }
 }

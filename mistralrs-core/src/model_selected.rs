@@ -7,7 +7,7 @@ use crate::{
         AutoDeviceMapParams, EmbeddingLoaderType, IsqOrganization, MultimodalLoaderType,
         NormalLoaderType, UqffWriteConfig,
     },
-    DiffusionLoaderType, ModelDType, SpeechLoaderType,
+    DiffusionLoaderType, LoraAdapterSpec, LoraRuntimeConfig, ModelDType, SpeechLoaderType,
 };
 
 // Default value functions for serde deserialization
@@ -269,17 +269,21 @@ pub enum ModelSelected {
 
     /// Select a LoRA architecture
     Lora {
-        /// Force a base model ID to load from instead of using the ordering file. This may be a HF hub repo or a local path.
+        /// Base model ID. This may be a Hugging Face repository or a local path.
         #[arg(short, long)]
-        model_id: Option<String>,
+        model_id: String,
 
         /// Path to local tokenizer.json file. If this is specified it is used over any remote file.
         #[arg(short, long)]
         tokenizer_json: Option<String>,
 
-        /// Model ID to load LoRA from. This may be a HF hub repo or a local path.
-        #[arg(short, long)]
-        adapter_model_id: String,
+        /// LoRA adapters to preload, each formatted as ALIAS=SOURCE.
+        #[arg(long = "lora")]
+        adapters: Vec<LoraAdapterSpec>,
+
+        /// Dynamic LoRA runtime capacity and rank limits.
+        #[arg(skip)]
+        runtime_config: LoraRuntimeConfig,
 
         /// The architecture of the model.
         #[arg(long, value_parser = parse_arch)]
@@ -293,6 +297,11 @@ pub enum ModelSelected {
         #[arg(long)]
         topology: Option<String>,
 
+        /// ISQ organization: `default` or `moqe`.
+        #[arg(short, long)]
+        #[serde(default)]
+        organization: Option<IsqOrganization>,
+
         /// UQFF path to write to.
         #[arg(short, long)]
         write_uqff: Option<UqffWriteConfig>,
@@ -300,6 +309,21 @@ pub enum ModelSelected {
         /// UQFF path to load from. If provided, this takes precedence over applying ISQ. Specify multiple files using a semicolon delimiter (;).
         #[arg(short, long)]
         from_uqff: Option<String>,
+
+        /// .imatrix file to enhance GGUF quantizations with.
+        #[arg(short, long)]
+        #[serde(default)]
+        imatrix: Option<PathBuf>,
+
+        /// Generate and utilize an imatrix to enhance GGUF quantizations.
+        #[arg(short, long)]
+        #[serde(default)]
+        calibration_file: Option<PathBuf>,
+
+        /// Automatically resize and pad images to this maximum edge length.
+        #[arg(short = 'e', long)]
+        #[serde(default)]
+        max_edge: Option<u32>,
 
         /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
         #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
@@ -309,14 +333,34 @@ pub enum ModelSelected {
         #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
         max_batch_size: usize,
 
+        /// Maximum prompt number of images to expect for automatic device mapping.
+        #[arg(long)]
+        #[serde(default)]
+        max_num_images: Option<usize>,
+
+        /// Maximum expected image edge length for automatic device mapping.
+        #[arg(long)]
+        #[serde(default)]
+        max_image_length: Option<usize>,
+
         /// Cache path for Hugging Face models downloaded locally
         #[arg(long)]
         hf_cache_path: Option<PathBuf>,
+
+        /// Path to local Matryoshka Transformer configuration CSV file.
+        #[arg(long)]
+        #[serde(default)]
+        matformer_config_path: Option<PathBuf>,
+
+        /// Name of the Matryoshka Transformer slice to use.
+        #[arg(long)]
+        #[serde(default)]
+        matformer_slice_name: Option<String>,
     },
 
     /// Select a GGUF model.
     GGUF {
-        /// `tok_model_id` is the local or remote model ID where you can find a `tokenizer_config.json` file.
+        /// `tok_model_id` optionally overrides embedded configuration and tokenizer assets.
         /// If the `chat_template` is specified, then it will be treated as a path and used over remote files,
         /// removing all remote accesses.
         #[arg(short, long)]
@@ -328,9 +372,27 @@ pub enum ModelSelected {
         quantized_model_id: String,
 
         /// Quantized filename(s).
-        /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
+        /// May be a single filename, or use semicolons to separate multiple files.
         #[arg(short = 'f', long)]
         quantized_filename: String,
+
+        /// Path to a tokenizer JSON file.
+        #[arg(long)]
+        tokenizer_json: Option<String>,
+
+        /// Multimodal projector filename(s), separated by semicolons.
+        #[arg(long)]
+        mmproj_filename: Option<String>,
+
+        /// Dynamic LoRA adapters to preload.
+        #[arg(skip)]
+        #[serde(default)]
+        lora_adapters: Vec<LoraAdapterSpec>,
+
+        /// Dynamic LoRA runtime limits. `None` disables dynamic LoRA.
+        #[arg(skip)]
+        #[serde(default)]
+        lora_runtime_config: Option<LoraRuntimeConfig>,
 
         /// Model data type. Defaults to `auto`.
         #[arg(short, long, default_value_t = ModelDType::Auto, value_parser = parse_model_dtype)]
@@ -340,6 +402,27 @@ pub enum ModelSelected {
         #[arg(long)]
         topology: Option<String>,
 
+        /// ISQ organization: `default` or `moqe`.
+        #[arg(long)]
+        organization: Option<IsqOrganization>,
+
+        /// UQFF path and quantization types to write.
+        #[arg(long)]
+        write_uqff: Option<UqffWriteConfig>,
+
+        /// Imatrix file to use while requantizing the GGUF weights.
+        #[arg(long)]
+        imatrix: Option<PathBuf>,
+
+        /// Calibration file used to generate an imatrix while requantizing the GGUF weights.
+        #[arg(long)]
+        calibration_file: Option<PathBuf>,
+
+        /// Automatically resize and pad images to this maximum edge length.
+        #[arg(short = 'e', long)]
+        #[serde(default)]
+        max_edge: Option<u32>,
+
         /// Maximum prompt sequence length to expect for this model. This affects automatic device mapping but is not a hard limit.
         #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
         max_seq_len: usize,
@@ -347,6 +430,31 @@ pub enum ModelSelected {
         /// Maximum prompt batch size to expect for this model. This affects automatic device mapping but is not a hard limit.
         #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
         max_batch_size: usize,
+
+        /// Maximum prompt number of images to expect for automatic device mapping.
+        #[arg(long)]
+        #[serde(default)]
+        max_num_images: Option<usize>,
+
+        /// Maximum expected image edge length for automatic device mapping.
+        #[arg(long)]
+        #[serde(default)]
+        max_image_length: Option<usize>,
+
+        /// Cache path for Hugging Face models downloaded locally.
+        #[arg(long)]
+        #[serde(default)]
+        hf_cache_path: Option<PathBuf>,
+
+        /// Path to a local Matryoshka Transformer configuration CSV file.
+        #[arg(long)]
+        #[serde(default)]
+        matformer_config_path: Option<PathBuf>,
+
+        /// Name of the Matryoshka Transformer slice to use.
+        #[arg(long)]
+        #[serde(default)]
+        matformer_slice_name: Option<String>,
     },
 
     /// Select a GGUF model with X-LoRA.
@@ -363,7 +471,7 @@ pub enum ModelSelected {
         quantized_model_id: String,
 
         /// Quantized filename(s).
-        /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
+        /// May be a single filename, or use semicolons to separate multiple files.
         #[arg(short = 'f', long)]
         quantized_filename: String,
 
@@ -411,7 +519,7 @@ pub enum ModelSelected {
         quantized_model_id: String,
 
         /// Quantized filename(s).
-        /// May be a single filename, or use a delimiter of " " (a single space) for multiple files.
+        /// May be a single filename, or use semicolons to separate multiple files.
         #[arg(short = 'f', long)]
         quantized_filename: String,
 

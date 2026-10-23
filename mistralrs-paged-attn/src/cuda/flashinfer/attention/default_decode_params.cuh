@@ -125,6 +125,7 @@ struct BatchDecodeParams {
   int32_t window_left;
   float logits_soft_cap;
   float sm_scale;
+  float v_scale;
   float rope_rcp_scale;
   float rope_rcp_theta;
 
@@ -149,6 +150,7 @@ struct BatchDecodeParams {
         window_left(0),
         logits_soft_cap(0.0f),
         sm_scale(0.0f),
+        v_scale(1.0f),
         rope_rcp_scale(0.0f),
         rope_rcp_theta(0.0f),
         request_indices(nullptr),
@@ -177,6 +179,7 @@ struct BatchDecodeParams {
         window_left(window_left),
         logits_soft_cap(logits_soft_cap),
         sm_scale(sm_scale),
+        v_scale(1.0f),
         rope_rcp_scale(1.f / rope_scale),
         rope_rcp_theta(1.f / rope_theta),
         request_indices(nullptr),

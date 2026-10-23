@@ -45,7 +45,8 @@ enum GluActivation {
   GLU_SILU = 0,
   GLU_GELU = 1,
   GLU_RELU = 2,
-  GLU_GELU_ERF = 3
+  GLU_GELU_ERF = 3,
+  GLU_SIGMOID = 4
 };
 
 static __device__ __forceinline__ float glu_silu(float x) {
@@ -78,6 +79,8 @@ static __device__ __forceinline__ float apply_glu_activation(float x, int act) {
     return glu_relu(x);
   case GLU_GELU_ERF:
     return glu_gelu_erf(x);
+  case GLU_SIGMOID:
+    return 1.0f / (1.0f + expf(-x));
   default:
     return glu_silu(x);
   }

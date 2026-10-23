@@ -27,6 +27,7 @@ Members and their wire/config names where relevant. The members are fieldless Py
 | `Architecture.GLM4Moe` | `'glm4moe'` |
 | `Architecture.GLM4MoeLite` | `'glm4moelite'` |
 | `Architecture.Qwen3Moe` | `'qwen3moe'` |
+| `Architecture.Flint` | `'flint'` |
 | `Architecture.SmolLm3` | `'smollm3'` |
 | `Architecture.GraniteMoeHybrid` | `'granitemoehybrid'` |
 | `Architecture.GptOss` | `'gptoss'` |
@@ -70,8 +71,10 @@ Members and their wire/config names where relevant. The members are fieldless Py
 | `MultimodalArchitecture.Qwen3VLMoE` | `'Qwen3VLMoE'` |
 | `MultimodalArchitecture.Qwen3_5` | `'Qwen3_5'` |
 | `MultimodalArchitecture.Qwen3_5Moe` | `'Qwen3_5Moe'` |
+| `MultimodalArchitecture.Qwen4Exp` | `'Qwen4Exp'` |
 | `MultimodalArchitecture.Voxtral` | `'Voxtral'` |
 | `MultimodalArchitecture.Gemma4` | `'Gemma4'` |
+| `MultimodalArchitecture.MuseGlimmer` | `'MuseGlimmer'` |
 | `MultimodalArchitecture.DiffusionGemma` | `'DiffusionGemma'` |
 
 

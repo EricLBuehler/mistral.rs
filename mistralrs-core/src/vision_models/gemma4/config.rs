@@ -108,7 +108,22 @@ pub struct Gemma4TextConfig {
     pub keep_tied_lm_head_unquantized: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gemma4BidirectionalAttention {
+    Causal,
+    Vision,
+    All,
+}
+
 impl Gemma4TextConfig {
+    pub fn bidirectional_attention(&self) -> Gemma4BidirectionalAttention {
+        match self.use_bidirectional_attention.as_deref() {
+            Some("vision") => Gemma4BidirectionalAttention::Vision,
+            Some("all") => Gemma4BidirectionalAttention::All,
+            _ => Gemma4BidirectionalAttention::Causal,
+        }
+    }
+
     pub fn expert_intermediate_size(&self) -> Option<usize> {
         self.expert_intermediate_size_field
             .or(self.moe_intermediate_size_field)

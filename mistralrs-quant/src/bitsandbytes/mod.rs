@@ -254,6 +254,10 @@ impl QuantMethod for BnbLinear {
         (self.params.dtype.into(), self.weight.device().clone())
     }
 
+    fn has_bias(&self) -> bool {
+        self.bias.is_some()
+    }
+
     fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
         let shape = self
             .params
@@ -273,13 +277,17 @@ impl QuantMethod for BnbLinear {
 
     fn apply_isq(
         self: Arc<Self>,
-        _dtype: Option<IsqType>,
-        _device: Device,
-        _n_quantized: &AtomicUsize,
-        _imatrix_weight: Option<Vec<f32>>,
-        _guard: QuantizeOntoGuard,
+        dtype: Option<IsqType>,
+        device: Device,
+        n_quantized: &AtomicUsize,
+        imatrix_weight: Option<Vec<f32>>,
+        guard: QuantizeOntoGuard,
     ) -> Result<Arc<dyn QuantMethod>> {
-        todo!()
+        let weight = self.dequantize_w()?;
+        Arc::new(crate::UnquantLinear::new(QuantMethodConfig::Unquantized(
+            candle_nn::Linear::new(weight, self.bias.clone()),
+        ))?)
+        .apply_isq(dtype, device, n_quantized, imatrix_weight, guard)
     }
 }
 
@@ -289,5 +297,53 @@ impl QuantizedSerde for BnbLinear {
     }
     fn name(&self) -> &'static str {
         "bnb-linear"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_layer() -> Result<Arc<dyn QuantMethod>> {
+        let params = BnbQuantParams {
+            absmax: Tensor::ones(1, DType::F32, &Device::Cpu)?,
+            code: Tensor::zeros(16, DType::F32, &Device::Cpu)?,
+            blocksize: 64,
+            shape: Some(Shape::from_dims(&[2, 32])),
+            nested: None,
+            offset: None,
+            dtype: BnbDType::F32,
+        };
+        Ok(Arc::new(BnbLinear::new(QuantMethodConfig::Bnb {
+            weight: Tensor::zeros(32, DType::U8, &Device::Cpu)?,
+            bias: Some(Tensor::ones(2, DType::F32, &Device::Cpu)?),
+            params,
+            quant_ty: BnbQuantType::Nf4,
+        })?))
+    }
+
+    #[test]
+    fn apply_isq_dequantizes_or_requantizes_without_panicking() -> Result<()> {
+        let n_quantized = AtomicUsize::new(0);
+        let dense = test_layer()?.apply_isq(
+            None,
+            Device::Cpu,
+            &n_quantized,
+            None,
+            QuantizeOntoGuard::new(),
+        )?;
+        assert_eq!(dense.name(), "unquant-linear");
+        assert!(dense.has_bias());
+
+        let quantized = test_layer()?.apply_isq(
+            Some(IsqType::Q4_0),
+            Device::Cpu,
+            &n_quantized,
+            None,
+            QuantizeOntoGuard::new(),
+        )?;
+        assert_eq!(quantized.uqff_type(), Some(IsqType::Q4_0));
+        assert!(quantized.has_bias());
+        Ok(())
     }
 }

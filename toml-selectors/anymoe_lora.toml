@@ -1,4 +1,5 @@
 [model]
+kind = "plain"
 model_id = "mistralai/Mistral-7B-Instruct-v0.1"
 arch = "mistral"
 

@@ -15,6 +15,7 @@ sidebar:
 | `system_fingerprint` | `str` | required |
 | `object` | `str` | required |
 | `usage` | `Usage` | required |
+| `adapter_generation` | `str \| None` | `None` |
 | `agentic_tool_calls` | `list[AgenticToolCallRecord] \| None` | `None` |
 | `files` | `list[File] \| None` | `None` |
 | `session_id` | `str \| None` | `None` |
@@ -31,6 +32,7 @@ sidebar:
 | `system_fingerprint` | `str` | required |
 | `object` | `str` | required |
 | `usage` | `Usage \| None` | `None` |
+| `adapter_generation` | `str \| None` | `None` |
 | `session_id` | `str \| None` | `None` |
 
 
@@ -88,15 +90,16 @@ sidebar:
 
 ## `CompletionResponse`
 
-| Field | Type |
-| --- | --- |
-| `id` | `str` |
-| `choices` | `list[CompletionChoice]` |
-| `created` | `int` |
-| `model` | `str` |
-| `system_fingerprint` | `str` |
-| `object` | `str` |
-| `usage` | `Usage` |
+| Field | Type | Default |
+| --- | --- | --- |
+| `id` | `str` | required |
+| `choices` | `list[CompletionChoice]` | required |
+| `created` | `int` | required |
+| `model` | `str` | required |
+| `system_fingerprint` | `str` | required |
+| `object` | `str` | required |
+| `usage` | `Usage` | required |
+| `adapter_generation` | `str \| None` | `None` |
 
 
 ## `CompletionChoice`

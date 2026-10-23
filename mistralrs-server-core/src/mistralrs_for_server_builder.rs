@@ -1,18 +1,19 @@
 //! ## mistral.rs instance for server builder.
 
-use std::sync::Arc;
+use std::{num::NonZeroUsize, sync::Arc};
 
 use anyhow::{Context, Result};
 use candle_core::Device;
 use mistralrs_core::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, paged_attn_supported,
-    parse_isq_value, plan_paged_kv, AutoDeviceMapParams, DefaultSchedulerMethod,
-    DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, Loader, LoaderBuilder,
-    McpClientConfig, MemoryGpuConfig, MistralRsBuilder, ModelLoaderConfig, ModelSelected,
-    MtpConfig, PagedAttentionConfig, PagedCacheType, PagedKvModelRequest, SchedulerConfig,
-    SearchCallback, SearchEmbeddingModel, TokenSource,
+    parse_isq_value, plan_paged_kv, reserve_external_mtp_memory_with_runtime, AutoDeviceMapParams,
+    DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting,
+    HfConfigOverrides, Loader, LoaderBuilder, McpClientConfig, MemoryGoal, MistralRsBuilder,
+    ModelLoaderConfig, ModelSelected, MtpConfig, MtpRuntimeConfig, PagedAttentionConfig,
+    PagedCacheType, PagedKvModelRequest, SchedulerConfig, SearchCallback, SearchEmbeddingModel,
+    TokenSource,
 };
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::types::{LoadedPipeline, SharedMistralRsState};
 use std::collections::{HashMap, HashSet};
@@ -30,10 +31,16 @@ pub struct ModelConfig {
     pub chat_template: Option<String>,
     /// Model-specific JINJA template
     pub jinja_explicit: Option<String>,
+    #[serde(default)]
+    pub max_model_len: Option<usize>,
+    #[serde(default)]
+    pub hf_config_overrides: Option<HfConfigOverrides>,
     /// Model-specific device layers
     pub num_device_layers: Option<Vec<String>>,
     /// Model-specific in-situ quantization
     pub in_situ_quant: Option<String>,
+    #[serde(default)]
+    pub encoder_cache_memory_bytes: Option<NonZeroUsize>,
 }
 
 impl ModelConfig {
@@ -44,8 +51,11 @@ impl ModelConfig {
             model,
             chat_template: None,
             jinja_explicit: None,
+            max_model_len: None,
+            hf_config_overrides: None,
             num_device_layers: None,
             in_situ_quant: None,
+            encoder_cache_memory_bytes: None,
         }
     }
 
@@ -64,6 +74,17 @@ impl ModelConfig {
         self
     }
 
+    pub fn with_max_model_len(mut self, max_model_len: usize) -> Self {
+        assert!(max_model_len > 0, "maximum model length must be nonzero");
+        self.max_model_len = Some(max_model_len);
+        self
+    }
+
+    pub fn with_hf_config_overrides(mut self, overrides: HfConfigOverrides) -> Self {
+        self.hf_config_overrides = Some(overrides);
+        self
+    }
+
     pub fn with_num_device_layers(mut self, num_device_layers: Vec<String>) -> Self {
         self.num_device_layers = Some(num_device_layers);
         self
@@ -71,6 +92,13 @@ impl ModelConfig {
 
     pub fn with_in_situ_quant(mut self, in_situ_quant: String) -> Self {
         self.in_situ_quant = Some(in_situ_quant);
+        self
+    }
+
+    pub fn with_encoder_cache_memory_bytes(mut self, max_bytes: usize) -> Self {
+        self.encoder_cache_memory_bytes = Some(
+            NonZeroUsize::new(max_bytes).expect("encoder cache memory capacity must be nonzero"),
+        );
         self
     }
 }
@@ -82,13 +110,19 @@ pub mod defaults {
 
     use std::sync::Arc;
 
-    use mistralrs_core::PagedCacheType;
+    use mistralrs_core::{
+        PagedCacheType, DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL, DEFAULT_MAX_NUM_BATCHED_TOKENS,
+        DEFAULT_MAX_PREFILL_CHUNK_TOKENS,
+    };
 
     pub const DEVICE: Option<candle_core::Device> = None;
     pub const SEED: Option<u64> = None;
     pub const LOG: Option<String> = None;
     pub const MODEL: Option<mistralrs_core::ModelSelected> = None;
-    pub const MAX_SEQS: usize = 16;
+    pub const MAX_SEQS: usize = mistralrs_core::memory_plan::DEFAULT_MAX_NUM_SEQS;
+    pub const MAX_NUM_BATCHED_TOKENS: usize = DEFAULT_MAX_NUM_BATCHED_TOKENS;
+    pub const MAX_PREFILL_CHUNK_TOKENS: usize = DEFAULT_MAX_PREFILL_CHUNK_TOKENS;
+    pub const MAX_DECODE_STEPS_BEFORE_PREFILL: usize = DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL;
     pub const NO_KV_CACHE: bool = false;
     pub const CHAT_TEMPLATE: Option<String> = None;
     pub const JINJA_EXPLICIT: Option<String> = None;
@@ -96,14 +130,11 @@ pub mod defaults {
     pub const PREFIX_CACHE_N: usize = 16;
     pub const NUM_DEVICE_LAYERS: Option<Vec<String>> = None;
     pub const IN_SITU_QUANT: Option<String> = None;
-    pub const PAGED_ATTN_GPU_MEM: Option<usize> = None;
-    pub const PAGED_ATTN_GPU_MEM_USAGE: Option<f32> = None;
-    pub const PAGED_CTXT_LEN: Option<usize> = None;
     pub const PAGED_ATTN_BLOCK_SIZE: Option<usize> = None;
     pub const PAGED_ATTN: Option<bool> = None;
     pub const PAGED_ATTN_CPU: bool = false;
     pub const PAGED_ATTN_CUDA: bool = true;
-    pub const PAGED_ATTN_METAL: bool = false;
+    pub const PAGED_ATTN_METAL: bool = true;
     pub const CPU: bool = false;
     pub const ENABLE_SEARCH: bool = false;
     pub const SEARCH_EMBEDDING_MODEL: Option<SearchEmbeddingModel> = None;
@@ -139,9 +170,7 @@ pub mod defaults {
 ///        .with_jinja_explicit_optional(args.jinja_explicit)
 ///        .with_num_device_layers_optional(args.num_device_layers)
 ///        .with_in_situ_quant_optional(args.in_situ_quant)
-///        .with_paged_attn_gpu_mem_optional(args.paged_attn_gpu_mem)
-///        .with_paged_attn_gpu_mem_usage_optional(args.paged_attn_gpu_mem_usage)
-///        .with_paged_ctxt_len_optional(args.paged_ctxt_len)
+///        .with_memory_goal(MemoryGoal::Auto)
 ///        .with_paged_attn_block_size_optional(args.paged_attn_block_size)
 ///        .build()
 ///        .await?;
@@ -171,6 +200,15 @@ pub struct MistralRsForServerBuilder {
     /// Maximum running sequences at any time. If the `tgt_non_granular_index` flag is set for X-LoRA models, this will be set to 1.
     max_seqs: usize,
 
+    /// Maximum tokens processed by one paged-attention scheduler step.
+    max_num_batched_tokens: NonZeroUsize,
+
+    /// Maximum chunkable CUDA or Metal text-prompt tokens in one paged-attention scheduler step.
+    max_prefill_chunk_tokens: NonZeroUsize,
+
+    /// Maximum decode steps before a waiting prefill batch is admitted.
+    max_decode_steps_before_prefill: NonZeroUsize,
+
     /// Use no KV cache.
     no_kv_cache: bool,
 
@@ -180,6 +218,12 @@ pub struct MistralRsForServerBuilder {
 
     /// Explicit JINJA chat template file (.jinja) to be used. If specified, this overrides all other chat templates.
     jinja_explicit: Option<String>,
+
+    /// Optional runtime context length applied by the selected model loader.
+    max_model_len: Option<usize>,
+
+    /// Optional recursively merged Hugging Face config.json overrides.
+    hf_config_overrides: Option<HfConfigOverrides>,
 
     /// Source of the token for authentication.
     /// Can be in the formats: `literal:<value>`, `env:<value>`, `path:<value>`, `cache` to use a cached token, or `none` to use no token.
@@ -201,28 +245,13 @@ pub struct MistralRsForServerBuilder {
     /// In-situ quantization to apply.
     in_situ_quant: Option<String>,
 
-    /// GPU memory to allocate for KV cache with PagedAttention in MBs.
-    /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-    /// The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
-    paged_attn_gpu_mem: Option<usize>,
+    /// Memory budget shared by model placement and paged KV allocation.
+    memory_goal: MemoryGoal,
 
-    /// Percentage of GPU memory to utilize after allocation of KV cache with PagedAttention, from 0 to 1.
-    /// If this is not set and the device is CUDA, it will default to `0.9`.
-    /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-    /// The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
-    paged_attn_gpu_mem_usage: Option<f32>,
-
-    /// Total context length to allocate the KV cache for (total number of tokens which the KV cache can hold).
-    /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-    /// The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
-    /// This is the default setting, and it defaults to the `max-seq-len` specified in after the model type.
-    paged_ctxt_len: Option<usize>,
-
-    /// Block size (number of tokens per block) for PagedAttention. If this is not set and the device is CUDA, it will default to 32.
-    /// PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
+    /// PagedAttention tokens per block, defaulting to 32 on CUDA and Metal.
     paged_attn_block_size: Option<usize>,
 
-    /// Enables or disables PagedAttention. By default, PagedAttention is enabled on CUDA and disabled on Metal (and not supported on CPU). Use this to override the default behavior.
+    /// Enables or disables PagedAttention. By default, PagedAttention is enabled on CUDA and Metal (and not supported on CPU). Use this to override the default behavior.
     paged_attn: Option<bool>,
 
     /// Use CPU only
@@ -245,6 +274,7 @@ pub struct MistralRsForServerBuilder {
 
     /// Optional MTP assistant configuration.
     mtp_config: Option<MtpConfig>,
+    encoder_cache_memory_bytes: Option<usize>,
 
     /// Disable EOS token stopping (generate until max_len regardless of EOS)
     disable_eos_stop: bool,
@@ -267,17 +297,24 @@ impl Default for MistralRsForServerBuilder {
             models: Vec::new(),
             default_model_id: None,
             max_seqs: defaults::MAX_SEQS,
+            max_num_batched_tokens: NonZeroUsize::new(defaults::MAX_NUM_BATCHED_TOKENS).unwrap(),
+            max_prefill_chunk_tokens: NonZeroUsize::new(defaults::MAX_PREFILL_CHUNK_TOKENS)
+                .unwrap(),
+            max_decode_steps_before_prefill: NonZeroUsize::new(
+                defaults::MAX_DECODE_STEPS_BEFORE_PREFILL,
+            )
+            .unwrap(),
             no_kv_cache: defaults::NO_KV_CACHE,
             chat_template: defaults::CHAT_TEMPLATE,
             jinja_explicit: defaults::JINJA_EXPLICIT,
+            max_model_len: None,
+            hf_config_overrides: None,
             token_source: defaults::TOKEN_SOURCE,
             interactive_mode: defaults::INTERACTIVE_MODE,
             prefix_cache_n: defaults::PREFIX_CACHE_N,
             num_device_layers: defaults::NUM_DEVICE_LAYERS,
             in_situ_quant: defaults::IN_SITU_QUANT,
-            paged_attn_gpu_mem: defaults::PAGED_ATTN_GPU_MEM,
-            paged_attn_gpu_mem_usage: defaults::PAGED_ATTN_GPU_MEM_USAGE,
-            paged_ctxt_len: defaults::PAGED_CTXT_LEN,
+            memory_goal: MemoryGoal::Auto,
             paged_attn_block_size: defaults::PAGED_ATTN_BLOCK_SIZE,
             paged_attn: defaults::PAGED_ATTN,
             cpu: defaults::CPU,
@@ -287,6 +324,7 @@ impl Default for MistralRsForServerBuilder {
             mcp_client_config: None,
             paged_cache_type: defaults::PAGED_CACHE_TYPE,
             mtp_config: defaults::MTP_CONFIG,
+            encoder_cache_memory_bytes: None,
             disable_eos_stop: false,
             code_exec_config: None,
             shell_config: None,
@@ -412,6 +450,36 @@ impl MistralRsForServerBuilder {
         self
     }
 
+    pub fn with_encoder_cache_memory_bytes(mut self, max_bytes: usize) -> Self {
+        assert!(
+            max_bytes > 0,
+            "encoder cache memory capacity must be nonzero"
+        );
+        self.encoder_cache_memory_bytes = Some(max_bytes);
+        self
+    }
+
+    /// Sets the maximum number of tokens processed by one paged-attention scheduler step.
+    pub fn with_max_num_batched_tokens(mut self, max_num_batched_tokens: NonZeroUsize) -> Self {
+        self.max_num_batched_tokens = max_num_batched_tokens;
+        self
+    }
+
+    /// Sets the maximum chunkable CUDA or Metal text-prompt tokens in one scheduler step.
+    pub fn with_max_prefill_chunk_tokens(mut self, max_prefill_chunk_tokens: NonZeroUsize) -> Self {
+        self.max_prefill_chunk_tokens = max_prefill_chunk_tokens;
+        self
+    }
+
+    /// Sets the maximum decode steps before a waiting prefill batch is admitted.
+    pub fn with_max_decode_steps_before_prefill(
+        mut self,
+        max_decode_steps_before_prefill: NonZeroUsize,
+    ) -> Self {
+        self.max_decode_steps_before_prefill = max_decode_steps_before_prefill;
+        self
+    }
+
     /// Sets whether to disable the key-value cache.
     pub fn with_no_kv_cache(mut self, no_kv_cache: bool) -> Self {
         self.no_kv_cache = no_kv_cache;
@@ -442,6 +510,38 @@ impl MistralRsForServerBuilder {
     pub fn with_jinja_explicit_optional(mut self, jinja_explicit: Option<String>) -> Self {
         if let Some(jinja_explicit) = jinja_explicit {
             self = self.with_jinja_explicit(jinja_explicit);
+        }
+        self
+    }
+
+    /// Sets the runtime model context length.
+    pub fn with_max_model_len(mut self, max_model_len: usize) -> Self {
+        assert!(max_model_len > 0, "maximum model length must be nonzero");
+        self.max_model_len = Some(max_model_len);
+        self
+    }
+
+    /// Sets the runtime model context length if provided.
+    pub fn with_max_model_len_optional(mut self, max_model_len: Option<usize>) -> Self {
+        if let Some(max_model_len) = max_model_len {
+            self = self.with_max_model_len(max_model_len);
+        }
+        self
+    }
+
+    /// Sets recursively merged Hugging Face config.json overrides.
+    pub fn with_hf_config_overrides(mut self, overrides: HfConfigOverrides) -> Self {
+        self.hf_config_overrides = Some(overrides);
+        self
+    }
+
+    /// Sets Hugging Face config.json overrides if provided.
+    pub fn with_hf_config_overrides_optional(
+        mut self,
+        overrides: Option<HfConfigOverrides>,
+    ) -> Self {
+        if let Some(overrides) = overrides {
+            self = self.with_hf_config_overrides(overrides);
         }
         self
     }
@@ -509,48 +609,9 @@ impl MistralRsForServerBuilder {
         self
     }
 
-    /// Sets the GPU memory allocation for PagedAttention KV cache.
-    pub fn with_paged_attn_gpu_mem(mut self, paged_attn_gpu_mem: usize) -> Self {
-        self.paged_attn_gpu_mem = Some(paged_attn_gpu_mem);
-        self
-    }
-
-    /// Sets the GPU memory allocation for PagedAttention KV cache if provided.
-    pub fn with_paged_attn_gpu_mem_optional(mut self, paged_attn_gpu_mem: Option<usize>) -> Self {
-        if let Some(paged_attn_gpu_mem) = paged_attn_gpu_mem {
-            self = self.with_paged_attn_gpu_mem(paged_attn_gpu_mem);
-        }
-        self
-    }
-
-    /// Sets the percentage of GPU memory to utilize for PagedAttention.
-    pub fn with_paged_attn_gpu_mem_usage(mut self, paged_attn_gpu_mem_usage: f32) -> Self {
-        self.paged_attn_gpu_mem_usage = Some(paged_attn_gpu_mem_usage);
-        self
-    }
-
-    /// Sets the percentage of GPU memory to utilize for PagedAttention if provided.
-    pub fn with_paged_attn_gpu_mem_usage_optional(
-        mut self,
-        paged_attn_gpu_mem_usage: Option<f32>,
-    ) -> Self {
-        if let Some(paged_attn_gpu_mem_usage) = paged_attn_gpu_mem_usage {
-            self = self.with_paged_attn_gpu_mem_usage(paged_attn_gpu_mem_usage);
-        }
-        self
-    }
-
-    /// Sets the total context length for KV cache allocation.
-    pub fn with_paged_ctxt_len(mut self, paged_ctxt_len: usize) -> Self {
-        self.paged_ctxt_len = Some(paged_ctxt_len);
-        self
-    }
-
-    /// Sets the total context length for KV cache allocation if provided.
-    pub fn with_paged_ctxt_len_optional(mut self, paged_ctxt_len: Option<usize>) -> Self {
-        if let Some(paged_ctxt_len) = paged_ctxt_len {
-            self = self.with_paged_ctxt_len(paged_ctxt_len);
-        }
+    /// Sets the memory goal used for model placement and KV cache allocation.
+    pub fn with_memory_goal(mut self, memory_goal: MemoryGoal) -> Self {
+        self.memory_goal = memory_goal;
         self
     }
 
@@ -692,6 +753,7 @@ impl MistralRsForServerBuilder {
 
     /// Build a single-model instance (legacy mode)
     async fn build_single_model(mut self) -> Result<SharedMistralRsState> {
+        let mtp_runtime = MtpRuntimeConfig::new(self.prefix_cache_n);
         let model = self.model.context("Model was None")?;
 
         let tgt_non_granular_index = get_tgt_non_granular_index(&model);
@@ -709,15 +771,28 @@ impl MistralRsForServerBuilder {
         };
 
         let mapper = init_mapper(&self.num_device_layers, &auto_device_map_params);
-        let paged_attn = configure_paged_attn(&device, self.paged_attn);
+        let paged_attn = configure_paged_attn(&device, self.paged_attn)?;
 
-        let cache_config = init_cache_config(
-            self.paged_attn_block_size,
-            self.paged_attn_gpu_mem,
-            self.paged_attn_gpu_mem_usage,
-            self.paged_ctxt_len,
-            self.paged_cache_type,
-            !paged_attn,
+        let cache_config = reserve_external_mtp_memory_with_runtime(
+            init_cache_config(
+                self.paged_attn_block_size,
+                self.memory_goal,
+                self.paged_cache_type,
+                !paged_attn || self.no_kv_cache,
+            )?
+            .map(|config| {
+                config.with_execution_limits(mistralrs_core::ExecutionMemoryLimits {
+                    max_num_seqs: self.max_seqs,
+                    max_num_batched_tokens: self.max_num_batched_tokens.get(),
+                    max_prefill_chunk_tokens: self.max_prefill_chunk_tokens.get(),
+                })
+            })
+            .transpose()?
+            .map(|config| config.with_recurrent_prefix_capacity(self.prefix_cache_n)),
+            self.mtp_config.as_ref(),
+            mtp_runtime,
+            &dtype,
+            &device,
         )?;
 
         // Clone values needed for loader config before they're moved
@@ -726,12 +801,17 @@ impl MistralRsForServerBuilder {
         let mapper_for_config = mapper.clone();
         let chat_template_for_config = self.chat_template.clone();
         let jinja_explicit_for_config = self.jinja_explicit.clone();
+        let hf_config_overrides_for_config = self.hf_config_overrides.clone();
 
         // Configure this last to prevent arg moves
         let loader: Box<dyn Loader> = LoaderBuilder::new(model)
             .with_no_kv_cache(self.no_kv_cache)
             .with_chat_template(self.chat_template)
             .with_jinja_explicit(self.jinja_explicit)
+            .with_max_model_len(self.max_model_len)
+            .with_hf_config_overrides(self.hf_config_overrides)
+            .with_mtp(self.mtp_config.as_ref().is_some_and(MtpConfig::is_builtin))
+            .with_encoder_cache_memory_bytes(self.encoder_cache_memory_bytes)
             .build()?;
 
         mistralrs_instance_info(&*loader);
@@ -750,18 +830,26 @@ impl MistralRsForServerBuilder {
             false,
             mapper,
             isq,
-            cache_config,
+            cache_config.clone(),
         )?;
         info!("Model loaded.");
 
         if let Some(mtp_config) = self.mtp_config.clone() {
-            pipeline
-                .lock()
-                .await
-                .attach_speculative(mistralrs_core::SpeculativeConfig::Mtp(mtp_config))?;
+            pipeline.lock().await.attach_speculative_with_runtime(
+                mistralrs_core::SpeculativeConfig::Mtp(mtp_config.with_draft_lm_head_isq(isq)),
+                mtp_runtime,
+            )?;
         }
 
-        let scheduler_config = init_scheduler_config(&cache_config, &pipeline, self.max_seqs).await;
+        let scheduler_config = init_scheduler_config(
+            &cache_config,
+            &pipeline,
+            self.max_seqs,
+            self.max_num_batched_tokens.get(),
+            self.max_prefill_chunk_tokens.get(),
+            self.max_decode_steps_before_prefill.get(),
+        )
+        .await;
 
         let search_embedding_model =
             get_search_embedding_model(self.enable_search, self.search_embedding_model);
@@ -779,7 +867,10 @@ impl MistralRsForServerBuilder {
             silent: false,
             chat_template: chat_template_for_config,
             jinja_explicit: jinja_explicit_for_config,
+            max_model_len: self.max_model_len,
+            hf_config_overrides: hf_config_overrides_for_config,
             mtp_config: self.mtp_config.clone(),
+            encoder_cache_memory_bytes: self.encoder_cache_memory_bytes,
         };
 
         let mut builder = MistralRsBuilder::new(
@@ -817,6 +908,7 @@ impl MistralRsForServerBuilder {
 
     /// Build a multi-model instance
     pub async fn build_multi_model(mut self) -> Result<SharedMistralRsState> {
+        let mtp_runtime = MtpRuntimeConfig::new(self.prefix_cache_n);
         if self.models.is_empty() {
             anyhow::bail!("No models configured for multi-model mode");
         }
@@ -826,6 +918,20 @@ impl MistralRsForServerBuilder {
         // Use the first model as the base configuration
         let first_model = &self.models[0];
         let model = first_model.model.clone();
+        let model_for_config = model.clone();
+        let first_chat_template = first_model
+            .chat_template
+            .clone()
+            .or(self.chat_template.clone());
+        let first_jinja_explicit = first_model
+            .jinja_explicit
+            .clone()
+            .or(self.jinja_explicit.clone());
+        let first_max_model_len = first_model.max_model_len.or(self.max_model_len);
+        let first_hf_config_overrides = first_model
+            .hf_config_overrides
+            .clone()
+            .or(self.hf_config_overrides.clone());
 
         let tgt_non_granular_index = get_tgt_non_granular_index(&model);
         let dtype = get_model_dtype(&model)?;
@@ -842,20 +948,18 @@ impl MistralRsForServerBuilder {
         };
 
         // Create the first model's pipeline
+        let first_encoder_cache_memory_bytes = first_model
+            .encoder_cache_memory_bytes
+            .map(NonZeroUsize::get)
+            .or(self.encoder_cache_memory_bytes);
         let loader: Box<dyn Loader> = LoaderBuilder::new(model)
             .with_no_kv_cache(self.no_kv_cache)
-            .with_chat_template(
-                first_model
-                    .chat_template
-                    .clone()
-                    .or(self.chat_template.clone()),
-            )
-            .with_jinja_explicit(
-                first_model
-                    .jinja_explicit
-                    .clone()
-                    .or(self.jinja_explicit.clone()),
-            )
+            .with_chat_template(first_chat_template.clone())
+            .with_jinja_explicit(first_jinja_explicit.clone())
+            .with_max_model_len(first_max_model_len)
+            .with_hf_config_overrides(first_hf_config_overrides.clone())
+            .with_mtp(self.mtp_config.as_ref().is_some_and(MtpConfig::is_builtin))
+            .with_encoder_cache_memory_bytes(first_encoder_cache_memory_bytes)
             .build()?;
 
         mistralrs_instance_info(&*loader);
@@ -867,28 +971,45 @@ impl MistralRsForServerBuilder {
                 .or(self.num_device_layers.clone()),
             &auto_device_map_params,
         );
-        let paged_attn = configure_paged_attn(&device, self.paged_attn);
+        let mapper_for_config = mapper.clone();
+        let paged_attn = configure_paged_attn(&device, self.paged_attn)?;
 
         let requested_cache_config = init_cache_config(
             self.paged_attn_block_size,
-            self.paged_attn_gpu_mem,
-            self.paged_attn_gpu_mem_usage,
-            self.paged_ctxt_len,
+            self.memory_goal,
             self.paged_cache_type,
-            !paged_attn,
-        )?;
-        let paged_kv_plan = plan_paged_kv(
+            !paged_attn || self.no_kv_cache,
+        )?
+        .map(|config| {
+            config.with_execution_limits(mistralrs_core::ExecutionMemoryLimits {
+                max_num_seqs: self.max_seqs,
+                max_num_batched_tokens: self.max_num_batched_tokens.get(),
+                max_prefill_chunk_tokens: self.max_prefill_chunk_tokens.get(),
+            })
+        })
+        .transpose()?
+        .map(|config| config.with_recurrent_prefix_capacity(self.prefix_cache_n));
+        let mut paged_kv_plan = plan_paged_kv(
             &self
                 .models
                 .iter()
                 .map(|_| PagedKvModelRequest {
-                    paged_attn: requested_cache_config,
+                    paged_attn: requested_cache_config.clone(),
                     max_num_seqs: self.max_seqs,
                 })
                 .collect::<Vec<_>>(),
             Default::default(),
         )?;
-        let first_cache_config = paged_kv_plan.paged_attn[0];
+        if let Some(first) = paged_kv_plan.paged_attn.first_mut() {
+            *first = reserve_external_mtp_memory_with_runtime(
+                first.take(),
+                self.mtp_config.as_ref(),
+                mtp_runtime,
+                &dtype,
+                &device,
+            )?;
+        }
+        let first_cache_config = paged_kv_plan.paged_attn[0].clone();
 
         let isq = first_model
             .in_situ_quant
@@ -908,13 +1029,13 @@ impl MistralRsForServerBuilder {
             false,
             mapper,
             isq,
-            first_cache_config,
+            first_cache_config.clone(),
         )?;
         if let Some(mtp_config) = self.mtp_config.clone() {
-            pipeline
-                .lock()
-                .await
-                .attach_speculative(mistralrs_core::SpeculativeConfig::Mtp(mtp_config))?;
+            pipeline.lock().await.attach_speculative_with_runtime(
+                mistralrs_core::SpeculativeConfig::Mtp(mtp_config.with_draft_lm_head_isq(isq)),
+                mtp_runtime,
+            )?;
         }
         let first_pipeline_name = pipeline.lock().await.name();
         let first_primary_id = first_model
@@ -943,10 +1064,34 @@ impl MistralRsForServerBuilder {
         }
         loaded_model_ids.push(first_primary_id.clone());
 
-        let scheduler_config =
-            init_scheduler_config(&first_cache_config, &pipeline, self.max_seqs).await;
+        let scheduler_config = init_scheduler_config(
+            &first_cache_config,
+            &pipeline,
+            self.max_seqs,
+            self.max_num_batched_tokens.get(),
+            self.max_prefill_chunk_tokens.get(),
+            self.max_decode_steps_before_prefill.get(),
+        )
+        .await;
         let search_embedding_model =
             get_search_embedding_model(self.enable_search, self.search_embedding_model);
+        let first_loader_config = ModelLoaderConfig {
+            model_selected: model_for_config,
+            token_source: self.token_source.clone(),
+            hf_revision: None,
+            dtype,
+            device: device.clone(),
+            device_map_setting: mapper_for_config,
+            isq,
+            paged_attn_config: first_cache_config,
+            silent: false,
+            chat_template: first_chat_template,
+            jinja_explicit: first_jinja_explicit,
+            max_model_len: first_max_model_len,
+            hf_config_overrides: first_hf_config_overrides,
+            mtp_config: self.mtp_config.clone(),
+            encoder_cache_memory_bytes: first_encoder_cache_memory_bytes,
+        };
 
         // Create the first MistralRs instance with the first model
         let mut builder = MistralRsBuilder::new(
@@ -959,7 +1104,8 @@ impl MistralRsForServerBuilder {
         .with_no_kv_cache(self.no_kv_cache)
         .with_prefix_cache_n(self.prefix_cache_n)
         .with_disable_eos_stop(self.disable_eos_stop)
-        .with_deferred_daemon_start(true);
+        .with_deferred_daemon_start(true)
+        .with_loader_config(first_loader_config);
         if first_primary_id != first_pipeline_name {
             builder = builder.with_model_id(first_primary_id.clone());
         }
@@ -994,22 +1140,34 @@ impl MistralRsForServerBuilder {
             );
 
             let model = model_config.model.clone();
+            let model_for_config = model.clone();
             let dtype = get_model_dtype(&model)?;
             let auto_device_map_params = get_auto_device_map_params(&model)?;
+            let chat_template = model_config
+                .chat_template
+                .clone()
+                .or(self.chat_template.clone());
+            let jinja_explicit = model_config
+                .jinja_explicit
+                .clone()
+                .or(self.jinja_explicit.clone());
+            let max_model_len = model_config.max_model_len.or(self.max_model_len);
+            let hf_config_overrides = model_config
+                .hf_config_overrides
+                .clone()
+                .or(self.hf_config_overrides.clone());
 
             let loader: Box<dyn Loader> = LoaderBuilder::new(model)
                 .with_no_kv_cache(self.no_kv_cache)
-                .with_chat_template(
+                .with_chat_template(chat_template.clone())
+                .with_jinja_explicit(jinja_explicit.clone())
+                .with_max_model_len(max_model_len)
+                .with_hf_config_overrides(hf_config_overrides.clone())
+                .with_encoder_cache_memory_bytes(
                     model_config
-                        .chat_template
-                        .clone()
-                        .or(self.chat_template.clone()),
-                )
-                .with_jinja_explicit(
-                    model_config
-                        .jinja_explicit
-                        .clone()
-                        .or(self.jinja_explicit.clone()),
+                        .encoder_cache_memory_bytes
+                        .map(NonZeroUsize::get)
+                        .or(self.encoder_cache_memory_bytes),
                 )
                 .build()?;
 
@@ -1020,6 +1178,7 @@ impl MistralRsForServerBuilder {
                     .or(self.num_device_layers.clone()),
                 &auto_device_map_params,
             );
+            let mapper_for_config = mapper.clone();
 
             let isq = model_config
                 .in_situ_quant
@@ -1028,6 +1187,7 @@ impl MistralRsForServerBuilder {
                 .map(|isq| parse_isq_value(isq, Some(&device)).map_err(|e| anyhow::anyhow!("{e}")))
                 .transpose()?;
 
+            let paged_attn_config = paged_kv_plan.paged_attn[model_index].clone();
             let pipeline: LoadedPipeline = loader.load_model_from_hf(
                 None,
                 self.token_source.clone(),
@@ -1036,7 +1196,7 @@ impl MistralRsForServerBuilder {
                 false,
                 mapper,
                 isq,
-                paged_kv_plan.paged_attn[model_index],
+                paged_attn_config.clone(),
             )?;
 
             // Each model gets its own scheduler
@@ -1044,6 +1204,9 @@ impl MistralRsForServerBuilder {
                 &paged_kv_plan.paged_attn[model_index],
                 &pipeline,
                 self.max_seqs,
+                self.max_num_batched_tokens.get(),
+                self.max_prefill_chunk_tokens.get(),
+                self.max_decode_steps_before_prefill.get(),
             )
             .await;
 
@@ -1074,7 +1237,28 @@ impl MistralRsForServerBuilder {
                 tool_callbacks: HashMap::new(),
             };
 
-            let mut add_model_config = mistralrs_core::AddModelConfig::new(engine_config);
+            let loader_config = ModelLoaderConfig {
+                model_selected: model_for_config,
+                token_source: self.token_source.clone(),
+                hf_revision: None,
+                dtype,
+                device: device.clone(),
+                device_map_setting: mapper_for_config,
+                isq,
+                paged_attn_config,
+                silent: false,
+                chat_template,
+                jinja_explicit,
+                max_model_len,
+                hf_config_overrides,
+                mtp_config: None,
+                encoder_cache_memory_bytes: model_config
+                    .encoder_cache_memory_bytes
+                    .map(NonZeroUsize::get)
+                    .or(self.encoder_cache_memory_bytes),
+            };
+            let mut add_model_config = mistralrs_core::AddModelConfig::new(engine_config)
+                .with_loader_config(loader_config);
             if let Some(mcp_config) = self.mcp_client_config.clone() {
                 add_model_config = add_model_config.with_mcp_config(mcp_config);
             }
@@ -1228,14 +1412,16 @@ fn mistralrs_instance_info(loader: &dyn Loader) {
 }
 
 /// Determines whether paged attention should be enabled based on device type and preferences.
-fn configure_paged_attn(device: &Device, paged_attn: Option<bool>) -> bool {
-    if mistralrs_core::distributed::use_nccl() {
+fn configure_paged_attn(device: &Device, paged_attn: Option<bool>) -> Result<bool> {
+    anyhow::ensure!(
+        paged_attn != Some(true)
+            || (!device.is_cpu() && paged_attn_supported())
+            || mistralrs_core::distributed::use_nccl(),
+        "paged attention is not supported on this device"
+    );
+    Ok(if mistralrs_core::distributed::use_nccl() {
         paged_attn.unwrap_or(defaults::PAGED_ATTN_CUDA)
     } else if device.is_cpu() {
-        if paged_attn == Some(true) {
-            warn!("Paged attention is not supported on CPU.");
-        }
-
         defaults::PAGED_ATTN_CPU
     } else if device.is_cuda() {
         paged_attn.unwrap_or(defaults::PAGED_ATTN_CUDA)
@@ -1243,74 +1429,25 @@ fn configure_paged_attn(device: &Device, paged_attn: Option<bool>) -> bool {
         paged_attn.unwrap_or(defaults::PAGED_ATTN_METAL)
     } else {
         false
-    }
+    })
 }
 
 /// Initializes the cache configuration for paged attention based on provided parameters.
 fn init_cache_config(
-    paged_attn_block_size: Option<usize>,
-    paged_attn_gpu_mem: Option<usize>,
-    paged_attn_gpu_mem_usage: Option<f32>,
-    paged_ctxt_len: Option<usize>,
+    block_size: Option<usize>,
+    memory_goal: MemoryGoal,
     cache_type: PagedCacheType,
-    no_paged_attn: bool,
+    disabled: bool,
 ) -> Result<Option<PagedAttentionConfig>> {
-    match (
-        paged_attn_block_size,
-        paged_attn_gpu_mem,
-        paged_attn_gpu_mem_usage,
-        paged_ctxt_len,
-        paged_attn_supported(),
-        no_paged_attn,
-    ) {
-        (block_size, None, None, None, true, false) => Ok(Some(PagedAttentionConfig::new(
-            block_size,
-            MemoryGpuConfig::Utilization(0.9),
-            cache_type,
-        )?)),
-        (block_size, None, None, Some(ctxt), true, false) => Ok(Some(PagedAttentionConfig::new(
-            block_size,
-            MemoryGpuConfig::ContextSize(ctxt),
-            cache_type,
-        )?)),
-        (block_size, None, Some(f), None, true, false) => Ok(Some(PagedAttentionConfig::new(
-            block_size,
-            MemoryGpuConfig::Utilization(f),
-            cache_type,
-        )?)),
-        (block_size, Some(m), None, None, true, false) => Ok(Some(PagedAttentionConfig::new(
-            block_size,
-            MemoryGpuConfig::MbAmount(m),
-            cache_type,
-        )?)),
-        (block_size, Some(_m), Some(f), None, true, false) => {
-            warn!("Both memory size and usage were specified, defaulting to the usage value.");
-            Ok(Some(PagedAttentionConfig::new(
-                block_size,
-                MemoryGpuConfig::Utilization(f),
-                cache_type,
-            )?))
-        }
-        (block_size, Some(_m), None, Some(ctxt), true, false) => {
-            warn!(
-                "Both memory size and context length were specified, defaulting to context length."
-            );
-            Ok(Some(PagedAttentionConfig::new(
-                block_size,
-                MemoryGpuConfig::ContextSize(ctxt),
-                cache_type,
-            )?))
-        }
-        (block_size, None, Some(f), Some(_ctxt), true, false) => {
-            warn!("Both context length and usage were specified, defaulting to the usage value.");
-            Ok(Some(PagedAttentionConfig::new(
-                block_size,
-                MemoryGpuConfig::Utilization(f),
-                cache_type,
-            )?))
-        }
-        (_, _, _, _, _, _) => Ok(None),
+    memory_goal.validate()?;
+    if disabled || !paged_attn_supported() {
+        anyhow::ensure!(
+            memory_goal == MemoryGoal::Auto,
+            "an explicit memory goal requires supported paged attention"
+        );
+        return Ok(None);
     }
+    PagedAttentionConfig::new(block_size, memory_goal, cache_type).map(Some)
 }
 
 /// Initializes the scheduler configuration based on cache settings and pipeline metadata.
@@ -1318,12 +1455,18 @@ async fn init_scheduler_config(
     cache_config: &Option<PagedAttentionConfig>,
     pipeline: &LoadedPipeline,
     args_max_seqs: usize,
+    max_num_batched_tokens: usize,
+    max_prefill_chunk_tokens: usize,
+    max_decode_steps_before_prefill: usize,
 ) -> SchedulerConfig {
     if cache_config.is_some() {
         // Handle case where we may have device mapping
         if let Some(ref cache_config) = pipeline.lock().await.get_metadata().cache_config {
             SchedulerConfig::PagedAttentionMeta {
                 max_num_seqs: args_max_seqs,
+                max_num_batched_tokens,
+                max_prefill_chunk_tokens,
+                max_decode_steps_before_prefill,
                 config: cache_config.clone(),
             }
         } else {

@@ -82,7 +82,7 @@ impl ClipVisionEmbeddings {
             stride: c.patch_size,
             ..Default::default()
         };
-        let position_embedding = layers::embedding(
+        let position_embedding = layers::dense_embedding(
             num_positions,
             c.hidden_size,
             vs.pp("position_embedding"),

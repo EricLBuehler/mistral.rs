@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::fs;
@@ -24,7 +24,7 @@ pub async fn append_chat_message(
     if content.trim_start().starts_with("{\"restore\":") {
         return Ok(());
     }
-    let path = format!("{}/{}.json", app.chats_dir, chat_id);
+    let path = app.chat_path(chat_id).context("invalid chat id")?;
     let data = match fs::read(&path).await {
         Ok(d) => d,
         Err(_) => return Ok(()),
@@ -58,7 +58,7 @@ pub async fn edit_chat_message(
     message_id: &str,
     new_content: &str,
 ) -> Result<()> {
-    let path = format!("{}/{}.json", app.chats_dir, chat_id);
+    let path = app.chat_path(chat_id).context("invalid chat id")?;
     let data = fs::read(&path).await?;
     let mut chat: ChatFile = serde_json::from_slice(&data)?;
 
@@ -82,7 +82,7 @@ pub async fn edit_chat_message(
 
 /// Set the active tail (selected branch leaf) for the chat.
 pub async fn set_chat_tail(app: &Arc<AppState>, chat_id: &str, tail: Option<String>) -> Result<()> {
-    let path = format!("{}/{}.json", app.chats_dir, chat_id);
+    let path = app.chat_path(chat_id).context("invalid chat id")?;
     let data = fs::read(&path).await?;
     let mut chat: ChatFile = serde_json::from_slice(&data)?;
     chat.tail = tail;

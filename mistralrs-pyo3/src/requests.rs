@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
 use either::Either;
-use mistralrs_core::WebSearchOptions;
+use mistralrs_core::{AdapterGenerationId, AdapterSelection, ReasoningEffort, WebSearchOptions};
 use pyo3::{
     exceptions::{PyTypeError, PyValueError},
     pyclass, pymethods,
     types::{PyAnyMethods, PyList, PyString},
-    Bound, Py, PyAny, PyErr, PyResult, Python,
+    Bound, Py, PyAny, PyErr, PyRef, PyResult, Python,
 };
 
 use crate::code_execution::{parse_agent_permission, parse_permission, ShellSkillMount};
@@ -18,11 +18,71 @@ pub enum ToolChoice {
     Auto,
 }
 
+#[pyclass(frozen)]
+#[derive(Debug, Clone)]
+/// Selects one exact immutable LoRA adapter generation.
+pub struct LoraAdapterGeneration {
+    generation: AdapterGenerationId,
+}
+
+impl LoraAdapterGeneration {
+    pub(crate) fn parse(
+        generation: &str,
+    ) -> Result<Self, mistralrs_core::AdapterGenerationParseError> {
+        Ok(Self {
+            generation: generation.parse()?,
+        })
+    }
+
+    fn selection(&self) -> AdapterSelection {
+        AdapterSelection::generation(self.generation)
+    }
+}
+
+#[pymethods]
+impl LoraAdapterGeneration {
+    #[new]
+    fn new(generation: String) -> PyResult<Self> {
+        Self::parse(&generation).map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
+    #[getter]
+    fn generation(&self) -> String {
+        self.generation.to_string()
+    }
+}
+
+fn parse_adapter_selection(adapter: Option<Py<PyAny>>) -> PyResult<Option<AdapterSelection>> {
+    Python::with_gil(|py| {
+        adapter
+            .map(|adapter| {
+                let adapter = adapter.bind(py);
+                if let Ok(alias) = adapter.extract::<String>() {
+                    return Ok(AdapterSelection::alias(alias));
+                }
+                if let Ok(generation) = adapter.extract::<PyRef<'_, LoraAdapterGeneration>>() {
+                    return Ok(generation.selection());
+                }
+                Err(PyTypeError::new_err(
+                    "adapter must be a string alias or LoraAdapterGeneration",
+                ))
+            })
+            .transpose()
+    })
+}
+
+fn parse_reasoning_effort(
+    effort: Option<&str>,
+) -> Result<Option<ReasoningEffort>, mistralrs_core::ReasoningEffortParseError> {
+    effort.map(str::parse).transpose()
+}
+
 #[pyclass]
 #[derive(Debug)]
 /// An OpenAI API compatible completion request.
 pub struct CompletionRequest {
     pub(crate) _model: String,
+    pub(crate) adapter: Option<AdapterSelection>,
     pub(crate) prompt: String,
     pub(crate) best_of: Option<usize>,
     pub(crate) echo_prompt: bool,
@@ -47,6 +107,7 @@ pub struct CompletionRequest {
     pub(crate) dry_allowed_length: Option<usize>,
     pub(crate) dry_sequence_breakers: Option<Vec<String>>,
     pub(crate) truncate_sequence: bool,
+    pub(crate) ignore_eos: bool,
 }
 
 #[pymethods]
@@ -78,6 +139,9 @@ impl CompletionRequest {
         dry_allowed_length=None,
         dry_sequence_breakers=None,
         truncate_sequence=false,
+        ignore_eos=false,
+        *,
+        adapter=None,
     ))]
     fn new(
         prompt: String,
@@ -105,6 +169,8 @@ impl CompletionRequest {
         dry_allowed_length: Option<usize>,
         dry_sequence_breakers: Option<Vec<String>>,
         truncate_sequence: Option<bool>,
+        ignore_eos: bool,
+        adapter: Option<Py<PyAny>>,
     ) -> PyResult<Self> {
         Ok(Self {
             prompt,
@@ -112,6 +178,7 @@ impl CompletionRequest {
             echo_prompt,
             suffix,
             _model: model,
+            adapter: parse_adapter_selection(adapter)?,
             logit_bias,
             max_tokens,
             n_choices,
@@ -132,6 +199,7 @@ impl CompletionRequest {
             dry_base,
             dry_sequence_breakers,
             truncate_sequence: truncate_sequence.unwrap_or(false),
+            ignore_eos,
         })
     }
 }
@@ -237,6 +305,7 @@ pub struct ChatCompletionRequest {
         String,
     >,
     pub(crate) _model: String,
+    pub(crate) adapter: Option<AdapterSelection>,
     pub(crate) logit_bias: Option<HashMap<u32, f32>>,
     pub(crate) logprobs: bool,
     pub(crate) top_logprobs: Option<usize>,
@@ -262,8 +331,8 @@ pub struct ChatCompletionRequest {
     pub(crate) web_search_options: Option<WebSearchOptions>,
     pub(crate) enable_thinking: Option<bool>,
     pub(crate) truncate_sequence: bool,
-    /// "low", "medium", or "high" for models that support extended thinking.
-    pub(crate) reasoning_effort: Option<String>,
+    pub(crate) ignore_eos: bool,
+    pub(crate) reasoning_effort: Option<ReasoningEffort>,
     /// Maximum number of tool-call rounds the server will auto-execute.
     pub(crate) max_tool_rounds: Option<usize>,
     /// URL to POST tool calls to for server-side execution.
@@ -327,6 +396,9 @@ impl ChatCompletionRequest {
         session_id=None,
         files=None,
         input_files=None,
+        ignore_eos=false,
+        *,
+        adapter=None,
     ))]
     fn new(
         messages: Py<PyAny>,
@@ -368,6 +440,8 @@ impl ChatCompletionRequest {
         session_id: Option<String>,
         files: Option<Vec<crate::files::RequestedFile>>,
         input_files: Option<Vec<crate::files::InputFile>>,
+        ignore_eos: bool,
+        adapter: Option<Py<PyAny>>,
     ) -> PyResult<Self> {
         let messages = Python::with_gil(|py| {
             if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
@@ -420,10 +494,15 @@ impl ChatCompletionRequest {
         let code_execution_permission = parse_permission(code_execution_permission)?;
         let agent_permission = parse_agent_permission(agent_permission)?
             .or_else(|| code_execution_permission.map(Into::into));
+        let reasoning_effort = parse_reasoning_effort(reasoning_effort.as_deref())
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        mistralrs_core::resolve_reasoning_controls(enable_thinking, reasoning_effort)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
 
         Ok(Self {
             messages,
             _model: model,
+            adapter: parse_adapter_selection(adapter)?,
             logit_bias,
             logprobs,
             top_logprobs,
@@ -449,6 +528,7 @@ impl ChatCompletionRequest {
             web_search_options,
             enable_thinking,
             truncate_sequence: truncate_sequence.unwrap_or(false),
+            ignore_eos,
             reasoning_effort,
             max_tool_rounds,
             tool_dispatch_url,
@@ -484,5 +564,55 @@ impl ChatCompletionRequest {
             .into_iter()
             .map(Into::into)
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyo3::impl_::pyclass::{PyClassImplCollector, PyClassNewTextSignature};
+
+    #[test]
+    fn exact_adapter_generation_is_validated_and_converted() {
+        let generation = AdapterGenerationId::from_bytes([0x5a; 32]);
+        let selector = LoraAdapterGeneration::parse(&generation.to_string()).unwrap();
+
+        assert_eq!(selector.generation(), generation.to_string());
+        assert_eq!(selector.selection().resolved_generation(), Some(generation));
+        assert!(LoraAdapterGeneration::parse("not-a-generation").is_err());
+    }
+
+    #[test]
+    fn adapter_selection_is_keyword_only_after_existing_request_arguments() {
+        let completion = PyClassImplCollector::<CompletionRequest>::new()
+            .new_text_signature()
+            .unwrap();
+        assert!(completion.starts_with("(prompt, model, best_of=1"));
+        assert!(completion.contains("ignore_eos=False"));
+        assert!(completion.ends_with("*, adapter=None)"));
+
+        let chat = PyClassImplCollector::<ChatCompletionRequest>::new()
+            .new_text_signature()
+            .unwrap();
+        assert!(chat.starts_with("(messages, model, logprobs=False"));
+        assert!(chat.contains("reasoning_effort=None"));
+        assert!(chat.contains("ignore_eos=False"));
+        assert!(chat.ends_with("*, adapter=None)"));
+    }
+
+    #[test]
+    fn reasoning_effort_accepts_all_supported_spellings() {
+        let cases = [
+            ("off", ReasoningEffort::Off),
+            ("none", ReasoningEffort::Off),
+            ("low", ReasoningEffort::Low),
+            ("medium", ReasoningEffort::Medium),
+            ("high", ReasoningEffort::High),
+            ("xhigh", ReasoningEffort::XHigh),
+        ];
+
+        for (value, expected) in cases {
+            assert_eq!(parse_reasoning_effort(Some(value)).unwrap(), Some(expected));
+        }
     }
 }

@@ -22,6 +22,8 @@ use crate::{
 use super::SearchResult;
 
 const EMBEDDING_BATCH: usize = 64;
+/// Files that must be cached for the search embedding model to load without hitting the network.
+const SEARCH_MODEL_CORE_FILES: &[&str] = &["config.json", "tokenizer.json", "model.safetensors"];
 /// Target chunk size in tokens. Smaller chunks give better granularity and
 /// reduce total tokens sent to the embedding model.
 const CHUNK_TARGET_TOKENS: usize = 500;
@@ -55,7 +57,16 @@ impl SearchPipeline {
     pub fn new(model: SearchEmbeddingModel, runner_device: &Device) -> anyhow::Result<Self> {
         let model_id = model.hf_model_id().to_string();
 
-        once_log_info(format!("Loading embedding model ({model_id})."));
+        // Quiet load when cached; on first run, surface download progress for the model files.
+        let cached =
+            crate::pipeline::hf::files_cached_locally(&model_id, "main", SEARCH_MODEL_CORE_FILES);
+        if cached {
+            once_log_info(format!("Loading embedding model ({model_id})."));
+        } else {
+            once_log_info(format!(
+                "Downloading embedding model ({model_id}); cached for future runs."
+            ));
+        }
 
         let loader = EmbeddingLoaderBuilder::new(
             EmbeddingSpecificConfig::default(),
@@ -70,7 +81,7 @@ impl SearchPipeline {
             TokenSource::CacheToken,
             &ModelDType::Auto,
             runner_device,
-            true,
+            cached,
             DeviceMapSetting::Auto(AutoDeviceMapParams::default_text()),
             None,
             None,

@@ -1,5 +1,6 @@
 //! Enum types for the OpenResponses API.
 
+pub use mistralrs_core::ReasoningEffort;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -58,21 +59,6 @@ impl ItemStatus {
             ItemStatus::Incomplete => "incomplete",
         }
     }
-}
-
-/// Reasoning effort level for models that support extended thinking
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum ReasoningEffort {
-    /// No reasoning
-    None,
-    /// Low reasoning effort
-    Low,
-    /// Medium reasoning effort (default)
-    #[default]
-    Medium,
-    /// High reasoning effort
-    High,
 }
 
 /// Truncation strategy for input
@@ -272,8 +258,19 @@ mod tests {
     }
 
     #[test]
-    fn test_reasoning_effort_default() {
-        assert_eq!(ReasoningEffort::default(), ReasoningEffort::Medium);
+    fn test_reasoning_effort_none_alias() {
+        assert_eq!(
+            serde_json::from_str::<ReasoningEffort>("\" NONE \"").unwrap(),
+            ReasoningEffort::Off
+        );
+        assert_eq!(
+            serde_json::from_str::<ReasoningEffort>("\" XHIGH \"").unwrap(),
+            ReasoningEffort::XHigh
+        );
+        assert_eq!(
+            serde_json::to_string(&ReasoningEffort::Off).unwrap(),
+            "\"off\""
+        );
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 /// Mistral LLM, https://github.com/mistralai/mistral-src
 use crate::layers_masker::CausalMaskConfig;
-use candle_core::{Device, Module, Result, Tensor};
+use candle_core::{DType, Device, Module, Result, Tensor};
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
@@ -15,8 +15,14 @@ use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     get_delta_from_lora_ab,
-    layers::{embedding, Activation, CausalMasker, MatMul, Mlp, RmsNorm, RotaryEmbedding, Sdpa},
-    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
+    layers::{
+        embedding_with_legacy_tied_uqff, Activation, CausalMasker, MatMul, Mlp, RmsNorm,
+        RotaryEmbedding, Sdpa,
+    },
+    paged_attention::{
+        AttentionImplementation, HybridPagedKvCacheConfig, ModelConfigLike, ModelConfigMetadata,
+        PagedAttention, PrefixPrefillAttentionFeatures,
+    },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         EitherCache, IsqModel, KvCache, ModelForwardContext, NormalCache, NormalCacheType,
@@ -344,20 +350,20 @@ impl DecoderLayer {
         let xs = self
             .self_attn
             .forward(&xs, attention_mask, kv_cache, ctx, layer_idx)?;
-        let xs = (xs + residual)?;
-        let residual = &xs;
-        let xs = self
-            .mlp
-            .forward(&xs.apply(&self.post_attention_layernorm)?)?;
+        let (residual, xs) = self
+            .post_attention_layernorm
+            .forward_add_rms_norm(&xs, residual)?;
+        let xs = self.mlp.forward(&xs)?;
         residual + xs
     }
 }
 
 pub struct Model {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
+    dtype: DType,
     sliding_window: Option<usize>,
     device: Device,
     cache: EitherCache,
@@ -402,11 +408,15 @@ impl Model {
             );
         }
         let mapper = normal_loading_metadata.mapper;
+        let dtype = vb_m.dtype();
 
-        let embed_tokens = embedding(
+        let embed_tokens = embedding_with_legacy_tied_uqff(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            cfg.tie_word_embeddings.then(|| {
+                mapper.set_nm_device(vb_lm_head.clone(), normal_loading_metadata.loading_isq)
+            }),
             &cfg.quantization_config,
         )?;
 
@@ -475,16 +485,7 @@ impl Model {
                 mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(
-                        embed_tokens.embeddings(),
-                        normal_loading_metadata.loading_isq,
-                    )?,
-                    None,
-                ),
-                mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
-            )?
+            embed_tokens.clone()
         };
         let cache_types = (0..cfg.num_hidden_layers)
             .map(|layer_idx| {
@@ -500,6 +501,7 @@ impl Model {
             layers,
             norm,
             lm_head,
+            dtype,
             sliding_window: cfg.sliding_window,
             device: normal_loading_metadata.real_device,
             cache: EitherCache::Normal(NormalCache::from_types(cache_types)),
@@ -525,7 +527,11 @@ impl Model {
         input_ids: &Tensor,
         ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        self.forward_embeds(input_ids, self.embed_tokens.forward(input_ids)?, ctx)
+        self.forward_embeds(
+            input_ids,
+            self.embed_tokens.embedding_forward(input_ids, self.dtype)?,
+            ctx,
+        )
     }
 
     pub fn forward_embeds(
@@ -560,7 +566,7 @@ impl Model {
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
         let xs = ctx.logits(&xs)?;
-        self.lm_head.forward(&xs)
+        ctx.lm_head(&*self.lm_head, &xs)
     }
 }
 
@@ -631,6 +637,25 @@ impl NormalModel for Model {
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
+    }
+    fn model_config(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
+        let features = self
+            .layers
+            .iter()
+            .map(|layer| PrefixPrefillAttentionFeatures {
+                has_alibi: false,
+                has_sinks: layer.self_attn.sdpa_params.sinks.is_some(),
+                has_softcap: layer.self_attn.sdpa_params.softcap.is_some(),
+                has_sliding_window: layer.self_attn.sdpa_params.sliding_window.is_some(),
+            })
+            .collect();
+        Arc::new(
+            HybridPagedKvCacheConfig::new(self.cfg.clone(), vec![true; self.layers.len()])
+                .with_prefix_prefill_attention_features(features),
+        )
+    }
+    fn supports_packed_prefill(&self) -> bool {
+        true
     }
     #[cfg(feature = "cuda")]
     fn supports_cuda_decode_graphs(&self) -> bool {

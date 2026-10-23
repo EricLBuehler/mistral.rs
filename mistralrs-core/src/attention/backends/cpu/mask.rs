@@ -11,6 +11,35 @@ impl<'a> MaskInfo<'a> {
         Self { data, dims, b, h }
     }
 
+    // Contiguous kv row for fixed (b, h, q); None when kv clamping would apply
+    // (kv dim shorter than kv_len) or the mask is a broadcast scalar.
+    #[inline(always)]
+    pub(super) fn row_with_id(
+        &self,
+        b_i: usize,
+        h_i: usize,
+        q_pos: usize,
+        kv_len: usize,
+    ) -> Option<(usize, &'a [f32])> {
+        let &kv_dim = self.dims.last()?;
+        if kv_dim < kv_len {
+            return None;
+        }
+        let base = mask_offset(self.dims, self.b, self.h, b_i, h_i, q_pos, 0)?;
+        self.data
+            .get(base..base + kv_len)
+            .map(|row| (base / kv_dim, row))
+    }
+
+    pub(super) fn row_count(&self) -> usize {
+        self.dims
+            .get(..self.dims.len().saturating_sub(1))
+            .unwrap_or_default()
+            .iter()
+            .copied()
+            .fold(1usize, usize::saturating_mul)
+    }
+
     #[inline(always)]
     pub(super) fn value(&self, b_i: usize, h_i: usize, q_pos: usize, kv_pos: usize) -> f32 {
         if let Some(idx) = mask_offset(self.dims, self.b, self.h, b_i, h_i, q_pos, kv_pos) {

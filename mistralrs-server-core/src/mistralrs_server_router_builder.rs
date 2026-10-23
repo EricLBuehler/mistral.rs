@@ -3,8 +3,9 @@
 use anyhow::Result;
 use axum::{
     extract::DefaultBodyLimit,
-    http::{self, header::HeaderName, Method},
+    http::{self, header::HeaderName, HeaderMap, Method, StatusCode, Uri},
     middleware,
+    response::IntoResponse,
     routing::{get, post},
     Extension, Router,
 };
@@ -15,7 +16,7 @@ use utoipa_swagger_ui::SwaggerUi;
 #[cfg(feature = "swagger-ui")]
 use crate::openapi_doc::get_openapi_doc;
 use crate::{
-    anthropic::{anthropic_count_tokens, anthropic_messages},
+    anthropic::{anthropic_count_tokens, anthropic_error_response, anthropic_messages},
     approvals::{resolve_agent_approval, ApprovalBroker},
     chat_completion::chatcompletions,
     completions::completions,
@@ -24,12 +25,16 @@ use crate::{
         delete_file, get_container_file, get_container_file_content, get_file, get_file_content,
         list_container_files, list_files, upload_file,
     },
+    handler_core::{openai_error_response, ApiError, ApiErrorKind},
     handlers::{
         calibration_apply, calibration_start, calibration_status, delete_session, get_model_status,
         get_session, health, models, put_session, re_isq, reload_model, system_doctor, system_info,
         tune_model, unload_model,
     },
     image_generation::image_generation,
+    lora_adapters::{
+        list_lora_adapters, load_lora_adapter, unload_lora_adapter, LoraAdapterApiConfig,
+    },
     metrics::{metrics, metrics_disabled, observe_http, ObservabilityConfig, ObservabilityState},
     responses::{cancel_response, create_response, delete_response, get_response},
     route_registry::{
@@ -37,10 +42,12 @@ use crate::{
         CALIBRATION_APPLY_ROUTE, CALIBRATION_START_ROUTE, CALIBRATION_STATUS_ROUTE,
         CANCEL_RESPONSE_ROUTE, CHAT_COMPLETIONS_ROUTE, COMPLETIONS_ROUTE, CONTAINER_FILES_ROUTE,
         CONTAINER_FILE_CONTENT_ROUTE, CONTAINER_FILE_ROUTE, EMBEDDINGS_ROUTE, FILES_ROUTE,
-        FILE_CONTENT_ROUTE, FILE_ROUTE, HEALTH_ROUTE, IMAGE_GENERATION_ROUTE, MODELS_ROUTE,
-        MODEL_STATUS_ROUTE, RELOAD_MODEL_ROUTE, RESPONSES_ROUTE, RESPONSE_ROUTE, RE_ISQ_ROUTE,
-        ROOT_ROUTE, SESSION_ROUTE, SKILLS_ROUTE, SKILL_VERSIONS_ROUTE, SPEECH_GENERATION_ROUTE,
-        SYSTEM_DOCTOR_ROUTE, SYSTEM_INFO_ROUTE, TUNE_MODEL_ROUTE, UNLOAD_MODEL_ROUTE,
+        FILE_CONTENT_ROUTE, FILE_ROUTE, HEALTH_ROUTE, IMAGE_GENERATION_ROUTE,
+        LIST_LORA_ADAPTERS_ROUTE, LOAD_LORA_ADAPTER_ROUTE, MODELS_ROUTE, MODEL_STATUS_ROUTE,
+        RELOAD_MODEL_ROUTE, RESPONSES_ROUTE, RESPONSE_ROUTE, RE_ISQ_ROUTE, ROOT_ROUTE,
+        SESSION_ROUTE, SKILLS_ROUTE, SKILL_VERSIONS_ROUTE, SPEECH_GENERATION_ROUTE,
+        SYSTEM_DOCTOR_ROUTE, SYSTEM_INFO_ROUTE, TUNE_MODEL_ROUTE, UNLOAD_LORA_ADAPTER_ROUTE,
+        UNLOAD_MODEL_ROUTE,
     },
     skills::{list_skill_versions, list_skills, upload_skill, upload_skill_version, SkillStore},
     speech_generation::speech_generation,
@@ -60,6 +67,8 @@ pub struct AgenticDefaults {
 // NOTE(EricLBuehler): Accept up to 50mb input
 const N_INPUT_SIZE: usize = 50;
 const MB_TO_B: usize = 1024 * 1024; // 1024 kb in a mb
+const ROUTE_NOT_FOUND_MESSAGE: &str = "The requested API route was not found.";
+const METHOD_NOT_ALLOWED_MESSAGE: &str = "The requested HTTP method is not allowed for this route.";
 
 /// This is the axum default request body limit for the router. Accept up to 50mb input.
 pub const DEFAULT_MAX_BODY_LIMIT: usize = N_INPUT_SIZE * MB_TO_B;
@@ -108,6 +117,7 @@ pub struct MistralRsServerRouterBuilder {
     agentic_defaults: AgenticDefaults,
     skills_dir: Option<std::path::PathBuf>,
     observability: ObservabilityConfig,
+    lora_adapter_api: LoraAdapterApiConfig,
 }
 
 impl Default for MistralRsServerRouterBuilder {
@@ -124,6 +134,7 @@ impl Default for MistralRsServerRouterBuilder {
             agentic_defaults: AgenticDefaults::default(),
             skills_dir: None,
             observability: ObservabilityConfig::default(),
+            lora_adapter_api: LoraAdapterApiConfig::from_env(),
         }
     }
 }
@@ -250,6 +261,12 @@ impl MistralRsServerRouterBuilder {
         self
     }
 
+    /// Configures runtime LoRA management routes and their allowed adapter root.
+    pub fn with_lora_adapter_api_config(mut self, config: LoraAdapterApiConfig) -> Self {
+        self.lora_adapter_api = config;
+        self
+    }
+
     /// Builds the configured axum router.
     ///
     /// ### Examples
@@ -266,6 +283,7 @@ impl MistralRsServerRouterBuilder {
         if self.observability.metrics {
             crate::metrics::install_prometheus_recorder();
         }
+        let lora_adapter_api = self.lora_adapter_api.prepare()?;
         let mistralrs = self.mistralrs.ok_or_else(|| {
             anyhow::anyhow!("`mistralrs` instance must be set. Use `with_mistralrs`.")
         })?;
@@ -284,6 +302,7 @@ impl MistralRsServerRouterBuilder {
             self.agentic_defaults,
             self.skills_dir,
             self.observability,
+            lora_adapter_api,
         )?;
 
         #[cfg(feature = "swagger-ui")]
@@ -313,6 +332,7 @@ fn init_router(
     agentic_defaults: AgenticDefaults,
     skills_dir: Option<std::path::PathBuf>,
     observability: ObservabilityConfig,
+    lora_adapter_api: LoraAdapterApiConfig,
 ) -> Result<Router> {
     let allow_origin = if let Some(origins) = allowed_origins {
         let parsed_origins: Result<Vec<_>, _> = origins.into_iter().map(|o| o.parse()).collect();
@@ -343,11 +363,15 @@ fn init_router(
             HeaderName::from_static("anthropic-version"),
             HeaderName::from_static("anthropic-beta"),
             HeaderName::from_static("x-request-id"),
+            HeaderName::from_static("request-id"),
         ])
-        .expose_headers([HeaderName::from_static("x-request-id")])
+        .expose_headers([
+            HeaderName::from_static("x-request-id"),
+            HeaderName::from_static("request-id"),
+        ])
         .allow_origin(allow_origin);
 
-    let router = Router::new()
+    let mut router = Router::new()
         .route(CHAT_COMPLETIONS_ROUTE.path, post(chatcompletions))
         .route(ANTHROPIC_MESSAGES_ROUTE.path, post(anthropic_messages))
         .route(
@@ -357,6 +381,7 @@ fn init_router(
         .route(COMPLETIONS_ROUTE.path, post(completions))
         .route(EMBEDDINGS_ROUTE.path, post(embeddings))
         .route(MODELS_ROUTE.path, get(models))
+        .route(LIST_LORA_ADAPTERS_ROUTE.path, get(list_lora_adapters))
         .route(UNLOAD_MODEL_ROUTE.path, post(unload_model))
         .route(RELOAD_MODEL_ROUTE.path, post(reload_model))
         .route(MODEL_STATUS_ROUTE.path, post(get_model_status))
@@ -399,13 +424,186 @@ fn init_router(
         .route(
             SESSION_ROUTE.path,
             get(get_session).put(put_session).delete(delete_session),
-        )
+        );
+
+    if lora_adapter_api.enabled() {
+        if let Some(root) = lora_adapter_api.allowed_root() {
+            tracing::warn!(
+                adapter_root = %root.display(),
+                "runtime LoRA adapter management is enabled; authorized clients can load adapter files from this root"
+            );
+        } else {
+            tracing::warn!(
+                "runtime LoRA adapter management is enabled without an adapter root; authorized clients can load any adapter path readable by the server"
+            );
+        }
+        router = router
+            .route(LOAD_LORA_ADAPTER_ROUTE.path, post(load_lora_adapter))
+            .route(UNLOAD_LORA_ADAPTER_ROUTE.path, post(unload_lora_adapter));
+    }
+
+    let router = router
+        .fallback(api_route_not_found)
+        .method_not_allowed_fallback(api_method_not_allowed)
         .layer(cors_layer)
         .layer(DefaultBodyLimit::max(router_max_body_limit))
         .layer(Extension(agentic_defaults.approval_broker.clone()))
         .layer(Extension(skill_store))
         .layer(Extension(agentic_defaults))
+        .layer(Extension(lora_adapter_api))
         .with_state(state);
 
     Ok(router)
+}
+
+fn path_is_in_namespace(path: &str, namespace: &str) -> bool {
+    path == namespace
+        || path
+            .strip_prefix(namespace)
+            .is_some_and(|suffix| suffix.starts_with('/'))
+}
+
+fn is_anthropic_api_request(uri: &Uri, headers: &HeaderMap) -> bool {
+    if path_is_in_namespace(uri.path(), ANTHROPIC_MESSAGES_ROUTE.path) {
+        return true;
+    }
+    if !path_is_in_namespace(uri.path(), SKILLS_ROUTE.path) {
+        return false;
+    }
+    headers.contains_key("anthropic-version")
+        || headers.contains_key("anthropic-beta")
+        || uri.query().is_some_and(|query| {
+            url::form_urlencoded::parse(query.as_bytes()).any(|(key, _)| key == "source")
+        })
+}
+
+fn is_versioned_api_path(path: &str) -> bool {
+    path == "/v1" || path.starts_with("/v1/")
+}
+
+fn api_protocol_error(
+    uri: &Uri,
+    headers: &HeaderMap,
+    status: StatusCode,
+    error: ApiError,
+) -> axum::response::Response {
+    let mut response = if is_anthropic_api_request(uri, headers) {
+        anthropic_error_response(error)
+    } else {
+        openai_error_response(error)
+    };
+    *response.status_mut() = status;
+    response
+}
+
+async fn api_route_not_found(uri: Uri, headers: HeaderMap) -> axum::response::Response {
+    if !is_versioned_api_path(uri.path()) {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    api_protocol_error(
+        &uri,
+        &headers,
+        StatusCode::NOT_FOUND,
+        ApiError::new(
+            ApiErrorKind::NotFound,
+            ROUTE_NOT_FOUND_MESSAGE,
+            Some("not_found"),
+            None,
+        ),
+    )
+}
+
+async fn api_method_not_allowed(uri: Uri, headers: HeaderMap) -> axum::response::Response {
+    if !is_versioned_api_path(uri.path()) {
+        return StatusCode::METHOD_NOT_ALLOWED.into_response();
+    }
+
+    api_protocol_error(
+        &uri,
+        &headers,
+        StatusCode::METHOD_NOT_ALLOWED,
+        ApiError::new(
+            ApiErrorKind::InvalidRequest,
+            METHOD_NOT_ALLOWED_MESSAGE,
+            Some("method_not_allowed"),
+            None,
+        ),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::body::to_bytes;
+
+    use super::*;
+
+    async fn response_body(response: axum::response::Response) -> serde_json::Value {
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
+
+    #[tokio::test]
+    async fn unknown_openai_routes_use_openai_errors() {
+        let response = api_route_not_found(Uri::from_static("/v1/unknown"), HeaderMap::new()).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = response_body(response).await;
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+        assert_eq!(body["error"]["code"], "not_found");
+    }
+
+    #[tokio::test]
+    async fn unknown_anthropic_message_routes_use_anthropic_errors() {
+        let response =
+            api_route_not_found(Uri::from_static("/v1/messages/unknown"), HeaderMap::new()).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = response_body(response).await;
+        assert_eq!(body["type"], "error");
+        assert_eq!(body["error"]["type"], "not_found_error");
+    }
+
+    #[tokio::test]
+    async fn wrong_openai_methods_use_openai_errors() {
+        let response =
+            api_method_not_allowed(Uri::from_static("/v1/chat/completions"), HeaderMap::new())
+                .await;
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        let body = response_body(response).await;
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+        assert_eq!(body["error"]["code"], "method_not_allowed");
+    }
+
+    #[tokio::test]
+    async fn wrong_anthropic_message_methods_use_anthropic_errors() {
+        let response =
+            api_method_not_allowed(Uri::from_static("/v1/messages"), HeaderMap::new()).await;
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        let body = response_body(response).await;
+        assert_eq!(body["type"], "error");
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+    }
+
+    #[tokio::test]
+    async fn anthropic_skill_fallbacks_use_anthropic_errors() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "anthropic-version",
+            "2023-06-01".parse().expect("valid header value"),
+        );
+        let response = api_method_not_allowed(Uri::from_static("/v1/skills"), headers).await;
+        assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+        let body = response_body(response).await;
+        assert_eq!(body["type"], "error");
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+
+        let response = api_route_not_found(
+            Uri::from_static("/v1/skills/unknown?source=custom"),
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = response_body(response).await;
+        assert_eq!(body["type"], "error");
+        assert_eq!(body["error"]["type"], "not_found_error");
+    }
 }

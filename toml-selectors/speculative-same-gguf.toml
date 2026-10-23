@@ -1,4 +1,5 @@
 [model]
+kind = "gguf"
 tok_model_id = "mistralai/Mistral-7B-Instruct-v0.1"
 quantized_model_id = "TheBloke/Mistral-7B-Instruct-v0.1-GGUF"
 quantized_filename = "mistral-7b-instruct-v0.1.Q2_K.gguf"
@@ -7,6 +8,7 @@ quantized_filename = "mistral-7b-instruct-v0.1.Q2_K.gguf"
 gamma = 32
 
 [speculative.draft_model]
+kind = "gguf"
 tok_model_id = "mistralai/Mistral-7B-Instruct-v0.1"
 quantized_model_id = "TheBloke/Mistral-7B-Instruct-v0.1-GGUF"
 quantized_filename = "mistral-7b-instruct-v0.1.Q2_K.gguf"

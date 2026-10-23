@@ -3,9 +3,9 @@ use super::isq::{
     WeightLoadingState,
 };
 use super::{
-    get_model_paths, get_xlora_paths, AdapterKind, AnyMoePipelineMixin, CacheManagerMixin,
-    EitherCache, ForwardInputsResult, GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin,
-    ModelCategory, ModelKind, ModelPaths, PreProcessingMixin, TokenSource,
+    get_model_paths, AnyMoePipelineMixin, CacheManagerMixin, EitherCache, ForwardInputsResult,
+    GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
+    PreProcessingMixin, TokenSource,
 };
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::{self, DeviceMapper};
@@ -17,7 +17,7 @@ use crate::embedding_normal_model_loader_sharded;
 use crate::get_embedding_paths;
 use crate::paged_attention::AttentionImplementation;
 use crate::pipeline::loaders::auto_device_map;
-use crate::pipeline::loaders::QuantizationConfigShim;
+use crate::pipeline::loaders::{AutoDeviceMapQuantization, QuantizationConfigShim};
 use crate::pipeline::sampling::sample_and_add_toks;
 use crate::pipeline::EmbeddingLoaderType;
 use crate::pipeline::EmbeddingModel;
@@ -80,7 +80,6 @@ pub struct EmbeddingLoader {
     revision: RwLock<Option<String>>,
     from_uqff: RwLock<Option<Vec<PathBuf>>>,
     hf_cache_path: Option<PathBuf>,
-    lora_adapter_ids: Option<Vec<String>>,
     load_context: EmbeddingLoadContext,
 }
 
@@ -108,7 +107,6 @@ pub struct EmbeddingLoaderBuilder {
     kind: ModelKind,
     tokenizer_json: Option<String>,
     hf_cache_path: Option<PathBuf>,
-    lora_adapter_ids: Option<Vec<String>>,
     load_context: EmbeddingLoadContext,
 }
 
@@ -129,26 +127,19 @@ impl EmbeddingLoaderBuilder {
         tokenizer_json: Option<String>,
         model_id: Option<String>,
     ) -> Self {
+        let hf_cache_path = config.hf_cache_path.clone();
         Self {
             config,
             tokenizer_json,
             model_id,
             kind: ModelKind::Normal,
-            hf_cache_path: None,
+            hf_cache_path,
             ..Default::default()
         }
     }
 
     pub fn hf_cache_path(mut self, hf_cache_path: PathBuf) -> Self {
         self.hf_cache_path = Some(hf_cache_path);
-        self
-    }
-
-    pub fn with_lora(mut self, lora_adapter_ids: Vec<String>) -> Self {
-        self.kind = ModelKind::Adapter {
-            adapter: AdapterKind::Lora,
-        };
-        self.lora_adapter_ids = Some(lora_adapter_ids);
         self
     }
 
@@ -173,7 +164,6 @@ impl EmbeddingLoaderBuilder {
             revision: RwLock::new(None),
             from_uqff: RwLock::new(None),
             hf_cache_path: self.hf_cache_path,
-            lora_adapter_ids: self.lora_adapter_ids,
             load_context: self.load_context,
         })
     }
@@ -219,7 +209,7 @@ impl Loader for EmbeddingLoader {
             *self.from_uqff.write().unwrap() = Some(get_uqff_paths!(&from_uqff, self, silent));
         }
         self.load_model_from_path(
-            &paths?,
+            paths?.as_ref(),
             dtype,
             device,
             silent,
@@ -232,7 +222,7 @@ impl Loader for EmbeddingLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_path(
         &self,
-        paths: &Box<dyn ModelPaths>,
+        paths: &dyn ModelPaths,
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
@@ -241,11 +231,19 @@ impl Loader for EmbeddingLoader {
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
-        let config = std::fs::read_to_string(paths.get_config_filename())?;
+        let config = super::loaders::load_model_config(
+            paths.get_config_filename(),
+            self.config.from_uqff.is_none(),
+        )?;
+        let config = if self.config.from_uqff.is_some() {
+            super::isq::sanitize_quantized_weight_source_config(&config)?
+        } else {
+            config
+        };
 
         if paged_attn_config.is_some() {
             warn!("PagedAttention is not supported for embedding models, disabling it.");
-            paged_attn_config = None;
+            super::disable_unsupported_paged_attention(&mut paged_attn_config)?;
         }
 
         debug!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
@@ -301,6 +299,7 @@ impl Loader for EmbeddingLoader {
             let (layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
                 if let Some(reader) = uqff_reader.as_ref() {
                     let weight_pack_factor = reader.pack_factor(dtype)?;
+                    let quantization = AutoDeviceMapQuantization::uqff(reader);
                     let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
                         &config,
                         dtype,
@@ -311,6 +310,7 @@ impl Loader for EmbeddingLoader {
                         &config,
                         dtype,
                         weight_pack_factor,
+                        Some(&quantization),
                         None,
                     )?;
                     let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
@@ -320,7 +320,10 @@ impl Loader for EmbeddingLoader {
                         layer_sizes_sum + non_mapped_size_in_bytes,
                     )
                 } else if let Some(isq) = in_situ_quant {
-                    let weight_pack_factor = isq.pack_factor(dtype);
+                    let quantization =
+                        AutoDeviceMapQuantization::isq(Some(isq), self.config.topology.as_ref());
+                    let weight_pack_factor =
+                        quantization.conservative_pack_factor(dtype, isq.pack_factor(dtype));
                     let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
                         &config,
                         dtype,
@@ -331,6 +334,7 @@ impl Loader for EmbeddingLoader {
                         &config,
                         dtype,
                         weight_pack_factor,
+                        Some(&quantization),
                         None,
                     )?;
                     let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
@@ -340,28 +344,78 @@ impl Loader for EmbeddingLoader {
                         layer_sizes_sum + non_mapped_size_in_bytes,
                     )
                 } else {
-                    // Be sure to get the weight pack factor here; we might be loading a prequantized model.
-                    let weight_pack_factor =
-                        QuantizationConfigShim::get_quant_config_pack_factor(&config, dtype)?;
-                    let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
-                        &config,
-                        dtype,
-                        weight_pack_factor,
-                        None,
-                    )?;
-                    let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
-                        &config,
-                        dtype,
-                        weight_pack_factor,
-                        None,
-                    )?;
-                    let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
-                    (
-                        layer_sizes_in_bytes,
-                        non_mapped_size_in_bytes,
-                        layer_sizes_sum + non_mapped_size_in_bytes,
-                    )
+                    let inventory = if self.config.topology.is_none() {
+                        let num_layers = self.inner.num_layers(&config)?;
+                        crate::pipeline::loaders::checkpoint_device_map_sizes(
+                            paths.get_weight_filenames(),
+                            num_layers,
+                            dtype,
+                            |name| self.inner.checkpoint_layer_index(&config, name),
+                        )?
+                    } else {
+                        None
+                    };
+                    if let Some(inventory) = inventory {
+                        info!(
+                            model_mib = inventory.total_model_size_in_bytes / (1024 * 1024),
+                            "Using checkpoint tensor inventory for automatic device mapping"
+                        );
+                        (
+                            inventory.layer_sizes_in_bytes,
+                            inventory.non_mapped_size_in_bytes,
+                            inventory.total_model_size_in_bytes,
+                        )
+                    } else {
+                        // Be sure to get the weight pack factor here; we might be loading a prequantized model.
+                        let weight_pack_factor =
+                            QuantizationConfigShim::get_quant_config_pack_factor(&config, dtype)?;
+                        let quantization =
+                            self.config.topology.as_ref().map(|topology| {
+                                AutoDeviceMapQuantization::isq(None, Some(topology))
+                            });
+                        let weight_pack_factor =
+                            quantization
+                                .as_ref()
+                                .map_or(weight_pack_factor, |quantization| {
+                                    quantization.conservative_pack_factor(dtype, weight_pack_factor)
+                                });
+                        let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
+                            &config,
+                            dtype,
+                            weight_pack_factor,
+                            None,
+                        )?;
+                        let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
+                            &config,
+                            dtype,
+                            weight_pack_factor,
+                            quantization.as_ref(),
+                            None,
+                        )?;
+                        let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
+                        (
+                            layer_sizes_in_bytes,
+                            non_mapped_size_in_bytes,
+                            layer_sizes_sum + non_mapped_size_in_bytes,
+                        )
+                    }
                 };
+
+            let module_bytes = paths
+                .get_modules()
+                .context("Embedding models require the `modules.json` file.")?
+                .iter()
+                .try_fold(0usize, |total, module| -> Result<usize> {
+                    total
+                        .checked_add(module.runtime_size(dtype)?)
+                        .context("Embedding module size overflow")
+                })?;
+            let non_mapped_size_in_bytes = non_mapped_size_in_bytes
+                .checked_add(module_bytes)
+                .context("Embedding non-mapped size overflow")?;
+            let total_model_size_in_bytes = total_model_size_in_bytes
+                .checked_add(module_bytes)
+                .context("Embedding total size overflow")?;
 
             let new = auto_device_map::get_device_layers(
                 &*self.inner,
@@ -373,7 +427,7 @@ impl Loader for EmbeddingLoader {
                 &available_devices,
                 dtype,
                 &params,
-                paged_attn_config.as_ref(),
+                paged_attn_config.as_mut(),
             )?;
             mapper = DeviceMapSetting::Map(new);
         }
@@ -501,20 +555,21 @@ impl Loader for EmbeddingLoader {
         );
 
         let (model, tracker) = if use_distributed {
-            let (mapper, sharded_vb) = distributed::prepare_distributed_mapper(
-                dtype,
-                &device,
-                &available_devices,
-                tensor_parallelism.world_size(),
-                silent,
-                &config,
-                loading_isq,
-                self.config.from_uqff.is_some(),
-                self.config.write_uqff.is_some(),
-                IsqOrganization::Default,
-                &*self.inner,
-                paths.as_ref(),
-            )?;
+            let (mapper, sharded_vb) =
+                distributed::prepare_distributed_mapper(distributed::DistributedMapperConfig {
+                    dtype,
+                    device: &device,
+                    available_devices: &available_devices,
+                    global_world_size_override: tensor_parallelism.world_size(),
+                    silent,
+                    config: &config,
+                    loading_isq,
+                    from_uqff: self.config.from_uqff.is_some(),
+                    write_uqff: self.config.write_uqff.is_some(),
+                    organization: IsqOrganization::Default,
+                    model: &*self.inner,
+                    weights: distributed::DistributedWeightSource::Paths(paths),
+                })?;
             let sharded_vb = if let Some(reader) = uqff_reader.clone() {
                 sharded_vb.with_uqff_reader(reader)
             } else {
@@ -560,6 +615,8 @@ impl Loader for EmbeddingLoader {
 
         let tokenizer = get_tokenizer(paths.get_tokenizer_filename(), None)?;
 
+        plan.validate_tracked_selection(&tracker.get())?;
+
         let imatrix_map = if plan.wants_imatrix {
             let drive = super::isq_flow::EmbeddingCalibrationDrive(&*model);
             Some(super::isq_flow::resolve_imatrix_map(
@@ -600,6 +657,7 @@ impl Loader for EmbeddingLoader {
             let full_ser = UqffFullSer {
                 tokenizer: &tokenizer,
                 template_filename: paths.get_template_filename(),
+                effective_chat_template: None,
                 generation_config: paths.get_gen_conf_filename(),
                 config: config.clone(),
                 processor_filename: &None,
@@ -613,10 +671,17 @@ impl Loader for EmbeddingLoader {
                 base_model: write_uqff.base_model.clone(),
                 repo_id: write_uqff.repo_id.clone(),
                 layers,
+                quantize_predicates: plan.uqff_quantize_predicates.clone(),
                 residual: model.residual_tensors(),
                 full_ser,
                 imatrix: imatrix_map.unwrap_or_default(),
             })?;
+        }
+
+        if plan.immediate_isq_installed {
+            for module in tracker.get().clone() {
+                module.ct.resolve()?;
+            }
         }
 
         let has_causal_attention = self.inner.has_causal_attention(&config)?;
@@ -648,11 +713,15 @@ impl Loader for EmbeddingLoader {
                 sliding_window: None,
                 cache_config: None,
                 cache_engine: None,
+                memory_plan: None,
+                #[cfg(feature = "cuda")]
+                runtime_memory_reservation: None,
                 model_metadata: None,
                 modalities: Modalities {
                     input: vec![SupportedModality::Text],
                     output: vec![SupportedModality::Embedding],
                 },
+                loaded_for_uqff_write: self.config.write_uqff.is_some(),
             }),
             mapper: pipeline_mapper,
             modules,
@@ -692,7 +761,12 @@ impl IsqPipelineMixin for EmbeddingPipeline {
             "Re-quantizing {} layers to {dtype}.",
             self.tracked_modules.len()
         );
-        super::isq_flow::requantize_and_swap(&self.tracked_modules, dtype, |_| dtype, &|_| None)
+        super::isq_flow::requantize_and_swap(
+            &self.tracked_modules,
+            dtype,
+            |module| module.default_type(dtype),
+            &|_| None,
+        )
     }
 
     fn begin_calibration(&mut self) -> Result<()> {
@@ -710,13 +784,16 @@ impl IsqPipelineMixin for EmbeddingPipeline {
         super::isq_flow::apply_calibration(
             &self.tracked_modules,
             &self.source_weight_files,
+            None,
             save_cimatrix.as_deref(),
         )
     }
 }
 
 impl CacheManagerMixin for EmbeddingPipeline {
-    fn clone_in_cache(&self, _seqs: &mut [&mut Sequence]) {}
+    fn clone_in_cache(&self, _seqs: &mut [&mut Sequence]) -> candle_core::Result<()> {
+        Ok(())
+    }
     fn clone_out_cache(&self, _seqs: &mut [&mut Sequence]) {}
     fn set_none_cache(
         &self,
@@ -724,7 +801,8 @@ impl CacheManagerMixin for EmbeddingPipeline {
         _reset_non_granular: bool,
         _modify_draft_cache: bool,
         _load_preallocated_cache: bool,
-    ) {
+    ) -> candle_core::Result<()> {
+        Ok(())
     }
     fn cache(&self) -> &EitherCache {
         unreachable!()

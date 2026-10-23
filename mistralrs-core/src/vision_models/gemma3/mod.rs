@@ -19,6 +19,9 @@ use crate::{
         EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
     },
     utils::unvarbuilder::UnVarBuilder,
+    vision_models::multimodal_layout::{
+        MultimodalEncoderKey, MultimodalEncoderOutputs, PackedMultimodalLayout,
+    },
     AnyMoeConfig, AnyMoeExpertType,
 };
 
@@ -47,20 +50,27 @@ impl Gemma3Model {
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         match cfg {
-            Gemma3Config::Text(text_cfg) => Ok(Self {
-                language_model: TextModel::new(
-                    text_cfg,
-                    vb,
-                    is_gptx,
-                    normal_loading_metadata,
-                    attention_mechanism,
-                    None,
-                )?,
-                multi_modal_projector: None,
-                vision_tower: None,
-                cfg: cfg.clone(),
-                encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
-            }),
+            Gemma3Config::Text(text_cfg) => {
+                let vb = if text_cfg.use_language_model_prefix {
+                    vb.pp("language_model")
+                } else {
+                    vb
+                };
+                Ok(Self {
+                    language_model: TextModel::new(
+                        text_cfg,
+                        vb,
+                        is_gptx,
+                        normal_loading_metadata,
+                        attention_mechanism,
+                        None,
+                    )?,
+                    multi_modal_projector: None,
+                    vision_tower: None,
+                    cfg: cfg.clone(),
+                    encoder_cache: Arc::new(Mutex::new(EncoderCacheManager::new(32))),
+                })
+            }
             Gemma3Config::WithVision {
                 text_config,
                 vision_config,
@@ -68,15 +78,18 @@ impl Gemma3Model {
                 mm_tokens_per_image: _,
             } => {
                 assert!(*image_token_index < text_config.vocab_size);
+                let non_text_vb = vb.clone().without_lora_registry();
                 Ok(Self {
                     multi_modal_projector: Some(Gemma3MultiModalProjector::new(
                         cfg,
-                        vb.pp("multi_modal_projector")
+                        non_text_vb
+                            .pp("multi_modal_projector")
                             .set_device(normal_loading_metadata.real_device.clone()),
                     )?),
                     vision_tower: Some(SiglipVisionTransformer::new(
                         vision_config,
-                        vb.pp("vision_tower")
+                        non_text_vb
+                            .pp("vision_tower")
                             .pp("vision_model")
                             .set_device(normal_loading_metadata.real_device.clone()),
                     )?),
@@ -100,6 +113,7 @@ impl Gemma3Model {
         input_ids: &Tensor,
         pixel_values: Option<Tensor>,
         image_hashes: &[u64],
+        packed_layout: Option<&PackedMultimodalLayout>,
         ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let mut input_embeds = self.language_model.embed_tokens(input_ids)?;
@@ -137,17 +151,40 @@ impl Gemma3Model {
                     let vision_outputs = vision_tower.forward(pv, &AttentionMask::None, None)?;
                     Ok(vec![multi_modal_projector.forward(&vision_outputs)?])
                 },
-            )?[0]
-                .clone();
+            )?
+            .remove(0);
 
-            let mut x_flat = input_embeds.flatten_all()?;
-            let src_flat = image_features.flatten_all()?;
-
-            let current_vals = x_flat.gather(&indices, 0)?;
-            let diff = (src_flat - current_vals)?;
-            x_flat = x_flat.scatter_add(&indices, &diff, 0)?;
-
-            input_embeds = x_flat.reshape(input_embeds.shape())?;
+            if let Some(layout) = packed_layout {
+                if image_features.dim(0)? != image_hashes.len() {
+                    candle_core::bail!(
+                        "Gemma 3 packed input has {} image outputs but {} image hashes",
+                        image_features.dim(0)?,
+                        image_hashes.len()
+                    );
+                }
+                let encoder_outputs = image_hashes
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .map(|(index, hash)| {
+                        Ok((
+                            MultimodalEncoderKey {
+                                kind: crate::paged_attention::block_hash::MultimodalKind::Image,
+                                hash,
+                            },
+                            vec![image_features.get(index)?],
+                        ))
+                    })
+                    .collect::<Result<MultimodalEncoderOutputs>>()?;
+                input_embeds = layout.splice_embeddings(&input_embeds, &encoder_outputs)?;
+            } else {
+                let mut x_flat = input_embeds.flatten_all()?;
+                let src_flat = image_features.flatten_all()?;
+                let current_vals = x_flat.gather(&indices, 0)?;
+                let diff = (src_flat - current_vals)?;
+                x_flat = x_flat.scatter_add(&indices, &diff, 0)?;
+                input_embeds = x_flat.reshape(input_embeds.shape())?;
+            }
         };
         let res = self
             .language_model
@@ -159,6 +196,12 @@ impl Gemma3Model {
 impl IsqModel for Gemma3Model {
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         match &self.cfg {
+            Gemma3Config::Text(config) if config.use_language_model_prefix => {
+                let uvb = UnVarBuilder::new();
+                uvb.pp("language_model")
+                    .extend(self.language_model.residual_tensors());
+                uvb.to_safetensors()
+            }
             Gemma3Config::Text(_) => self.language_model.residual_tensors(),
             Gemma3Config::WithVision { .. } => {
                 let vision_tower = self.vision_tower.as_ref().unwrap();
@@ -179,8 +222,10 @@ impl IsqModel for Gemma3Model {
     }
 }
 
+#[derive(Default)]
 pub struct Gemma3SpecificArgs {
     pub image_hashes: Vec<u64>,
+    pub(crate) packed_layout: Option<PackedMultimodalLayout>,
 }
 
 impl crate::speculative::SpeculativeTargetMixin for Gemma3Model {}
@@ -188,6 +233,14 @@ impl crate::speculative::SpeculativeTargetMixin for Gemma3Model {}
 impl crate::block_diffusion::BlockDiffusionMixin for Gemma3Model {}
 
 impl MultimodalModel for Gemma3Model {
+    fn supports_packed_prefill(&self) -> bool {
+        self.language_model.supports_packed_prefill()
+    }
+
+    fn supports_mixed_media_batches(&self) -> bool {
+        true
+    }
+
     fn forward(
         &self,
         input_ids: &Tensor,
@@ -195,15 +248,22 @@ impl MultimodalModel for Gemma3Model {
         model_specific_args: Box<dyn std::any::Any>,
         ctx: &mut ModelForwardContext<'_>,
     ) -> candle_core::Result<Tensor> {
-        let Gemma3SpecificArgs { image_hashes } = *model_specific_args
+        let Gemma3SpecificArgs {
+            image_hashes,
+            packed_layout,
+        } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Gemma3SpecificArgs`");
-        self.forward(input_ids, pixel_values, &image_hashes, ctx)
+        self.forward(
+            input_ids,
+            pixel_values,
+            &image_hashes,
+            packed_layout.as_ref(),
+            ctx,
+        )
     }
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn std::any::Any> {
-        Box::new(Gemma3SpecificArgs {
-            image_hashes: vec![],
-        })
+        Box::new(Gemma3SpecificArgs::default())
     }
     #[cfg(feature = "cuda")]
     fn supports_cuda_decode_graphs(&self) -> bool {
@@ -221,18 +281,12 @@ impl MultimodalModel for Gemma3Model {
     fn config(&self) -> &ModelConfigMetadata {
         self.language_model.config()
     }
-    fn encoder_cache_counters(
-        &self,
-    ) -> Option<(
-        Arc<std::sync::atomic::AtomicUsize>,
-        Arc<std::sync::atomic::AtomicUsize>,
-    )> {
-        Some(
-            self.encoder_cache
-                .lock()
-                .expect("encoder cache poisoned")
-                .counters(),
-        )
+    fn encoder_cache(&self) -> Option<&Mutex<EncoderCacheManager>> {
+        if matches!(&self.cfg, Gemma3Config::WithVision { .. }) {
+            Some(&self.encoder_cache)
+        } else {
+            None
+        }
     }
 }
 

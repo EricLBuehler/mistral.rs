@@ -109,7 +109,7 @@ impl Loader for DiffusionLoader {
             })))
         };
         self.load_model_from_path(
-            &paths?,
+            paths?.as_ref(),
             dtype,
             device,
             silent,
@@ -122,7 +122,7 @@ impl Loader for DiffusionLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_path(
         &self,
-        paths: &Box<dyn ModelPaths>,
+        paths: &dyn ModelPaths,
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
@@ -132,7 +132,6 @@ impl Loader for DiffusionLoader {
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
         let paths = &paths
-            .as_ref()
             .as_any()
             .downcast_ref::<DiffusionModelPaths>()
             .expect("Path downcast failed.")
@@ -149,7 +148,7 @@ impl Loader for DiffusionLoader {
         if paged_attn_config.is_some() {
             warn!("PagedAttention is not supported for Diffusion models, disabling it.");
 
-            paged_attn_config = None;
+            super::disable_unsupported_paged_attention(&mut paged_attn_config)?;
         }
 
         if crate::using_flash_attn() {
@@ -218,6 +217,7 @@ impl Loader for DiffusionLoader {
                         real_device: device.clone(),
                         multi_progress: Arc::new(new_multi_progress()),
                         matformer_slicing_config: None,
+                        rope_pairing: None,
                     },
                     attention_mechanism,
                     silent,
@@ -243,11 +243,15 @@ impl Loader for DiffusionLoader {
                 sliding_window: None,
                 cache_config: None,
                 cache_engine: None,
+                memory_plan: None,
+                #[cfg(feature = "cuda")]
+                runtime_memory_reservation: None,
                 model_metadata: None,
                 modalities: Modalities {
                     input: vec![SupportedModality::Text],
                     output: vec![SupportedModality::Vision],
                 },
+                loaded_for_uqff_write: false,
             }),
             dummy_cache: EitherCache::Full(Cache::new(0, false)),
         })))
@@ -281,7 +285,9 @@ impl IsqPipelineMixin for DiffusionPipeline {
 }
 
 impl CacheManagerMixin for DiffusionPipeline {
-    fn clone_in_cache(&self, _seqs: &mut [&mut Sequence]) {}
+    fn clone_in_cache(&self, _seqs: &mut [&mut Sequence]) -> candle_core::Result<()> {
+        Ok(())
+    }
     fn clone_out_cache(&self, _seqs: &mut [&mut Sequence]) {}
     fn set_none_cache(
         &self,
@@ -289,7 +295,8 @@ impl CacheManagerMixin for DiffusionPipeline {
         _reset_non_granular: bool,
         _modify_draft_cache: bool,
         _load_preallocated_cache: bool,
-    ) {
+    ) -> candle_core::Result<()> {
+        Ok(())
     }
     fn cache(&self) -> &EitherCache {
         &self.dummy_cache

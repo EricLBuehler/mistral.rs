@@ -14,7 +14,9 @@ use crate::{
     amoe::{AnyMoeBaseModelMixin, AnyMoeConfig, AnyMoeExpertType, MlpLayer},
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
-    layers::{embedding, Activation, CausalMasker, RmsNorm, RotaryEmbedding, Sdpa},
+    layers::{
+        embedding_with_legacy_tied_uqff, Activation, CausalMasker, RmsNorm, RotaryEmbedding, Sdpa,
+    },
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -289,7 +291,7 @@ impl Attention {
             hidden_sz,
             num_heads * head_dim,
             &cfg.quantization_config,
-            false,
+            cfg.attention_bias,
             comm,
             mapper.set_device(layer_idx, vb.pp("q_proj"), loading_isq),
         )?;
@@ -298,7 +300,7 @@ impl Attention {
             hidden_sz,
             num_kv_heads * head_dim,
             &cfg.quantization_config,
-            false,
+            cfg.attention_bias,
             comm,
             kv_shard,
             mapper.set_device(layer_idx, vb.pp("k_proj"), loading_isq),
@@ -307,7 +309,7 @@ impl Attention {
             hidden_sz,
             num_kv_heads * head_dim,
             &cfg.quantization_config,
-            false,
+            cfg.attention_bias,
             comm,
             kv_shard,
             mapper.set_device(layer_idx, vb.pp("v_proj"), loading_isq),
@@ -316,7 +318,7 @@ impl Attention {
             num_heads * head_dim,
             hidden_sz,
             &cfg.quantization_config,
-            false,
+            cfg.attention_bias,
             comm,
             mapper.set_device(layer_idx, vb.pp("o_proj"), loading_isq),
         )?;
@@ -468,6 +470,7 @@ impl SparseMlp {
         hidden_size: usize,
         intermediate_size: usize,
         act_fn: Activation,
+        bias: bool,
         quant_cfg: &Option<QuantizedConfig>,
         vb: ShardedVarBuilder,
         comm: &Arc<mistralrs_quant::Comm>,
@@ -476,7 +479,7 @@ impl SparseMlp {
             hidden_size,
             intermediate_size,
             quant_cfg,
-            false,
+            bias,
             comm,
             vb.pp("gate_proj"),
         )?;
@@ -484,7 +487,7 @@ impl SparseMlp {
             hidden_size,
             intermediate_size,
             quant_cfg,
-            false,
+            bias,
             comm,
             vb.pp("up_proj"),
         )?;
@@ -492,7 +495,7 @@ impl SparseMlp {
             intermediate_size,
             hidden_size,
             quant_cfg,
-            false,
+            bias,
             comm,
             vb.pp("down_proj"),
         )?;
@@ -608,6 +611,7 @@ impl MoeBlock {
         router_score_function: crate::ops::MoeRouterScoreFunction,
         router_selection_bias: Option<Tensor>,
         act_fn: Activation,
+        mlp_bias: bool,
         quant_cfg: &Option<QuantizedConfig>,
         loading_isq: bool,
         vb: ShardedVarBuilder,
@@ -630,6 +634,7 @@ impl MoeBlock {
                 hidden_size,
                 shared_intermediate_size,
                 act_fn,
+                mlp_bias,
                 quant_cfg,
                 vb.pp("shared_mlp"),
                 comm,
@@ -643,6 +648,7 @@ impl MoeBlock {
             num_experts_per_tok: routing_mode.top_k(),
             hidden_size,
             moe_intermediate_size: intermediate_size,
+            expert_proj_names: crate::moe::ExpertProjNames::DEFAULT,
         };
         let experts = MoEExperts::new(
             &moe_cfg,
@@ -778,6 +784,7 @@ impl DecoderLayer {
                     None
                 },
                 cfg.hidden_act,
+                cfg.mlp_bias,
                 &cfg.quantization_config,
                 loading_isq,
                 mlp_vb,
@@ -787,6 +794,7 @@ impl DecoderLayer {
                 cfg.hidden_size,
                 cfg.intermediate_size,
                 cfg.hidden_act,
+                cfg.mlp_bias,
                 &cfg.quantization_config,
                 mlp_vb,
                 comm,
@@ -823,20 +831,20 @@ impl DecoderLayer {
         let xs = self
             .self_attn
             .forward(&xs, attention_mask, kv_cache, ctx, layer_idx)?;
-        let xs = (xs + residual)?;
-        let residual = &xs;
-        let xs = self
-            .mlp
-            .forward(&xs.apply(&self.post_attention_layernorm)?)?;
+        let (residual, xs) = self
+            .post_attention_layernorm
+            .forward_add_rms_norm(&xs, residual)?;
+        let xs = self.mlp.forward(&xs)?;
         residual + xs
     }
 }
 
 pub struct Model {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
+    dtype: DType,
     device: Device,
     cache: EitherCache,
     max_seq_len: usize,
@@ -900,11 +908,15 @@ impl Model {
             );
         }
         let mapper = normal_loading_metadata.mapper;
+        let dtype = vb_m.dtype();
 
-        let embed_tokens = embedding(
+        let embed_tokens = embedding_with_legacy_tied_uqff(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            cfg.tie_word_embeddings.then(|| {
+                mapper.set_nm_device(vb_lm_head.clone(), normal_loading_metadata.loading_isq)
+            }),
             &cfg.quantization_config,
         )?;
 
@@ -973,22 +985,14 @@ impl Model {
                 mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(
-                        embed_tokens.embeddings(),
-                        normal_loading_metadata.loading_isq,
-                    )?,
-                    None,
-                ),
-                mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
-            )?
+            embed_tokens.clone()
         };
         Ok(Self {
             embed_tokens,
             layers,
             norm,
             lm_head,
+            dtype,
             device: normal_loading_metadata.real_device,
             cache: EitherCache::Normal(NormalCache::new(
                 cfg.num_hidden_layers,
@@ -1016,7 +1020,11 @@ impl Model {
         input_ids: &Tensor,
         ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        self.forward_embeds(input_ids, self.embed_tokens.forward(input_ids)?, ctx)
+        self.forward_embeds(
+            input_ids,
+            self.embed_tokens.embedding_forward(input_ids, self.dtype)?,
+            ctx,
+        )
     }
 
     pub fn forward_embeds(
@@ -1050,7 +1058,7 @@ impl Model {
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
         let xs = ctx.logits(&xs)?;
-        self.lm_head.forward(&xs)
+        ctx.lm_head(&*self.lm_head, &xs)
     }
 }
 
@@ -1122,6 +1130,9 @@ impl NormalModel for Model {
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
+    }
+    fn supports_packed_prefill(&self) -> bool {
+        true
     }
     #[cfg(feature = "cuda")]
     fn supports_cuda_decode_graphs(&self) -> bool {

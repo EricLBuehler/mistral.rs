@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::thread::ThreadId;
 
 use candle_core::cuda::cudarc::driver::{CudaSlice, CudaStream, DevicePtrMut, SyncOnDrop};
 use candle_core::{
@@ -53,7 +54,6 @@ pub const MMVQ_MAX_BATCH: usize = 8;
 
 struct WorkspaceSlot {
     slice: CudaSlice<u8>,
-    cap: usize,
 }
 
 struct WorkspaceGuard<'a> {
@@ -67,7 +67,15 @@ impl WorkspaceGuard<'_> {
     }
 }
 
-type WsMap = Mutex<HashMap<candle_core::cuda::DeviceId, &'static Mutex<WorkspaceSlot>>>;
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+struct WorkspaceKey {
+    device: candle_core::cuda::DeviceId,
+    stream: usize,
+    thread: ThreadId,
+    capacity: usize,
+}
+
+type WsMap = Mutex<HashMap<WorkspaceKey, &'static Mutex<WorkspaceSlot>>>;
 
 static WORKSPACE: OnceLock<WsMap> = OnceLock::new();
 
@@ -77,28 +85,30 @@ fn workspace_ensure<'a>(
     stream: &'a CudaStream,
 ) -> Result<WorkspaceGuard<'a>> {
     let map = WORKSPACE.get_or_init(|| Mutex::new(HashMap::new()));
-    let device_key = dev.id();
-    let device_mtx: &'static Mutex<WorkspaceSlot> = {
+    let capacity = bytes.max(1).next_power_of_two();
+    let key = WorkspaceKey {
+        device: dev.id(),
+        stream: stream.cu_stream() as usize,
+        thread: std::thread::current().id(),
+        capacity,
+    };
+    let workspace_mtx: &'static Mutex<WorkspaceSlot> = {
         let mut guard = map.lock().unwrap();
-        match guard.get(&device_key).copied() {
+        match guard.get(&key).copied() {
             Some(mtx) => mtx,
             None => {
-                let slice = unsafe { dev.alloc::<u8>(bytes.max(1))? };
-                let leaked = Box::leak(Box::new(Mutex::new(WorkspaceSlot {
-                    slice,
-                    cap: bytes.max(1),
-                })));
-                guard.insert(device_key, leaked);
+                let slice = unsafe { dev.alloc::<u8>(capacity)? };
+                // CUDA graph replay requires process-stable workspace addresses.
+                let leaked = Box::leak(Box::new(Mutex::new(WorkspaceSlot { slice })));
+                guard.insert(key, leaked);
                 leaked
             }
         }
     };
-    let mut slot = device_mtx.lock().unwrap();
-    if slot.cap < bytes {
-        slot.slice = unsafe { dev.alloc::<u8>(bytes)? };
-        slot.cap = bytes;
-    }
-    Ok(WorkspaceGuard { slot, stream })
+    Ok(WorkspaceGuard {
+        slot: workspace_mtx.lock().unwrap(),
+        stream,
+    })
 }
 
 // Launcher dispatch by weight and output dtype.
@@ -280,9 +290,7 @@ fn fused_qkv_launcher(input_ty: DType, dtype: GgmlDType) -> Option<FusedQkvLaunc
 /// Compute `w @ xs^T` where `w` is a Q8_1-quantizable GGUF weight tensor and
 /// `xs` is a contiguous BF16 / F16 / F32 activation on the same CUDA device.
 ///
-/// Supported input shapes:
-/// * `[b, k]`     with b in `1..=8`
-/// * `[b, m, k]`  with `b * m` in `1..=8`
+/// The product of the leading input dimensions must be in `1..=8`.
 ///
 /// Output has the same leading dimensions as `xs` with the last axis replaced
 /// by `w.shape().dims2()?.0` (nrows of the weight).
@@ -296,13 +304,15 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
     let Device::Cuda(dev) = w.device() else {
         candle_core::bail!("fast_mmvq: weight must live on CUDA");
     };
+    if !xs.device().same_device(&w.device()) {
+        candle_core::bail!("fast_mmvq: input and weight are on different devices");
+    }
     let (nrows, ncols) = w.shape().dims2()?;
 
-    let (b_size, k) = match xs.dims() {
-        [b, k] => (*b, *k),
-        [b, m, k] => (*b * *m, *k),
-        other => candle_core::bail!("fast_mmvq: unexpected input rank {other:?}"),
+    let Some((&k, batch_dims)) = xs.dims().split_last() else {
+        candle_core::bail!("fast_mmvq: input must have at least one dimension");
     };
+    let b_size = batch_dims.iter().product::<usize>();
     if k != ncols {
         candle_core::bail!(
             "fast_mmvq: shape mismatch: weight [{nrows}, {ncols}] vs input tail {k}"
@@ -486,6 +496,9 @@ pub fn fused_glu(
     if dev.id() != up_dev.id() {
         candle_core::bail!("fast_mmvq fused_glu: gate/up weights are on different CUDA devices");
     }
+    if !xs.device().same_device(&gate_w.device()) {
+        candle_core::bail!("fast_mmvq fused_glu: input and weights are on different devices");
+    }
 
     let (nrows, ncols) = gate_w.shape().dims2()?;
     let (up_nrows, up_ncols) = up_w.shape().dims2()?;
@@ -495,11 +508,10 @@ pub fn fused_glu(
         );
     }
 
-    let (b_size, k) = match xs.dims() {
-        [b, k] => (*b, *k),
-        [b, m, k] => (*b * *m, *k),
-        other => candle_core::bail!("fast_mmvq fused_glu: unexpected input rank {other:?}"),
+    let Some((&k, batch_dims)) = xs.dims().split_last() else {
+        candle_core::bail!("fast_mmvq fused_glu: input must have at least one dimension");
     };
+    let b_size = batch_dims.iter().product::<usize>();
     if k != ncols {
         candle_core::bail!(
             "fast_mmvq fused_glu: shape mismatch: weight [{nrows}, {ncols}] vs input tail {k}"
@@ -698,6 +710,9 @@ pub fn fused_qkv(
     if dev.id() != k_dev.id() || dev.id() != v_dev.id() {
         candle_core::bail!("fast_mmvq fused_qkv: q/k/v weights are on different CUDA devices");
     }
+    if !xs.device().same_device(&q_w.device()) {
+        candle_core::bail!("fast_mmvq fused_qkv: input and weights are on different devices");
+    }
 
     let (q_nrows, ncols) = q_w.shape().dims2()?;
     let (k_nrows, k_ncols) = k_w.shape().dims2()?;
@@ -708,11 +723,10 @@ pub fn fused_qkv(
         );
     }
 
-    let (b_size, k) = match xs.dims() {
-        [b, k] => (*b, *k),
-        [b, m, k] => (*b * *m, *k),
-        other => candle_core::bail!("fast_mmvq fused_qkv: unexpected input rank {other:?}"),
+    let Some((&k, batch_dims)) = xs.dims().split_last() else {
+        candle_core::bail!("fast_mmvq fused_qkv: input must have at least one dimension");
     };
+    let b_size = batch_dims.iter().product::<usize>();
     if k != ncols {
         candle_core::bail!(
             "fast_mmvq fused_qkv: shape mismatch: weight ncols {ncols} vs input tail {k}"

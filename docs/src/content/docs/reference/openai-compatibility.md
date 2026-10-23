@@ -3,7 +3,7 @@ title: OpenAI compatibility
 description: Which OpenAI API fields mistralrs implements, which it extends, and which it does not support.
 ---
 
-mistral.rs targets field-level OpenAI API compatibility. Most OpenAI client libraries work against mistral.rs unchanged. This page lists the exceptions. For setup and examples, see [OpenAI-compatible APIs](/mistral.rs/guides/serve/openai-compatible-apis/).
+mistral.rs targets field-level OpenAI API compatibility. Most OpenAI client libraries work against mistral.rs unchanged. This page lists the exceptions. For setup and examples, see [OpenAI-compatible APIs](/guides/serve/openai-compatible-apis/).
 
 ## Chat Completions fields
 
@@ -24,39 +24,45 @@ mistral.rs targets field-level OpenAI API compatibility. Most OpenAI client libr
 - `presence_penalty`, `frequency_penalty`
 - `n` (multiple completions)
 
+Loaded dynamic LoRA aliases receive stable qualified model-card IDs from `GET /v1/models` and may be sent as `model`. Use the exact returned ID rather than constructing one; reserved characters are escaped and collisions receive a suffix. A unique short alias is also accepted for vLLM-style routing. The card's `parent` identifies the base model, `root` uses the public adapter alias rather than a local filesystem path, and `adapter_generation` identifies the current immutable generation. The explicit `adapter` extension below is available when callers need separate base-model routing or an exact generation.
+
 ### Implemented with deviation
 
-- `tool_choice`: `"auto"`, `"none"`, `"required"`, Chat Completions specific function objects (`{"type":"function","function":{"name":"..."}}`), Responses-style specific function objects (`{"type":"function","name":"..."}`), and `{"type":"allowed_tools","mode":"auto"|"required","tools":[{"type":"function","name":"..."}]}` work for function tools. `"required"` rejects requests with no available tools. Function-tool obligations are enforced by the tool-call lifecycle; hosted tools such as web search, code execution, and shell are handled by the agentic runtime.
-- `tools[*].function.strict`: accepted on function tools. When `true`, mistral.rs constrains generated tool arguments to the tool's `parameters` JSON Schema. See [tool calling](/mistral.rs/guides/agents/tool-calling-basics/).
+- `tool_choice`: `"auto"`, `"none"`, `"required"`, Chat Completions specific function objects (`{"type":"function","function":{"name":"..."}}`), Responses-style specific function objects (`{"type":"function","name":"..."}`), and `{"type":"allowed_tools","mode":"auto"|"required","tools":[{"type":"function","name":"..."}]}` work for function tools. `"required"` rejects requests with no available tools.
+- `tools[*].function.strict`: accepted on function tools. When `true`, mistral.rs constrains generated tool arguments to the tool's `parameters` JSON Schema. See [tool calling](/guides/agents/tool-calling-basics/).
 - `tools[*].type="code_interpreter"`: accepted as the OpenAI-compatible opt-in for the built-in Python executor. The server must be started with code execution enabled. The only supported container form is `{"type":"auto"}`. Container ids, `container.file_ids`, `container.memory_limit`, and OpenAI container lifecycle endpoints are not supported.
 - `messages[].content[]` file parts: `{"type":"file","file":{"file_id":"file-..."}}` and `{"type":"file","file":{"filename":"data.csv","file_data":"data:text/csv;base64,..."}}` are supported. Chat Completions file URLs are not supported; upload the file first or use Responses.
-- `response_format` with `json_schema`: uses [llguidance](/mistral.rs/guides/serve/structured-output/) (a constrained-decoding grammar library) to constrain decoding. Output shape may differ from OpenAI's on ambiguous schemas. `json_object` is not accepted.
+- `response_format` with `json_schema`: supported; output shape may differ from OpenAI's on ambiguous schemas. `json_object` is not accepted. See [structured output](/guides/serve/structured-output/).
+- `seed`: initializes a deterministic request-scoped sampling stream. Requests with multiple choices derive a distinct stream for each choice.
 
 ### Silently ignored
 
-`seed`, `user`, `stream_options`, `metadata`, `service_tier`, `parallel_tool_calls`, `store`. The request body accepts these fields (unknown fields are not rejected) but no behavior is wired to them. Use mistral.rs `session_id` for persistence.
+`user`, `stream_options`, `metadata`, `service_tier`, `parallel_tool_calls`, `store`. The request body accepts these fields (unknown fields are not rejected) but no behavior is wired to them. Use mistral.rs `session_id` for persistence.
 
-### mistralrs extensions
+### Additional request controls
 
-Accepted alongside OpenAI fields. OpenAI ignores them:
+Accepted alongside the base Chat Completions fields. Several are mistral.rs extensions:
 
 - `top_k`: hard candidate cap.
 - `min_p`: min-p sampling threshold.
 - `repetition_penalty`: simpler alternative to frequency/presence.
 - `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`: DRY sampling parameters.
 - `grammar`: llguidance constraints beyond JSON schemas.
-- `enable_thinking`: tri-state for supporting models.
-  - `true`: forces thinking on.
-  - `false`: forces thinking off.
-  - omitted or `null`: uses the chat template's default (currently thinking on).
+- `reasoning_effort`: `off`, `low`, `medium`, `high`, or `xhigh`. `none` is accepted as an alias for `off`. Values are trimmed and case-insensitive.
+- `enable_thinking`: legacy boolean toggle. If both controls are omitted, mistral.rs enables thinking and leaves the effort unspecified. An explicit positive effort enables thinking; `off` disables it. Contradictory pairs such as `reasoning_effort: "off"` with `enable_thinking: true` return a validation error.
 
-  The Python SDK's `ChatCompletionRequest` defaults `enable_thinking` to `None`, matching the omitted-field behavior above.
+The selected effort is passed to the chat template as both `reasoning_effort` and the compatibility name `reasoning_strength`. The template determines how each tier affects the model; it may treat positive tiers alike or ignore controls it does not use. The Python SDK uses the same values and defaults.
 - `web_search_options`: search tool configuration (de facto OpenAI field, not yet universal).
 - `session_id`: multi-turn session persistence.
 - `files`: required output files for server-side code execution.
 - `agent_permission`, `code_execution_permission`: per-request permission tightening for server-executed tools.
 - `max_tool_rounds`: cap server-side tool loop rounds for one request.
 - `truncate_sequence`: truncate long prompts at the model's context limit instead of erroring.
+- `adapter`: select a loaded dynamic LoRA alias string or an exact immutable generation object, `{"generation":"<generation-id>"}`. Omit it or use `null` for the base model. Unknown aliases, nonresident generations, and models without a dynamic LoRA runtime return an error.
+
+`GET /v1/lora_adapters` is always registered and returns detailed alias, generation, and capacity state for models started with dynamic LoRA. A model without that runtime returns 409 with `lora_runtime_unavailable`. Adapter source is redacted unless runtime mutation is enabled. With `mistralrs serve`, `POST /v1/load_lora_adapter` and `POST /v1/unload_lora_adapter` require `MISTRALRS_ALLOW_RUNTIME_LORA_UPDATING`; embedded servers configure mutation through `LoraAdapterApiConfig`. Read-only discovery does not require mutation access.
+
+Chat Completions and Completions responses expose the exact resolved generation as `adapter_generation`, including streaming chunks. Completed Responses resources expose the same field. The field is omitted for base-model requests.
 
 ## Responses API
 
@@ -74,7 +80,7 @@ Use Responses when the client:
 - needs polling or background processing,
 - needs cancellation.
 
-Chat Completions, by contrast, returns the full response on a single connection. Codex speaks the Responses API; see [coding agents](/mistral.rs/guides/serve/coding-agents/).
+Chat Completions, by contrast, returns the full response on a single connection. Codex speaks the Responses API; see [coding agents](/guides/serve/coding-agents/).
 
 ### Implemented
 
@@ -94,7 +100,7 @@ Responses `tools` accepts:
 - `{"type":"code_interpreter","container":{"type":"auto"}}` for server-side Python code execution.
 - `{"type":"shell","environment":{"type":"container_auto","skills":[{"type":"skill_reference","skill_id":"skill_...","version":"latest"}]}}` for server-side shell execution and OpenAI-compatible Skills. Skills require the shell executor, so start the server with at least `--enable-shell`; `--agent` is the recommended preset when you also want the full agentic runtime.
 
-`tool_choice: "required"` is accepted and rejects requests that provide no tools. Specific function choices must reference a declared function tool. `tool_choice: {"type":"allowed_tools", ...}` is supported for function tool subsets only. Hosted tool forcing or filtering, such as `{"type":"web_search_preview"}`, `{"type":"code_interpreter"}`, `{"type":"shell"}`, or hosted tools inside `allowed_tools`, is rejected because those tools run through the server-side agentic runtime rather than the grammar-constrained function-tool path.
+`tool_choice: "required"` is accepted and rejects requests that provide no tools. Specific function choices must reference a declared function tool. `tool_choice: {"type":"allowed_tools", ...}` is supported for function tool subsets only. Hosted tool forcing or filtering, such as `{"type":"web_search_preview"}`, `{"type":"code_interpreter"}`, `{"type":"shell"}`, or hosted tools inside `allowed_tools`, is not supported.
 
 ### Skills API
 
@@ -102,7 +108,7 @@ Responses `tools` accepts:
 - `GET /v1/skills`: list uploaded skills for the current server process and skills directory.
 - `POST /v1/skills/{skill_id}/versions`: upload a new version for an existing skill.
 
-Uploaded skill versions are stored under the server's skills directory (`--skills-dir`, or a system temp directory by default). When a Responses request references a skill, mistral.rs copies that skill version into the shell session working directory at `skills/<skill-name>/`.
+Uploaded skill versions remain available from the server's skills directory (`--skills-dir`, or a system temporary directory by default). Referenced skills are made available to the shell session.
 
 ### Rejected non-default values
 
@@ -115,9 +121,9 @@ Uploaded skill versions are stored under the server's skills directory (`--skill
 
 ### mistralrs extensions on Responses
 
-`top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`. The chat-only agentic fields (`session_id`, `agent_permission`, `files`, `max_tool_rounds`, `web_search_options`) are not part of this endpoint's schema. Use the Responses `tools` array for web search, code interpreter, shell, and OpenAI-compatible Skills.
+`top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`, `adapter`. The `adapter` field selects a loaded dynamic LoRA alias string or exact generation object; omit it or use `null` for the base model. A loaded alias can instead be sent as `model`. The chat-only agentic fields (`session_id`, `agent_permission`, `files`, `max_tool_rounds`, `web_search_options`) are not part of this endpoint's schema. Use the Responses `tools` array for web search, code interpreter, shell, and OpenAI-compatible Skills.
 
-Thinking, reasoning effort, and truncation are not top-level extension fields here; they are controlled through the standard Responses objects. Use the `reasoning` object (`reasoning.effort`) for thinking/reasoning effort and the `truncation` field for sequence truncation. Top-level `enable_thinking`, `reasoning_effort`, and `truncate_sequence` keys are silently ignored on this endpoint.
+Thinking, reasoning effort, and truncation are not top-level extension fields here; they are controlled through the standard Responses objects. Use `reasoning.effort` with `off`, `low`, `medium`, `high`, or `xhigh`; `none` is accepted as an alias for `off`. Omission enables thinking without choosing an effort. `reasoning.summary` is accepted for compatibility but currently does not change the response. Use `truncation` for sequence truncation. Top-level `enable_thinking`, `reasoning_effort`, and `truncate_sequence` keys are silently ignored on this endpoint.
 
 ### Background runs
 
@@ -131,11 +137,11 @@ curl http://localhost:1234/v1/responses \
   }'
 ```
 
-Poll with `curl http://localhost:1234/v1/responses/<id>`, cancel with `curl -X POST http://localhost:1234/v1/responses/<id>/cancel`. Streaming event names are in the [HTTP API semantics page](/mistral.rs/reference/http-api/#streaming-responses); full schemas in the [generated reference](/mistral.rs/reference/http-api-generated/).
+Poll with `curl http://localhost:1234/v1/responses/<id>`, cancel with `curl -X POST http://localhost:1234/v1/responses/<id>/cancel`. Streaming event names are in the [HTTP API semantics page](/reference/http-api/#streaming-responses); full schemas in the [generated reference](/reference/http-api-generated/).
 
 ## Completions (legacy)
 
-`/v1/completions` (non-chat) is supported with a subset of Chat Completions extensions: `top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`, `truncate_sequence`. The agentic, session, file, web-search, thinking, and reasoning-effort fields are not part of this endpoint's schema and have no effect.
+`/v1/completions` (non-chat) is supported with a subset of Chat Completions extensions: `top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`, `truncate_sequence`, `adapter`. LoRA accepts the same alias-as-`model`, adapter alias, and exact-generation forms as Chat Completions. The agentic, session, file, web-search, thinking, and reasoning-effort fields are not part of this endpoint's schema and have no effect.
 
 ## Embeddings
 
@@ -171,7 +177,7 @@ OpenAI's `size` string (e.g. `"1024x1024"`) is not supported. Use the `height` a
 
 ### `/v1/audio/transcriptions` and `/v1/audio/translations`
 
-Not exposed as dedicated endpoints. Voxtral and similar STT models go through `/v1/chat/completions` with audio content parts. See [speech models guide](/mistral.rs/guides/models/use-speech-models/).
+Not exposed as dedicated endpoints. Voxtral and similar STT models go through `/v1/chat/completions` with audio content parts. See [speech models guide](/guides/models/use-speech-models/).
 
 ## Moderation
 

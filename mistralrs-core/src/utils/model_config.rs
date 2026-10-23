@@ -10,7 +10,6 @@ use crate::{
     device_map::DeviceMapper,
     gguf::Content,
     lora::{LoraConfig, Ordering},
-    paged_attention::AttentionImplementation,
     pipeline::{AdapterPaths, ModelPaths},
     xlora_models::XLoraConfig,
 };
@@ -41,9 +40,8 @@ impl<'a> Adapter<'a> {
     // As referenced value would drop after this method, Adapter takes ownership of vb + preload_adapters
     // and then passes by reference to the `from_gguf()` / `from_ggml()` methods when proxying to params.
     // NOTE: Due to reference usage persisting in returned struct, additional lifetime annotations were required.
-    #[allow(clippy::borrowed_box)]
     pub fn try_new<'b: 'a>(
-        paths: &'b Box<dyn ModelPaths>,
+        paths: &'b dyn ModelPaths,
         device: &'b candle_core::Device,
         silent: bool,
         is_xlora: bool,
@@ -109,7 +107,6 @@ pub struct ParamsGGML(pub FileGGML);
 pub struct ParamsGGUF<'a, R: std::io::Seek + std::io::Read>(
     pub Content<'a, R>,
     pub Device<'a>,
-    pub AttentionImplementation,
     pub DType,
 );
 
@@ -166,18 +163,6 @@ pub trait FromGGML {
     fn from_ggml(
         ct: ggml_file::Content,
         gqa: usize,
-        dtype: DType,
-    ) -> Result<Self, candle_core::Error>
-    where
-        Self: Sized;
-}
-
-pub trait FromGGUF {
-    fn from_gguf<R: std::io::Seek + std::io::Read>(
-        ct: Content<'_, R>,
-        device: &candle_core::Device,
-        mapper: Box<dyn DeviceMapper + Send + Sync>,
-        attention_mechanism: AttentionImplementation,
         dtype: DType,
     ) -> Result<Self, candle_core::Error>
     where
@@ -255,21 +240,10 @@ impl Config<ParamsGGML, Adapter<'_>> {
     }
 }
 
-impl<R: std::io::Seek + std::io::Read> Config<ParamsGGUF<'_, R>, NoAdapter> {
-    pub fn try_into_model<T: FromGGUF>(self) -> Result<T, candle_core::Error> {
-        // Destructure props:
-        let ParamsGGUF(ct, Device { device, mapper }, attention_implementation, dtype) = self.quant;
-
-        // Forwards all structured fields above into the required flattened param sequence:
-        T::from_gguf(ct, device, mapper, attention_implementation, dtype)
-    }
-}
-
 impl<R: std::io::Seek + std::io::Read> Config<ParamsGGUF<'_, R>, Adapter<'_>> {
     pub fn try_into_model<T: FromAdapterGGUF>(self) -> Result<T, candle_core::Error> {
         // Destructure props:
-        let ParamsGGUF(ct, Device { device, mapper }, _attention_implementation, dtype) =
-            self.quant;
+        let ParamsGGUF(ct, Device { device, mapper }, dtype) = self.quant;
 
         let Adapter {
             xlora_config,
@@ -296,12 +270,6 @@ impl<R: std::io::Seek + std::io::Read> Config<ParamsGGUF<'_, R>, Adapter<'_>> {
 
 use crate::{
     models::quantized_llama::ModelWeights as QLlama,
-    models::quantized_phi2::ModelWeights as QPhi,
-    models::quantized_phi3::ModelWeights as QPhi3,
-    models::quantized_qwen::ModelWeights as QQwen,
-    models::quantized_qwen3::ModelWeights as QQwen3,
-    models::quantized_qwen3_moe::ModelWeights as QQwen3MoE,
-    models::quantized_starcoder2::ModelWeights as QStarcoder2,
     xlora_models::{XLoraQLlama, XLoraQPhi3},
 };
 use akin::akin;
@@ -321,19 +289,6 @@ impl TryFrom<ModelParams<'_, ParamsGGML>> for XLoraQLlama {
     fn try_from(params: ModelParams<'_, ParamsGGML>) -> Result<Self, Self::Error> {
         let config = params.expect_adapted("`Config` should be GGML Quantized with an Adapter");
         config.try_into_model()
-    }
-}
-
-akin! {
-    let &models_gguf = [QLlama, QPhi, QPhi3, QStarcoder2, QQwen, QQwen3, QQwen3MoE];
-
-    impl<R: std::io::Seek + std::io::Read> TryFrom<ModelParams<'_, ParamsGGUF<'_, R>>> for *models_gguf {
-        type Error = candle_core::Error;
-
-        fn try_from(params: ModelParams<'_, ParamsGGUF<'_, R>>) -> Result<Self, Self::Error> {
-            let config = params.expect_quantized("`Config` should be GGUF Quantized");
-            config.try_into_model()
-        }
     }
 }
 

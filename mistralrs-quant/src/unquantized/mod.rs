@@ -36,6 +36,22 @@ fn supports_cublaslt_batch_matmul(a: &Tensor, w: &Tensor) -> bool {
 }
 
 impl UnquantLinear {
+    fn forward_cuda_gemm(&self, input: &Tensor) -> Result<Tensor> {
+        let input_dim = input.dim(D::Minus1)?;
+        let output_dim = self.w.dim(0)?;
+        let rows: usize = input.dims()[..input.rank() - 1].iter().product();
+        let mut output_shape = input.dims().to_vec();
+        *output_shape.last_mut().unwrap() = output_dim;
+
+        let input = input.contiguous()?.reshape((rows, input_dim))?;
+        let output = input.matmul(&self.w.t()?)?;
+        let output = match self.b.as_ref() {
+            Some(bias) => output.broadcast_add(bias)?,
+            None => output,
+        };
+        output.reshape(output_shape)
+    }
+
     pub(crate) fn inspect_uqff_header(layer: &UqffLayerHeaderView<'_>) -> Option<UqffHeaderMatch> {
         const WEIGHT_SUFFIXES: &[&str] = &["weight", "weight.format"];
         if layer.exact_weight_suffixes(WEIGHT_SUFFIXES) && layer.scalar("weight.format", Dtype::U8)
@@ -54,9 +70,37 @@ impl UnquantLinear {
     ) -> Result<String> {
         Ok("unquant".to_string())
     }
+
+    fn add_gather_bias(&self, result: Tensor, indices: &Tensor) -> Result<Tensor> {
+        let Some(bias) = &self.b else {
+            return Ok(result);
+        };
+        let out_features = result.dim(D::Minus1)?;
+        match bias.dims() {
+            [bias_out] if *bias_out == out_features => result.broadcast_add(bias),
+            [num_experts, bias_out]
+                if *num_experts == self.w.dim(0)? && *bias_out == out_features =>
+            {
+                let selected = bias
+                    .index_select(&indices.flatten_all()?, 0)?
+                    .reshape(Shape::from_dims(result.dims()))?;
+                result.broadcast_add(&selected)
+            }
+            dims => candle_core::bail!(
+                "UnquantLinear::gather_forward: bias shape {:?} is incompatible with weight shape {:?}",
+                dims,
+                self.w.dims()
+            ),
+        }
+    }
 }
 
 impl QuantMethod for UnquantLinear {
+    #[cfg(feature = "metal")]
+    fn prepare_metal_kernels(&self, _activation_dtype: DType) -> Result<()> {
+        crate::metal_kernels::prepare_dense(&self.w)
+    }
+
     fn new(method: QuantMethodConfig) -> candle_core::Result<Self>
     where
         Self: Sized,
@@ -72,16 +116,28 @@ impl QuantMethod for UnquantLinear {
             | QuantMethodConfig::PerTensorFP8 { .. }
             | QuantMethodConfig::Afq { .. }
             | QuantMethodConfig::MXFP4 { .. } => unreachable!(),
-            QuantMethodConfig::Unquantized(l) => Ok(Self {
-                w: l.weight().clone(),
-                b: l.bias().cloned(),
-                stats: ImatrixLayerStats::empty(),
-            }),
+            QuantMethodConfig::Unquantized(l) => {
+                let layer = Self {
+                    w: l.weight().clone(),
+                    b: l.bias().cloned(),
+                    stats: ImatrixLayerStats::empty(),
+                };
+                #[cfg(feature = "metal")]
+                layer.prepare_metal_kernels(layer.w.dtype())?;
+                Ok(layer)
+            }
         }
     }
 
     fn dequantize_w(&self) -> Result<Tensor> {
         Ok(self.w.clone())
+    }
+
+    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
+        let mut final_dims = ids.dims().to_vec();
+        final_dims.push(self.w.dim(D::Minus1)?);
+        let ids = ids.flatten_all()?;
+        self.w.index_select(&ids, 0)?.reshape(final_dims)
     }
 
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
@@ -94,13 +150,26 @@ impl QuantMethod for UnquantLinear {
             return crate::gemv::gemv(a, &self.w, self.b.as_ref());
         }
 
+        self.stats.process(a)?;
+
+        #[cfg(feature = "cuda")]
+        if crate::gemv::should_use_wide_gemv(a, &self.w) {
+            let output = crate::gemv::gemv(a, &self.w, None)?;
+            return match self.b.as_ref() {
+                Some(bias) => output.broadcast_add(bias),
+                None => Ok(output),
+            };
+        }
+
+        if a.device().is_cuda() && a.rank() > 2 {
+            return self.forward_cuda_gemm(a);
+        }
+
         let w = match *a.dims() {
             [b1, b2, _, _] => self.w.broadcast_left((b1, b2))?,
             [bsize, _, _] => self.w.broadcast_left(bsize)?,
             _ => self.w.clone(),
         };
-
-        self.stats.process(a)?;
 
         if let Some(b) = self.b.as_ref() {
             let mut tgt_shape = a.dims().to_vec();
@@ -201,7 +270,7 @@ impl QuantMethod for UnquantLinear {
         let w = &self.w;
         let (_num_experts, out_features, _in_features) = w.dims3()?;
 
-        match a.dims() {
+        let result = match a.dims() {
             // Metal path: 5D input (b_size, seq_len, 1, 1, hidden_dim)
             &[b_size, seq_len, 1, 1, hidden_dim] => {
                 let (_b, _s, num_experts_per_tok) = indices.dims3()?;
@@ -305,7 +374,8 @@ impl QuantMethod for UnquantLinear {
                     dims
                 );
             }
-        }
+        }?;
+        self.add_gather_bias(result, indices)
     }
 
     fn quantized_act_type(&self) -> Option<DType> {
@@ -325,6 +395,12 @@ impl QuantMethod for UnquantLinear {
     }
 
     fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
+        if self.w.rank() == 3 && request.ty.is_some_and(|ty| !ty.supports_stacked_gather()) {
+            candle_core::bail!(
+                "Cannot quantize stacked expert weights to {}: that target does not support stacked expert gather. Use a Q*K/Q*_0/Q*_1 target, AFQ, or omit ISQ.",
+                request.ty.expect("rank-3 rejection requires an ISQ target")
+            );
+        }
         Ok(crate::plan_weight_isq(
             self.w.dtype(),
             self.w.device().clone(),
@@ -469,7 +545,8 @@ impl QuantMethod for UnquantLinear {
                     b: self
                         .b
                         .as_ref()
-                        .map(|b| b.to_dtype(DType::F32).unwrap().to_device(&device).unwrap()),
+                        .map(|b| b.to_dtype(DType::F32)?.to_device(&device))
+                        .transpose()?,
                 })?))
             }
             Some(IsqType::F8E4M3) => {
@@ -615,13 +692,17 @@ mod tests {
     use super::*;
 
     fn test_layer(device: &Device) -> Result<UnquantLinear> {
+        test_layer_with_bias(device, None)
+    }
+
+    fn test_layer_with_bias(device: &Device, bias: Option<Tensor>) -> Result<UnquantLinear> {
         let weight = Tensor::from_vec(
             vec![1f32, 0., 0., 0., 1., 0., 0., 0., 1., 1., 1., 1.],
             (2, 2, 3),
             device,
         )?;
         <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(Linear::new(
-            weight, None,
+            weight, bias,
         )))
     }
 
@@ -657,6 +738,53 @@ mod tests {
     }
 
     #[test]
+    fn gather_forward_broadcasts_shared_bias() -> Result<()> {
+        let device = Device::Cpu;
+        let bias = Tensor::from_vec(vec![10f32, 20.], 2, &device)?;
+        let layer = test_layer_with_bias(&device, Some(bias))?;
+        let input = Tensor::from_vec(vec![1f32, 2., 3.], (1, 1, 3), &device)?;
+        let indices = Tensor::from_vec(vec![0u32, 1], (1, 2), &device)?;
+
+        let output = layer.gather_forward(&input, &indices)?;
+
+        assert_eq!(
+            output.flatten_all()?.to_vec1::<f32>()?,
+            &[11., 22., 13., 26.]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn gather_forward_selects_per_expert_bias() -> Result<()> {
+        let device = Device::Cpu;
+        let bias = Tensor::from_vec(vec![10f32, 20., 30., 40.], (2, 2), &device)?;
+        let layer = test_layer_with_bias(&device, Some(bias))?;
+        let input = Tensor::from_vec(vec![1f32, 2., 3.], (1, 1, 3), &device)?;
+        let indices = Tensor::from_vec(vec![0u32, 1], (1, 2), &device)?;
+
+        let output = layer.gather_forward(&input, &indices)?;
+
+        assert_eq!(
+            output.flatten_all()?.to_vec1::<f32>()?,
+            &[11., 22., 33., 46.]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn gather_forward_without_bias_keeps_matmul_output() -> Result<()> {
+        let device = Device::Cpu;
+        let layer = test_layer(&device)?;
+        let input = Tensor::from_vec(vec![1f32, 2., 3.], (1, 1, 3), &device)?;
+        let indices = Tensor::from_vec(vec![0u32, 1], (1, 2), &device)?;
+
+        let output = layer.gather_forward(&input, &indices)?;
+
+        assert_eq!(output.flatten_all()?.to_vec1::<f32>()?, &[1., 2., 3., 6.]);
+        Ok(())
+    }
+
+    #[test]
     fn afq_keeps_unsupported_shape_unquantized() -> Result<()> {
         let device = Device::Cpu;
         let weight = Tensor::zeros((2, 65), DType::BF16, &device)?;
@@ -688,22 +816,91 @@ mod tests {
 
     #[cfg(feature = "cuda")]
     #[test]
-    fn forward_cuda_accepts_non_contiguous_3d_input() -> Result<()> {
+    fn forward_cuda_flattens_large_non_contiguous_batch() -> Result<()> {
         let device = Device::new_cuda(0)?;
-        let input = Tensor::randn(0., 1., (1, 4, 3), &device)?
+        let input = Tensor::randn(0., 1., (9, 4, 3), &device)?
             .to_dtype(DType::F32)?
             .transpose(1, 2)?;
         let weight = Tensor::randn(0., 1., (5, 4), &device)?.to_dtype(DType::F32)?;
+        let bias = Tensor::randn(0., 1., 5, &device)?.to_dtype(DType::F32)?;
         let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
-            Linear::new(weight.clone(), None),
+            Linear::new(weight.clone(), Some(bias.clone())),
         ))?;
 
         assert!(!has_cublaslt_batch_layout(&input));
         let output = layer.forward(&input)?;
-        let expected = input.matmul(&weight.broadcast_left(1)?.t()?)?;
+        assert_eq!(output.dims(), &[9, 3, 5]);
+        let expected = input
+            .matmul(&weight.broadcast_left(9)?.t()?)?
+            .broadcast_add(&bias)?;
         let max_diff = (output - expected)?.abs()?.max_all()?.to_scalar::<f32>()?;
 
         assert!(max_diff <= 1e-5, "max_diff={max_diff}");
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn forward_cuda_bf16_preserves_batched_shapes() -> Result<()> {
+        const TOLERANCE: f32 = 0.05;
+
+        let device = Device::new_cuda(0)?;
+        let weight = Tensor::from_vec(
+            (0..20)
+                .map(|index| ((index % 7) as f32 - 3.0) / 4.0)
+                .collect::<Vec<_>>(),
+            (5, 4),
+            &device,
+        )?
+        .to_dtype(DType::BF16)?;
+        let bias = Tensor::from_vec(vec![-0.2f32, -0.1, 0.0, 0.1, 0.2], 5, &device)?
+            .to_dtype(DType::BF16)?;
+        let input3 = Tensor::from_vec(
+            (0..108)
+                .map(|index| ((index % 11) as f32 - 5.0) / 8.0)
+                .collect::<Vec<_>>(),
+            (9, 3, 4),
+            &device,
+        )?
+        .to_dtype(DType::BF16)?;
+        let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
+            Linear::new(weight.clone(), Some(bias.clone())),
+        ))?;
+
+        let output3 = layer.forward(&input3)?;
+        assert_eq!(output3.dims(), &[9, 3, 5]);
+        let expected3 = input3
+            .to_dtype(DType::F32)?
+            .matmul(&weight.to_dtype(DType::F32)?.broadcast_left(9)?.t()?)?
+            .broadcast_add(&bias.to_dtype(DType::F32)?)?;
+        let max_diff3 = (output3.to_dtype(DType::F32)? - expected3)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        assert!(max_diff3 <= TOLERANCE, "max_diff={max_diff3}");
+
+        let input4 = Tensor::from_vec(
+            (0..120)
+                .map(|index| ((index % 13) as f32 - 6.0) / 8.0)
+                .collect::<Vec<_>>(),
+            (2, 5, 3, 4),
+            &device,
+        )?
+        .to_dtype(DType::BF16)?;
+        let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
+            Linear::new(weight.clone(), None),
+        ))?;
+
+        let output4 = layer.forward(&input4)?;
+        assert_eq!(output4.dims(), &[2, 5, 3, 5]);
+        let expected4 = input4
+            .to_dtype(DType::F32)?
+            .matmul(&weight.to_dtype(DType::F32)?.broadcast_left((2, 5))?.t()?)?;
+        let max_diff4 = (output4.to_dtype(DType::F32)? - expected4)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        assert!(max_diff4 <= TOLERANCE, "max_diff={max_diff4}");
         Ok(())
     }
 
@@ -745,3 +942,6 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(all(test, feature = "cuda"))]
+mod wide_gemv_tests;

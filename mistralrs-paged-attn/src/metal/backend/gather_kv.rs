@@ -1,7 +1,11 @@
-use candle_core::{DType, IndexOp, Result, Storage, Tensor};
+use candle_core::{DType, Result, Storage, Tensor};
 
-use crate::metal::kernels::{self, PagedAttentionDType};
+use crate::metal::{
+    backend::{validate_kv_cache_scales, CacheShape},
+    kernels::{self, PagedAttentionDType},
+};
 
+#[allow(clippy::too_many_arguments)]
 pub fn gather_kv_cache(
     key_cache: &Tensor,   // [num_blocks, kv_heads, head_size/x, block_size, x]
     value_cache: &Tensor, // [num_blocks, kv_heads, head_size, block_size]
@@ -9,6 +13,7 @@ pub fn gather_kv_cache(
     v_scale: Option<&Tensor>,
     block_table: &Tensor, // [batch, max_blocks]
     cu_seq_lens: &Tensor, // [batch + 1]
+    num_tokens: usize,    // cu_seq_lens[-1]
     out_dtype: DType,
 ) -> Result<(Tensor, Tensor)> {
     let cache_dtype = key_cache.dtype();
@@ -19,6 +24,7 @@ pub fn gather_kv_cache(
             value_cache.dtype()
         );
     }
+    validate_kv_cache_scales(cache_dtype, k_scale, v_scale, "gather_kv_cache")?;
 
     let block_table = block_table.contiguous()?;
     let cu_seq_lens = cu_seq_lens.contiguous()?;
@@ -50,22 +56,19 @@ pub fn gather_kv_cache(
         other => candle_core::bail!("unsupported output dtype {other:?}"),
     };
 
-    // Extract dimensions
-    let k_dims = key_cache.dims5()?;
-    let num_kv_heads = k_dims.1;
-    let head_size_over_x = k_dims.2;
-    let block_size = k_dims.3;
-    let x = k_dims.4;
-    let head_size = head_size_over_x * x;
+    let cache = CacheShape::new(key_cache, value_cache)?;
+    let num_kv_heads = cache.num_heads;
+    let head_size = cache.head_size;
+    let block_size = cache.block_size;
 
-    // num_tokens = cu_seq_lens[-1], num_seqs = len(cu_seq_lens) - 1
     let cu_seq_lens_len = cu_seq_lens.dims1()?;
-    let num_seqs = cu_seq_lens_len - 1;
-    let num_tokens = if cu_seq_lens.dtype() == DType::I32 {
-        cu_seq_lens.i(cu_seq_lens_len - 1)?.to_scalar::<i32>()? as usize
-    } else {
-        cu_seq_lens.i(cu_seq_lens_len - 1)?.to_scalar::<u32>()? as usize
-    };
+    let num_seqs = cu_seq_lens_len
+        .checked_sub(1)
+        .ok_or_else(|| candle_core::Error::msg("cu_seq_lens must contain an initial offset"))?;
+    let num_tokens_i32 = i32::try_from(num_tokens)
+        .map_err(|_| candle_core::Error::msg("num_tokens exceeds the kernel i32 limit"))?;
+    let num_seqs_i32 = i32::try_from(num_seqs)
+        .map_err(|_| candle_core::Error::msg("num_seqs exceeds the kernel i32 limit"))?;
 
     if num_tokens == 0 {
         let k_out = Tensor::zeros((0, num_kv_heads, head_size), out_dtype, key_cache.device())?;
@@ -162,13 +165,14 @@ pub fn gather_kv_cache(
             bt_l.start_offset() * block_table.dtype().size_in_bytes(),
             cu.buffer(),
             cu_l.start_offset() * cu_seq_lens.dtype().size_in_bytes(),
-            num_tokens as i32,
-            num_seqs as i32,
+            num_tokens_i32,
+            num_seqs_i32,
             block_size as i32,
             block_table_stride as i32,
             num_kv_heads as i32,
             head_size as i32,
-            x as i32,
+            cache.x as i32,
+            cache.hnd,
         )
         .map_err(candle_core::Error::wrap)?;
     }

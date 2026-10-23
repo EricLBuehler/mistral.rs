@@ -6,6 +6,7 @@ pub enum KvCacheLayout {
     Standard,
     StandardNoFlashInfer,
     FlashInferHnd,
+    MetalHnd,
     Mla {
         kv_lora_rank: usize,
         kpe_head_dim: usize,
@@ -101,7 +102,7 @@ fn select_kv_cache_layout<M: ModelConfigLike + ?Sized>(
     config: &M,
 ) -> KvCacheLayout {
     match requested_layout {
-        KvCacheLayout::Mla { .. } => requested_layout,
+        KvCacheLayout::Mla { .. } | KvCacheLayout::MetalHnd => requested_layout,
         KvCacheLayout::StandardNoFlashInfer => KvCacheLayout::Standard,
         KvCacheLayout::FlashInferHnd | KvCacheLayout::Standard => {
             match config.attention_backend_kind() {
@@ -118,7 +119,7 @@ fn select_kv_cache_layout_for_layer<M: ModelConfigLike + ?Sized>(
     layer_idx: usize,
 ) -> KvCacheLayout {
     match requested_layout {
-        KvCacheLayout::Mla { .. } => requested_layout,
+        KvCacheLayout::Mla { .. } | KvCacheLayout::MetalHnd => requested_layout,
         KvCacheLayout::StandardNoFlashInfer => KvCacheLayout::Standard,
         KvCacheLayout::FlashInferHnd | KvCacheLayout::Standard => {
             match config.attention_backend_kind_for_layer(layer_idx) {
@@ -149,6 +150,9 @@ pub trait ModelConfigLike {
     fn v_head_dim_for_layer(&self, _layer_idx: usize) -> usize {
         self.v_head_dim()
     }
+    fn sliding_window_for_layer(&self, _layer_idx: usize) -> Option<usize> {
+        None
+    }
     fn has_kv_cache_sharing(&self) -> bool {
         false
     }
@@ -160,6 +164,22 @@ pub trait ModelConfigLike {
             || self
                 .kv_cache_topology()
                 .uses_own_kv_cache_for_layer(layer_idx)
+    }
+    /// False for layers with no paged KV cache at all, e.g. the linear/recurrent half of a hybrid model.
+    fn layer_has_paged_kv_cache(&self, _layer_idx: usize) -> bool {
+        true
+    }
+    /// Paged KV elements per token for one layer, or `None` when the layer keeps no paged cache.
+    fn layer_kv_cache_elements_per_token(&self, layer_idx: usize) -> Option<usize> {
+        self.layer_has_paged_kv_cache(layer_idx)
+            .then(|| self.kv_cache_elements_per_token())
+    }
+    /// Summed over every layer holding a paged cache. Size against this rather than multiplying a
+    /// per-layer average by a layer count: the two diverge as soon as layers differ from each other.
+    fn total_kv_cache_elements_per_token(&self) -> usize {
+        (0..self.num_layers())
+            .filter_map(|idx| self.layer_kv_cache_elements_per_token(idx))
+            .sum()
     }
     fn kv_cache_group_ids(&self) -> Vec<u32> {
         if self.has_kv_cache_sharing() {
@@ -189,7 +209,169 @@ pub trait ModelConfigLike {
         select_kv_cache_layout_for_layer(KvCacheLayout::Standard, self, layer_idx)
     }
     fn kv_cache_elements_per_token(&self) -> usize {
-        2 * self.num_kv_heads() * self.k_head_dim().max(self.v_head_dim())
+        self.num_kv_heads() * (self.k_head_dim() + self.v_head_dim())
+    }
+
+    fn prefix_prefill_attention_features(
+        &self,
+        _layer_idx: usize,
+    ) -> Option<PrefixPrefillAttentionFeatures> {
+        None
+    }
+    /// Most keys any prompt query attends through the dense prefix path; longer contexts take a
+    /// sparse path that needs no prefix workspace.
+    fn prefix_prefill_kv_len_cap(&self) -> Option<usize> {
+        None
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PrefixPrefillAttentionFeatures {
+    pub has_alibi: bool,
+    pub has_sinks: bool,
+    pub has_softcap: bool,
+    pub has_sliding_window: bool,
+}
+
+pub(crate) fn with_attention_features(
+    base: std::sync::Arc<dyn ModelConfigLike + Send + Sync>,
+    fallback: Option<PrefixPrefillAttentionFeatures>,
+) -> std::sync::Arc<dyn ModelConfigLike + Send + Sync> {
+    match fallback {
+        Some(fallback) => std::sync::Arc::new(AttentionFeaturesConfig::new(base, Some(fallback))),
+        None => base,
+    }
+}
+
+pub(crate) struct AttentionFeaturesConfig<M> {
+    base: M,
+    fallback: Option<PrefixPrefillAttentionFeatures>,
+}
+
+impl<M> AttentionFeaturesConfig<M> {
+    pub(crate) fn new(base: M, fallback: Option<PrefixPrefillAttentionFeatures>) -> Self {
+        Self { base, fallback }
+    }
+}
+
+impl<M: std::ops::Deref> ModelConfigLike for AttentionFeaturesConfig<M>
+where
+    M::Target: ModelConfigLike,
+{
+    fn max_seq_len(&self) -> usize {
+        self.base.max_seq_len()
+    }
+
+    fn num_layers(&self) -> usize {
+        self.base.num_layers()
+    }
+
+    fn hidden_size(&self) -> usize {
+        self.base.hidden_size()
+    }
+
+    fn num_kv_heads(&self) -> usize {
+        self.base.num_kv_heads()
+    }
+
+    fn num_attn_heads(&self) -> usize {
+        self.base.num_attn_heads()
+    }
+
+    fn k_head_dim(&self) -> usize {
+        self.base.k_head_dim()
+    }
+
+    fn v_head_dim(&self) -> usize {
+        self.base.v_head_dim()
+    }
+
+    fn has_kv_cache_sharing(&self) -> bool {
+        self.base.has_kv_cache_sharing()
+    }
+
+    fn kv_cache_topology(&self) -> KvCacheTopology {
+        self.base.kv_cache_topology()
+    }
+
+    fn total_kv_cache_elements_per_token(&self) -> usize {
+        self.base.total_kv_cache_elements_per_token()
+    }
+
+    fn kv_cache_group_ids(&self) -> Vec<u32> {
+        self.base.kv_cache_group_ids()
+    }
+
+    fn attention_backend_kind(&self) -> AttentionBackendKind {
+        self.base.attention_backend_kind()
+    }
+
+    fn kv_cache_layout(&self) -> KvCacheLayout {
+        self.base.kv_cache_layout()
+    }
+
+    fn kv_cache_elements_per_token(&self) -> usize {
+        self.base.kv_cache_elements_per_token()
+    }
+
+    fn num_attn_heads_for_layer(&self, layer_idx: usize) -> usize {
+        self.base.num_attn_heads_for_layer(layer_idx)
+    }
+
+    fn num_kv_heads_for_layer(&self, layer_idx: usize) -> usize {
+        self.base.num_kv_heads_for_layer(layer_idx)
+    }
+
+    fn k_head_dim_for_layer(&self, layer_idx: usize) -> usize {
+        self.base.k_head_dim_for_layer(layer_idx)
+    }
+
+    fn v_head_dim_for_layer(&self, layer_idx: usize) -> usize {
+        self.base.v_head_dim_for_layer(layer_idx)
+    }
+
+    fn sliding_window_for_layer(&self, layer_idx: usize) -> Option<usize> {
+        self.base.sliding_window_for_layer(layer_idx)
+    }
+
+    fn uses_own_kv_cache_for_layer(&self, layer_idx: usize) -> bool {
+        self.base.uses_own_kv_cache_for_layer(layer_idx)
+    }
+
+    fn layer_has_paged_kv_cache(&self, layer_idx: usize) -> bool {
+        self.base.layer_has_paged_kv_cache(layer_idx)
+    }
+
+    fn layer_kv_cache_elements_per_token(&self, layer_idx: usize) -> Option<usize> {
+        self.base.layer_kv_cache_elements_per_token(layer_idx)
+    }
+
+    fn attention_layer_spec(&self, layer_idx: usize) -> AttentionLayerSpec {
+        self.base.attention_layer_spec(layer_idx)
+    }
+
+    fn attention_backend_kind_for_layer(&self, layer_idx: usize) -> AttentionBackendKind {
+        self.base.attention_backend_kind_for_layer(layer_idx)
+    }
+
+    fn kv_cache_layout_for_layer(&self, layer_idx: usize) -> KvCacheLayout {
+        self.base.kv_cache_layout_for_layer(layer_idx)
+    }
+
+    fn prefix_prefill_attention_features(
+        &self,
+        layer_idx: usize,
+    ) -> Option<PrefixPrefillAttentionFeatures> {
+        if !self.layer_has_paged_kv_cache(layer_idx) {
+            return None;
+        }
+        self.base
+            .prefix_prefill_attention_features(layer_idx)
+            .or(self.fallback)
+    }
+
+    fn prefix_prefill_kv_len_cap(&self) -> Option<usize> {
+        self.base.prefix_prefill_kv_len_cap()
     }
 }
 
@@ -207,6 +389,9 @@ pub struct ModelConfigMetadata {
 }
 
 impl ModelConfigLike for ModelConfigMetadata {
+    fn sliding_window_for_layer(&self, _layer_idx: usize) -> Option<usize> {
+        self.sliding_window
+    }
     fn max_seq_len(&self) -> usize {
         self.max_seq_len
     }
@@ -230,9 +415,9 @@ impl ModelConfigLike for ModelConfigMetadata {
     }
     fn attention_backend_kind(&self) -> AttentionBackendKind {
         match self.kv_cache_layout {
-            KvCacheLayout::Mla { .. } | KvCacheLayout::StandardNoFlashInfer => {
-                AttentionBackendKind::Standard
-            }
+            KvCacheLayout::Mla { .. }
+            | KvCacheLayout::StandardNoFlashInfer
+            | KvCacheLayout::MetalHnd => AttentionBackendKind::Standard,
             KvCacheLayout::FlashInferHnd | KvCacheLayout::Standard => {
                 select_attention_backend(self)
             }
@@ -240,9 +425,9 @@ impl ModelConfigLike for ModelConfigMetadata {
     }
     fn attention_backend_kind_for_layer(&self, layer_idx: usize) -> AttentionBackendKind {
         match self.kv_cache_layout {
-            KvCacheLayout::Mla { .. } | KvCacheLayout::StandardNoFlashInfer => {
-                AttentionBackendKind::Standard
-            }
+            KvCacheLayout::Mla { .. }
+            | KvCacheLayout::StandardNoFlashInfer
+            | KvCacheLayout::MetalHnd => AttentionBackendKind::Standard,
             KvCacheLayout::FlashInferHnd | KvCacheLayout::Standard => {
                 select_attention_backend_for_layer(self, layer_idx)
             }
@@ -258,8 +443,9 @@ impl ModelConfigLike for ModelConfigMetadata {
         match self.kv_cache_layout() {
             KvCacheLayout::Standard
             | KvCacheLayout::StandardNoFlashInfer
+            | KvCacheLayout::MetalHnd
             | KvCacheLayout::FlashInferHnd => {
-                2 * self.num_kv_heads * self.k_head_dim.max(self.v_head_dim)
+                self.num_kv_heads * (self.k_head_dim + self.v_head_dim)
             }
             KvCacheLayout::Mla {
                 kv_lora_rank,
@@ -269,9 +455,251 @@ impl ModelConfigLike for ModelConfigMetadata {
     }
 }
 
+/// Base config plus a per-layer mask of which layers keep a paged KV cache.
+///
+/// Hybrid models interleave attention layers with linear/recurrent ones that hold no paged cache.
+/// Sizing the cache off `num_layers` there over-allocates by the ratio of attention to total layers.
+#[derive(Clone)]
+pub struct HybridPagedKvCacheConfig {
+    base: ModelConfigMetadata,
+    paged_layers: Vec<bool>,
+    prefix_prefill_attention_features: Vec<Option<PrefixPrefillAttentionFeatures>>,
+}
+
+impl HybridPagedKvCacheConfig {
+    pub fn new(base: ModelConfigMetadata, paged_layers: Vec<bool>) -> Self {
+        let num_layers = base.num_layers();
+        Self {
+            base,
+            paged_layers,
+            prefix_prefill_attention_features: vec![None; num_layers],
+        }
+    }
+
+    pub fn with_prefix_prefill_attention_features(
+        mut self,
+        features: Vec<PrefixPrefillAttentionFeatures>,
+    ) -> Self {
+        assert_eq!(features.len(), self.paged_layers.len());
+        self.prefix_prefill_attention_features = features.into_iter().map(Some).collect();
+        self
+    }
+
+    pub fn with_uniform_prefix_prefill_attention_features(
+        mut self,
+        features: PrefixPrefillAttentionFeatures,
+    ) -> Self {
+        for (features_slot, has_paged_cache) in self
+            .prefix_prefill_attention_features
+            .iter_mut()
+            .zip(&self.paged_layers)
+        {
+            if *has_paged_cache {
+                *features_slot = Some(features);
+            }
+        }
+        self
+    }
+}
+
+impl ModelConfigLike for HybridPagedKvCacheConfig {
+    fn sliding_window_for_layer(&self, layer_idx: usize) -> Option<usize> {
+        self.base.sliding_window_for_layer(layer_idx)
+    }
+    fn max_seq_len(&self) -> usize {
+        self.base.max_seq_len()
+    }
+    fn num_layers(&self) -> usize {
+        self.base.num_layers()
+    }
+    fn hidden_size(&self) -> usize {
+        self.base.hidden_size()
+    }
+    fn num_kv_heads(&self) -> usize {
+        self.base.num_kv_heads()
+    }
+    fn num_attn_heads(&self) -> usize {
+        self.base.num_attn_heads()
+    }
+    fn k_head_dim(&self) -> usize {
+        self.base.k_head_dim()
+    }
+    fn v_head_dim(&self) -> usize {
+        self.base.v_head_dim()
+    }
+    fn num_attn_heads_for_layer(&self, layer_idx: usize) -> usize {
+        self.base.num_attn_heads_for_layer(layer_idx)
+    }
+    fn num_kv_heads_for_layer(&self, layer_idx: usize) -> usize {
+        self.base.num_kv_heads_for_layer(layer_idx)
+    }
+    fn k_head_dim_for_layer(&self, layer_idx: usize) -> usize {
+        self.base.k_head_dim_for_layer(layer_idx)
+    }
+    fn v_head_dim_for_layer(&self, layer_idx: usize) -> usize {
+        self.base.v_head_dim_for_layer(layer_idx)
+    }
+    fn has_kv_cache_sharing(&self) -> bool {
+        self.base.has_kv_cache_sharing()
+    }
+    fn kv_cache_topology(&self) -> KvCacheTopology {
+        self.base.kv_cache_topology()
+    }
+    fn attention_backend_kind(&self) -> AttentionBackendKind {
+        self.base.attention_backend_kind()
+    }
+    fn attention_backend_kind_for_layer(&self, layer_idx: usize) -> AttentionBackendKind {
+        self.base.attention_backend_kind_for_layer(layer_idx)
+    }
+    fn kv_cache_layout(&self) -> KvCacheLayout {
+        self.base.kv_cache_layout()
+    }
+    fn kv_cache_layout_for_layer(&self, layer_idx: usize) -> KvCacheLayout {
+        self.base.kv_cache_layout_for_layer(layer_idx)
+    }
+    fn kv_cache_elements_per_token(&self) -> usize {
+        self.base.kv_cache_elements_per_token()
+    }
+    fn layer_has_paged_kv_cache(&self, layer_idx: usize) -> bool {
+        self.paged_layers.get(layer_idx).copied().unwrap_or(true)
+    }
+    fn prefix_prefill_attention_features(
+        &self,
+        layer_idx: usize,
+    ) -> Option<PrefixPrefillAttentionFeatures> {
+        if !self.layer_has_paged_kv_cache(layer_idx) {
+            return None;
+        }
+        self.prefix_prefill_attention_features
+            .get(layer_idx)
+            .copied()
+            .flatten()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::KvCacheTopology;
+    use super::{
+        AttentionBackendKind, KvCacheLayout, KvCacheTopology, ModelConfigLike, ModelConfigMetadata,
+    };
+
+    #[test]
+    fn attention_feature_fallback_preserves_geometry_and_per_layer_features() {
+        use super::{
+            with_attention_features, HybridPagedKvCacheConfig, PrefixPrefillAttentionFeatures,
+        };
+        use std::sync::Arc;
+
+        let known = PrefixPrefillAttentionFeatures {
+            has_sliding_window: true,
+            ..Default::default()
+        };
+        let fallback = PrefixPrefillAttentionFeatures {
+            has_softcap: true,
+            ..Default::default()
+        };
+        let base = Arc::new(HybridPagedKvCacheConfig {
+            base: ModelConfigMetadata {
+                max_seq_len: 8192,
+                num_layers: 3,
+                hidden_size: 512,
+                num_kv_heads: 2,
+                num_attn_heads: 8,
+                sliding_window: Some(256),
+                k_head_dim: 64,
+                v_head_dim: 96,
+                kv_cache_layout: KvCacheLayout::StandardNoFlashInfer,
+            },
+            paged_layers: vec![true, true, false],
+            prefix_prefill_attention_features: vec![Some(known), None, None],
+        });
+        let wrapped = with_attention_features(base.clone(), Some(fallback));
+        assert_eq!(wrapped.prefix_prefill_attention_features(0), Some(known));
+        assert_eq!(wrapped.prefix_prefill_attention_features(1), Some(fallback));
+        assert_eq!(wrapped.prefix_prefill_attention_features(2), None);
+        assert_eq!(wrapped.max_seq_len(), base.max_seq_len());
+        assert_eq!(wrapped.num_layers(), base.num_layers());
+        assert_eq!(wrapped.hidden_size(), base.hidden_size());
+        assert_eq!(wrapped.kv_cache_layout(), base.kv_cache_layout());
+        assert_eq!(
+            wrapped.total_kv_cache_elements_per_token(),
+            base.total_kv_cache_elements_per_token()
+        );
+        for layer in 0..base.num_layers() {
+            assert_eq!(
+                wrapped.num_attn_heads_for_layer(layer),
+                base.num_attn_heads_for_layer(layer)
+            );
+            assert_eq!(
+                wrapped.num_kv_heads_for_layer(layer),
+                base.num_kv_heads_for_layer(layer)
+            );
+            assert_eq!(
+                wrapped.k_head_dim_for_layer(layer),
+                base.k_head_dim_for_layer(layer)
+            );
+            assert_eq!(
+                wrapped.v_head_dim_for_layer(layer),
+                base.v_head_dim_for_layer(layer)
+            );
+            assert_eq!(
+                wrapped.sliding_window_for_layer(layer),
+                base.sliding_window_for_layer(layer)
+            );
+            assert_eq!(
+                wrapped.layer_kv_cache_elements_per_token(layer),
+                base.layer_kv_cache_elements_per_token(layer)
+            );
+            assert_eq!(
+                wrapped.attention_backend_kind_for_layer(layer),
+                base.attention_backend_kind_for_layer(layer)
+            );
+        }
+        let original: Arc<dyn ModelConfigLike + Send + Sync> = base;
+        assert!(Arc::ptr_eq(
+            &original,
+            &with_attention_features(original.clone(), None)
+        ));
+    }
+
+    #[test]
+    fn attention_feature_fallback_preserves_dense_prefix_cap() {
+        struct CappedConfig;
+        impl ModelConfigLike for CappedConfig {
+            fn max_seq_len(&self) -> usize {
+                65_536
+            }
+            fn num_layers(&self) -> usize {
+                1
+            }
+            fn hidden_size(&self) -> usize {
+                512
+            }
+            fn num_kv_heads(&self) -> usize {
+                2
+            }
+            fn num_attn_heads(&self) -> usize {
+                8
+            }
+            fn k_head_dim(&self) -> usize {
+                64
+            }
+            fn v_head_dim(&self) -> usize {
+                64
+            }
+            fn prefix_prefill_kv_len_cap(&self) -> Option<usize> {
+                Some(1024)
+            }
+        }
+
+        let base = std::sync::Arc::new(CappedConfig);
+        for fallback in [None, Some(super::PrefixPrefillAttentionFeatures::default())] {
+            let wrapped = super::with_attention_features(base.clone(), fallback);
+            assert_eq!(wrapped.prefix_prefill_kv_len_cap(), Some(1024));
+            let borrowed = super::AttentionFeaturesConfig::new(wrapped.as_ref(), fallback);
+            assert_eq!(borrowed.prefix_prefill_kv_len_cap(), Some(1024));
+        }
+    }
 
     #[test]
     fn all_own_topology_uses_single_prefix_cache_group() {
@@ -289,5 +717,73 @@ mod tests {
         assert!(topology.uses_own_kv_cache_for_layer(1));
         assert!(!topology.uses_own_kv_cache_for_layer(2));
         assert_eq!(topology.owner_for_layer(3), 1);
+    }
+
+    #[test]
+    fn hybrid_totals_skip_layers_without_a_paged_cache() {
+        let base = ModelConfigMetadata {
+            max_seq_len: 32_768,
+            num_layers: 4,
+            hidden_size: 896,
+            num_kv_heads: 2,
+            num_attn_heads: 16,
+            sliding_window: None,
+            k_head_dim: 128,
+            v_head_dim: 128,
+            kv_cache_layout: KvCacheLayout::Standard,
+        };
+        let per_layer = base.kv_cache_elements_per_token();
+        assert_eq!(base.total_kv_cache_elements_per_token(), 4 * per_layer);
+
+        let hybrid = super::HybridPagedKvCacheConfig::new(base, vec![true, false, false, true]);
+        assert_eq!(hybrid.total_kv_cache_elements_per_token(), 2 * per_layer);
+        assert_eq!(hybrid.layer_kv_cache_elements_per_token(1), None);
+    }
+
+    #[test]
+    fn asymmetric_head_dimensions_charge_actual_key_and_value_storage() {
+        let mut config = ModelConfigMetadata {
+            max_seq_len: 4096,
+            num_layers: 3,
+            hidden_size: 512,
+            num_kv_heads: 2,
+            num_attn_heads: 8,
+            sliding_window: None,
+            k_head_dim: 64,
+            v_head_dim: 128,
+            kv_cache_layout: KvCacheLayout::StandardNoFlashInfer,
+        };
+        assert_eq!(config.kv_cache_elements_per_token(), 2 * (64 + 128));
+        assert_eq!(
+            config.total_kv_cache_elements_per_token(),
+            3 * 2 * (64 + 128)
+        );
+        config.kv_cache_layout = KvCacheLayout::Mla {
+            kv_lora_rank: 512,
+            kpe_head_dim: 64,
+        };
+        assert_eq!(config.kv_cache_elements_per_token(), 512 + 64);
+        assert_eq!(config.total_kv_cache_elements_per_token(), 3 * (512 + 64));
+    }
+
+    #[test]
+    fn unsupported_flashinfer_group_uses_standard_paged_attention() {
+        let config = ModelConfigMetadata {
+            max_seq_len: 32_768,
+            num_layers: 24,
+            hidden_size: 1152,
+            num_kv_heads: 2,
+            num_attn_heads: 18,
+            sliding_window: None,
+            k_head_dim: 64,
+            v_head_dim: 64,
+            kv_cache_layout: KvCacheLayout::Standard,
+        };
+
+        assert_eq!(
+            config.attention_backend_kind(),
+            AttentionBackendKind::Standard
+        );
+        assert_eq!(config.kv_cache_layout(), KvCacheLayout::Standard);
     }
 }

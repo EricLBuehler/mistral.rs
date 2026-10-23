@@ -15,6 +15,10 @@ pub enum DeviceMappedMask {
     None,
     /// Flash attention handles causality. No tensor needed.
     CausalFlash,
+    Bidirectional,
+    ChunkedCausal {
+        chunk_size: usize,
+    },
     /// Explicit mask tensor, replicated to each device.
     Custom(HashMap<DeviceLocation, Tensor>),
 }
@@ -25,6 +29,10 @@ impl DeviceMappedMask {
         match mask {
             crate::attention::AttentionMask::None => Ok(Self::None),
             crate::attention::AttentionMask::CausalFlash => Ok(Self::CausalFlash),
+            crate::attention::AttentionMask::Bidirectional => Ok(Self::Bidirectional),
+            crate::attention::AttentionMask::ChunkedCausal { chunk_size } => {
+                Ok(Self::ChunkedCausal { chunk_size })
+            }
             crate::attention::AttentionMask::Custom(tensor) => {
                 let mut masks = HashMap::new();
                 let devices = mapper.get_unique_devices();
@@ -45,6 +53,10 @@ impl DeviceMappedMask {
         match mask {
             crate::attention::AttentionMask::None => Self::None,
             crate::attention::AttentionMask::CausalFlash => Self::CausalFlash,
+            crate::attention::AttentionMask::Bidirectional => Self::Bidirectional,
+            crate::attention::AttentionMask::ChunkedCausal { chunk_size } => {
+                Self::ChunkedCausal { chunk_size }
+            }
             crate::attention::AttentionMask::Custom(tensor) => {
                 let mut masks = HashMap::new();
                 masks.insert(tensor.device().location(), tensor);
@@ -58,6 +70,10 @@ impl DeviceMappedMask {
         match self {
             Self::None => crate::attention::AttentionMask::None,
             Self::CausalFlash => crate::attention::AttentionMask::CausalFlash,
+            Self::Bidirectional => crate::attention::AttentionMask::Bidirectional,
+            Self::ChunkedCausal { chunk_size } => crate::attention::AttentionMask::ChunkedCausal {
+                chunk_size: *chunk_size,
+            },
             Self::Custom(masks) => {
                 let tensor = masks
                     .get(&device.location())

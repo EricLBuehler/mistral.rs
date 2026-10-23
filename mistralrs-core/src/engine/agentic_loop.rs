@@ -203,6 +203,25 @@ pub(super) fn append_assistant_tool_call(
     messages.push(message);
 }
 
+fn attach_reasoning_to_latest_assistant_tool_call(
+    messages: &mut [IndexMap<String, MessageContent>],
+    reasoning_content: Option<&str>,
+) {
+    let Some(reasoning_content) = reasoning_content.filter(|content| !content.is_empty()) else {
+        return;
+    };
+    let Some(message) = messages.iter_mut().rev().find(|message| {
+        message.contains_key("tool_calls")
+            && matches!(message.get("role"), Some(Either::Left(role)) if role == "assistant")
+    }) else {
+        return;
+    };
+    message.insert(
+        "reasoning_content".to_string(),
+        Either::Left(reasoning_content.to_string()),
+    );
+}
+
 pub(super) fn append_tool_response(
     messages: &mut Vec<IndexMap<String, MessageContent>>,
     tool_name: &str,
@@ -336,6 +355,20 @@ async fn forward_passthrough(
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct ClientDisconnected;
+
+async fn recv_or_client_disconnect<T>(
+    receiver: &mut tokio::sync::mpsc::Receiver<T>,
+    user_sender: &tokio::sync::mpsc::Sender<Response>,
+) -> Result<Option<T>, ClientDisconnected> {
+    tokio::select! {
+        biased;
+        _ = user_sender.closed() => Err(ClientDisconnected),
+        response = receiver.recv() => Ok(response),
+    }
+}
+
 #[derive(Default)]
 struct AgenticUsageAccumulator {
     prompt_tokens: usize,
@@ -364,6 +397,7 @@ impl AgenticUsageAccumulator {
                 completion_tokens: self.completion_tokens,
                 prompt_tokens: self.prompt_tokens,
                 total_tokens,
+                prompt_tokens_details: None,
                 avg_tok_per_sec: tps(total_tokens, total_time_sec),
                 avg_prompt_tok_per_sec: tps(self.prompt_tokens, self.total_prompt_time_sec),
                 avg_compl_tok_per_sec: tps(self.completion_tokens, self.total_completion_time_sec),
@@ -1274,9 +1308,13 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                 .await;
 
             if !is_streaming {
-                let Some(resp) = receiver.recv().await else {
-                    tracing::warn!("Engine closed without sending a response.");
-                    return;
+                let resp = match recv_or_client_disconnect(&mut receiver, &user_sender).await {
+                    Ok(Some(resp)) => resp,
+                    Ok(None) => {
+                        tracing::warn!("Engine closed without sending a response.");
+                        return;
+                    }
+                    Err(_) => return,
                 };
                 let Some(resp) = forward_passthrough(resp, &user_sender).await else {
                     return;
@@ -1337,7 +1375,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                             .unwrap_or_else(|| "Agent action was denied.".to_string()),
                     ))
                 };
-                let Some((next_visible, complete_data, files)) = outcome else {
+                let Some((mut next_visible, complete_data, files)) = outcome else {
                     save_session(&this_clone, &session_id, &visible_req);
                     let mut final_resp = done.clone();
                     if let Some(usage) = usage_accumulator.aggregate() {
@@ -1347,6 +1385,10 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                     let _ = user_sender.send(Response::Done(final_resp)).await;
                     return;
                 };
+                attach_reasoning_to_latest_assistant_tool_call(
+                    get_messages_mut(&mut next_visible),
+                    done.choices[0].message.reasoning_content.as_deref(),
+                );
 
                 emit_files(&this_clone, &session_id, files, &user_sender).await;
 
@@ -1367,8 +1409,14 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                 // Hold the finish-reason chunk so we can stamp the session ID on it if this is the final round.
                 let mut last_choice = None;
                 let mut held_final_chunk: Option<crate::ChatCompletionChunkResponse> = None;
+                let mut round_reasoning_content = String::new();
 
-                while let Some(resp) = receiver.recv().await {
+                loop {
+                    let resp = match recv_or_client_disconnect(&mut receiver, &user_sender).await {
+                        Ok(Some(resp)) => resp,
+                        Ok(None) => break,
+                        Err(_) => return,
+                    };
                     let Some(resp) = forward_passthrough(resp, &user_sender).await else {
                         return;
                     };
@@ -1376,6 +1424,9 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                         Response::Chunk(chunk) => {
                             // Suppress tool-call chunks. Forwarding them would surface a premature finish_reason before the tool loop continues.
                             let first_choice = &chunk.choices[0];
+                            if let Some(reasoning_content) = &first_choice.delta.reasoning_content {
+                                round_reasoning_content.push_str(reasoning_content);
+                            }
                             let is_final = first_choice.finish_reason.is_some();
                             if is_final {
                                 if let Some(usage) = &chunk.usage {
@@ -1456,10 +1507,14 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                             .unwrap_or_else(|| "Agent action was denied.".to_string()),
                     ))
                 };
-                let Some((next_visible, complete_data, files)) = outcome else {
+                let Some((mut next_visible, complete_data, files)) = outcome else {
                     save_session(&this_clone, &session_id, &visible_req);
                     break;
                 };
+                attach_reasoning_to_latest_assistant_tool_call(
+                    get_messages_mut(&mut next_visible),
+                    Some(&round_reasoning_content),
+                );
 
                 emit_files(&this_clone, &session_id, files, &user_sender).await;
 
@@ -1481,4 +1536,48 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
     });
 
     get_mut_arcmutex!(this.handles).push(handle);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{tools::ToolCallType, CalledFunction};
+
+    #[tokio::test]
+    async fn client_disconnect_drops_the_internal_response_bridge() {
+        let (user_sender, user_receiver) = tokio::sync::mpsc::channel(1);
+        let (internal_sender, mut internal_receiver) = tokio::sync::mpsc::channel::<usize>(1);
+
+        let task = tokio::spawn(async move {
+            recv_or_client_disconnect(&mut internal_receiver, &user_sender).await
+        });
+        tokio::task::yield_now().await;
+        assert!(!internal_sender.is_closed());
+
+        drop(user_receiver);
+        assert_eq!(task.await.unwrap(), Err(ClientDisconnected));
+        assert!(internal_sender.is_closed());
+    }
+
+    #[test]
+    fn assistant_tool_call_history_preserves_reasoning() {
+        let mut messages = Vec::new();
+        let tool_call = ToolCallResponse {
+            index: 0,
+            id: "call-1".to_string(),
+            tp: ToolCallType::Function,
+            function: CalledFunction {
+                name: "get_weather".to_string(),
+                arguments: r#"{"city":"Paris"}"#.to_string(),
+            },
+        };
+        append_assistant_tool_call(&mut messages, &tool_call);
+
+        attach_reasoning_to_latest_assistant_tool_call(&mut messages, Some("Need weather"));
+
+        assert_eq!(
+            messages[0].get("reasoning_content"),
+            Some(&Either::Left("Need weather".to_string()))
+        );
+    }
 }

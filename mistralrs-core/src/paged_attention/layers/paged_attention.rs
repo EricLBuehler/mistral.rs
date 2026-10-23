@@ -1,27 +1,117 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Once};
 
 use candle_core::{DType, Device, DeviceLocation, Result, Tensor};
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use mistralrs_paged_attn::{
-    flashinfer_decode, gather_kv_cache_flashinfer, reshape_and_cache_flashinfer,
-    FlashInferDecodeScratch,
+    fa3_fp8_decode, flashinfer_decode, gather_kv_cache_flashinfer, reshape_and_cache_flashinfer,
+    Fa3DecodeParams, FlashInferDecodeScratch, KvCacheScales as FlashInferKvCacheScales,
+    DEFAULT_FP8_KV_CACHE_SCALES,
 };
-use mistralrs_paged_attn::{kv_scale_update, paged_attention, reshape_and_cache};
+#[cfg(feature = "metal")]
+use mistralrs_paged_attn::{metal_paged_prefill, MetalPagedPrefillRequest, MetalPagedPrefillShape};
+use mistralrs_paged_attn::{paged_attention, reshape_and_cache};
 
-const KV_SCALE_UPDATE_ITERATION: i32 = 128;
-use std::sync::atomic::{AtomicI32, Ordering};
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+use crate::paged_attention::plan::gather_prefill_uses_sinks;
 
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+use crate::attention::sliding_window_left;
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+use crate::flashinfer::{
+    fa3_device_num_sm, fa3_prefill_cache_num_sm, with_fa3_prefill_workspace, Fa3DecodeScheduleKey,
+    Fa3DecodeView, Fa3PagedScheduleShape,
+};
+#[cfg(feature = "metal")]
+use crate::paged_attention::mask_cache::PrefixMaskKey;
 use crate::{
     attention::{AttentionMask, SdpaParams},
     layers::Sdpa,
     paged_attention::{
-        plan::{DecodePlan, DecodePlanInput, PrefixPrefillPlan, PrefixPrefillPlanInput},
-        AttentionBackendKind, _PAD_SLOT_ID,
+        block_aligned_sliding_window_start,
+        mask_cache::PrefixMaskCache,
+        plan::{
+            gather_prefill_uses_packed_varlen, gather_prefill_workspace_for_lengths, DecodePlan,
+            DecodePlanInput, GatherPrefillWorkspaceRequest, PrefixPrefillPlan,
+            PrefixPrefillPlanInput,
+        },
+        AttentionBackendKind, Fp8AttentionScales, _PAD_SLOT_ID,
     },
     pipeline::text_models_inputs_processor::{
-        FlashKMeta, FlashParams, PagedAttentionInputMetadata,
+        AttentionMemoryBudget, FlashKMeta, FlashParams, PagedAttentionInputMetadata,
     },
 };
+
+static UNCALIBRATED_FP8_ATTENTION_WARNING: Once = Once::new();
+const METAL_DONOR_DECODE_HEAD_SIZES: [usize; 2] = [256, 512];
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[derive(Clone, Copy)]
+struct Fa3DecodeCandidate {
+    key: Fa3DecodeScheduleKey,
+    query_dtype: DType,
+    query_contiguous: bool,
+    key_cache_dtype: DType,
+    value_cache_dtype: DType,
+    mask_is_none: bool,
+    shapes_match: bool,
+    has_alibi: bool,
+    has_sinks: bool,
+    has_softcap: bool,
+    has_sliding_window: bool,
+    has_noncausal_mm_context: bool,
+}
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+impl Fa3DecodeCandidate {
+    fn schedule_key(self) -> Option<Fa3DecodeScheduleKey> {
+        (self.query_dtype == DType::BF16
+            && self.query_contiguous
+            && self.key_cache_dtype == DType::F8E4M3
+            && self.value_cache_dtype == DType::F8E4M3
+            && self.mask_is_none
+            && self.shapes_match
+            && !self.has_alibi
+            && !self.has_sinks
+            && !self.has_softcap
+            && !self.has_sliding_window
+            && !self.has_noncausal_mm_context
+            && self.key.supported())
+        .then_some(self.key)
+    }
+}
+
+#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[derive(Clone, Copy)]
+struct FlashInferDecodeCall<'call, 'ctx> {
+    ctx: &'call PagedForwardCtx<'ctx>,
+    query: &'call Tensor,
+    key_cache: &'call Tensor,
+    value_cache: &'call Tensor,
+    dev: &'call DeviceLocation,
+    attention_mask: &'call AttentionMask,
+}
+
+#[derive(Clone, Copy)]
+struct CacheScales<'a> {
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    attention: Fp8AttentionScales,
+    k: Option<&'a Tensor>,
+    v: Option<&'a Tensor>,
+}
+
+impl CacheScales<'_> {
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    fn flashinfer(self, key_cache: &Tensor) -> FlashInferKvCacheScales {
+        if key_cache.dtype() == DType::F8E4M3 {
+            FlashInferKvCacheScales {
+                k: self.attention.k,
+                v: self.attention.v,
+            }
+        } else {
+            DEFAULT_FP8_KV_CACHE_SCALES
+        }
+    }
+}
 
 fn resolve_tensor_for_device(
     tensors: &HashMap<candle_core::DeviceLocation, Tensor>,
@@ -37,19 +127,28 @@ fn resolve_tensor_for_device(
     candle_core::bail!("Missing {what} tensor for {:?}", device.location())
 }
 
-fn cumulative_seqlens_from_lengths(lengths: &[usize], device: &Device) -> Result<Tensor> {
-    let mut cumulative = Vec::with_capacity(lengths.len() + 1);
-    cumulative.push(0u32);
-    for &len in lengths {
-        #[allow(clippy::cast_possible_truncation)]
-        cumulative.push(cumulative.last().copied().unwrap_or(0) + len as u32);
-    }
-    Tensor::new(&cumulative[..], &Device::Cpu)?.to_device(device)
+fn checked_sequence_token_count(lengths: &[usize]) -> Result<usize> {
+    let total = lengths.iter().try_fold(0usize, |total, &len| {
+        total
+            .checked_add(len)
+            .ok_or_else(|| candle_core::Error::msg("sequence token count overflow"))
+    })?;
+    i32::try_from(total)
+        .map_err(|_| candle_core::Error::msg("sequence token count exceeds kernel i32 limit"))?;
+    Ok(total)
 }
 
-fn block_aligned_window_start(full_len: usize, window: usize, block_size: usize) -> usize {
-    let window_start = full_len.saturating_sub(window);
-    (window_start / block_size) * block_size
+fn cumulative_seqlens_from_lengths(lengths: &[usize], device: &Device) -> Result<Tensor> {
+    let expected_total = checked_sequence_token_count(lengths)?;
+    let mut cumulative = Vec::with_capacity(lengths.len() + 1);
+    let mut total = 0usize;
+    cumulative.push(0u32);
+    for &len in lengths {
+        total += len;
+        cumulative.push(u32::try_from(total).map_err(candle_core::Error::wrap)?);
+    }
+    debug_assert_eq!(total, expected_total);
+    Tensor::new(&cumulative[..], &Device::Cpu)?.to_device(device)
 }
 
 fn block_aligned_window_len_for_query(
@@ -58,16 +157,17 @@ fn block_aligned_window_len_for_query(
     window: usize,
     block_size: usize,
 ) -> usize {
-    let block_start = block_aligned_window_start(full_len, window, block_size);
-    let query_start = full_len.saturating_sub(query_len);
-    if block_start <= query_start {
-        full_len - block_start
-    } else {
-        full_len
-    }
+    full_len - block_aligned_sliding_window_start(full_len, query_len, window, block_size)
+}
+
+fn is_metal_hnd_cache(key_cache: &Tensor, value_cache: &Tensor) -> bool {
+    key_cache.device().is_metal() && key_cache.rank() == 4 && value_cache.rank() == 4
 }
 
 fn cache_block_size(key_cache: &Tensor, value_cache: &Tensor) -> Result<usize> {
+    if is_metal_hnd_cache(key_cache, value_cache) {
+        return Ok(key_cache.dims4()?.2);
+    }
     match AttentionBackendKind::from_cache(key_cache, value_cache) {
         AttentionBackendKind::FlashInfer => Ok(key_cache.dims4()?.2),
         AttentionBackendKind::Standard => Ok(key_cache.dims5()?.3),
@@ -75,6 +175,10 @@ fn cache_block_size(key_cache: &Tensor, value_cache: &Tensor) -> Result<usize> {
 }
 
 fn cache_kv_shape(key_cache: &Tensor, value_cache: &Tensor) -> Result<(usize, usize)> {
+    if is_metal_hnd_cache(key_cache, value_cache) {
+        let (_, num_kv_heads, _, head_size) = key_cache.dims4()?;
+        return Ok((num_kv_heads, head_size));
+    }
     match AttentionBackendKind::from_cache(key_cache, value_cache) {
         AttentionBackendKind::FlashInfer => {
             let (_, num_kv_heads, _, head_size) = key_cache.dims4()?;
@@ -87,40 +191,124 @@ fn cache_kv_shape(key_cache: &Tensor, value_cache: &Tensor) -> Result<(usize, us
     }
 }
 
-fn cache_input_is_packed(tensor: &Tensor) -> Result<bool> {
-    let (_, heads, head_size) = tensor.dims3()?;
+fn cache_input_shape(tensor: &Tensor) -> Result<(usize, usize, usize)> {
+    match *tensor.dims() {
+        [tokens, heads, head_size] => Ok((tokens, heads, head_size)),
+        [batch, seq_len, heads, head_size] => Ok((
+            batch
+                .checked_mul(seq_len)
+                .ok_or_else(|| candle_core::Error::msg("cache input token count overflow"))?,
+            heads,
+            head_size,
+        )),
+        _ => candle_core::bail!(
+            "cache input must have shape [tokens, heads, head_size] or [batch, seq_len, heads, head_size], got {:?}",
+            tensor.shape()
+        ),
+    }
+}
+
+fn cache_input_can_write_directly(tensor: &Tensor) -> Result<bool> {
+    let (_, heads, head_size) = cache_input_shape(tensor)?;
+    let dims = tensor.dims();
     let stride = tensor.stride();
-    Ok(stride[2] == 1 && stride[1] == head_size && stride[0] == heads * head_size)
+    let row_stride = match *dims {
+        [_, _, _] => stride[0],
+        [batch, seq_len, _, _] => {
+            if tensor.device().is_metal() || !cfg!(all(feature = "cuda", target_family = "unix")) {
+                return Ok(false);
+            }
+            let row_stride = if seq_len == 1 { stride[0] } else { stride[1] };
+            if batch > 1 && seq_len > 1 && stride[0] != seq_len.saturating_mul(row_stride) {
+                return Ok(false);
+            }
+            row_stride
+        }
+        _ => unreachable!(),
+    };
+    Ok(stride[stride.len() - 1] == 1
+        && stride[stride.len() - 2] == head_size
+        && row_stride >= heads.saturating_mul(head_size))
+}
+
+fn pack_cache_input(tensor: &Tensor) -> Result<Tensor> {
+    if tensor.device().is_metal() {
+        tensor.contiguous()?
+    } else {
+        tensor.force_contiguous()?
+    }
+    .reshape(cache_input_shape(tensor)?)
+}
+
+struct CacheWriteParams<'a> {
+    scales: CacheScales<'a>,
+    slot_mapping: &'a Tensor,
+    memory: Option<&'a AttentionMemoryBudget>,
 }
 
 fn write_kv_cache(
     key: &Tensor,
     value: &Tensor,
-    k_scale: Option<&Tensor>,
-    v_scale: Option<&Tensor>,
     key_cache: &mut Tensor,
     value_cache: &mut Tensor,
-    slot_mapping: &Tensor,
+    params: CacheWriteParams<'_>,
 ) -> Result<()> {
+    let CacheWriteParams {
+        scales,
+        slot_mapping,
+        memory,
+    } = params;
+    #[cfg(not(feature = "metal"))]
+    let _ = memory;
+    #[cfg(feature = "metal")]
+    if key.device().is_metal() {
+        let mut bytes = 0usize;
+        for tensor in [key, value] {
+            if !cache_input_can_write_directly(tensor)? {
+                let buffer = tensor
+                    .elem_count()
+                    .checked_mul(tensor.dtype().size_in_bytes())
+                    .and_then(usize::checked_next_power_of_two)
+                    .ok_or_else(|| candle_core::Error::msg("KV packing workspace overflow"))?;
+                bytes = bytes
+                    .checked_add(buffer)
+                    .ok_or_else(|| candle_core::Error::msg("KV packing workspace overflow"))?;
+            }
+        }
+        if bytes > 0 {
+            crate::paged_attention::plan::check_metal_attention_workspace(
+                key.device(),
+                bytes,
+                memory,
+            )?;
+        }
+    }
     let key_packed;
-    let key = if cache_input_is_packed(key)? {
+    let key = if cache_input_can_write_directly(key)? {
         key
     } else {
-        key_packed = key.contiguous()?;
+        key_packed = pack_cache_input(key)?;
         &key_packed
     };
     let value_packed;
-    let value = if cache_input_is_packed(value)? {
+    let value = if cache_input_can_write_directly(value)? {
         value
     } else {
-        value_packed = value.contiguous()?;
+        value_packed = pack_cache_input(value)?;
         &value_packed
     };
     match AttentionBackendKind::from_cache(key_cache, value_cache) {
         AttentionBackendKind::FlashInfer => {
             #[cfg(all(feature = "cuda", target_family = "unix"))]
             {
-                reshape_and_cache_flashinfer(key, value, key_cache, value_cache, slot_mapping)
+                reshape_and_cache_flashinfer(
+                    key,
+                    value,
+                    key_cache,
+                    value_cache,
+                    slot_mapping,
+                    scales.flashinfer(key_cache),
+                )
             }
             #[cfg(not(all(feature = "cuda", target_family = "unix")))]
             {
@@ -130,8 +318,8 @@ fn write_kv_cache(
         AttentionBackendKind::Standard => reshape_and_cache(
             key,
             value,
-            k_scale,
-            v_scale,
+            scales.k,
+            scales.v,
             key_cache,
             value_cache,
             slot_mapping,
@@ -142,17 +330,25 @@ fn write_kv_cache(
 fn gather_kv_cache_for_layout(
     key_cache: &Tensor,
     value_cache: &Tensor,
-    k_scale: Option<&Tensor>,
-    v_scale: Option<&Tensor>,
+    scales: CacheScales<'_>,
     block_tables: &Tensor,
     cu_kv: &Tensor,
+    num_tokens: usize, // Must equal cu_kv[-1].
     dtype: DType,
 ) -> Result<(Tensor, Tensor)> {
     match AttentionBackendKind::from_cache(key_cache, value_cache) {
         AttentionBackendKind::FlashInfer => {
             #[cfg(all(feature = "cuda", target_family = "unix"))]
             {
-                gather_kv_cache_flashinfer(key_cache, value_cache, block_tables, cu_kv, dtype)
+                gather_kv_cache_flashinfer(
+                    key_cache,
+                    value_cache,
+                    block_tables,
+                    cu_kv,
+                    num_tokens,
+                    dtype,
+                    scales.flashinfer(key_cache),
+                )
             }
             #[cfg(not(all(feature = "cuda", target_family = "unix")))]
             {
@@ -162,10 +358,11 @@ fn gather_kv_cache_for_layout(
         AttentionBackendKind::Standard => mistralrs_paged_attn::gather_kv_cache(
             key_cache,
             value_cache,
-            k_scale,
-            v_scale,
+            scales.k,
+            scales.v,
             block_tables,
             cu_kv,
+            num_tokens,
             dtype,
         ),
     }
@@ -187,6 +384,144 @@ fn new_token_lens_from_slot_mapping(
         .into_iter()
         .map(|row| row.into_iter().filter(|&slot| slot != _PAD_SLOT_ID).count())
         .collect())
+}
+
+fn query_layout_is_dense(query_lens: &[usize], batch_size: usize, seq_len: usize) -> bool {
+    query_lens.iter().sum::<usize>() == batch_size * seq_len
+}
+
+fn validate_varlen_segment_partition(
+    query_lens: &[usize],
+    segment_lens: &[usize],
+) -> Result<usize> {
+    if query_lens.is_empty()
+        || query_lens.contains(&0)
+        || segment_lens.is_empty()
+        || segment_lens.contains(&0)
+    {
+        candle_core::bail!("packed varlen segments contain an empty sequence");
+    }
+    let mut segment_index = 0usize;
+    for &query_len in query_lens {
+        let mut remaining = query_len;
+        while remaining > 0 {
+            let segment = segment_lens.get(segment_index).copied().ok_or_else(|| {
+                candle_core::Error::msg("packed varlen segments do not cover every query")
+            })?;
+            if segment > remaining {
+                candle_core::bail!("packed varlen segment crosses a logical query boundary");
+            }
+            remaining -= segment;
+            segment_index += 1;
+        }
+    }
+    if segment_index != segment_lens.len() {
+        candle_core::bail!("packed varlen segments contain trailing queries");
+    }
+    Ok(segment_lens.iter().copied().max().unwrap_or(0))
+}
+
+fn decode_query_rows(query: &Tensor, kv_lens: &[usize]) -> Result<usize> {
+    let query_rows = query.dim(0)?;
+    if query_rows != kv_lens.len() {
+        candle_core::bail!(
+            "decode gather has {query_rows} query rows for {} KV rows",
+            kv_lens.len()
+        );
+    }
+    Ok(query_rows)
+}
+
+fn pad_packed_query(query: &Tensor, query_lens: &[usize]) -> Result<Tensor> {
+    let (batch, heads, total_tokens, head_size) = query.dims4()?;
+    if batch != 1 || query_lens.is_empty() || query_lens.contains(&0) {
+        candle_core::bail!("packed sinks query has invalid logical dimensions");
+    }
+    let logical_tokens = query_lens.iter().try_fold(0usize, |total, &len| {
+        total
+            .checked_add(len)
+            .ok_or_else(|| candle_core::Error::msg("packed sinks query length overflow"))
+    })?;
+    if logical_tokens != total_tokens {
+        candle_core::bail!(
+            "packed sinks query has {total_tokens} tokens for {logical_tokens} logical tokens"
+        );
+    }
+
+    let max_query_len = query_lens.iter().copied().max().unwrap_or(0);
+    let mut offset = 0usize;
+    let mut rows = Vec::with_capacity(query_lens.len());
+    for &query_len in query_lens {
+        let row = query.narrow(2, offset, query_len)?;
+        offset += query_len;
+        if query_len == max_query_len {
+            rows.push(row);
+        } else {
+            let padding = Tensor::zeros(
+                (1, heads, max_query_len - query_len, head_size),
+                query.dtype(),
+                query.device(),
+            )?;
+            rows.push(Tensor::cat(&[&row, &padding], 2)?);
+        }
+    }
+    Tensor::cat(&rows, 0)
+}
+
+fn repack_padded_query(output: &Tensor, query_lens: &[usize]) -> Result<Tensor> {
+    let (batch, _, max_query_len, _) = output.dims4()?;
+    if batch != query_lens.len()
+        || query_lens.is_empty()
+        || query_lens.contains(&0)
+        || query_lens.iter().any(|&len| len > max_query_len)
+    {
+        candle_core::bail!("padded sinks output has invalid logical dimensions");
+    }
+
+    let mut rows = Vec::with_capacity(query_lens.len());
+    for (batch_idx, &query_len) in query_lens.iter().enumerate() {
+        rows.push(output.narrow(0, batch_idx, 1)?.narrow(2, 0, query_len)?);
+    }
+    Tensor::cat(&rows, 2)
+}
+
+fn should_use_gather_path(
+    has_block_tables: bool,
+    has_cached_prefix: bool,
+    has_noncausal_mm_context: bool,
+    mask_is_prefill: bool,
+    single_token_first_prompt: bool,
+    write_cache: bool,
+) -> bool {
+    if write_cache {
+        (has_cached_prefix || has_noncausal_mm_context || mask_is_prefill) && has_block_tables
+    } else {
+        (has_cached_prefix
+            || has_noncausal_mm_context
+            || mask_is_prefill
+            || single_token_first_prompt)
+            && has_block_tables
+    }
+}
+
+fn select_optional_view<'a, T>(
+    use_full: bool,
+    full: Option<&'a T>,
+    regular: Option<&'a T>,
+) -> Option<&'a T> {
+    if use_full {
+        full
+    } else {
+        regular
+    }
+}
+
+fn noncausal_mm_view_is_valid(
+    has_noncausal_mm_context: bool,
+    has_block_tables: bool,
+    has_mm_prefix_ranges: bool,
+) -> bool {
+    !has_noncausal_mm_context || has_block_tables && has_mm_prefix_ranges
 }
 
 fn unpack_gathered_kv(
@@ -230,29 +565,173 @@ fn adjust_kv_mask(mask: &Tensor, kv_seq_len: usize) -> Result<Tensor> {
     }
 }
 
+fn metal_gather_mask_is_compatible(
+    mask: &AttentionMask,
+    query: &Tensor,
+    batch: usize,
+    query_len: usize,
+    kv_len: usize,
+) -> Result<bool> {
+    match mask {
+        AttentionMask::Custom(mask) => {
+            let mask = adjust_kv_mask(mask, kv_len)?;
+            Ok(mask.dtype() == query.dtype()
+                && mask
+                    .layout()
+                    .broadcast_as((batch, 1, query_len, kv_len))
+                    .is_ok())
+        }
+        _ => Ok(true),
+    }
+}
+
+fn prefix_attention_output_layout(
+    output: Tensor,
+    attention_mask: &AttentionMask,
+) -> Result<Tensor> {
+    if matches!(attention_mask, AttentionMask::None) {
+        output.transpose(1, 2)?.contiguous()
+    } else {
+        Ok(output)
+    }
+}
+
+fn should_reconstruct_prefix_mask(
+    attention_mask: &AttentionMask,
+    prefix_causal: bool,
+    has_noncausal_mm_context: bool,
+    has_padding_or_window: bool,
+) -> bool {
+    matches!(attention_mask, AttentionMask::None)
+        && (prefix_causal || has_noncausal_mm_context || has_padding_or_window)
+}
+
+fn should_use_packed_prefix_mask(
+    packed: bool,
+    query_layout_is_dense: bool,
+    attention_mask: &AttentionMask,
+    dense_flash_causal: bool,
+) -> bool {
+    packed
+        && query_layout_is_dense
+        && matches!(attention_mask, AttentionMask::CausalFlash)
+        && !dense_flash_causal
+}
+
+fn prefix_prefill_is_causal(
+    has_multi_token_query: bool,
+    declared_causal: bool,
+    has_mm_prefix_ranges: bool,
+) -> bool {
+    has_multi_token_query && (declared_causal || has_mm_prefix_ranges)
+}
+
 type SeqMmPrefixRanges = Vec<Vec<(usize, usize)>>;
 
-#[allow(clippy::too_many_arguments)]
-fn prefix_gather_causal_mask(
-    query_lens: &[usize],
-    kv_lens: &[usize],
-    mm_prefix_ranges: Option<&[Vec<(usize, usize)>]>,
-    q_max: usize,
-    kv_max: usize,
+#[derive(Clone, Copy)]
+struct PrefixMaskRequest<'a> {
+    query_lens: &'a [usize],
+    kv_lens: &'a [usize],
+    mm_prefix_ranges: Option<&'a [Vec<(usize, usize)>]>,
     sliding_window: Option<usize>,
     dtype: DType,
-    device: &Device,
+    device: &'a Device,
+}
+
+#[cfg(feature = "metal")]
+impl PrefixMaskRequest<'_> {
+    fn key(self, q_max: usize, kv_max: usize, packed: bool) -> PrefixMaskKey {
+        PrefixMaskKey {
+            query_lens: self.query_lens.to_vec(),
+            kv_lens: self.kv_lens.to_vec(),
+            mm_prefix_ranges: self.mm_prefix_ranges.map(<[_]>::to_vec),
+            q_max,
+            kv_max,
+            sliding_window: self.sliding_window,
+            packed,
+            dtype: self.dtype,
+            device: self.device.location(),
+        }
+    }
+}
+
+fn prefix_gather_causal_mask(
+    request: PrefixMaskRequest<'_>,
+    q_max: usize,
+    kv_max: usize,
+    _cache: &PrefixMaskCache,
 ) -> Result<AttentionMask> {
-    let batch = query_lens.len();
-    let mut mask = Vec::with_capacity(batch * q_max * kv_max);
-    for (batch_idx, (&q_len, &kv_len)) in query_lens.iter().zip(kv_lens.iter()).enumerate() {
-        let prefix_len = kv_len.saturating_sub(q_len);
-        for q_idx in 0..q_max {
-            for kv_idx in 0..kv_max {
-                let masked = if q_idx >= q_len || kv_idx >= kv_len {
-                    q_idx >= q_len || kv_idx != 0
-                } else {
-                    let q_pos = prefix_len + q_idx;
+    let PrefixMaskRequest {
+        query_lens,
+        kv_lens,
+        mm_prefix_ranges,
+        sliding_window,
+        dtype,
+        device,
+    } = request;
+    let make_mask = || {
+        let batch = query_lens.len();
+        let mut mask = Vec::with_capacity(batch * q_max * kv_max);
+        for (batch_idx, (&q_len, &kv_len)) in query_lens.iter().zip(kv_lens.iter()).enumerate() {
+            let prefix_len = kv_len.saturating_sub(q_len);
+            for q_idx in 0..q_max {
+                for kv_idx in 0..kv_max {
+                    let masked = if q_idx >= q_len {
+                        kv_idx != 0
+                    } else if kv_idx >= kv_len {
+                        true
+                    } else {
+                        let q_pos = prefix_len + q_idx;
+                        let future = kv_idx > q_pos;
+                        let too_old = sliding_window
+                            .is_some_and(|window| q_pos >= window && kv_idx <= q_pos - window);
+                        let mm_prefix = mm_prefix_ranges
+                            .and_then(|ranges| ranges.get(batch_idx))
+                            .is_some_and(|ranges| {
+                                ranges.iter().any(|&(start, end)| {
+                                    q_pos >= start && q_pos < end && kv_idx >= start && kv_idx < end
+                                })
+                            });
+                        (future || too_old) && !mm_prefix
+                    };
+                    mask.push(if masked { f32::NEG_INFINITY } else { 0.0 });
+                }
+            }
+        }
+        Tensor::from_vec(mask, (batch, 1, q_max, kv_max), device)?.to_dtype(dtype)
+    };
+    #[cfg(feature = "metal")]
+    if device.is_metal() {
+        return _cache
+            .get_or_try_insert(request.key(q_max, kv_max, false), make_mask)
+            .map(AttentionMask::Custom);
+    }
+    make_mask().map(AttentionMask::Custom)
+}
+
+fn packed_prefix_gather_causal_mask(
+    request: PrefixMaskRequest<'_>,
+    _cache: &PrefixMaskCache,
+) -> Result<Tensor> {
+    let PrefixMaskRequest {
+        query_lens,
+        kv_lens,
+        mm_prefix_ranges,
+        sliding_window,
+        dtype,
+        device,
+    } = request;
+    let make_mask = || {
+        let total_q = query_lens.iter().sum::<usize>();
+        let total_kv = kv_lens.iter().sum::<usize>();
+        let mut mask = vec![f32::NEG_INFINITY; total_q * total_kv];
+        let mut q_offset = 0usize;
+        let mut kv_offset = 0usize;
+        for (batch_idx, (&q_len, &kv_len)) in query_lens.iter().zip(kv_lens).enumerate() {
+            let prefix_len = kv_len.saturating_sub(q_len);
+            for q_idx in 0..q_len {
+                let q_pos = prefix_len + q_idx;
+                for kv_idx in 0..kv_len {
                     let future = kv_idx > q_pos;
                     let too_old = sliding_window
                         .is_some_and(|window| q_pos >= window && kv_idx <= q_pos - window);
@@ -263,15 +742,24 @@ fn prefix_gather_causal_mask(
                                 q_pos >= start && q_pos < end && kv_idx >= start && kv_idx < end
                             })
                         });
-                    (future || too_old) && !mm_prefix
-                };
-                mask.push(if masked { f32::NEG_INFINITY } else { 0.0 });
+                    if !(future || too_old) || mm_prefix {
+                        mask[(q_offset + q_idx) * total_kv + kv_offset + kv_idx] = 0.0;
+                    }
+                }
             }
+            q_offset += q_len;
+            kv_offset += kv_len;
         }
+        Tensor::from_vec(mask, (1usize, 1usize, total_q, total_kv), device)?.to_dtype(dtype)
+    };
+    #[cfg(feature = "metal")]
+    if device.is_metal() {
+        return _cache.get_or_try_insert(
+            request.key(query_lens.iter().sum(), kv_lens.iter().sum(), true),
+            make_mask,
+        );
     }
-    Ok(AttentionMask::Custom(
-        Tensor::from_vec(mask, (batch, 1, q_max, kv_max), device)?.to_dtype(dtype)?,
-    ))
+    make_mask()
 }
 
 fn mm_prefix_ranges_from_tensor(tensor: Option<&Tensor>) -> Result<Option<SeqMmPrefixRanges>> {
@@ -296,9 +784,46 @@ fn mm_prefix_ranges_from_tensor(tensor: Option<&Tensor>) -> Result<Option<SeqMmP
     Ok(Some(ranges))
 }
 
-fn supports_packed_varlen_sdpa(query: &Tensor) -> bool {
-    query.device().is_cpu()
-        || (query.device().is_cuda() && crate::using_flash_attn() && query.dtype() != DType::F32)
+fn packed_varlen_flash_is_usable(
+    device_is_cuda: bool,
+    flash_attn_enabled: bool,
+    dtype: DType,
+    head_size: usize,
+    has_softcap: bool,
+    has_sliding_window: bool,
+) -> bool {
+    device_is_cuda
+        && flash_attn_enabled
+        && matches!(dtype, DType::F16 | DType::BF16)
+        && crate::attention::flash_backend_supports_sdpa(head_size, has_softcap, has_sliding_window)
+}
+
+fn supports_packed_varlen_sdpa(query: &Tensor, head_size: usize, sdpa_params: &SdpaParams) -> bool {
+    packed_varlen_flash_is_usable(
+        query.device().is_cuda(),
+        crate::using_flash_attn(),
+        query.dtype(),
+        head_size,
+        sdpa_params.softcap.is_some(),
+        sdpa_params.sliding_window.is_some(),
+    )
+}
+
+fn supports_sinks_varlen_sdpa(query: &Tensor, head_size: usize) -> bool {
+    crate::attention::sinks_backend_is_available(query, head_size)
+}
+
+fn should_use_decode_gather_varlen(
+    supports_general_varlen: bool,
+    has_sinks: bool,
+    supports_sinks_varlen: bool,
+    query_rows: usize,
+) -> bool {
+    if has_sinks {
+        supports_sinks_varlen && query_rows > 1
+    } else {
+        supports_general_varlen
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -364,48 +889,118 @@ impl PagedForwardCtx<'_> {
     }
 
     fn mm_prefix_ranges(&self, dev: &DeviceLocation) -> Option<&Tensor> {
-        if self.sdpa_params.sliding_window.is_some() {
-            self.input_metadata.mm_prefix_ranges.as_ref()?.get(dev)
-        } else {
-            None
-        }
+        select_optional_view(
+            self.use_full,
+            self.input_metadata.full_mm_prefix_ranges.as_ref(),
+            self.input_metadata.mm_prefix_ranges.as_ref(),
+        )?
+        .get(dev)
+    }
+
+    fn has_noncausal_mm_context(&self) -> bool {
+        select_optional_view(
+            self.use_full,
+            self.input_metadata.full_mm_prefix_ranges.as_ref(),
+            self.input_metadata.mm_prefix_ranges.as_ref(),
+        )
+        .is_some()
     }
 
     fn use_gather_path(&self, attention_mask: &AttentionMask, write_cache: bool) -> bool {
         let has_block_tables = self.input_metadata.block_tables.is_some();
         let has_cached_prefix = self.input_metadata.num_cached_tokens.is_some();
-        let mask_is_prefill = !matches!(attention_mask, AttentionMask::None);
+        let mask_is_prefill = !matches!(attention_mask, AttentionMask::None)
+            && (!write_cache
+                || self.input_metadata.query_lens.is_some()
+                    && !self.input_metadata.is_first_prompt_chunk);
         let single_token_first_prompt =
             self.input_metadata.is_first_prompt_chunk && self.dims.seq_len == 1;
-        if write_cache {
-            has_cached_prefix && has_block_tables
-        } else {
-            (has_cached_prefix || mask_is_prefill || single_token_first_prompt) && has_block_tables
-        }
+        should_use_gather_path(
+            has_block_tables,
+            has_cached_prefix,
+            self.has_noncausal_mm_context(),
+            mask_is_prefill,
+            single_token_first_prompt,
+            write_cache,
+        )
     }
 }
 
 pub struct PagedAttention {
     alibi_slopes: Option<Tensor>,
-    k_scale: Option<Tensor>,
-    v_scale: Option<Tensor>,
-    kv_updated_times: AtomicI32,
+    fp8_attention_scales: Fp8AttentionScales,
+    fp8_attention_scales_calibrated: bool,
+    // read only in the cuda FA3 path
+    #[allow(dead_code)]
+    fp8_q_scale: Tensor,
+    fp8_k_scale: Tensor,
+    fp8_v_scale: Tensor,
+}
+
+#[allow(dead_code)]
+impl PagedAttention {
+    pub fn fp8_attention_scales(&self) -> Fp8AttentionScales {
+        self.fp8_attention_scales
+    }
+
+    pub fn has_calibrated_fp8_attention_scales(&self) -> bool {
+        self.fp8_attention_scales_calibrated
+    }
 }
 
 impl PagedAttention {
     pub fn new(head_dim: usize, device: &Device, alibi_slopes: Option<Vec<f32>>) -> Result<Self> {
+        Self::new_with_fp8_attention_scales(head_dim, device, alibi_slopes, None)
+    }
+
+    pub fn new_with_fp8_attention_scales(
+        head_dim: usize,
+        device: &Device,
+        alibi_slopes: Option<Vec<f32>>,
+        fp8_attention_scales: Option<Fp8AttentionScales>,
+    ) -> Result<Self> {
         let alibi_slopes = if let Some(alibi_slopes) = alibi_slopes {
             assert_eq!(alibi_slopes.len(), head_dim);
             Some(Tensor::new(alibi_slopes, device)?)
         } else {
             None
         };
+        let fp8_attention_scales_calibrated = fp8_attention_scales.is_some();
+        let fp8_attention_scales = fp8_attention_scales.unwrap_or_default().validate()?;
         Ok(Self {
             alibi_slopes,
-            k_scale: Some(Tensor::new(1f32, device)?),
-            v_scale: Some(Tensor::new(1f32, device)?),
-            kv_updated_times: AtomicI32::new(0),
+            fp8_attention_scales,
+            fp8_attention_scales_calibrated,
+            fp8_q_scale: Tensor::new(fp8_attention_scales.q, device)?,
+            fp8_k_scale: Tensor::new(fp8_attention_scales.k, device)?,
+            fp8_v_scale: Tensor::new(fp8_attention_scales.v, device)?,
         })
+    }
+
+    #[cfg(test)]
+    fn fp8_scale_tensors(&self) -> [&Tensor; 3] {
+        [&self.fp8_q_scale, &self.fp8_k_scale, &self.fp8_v_scale]
+    }
+
+    fn cache_scales<'a>(&'a self, key_cache: &Tensor) -> CacheScales<'a> {
+        let (k, v) = if key_cache.dtype() == DType::F8E4M3 {
+            if !self.fp8_attention_scales_calibrated {
+                UNCALIBRATED_FP8_ATTENTION_WARNING.call_once(|| {
+                    tracing::warn!(
+                        "FP8 KV cache is using uncalibrated unit Q/K/V scales; load offline q_scale, k_scale, and v_scale for calibrated serving"
+                    );
+                });
+            }
+            (Some(&self.fp8_k_scale), Some(&self.fp8_v_scale))
+        } else {
+            (None, None)
+        };
+        CacheScales {
+            #[cfg(all(feature = "cuda", target_family = "unix"))]
+            attention: self.fp8_attention_scales,
+            k,
+            v,
+        }
     }
 
     /// Gather a batch of sequences' full KV from the paged cache into one contiguous
@@ -459,14 +1054,17 @@ impl PagedAttention {
                 .collect::<candle_core::Result<_>>()?;
             block_tables.index_select(&Tensor::from_vec(row_idx, (num_seqs,), device)?, 0)?
         };
-        let cu_kv = cumulative_seqlens_from_lengths(&vec![kv_len; num_seqs], device)?;
+        let kv_lens = vec![kv_len; num_seqs];
+        let num_tokens = checked_sequence_token_count(&kv_lens)?;
+        let cu_kv = cumulative_seqlens_from_lengths(&kv_lens, device)?;
+        let scales = self.cache_scales(key_cache);
         let (k, v) = gather_kv_cache_for_layout(
             key_cache,
             value_cache,
-            self.k_scale.as_ref(),
-            self.v_scale.as_ref(),
+            scales,
             &table,
             &cu_kv,
+            num_tokens,
             dtype,
         )?;
         // Packed [num_seqs * kv_len, kv_heads, head_size] -> [num_seqs, kv_heads, kv_len, hd].
@@ -477,27 +1075,6 @@ impl PagedAttention {
                 .contiguous()
         };
         Ok((unpack(k)?, unpack(v)?))
-    }
-
-    fn update_kv_scale_if_needed(
-        &self,
-        tensors: PagedForwardTensors<'_>,
-        key_cache: Option<&Tensor>,
-        write_cache: bool,
-    ) -> Result<()> {
-        if write_cache {
-            if let (Some(k_scale), Some(v_scale), Some(key_cache)) =
-                (&self.k_scale, &self.v_scale, key_cache)
-            {
-                if self.kv_updated_times.load(Ordering::Relaxed) < KV_SCALE_UPDATE_ITERATION
-                    && key_cache.dtype() == DType::F8E4M3
-                {
-                    kv_scale_update(tensors.key, tensors.value, k_scale, v_scale)?;
-                    self.kv_updated_times.fetch_add(1, Ordering::Relaxed);
-                }
-            }
-        }
-        Ok(())
     }
 
     fn build_forward_ctx<'a>(&self, setup: PagedForwardSetup<'a>) -> Result<PagedForwardCtx<'a>> {
@@ -532,7 +1109,10 @@ impl PagedAttention {
             .flashinfer
             .as_ref()
             .is_some_and(|metadata| metadata.views.sliding.is_some());
-        let use_full = setup.sdpa_params.sliding_window.is_none()
+        let custom_metal_full_view = setup.tensors.query.device().is_metal()
+            && setup.tensors.attention_mask.is_custom()
+            && setup.input_metadata.full_block_tables.is_some();
+        let use_full = (setup.sdpa_params.sliding_window.is_none() || custom_metal_full_view)
             && (setup.input_metadata.full_block_tables.is_some() || has_flashinfer_sliding_view);
         let alibi_slopes = if let Some(alibi_slopes) = self.alibi_slopes.as_ref() {
             Some(alibi_slopes.to_device(setup.tensors.query.device())?)
@@ -558,6 +1138,276 @@ impl PagedAttention {
         })
     }
 
+    #[cfg(feature = "metal")]
+    fn try_metal_prefill(
+        &self,
+        ctx: &PagedForwardCtx<'_>,
+        tensors: PagedForwardTensors<'_>,
+        key_cache: &mut Option<Tensor>,
+        value_cache: &mut Option<Tensor>,
+        write_cache: bool,
+    ) -> Result<Option<Tensor>> {
+        if !tensors.query.device().is_metal()
+            || key_cache.is_none()
+            || value_cache.is_none()
+            || (ctx.input_metadata.is_decode_step()
+                && ctx.dims.seq_len == 1
+                && tensors.attention_mask.is_none()
+                && !ctx.has_noncausal_mm_context())
+        {
+            return Ok(None);
+        }
+        let device = tensors.query.device();
+        let location = device.location();
+        if !matches!(key_cache.as_ref().unwrap().rank(), 4 | 5)
+            || value_cache.as_ref().unwrap().rank() != 4
+        {
+            return Ok(None);
+        }
+        if ctx.input_metadata.has_noncausal_mm_context
+            && ctx.input_metadata.mm_prefix_ranges.is_none()
+            && ctx.input_metadata.full_mm_prefix_ranges.is_none()
+        {
+            candle_core::bail!("Metal paged prefill is missing multimodal ranges");
+        }
+        let Some(block_tables) = ctx.block_tables(&location) else {
+            return Ok(None);
+        };
+        let Some(context_lens) = ctx.context_lens_cpu() else {
+            return Ok(None);
+        };
+        let expanded_decode = ctx.input_metadata.query_lens.is_none()
+            && ctx.dims.seq_len > 1
+            && context_lens.len() == ctx.dims.batch_size * ctx.dims.seq_len;
+        if expanded_decode && tensors.attention_mask.is_custom() {
+            return Ok(None);
+        }
+        let query_lens = ctx.input_metadata.query_lens.clone().unwrap_or_else(|| {
+            if expanded_decode {
+                vec![1; context_lens.len()]
+            } else {
+                vec![ctx.dims.seq_len; ctx.dims.batch_size]
+            }
+        });
+        if context_lens.len() != query_lens.len() {
+            candle_core::bail!("Metal paged prefill query and context counts differ");
+        }
+        let full_context_lens = ctx
+            .input_metadata
+            .full_paged_context_lens_cpu
+            .as_deref()
+            .filter(|lens| lens.len() == query_lens.len())
+            .map(<[usize]>::to_vec)
+            .unwrap_or_else(|| match &ctx.input_metadata.num_cached_tokens {
+                Some(cached) => cached.iter().zip(&query_lens).map(|(k, q)| k + q).collect(),
+                None => context_lens.to_vec(),
+            });
+        let query_starts = full_context_lens
+            .iter()
+            .zip(&query_lens)
+            .map(|(context, query)| context.saturating_sub(*query))
+            .collect::<Vec<_>>();
+        let key_starts = full_context_lens
+            .iter()
+            .zip(context_lens)
+            .map(|(full, visible)| full.saturating_sub(*visible))
+            .collect::<Vec<_>>();
+        let ranges_tensor = ctx
+            .mm_prefix_ranges(&DeviceLocation::Cpu)
+            .or_else(|| ctx.mm_prefix_ranges(&location));
+        let mut ranges = mm_prefix_ranges_from_tensor(ranges_tensor)?;
+        if let Some(ranges) = &mut ranges {
+            if ranges.len() != key_starts.len() {
+                candle_core::bail!("Metal paged prefill multimodal range count differs");
+            }
+            for (ranges, start) in ranges.iter_mut().zip(&key_starts) {
+                for (lo, hi) in ranges {
+                    *lo += start;
+                    *hi += start;
+                }
+            }
+        }
+        let k_cache = key_cache.as_ref().unwrap();
+        let v_cache = value_cache.as_ref().unwrap();
+        let hnd = is_metal_hnd_cache(k_cache, v_cache);
+        let value_dim = v_cache.dim(if hnd { 3 } else { 2 })?;
+        let packed = !expanded_decode && ctx.flash_params.is_some_and(|params| params.packed);
+        let shape = MetalPagedPrefillShape {
+            num_seqs: query_lens.len(),
+            num_heads: ctx.dims.attention_heads,
+            num_kv_heads: ctx.dims.key_value_heads,
+            max_query_len: query_lens.iter().copied().max().unwrap_or(0),
+            total_query_tokens: query_lens.iter().sum(),
+            max_context_len: context_lens.iter().copied().max().unwrap_or(0),
+            key_head_dim: ctx.dims.head_size,
+            value_head_dim: value_dim,
+            block_size: cache_block_size(k_cache, v_cache)?,
+            num_multimodal_ranges: ranges
+                .as_ref()
+                .map_or(0, |ranges| ranges.iter().map(Vec::len).sum()),
+            query_dtype: tensors.query.dtype(),
+            cache_dtype: k_cache.dtype(),
+            packed_queries: packed,
+            hnd,
+        };
+        if !shape.supports() {
+            return Ok(None);
+        }
+        let mut required = shape.workspace_bytes()?;
+        if expanded_decode {
+            required = required
+                .checked_add(shape.query_copy_workspace_bytes()?)
+                .ok_or_else(|| candle_core::Error::msg("Metal prefill workspace overflow"))?;
+        }
+        if tensors.attention_mask.is_none() {
+            required = required
+                .checked_add(shape.output_copy_workspace_bytes()?)
+                .ok_or_else(|| candle_core::Error::msg("Metal prefill workspace overflow"))?;
+        }
+        let mask = tensors.attention_mask.as_option_tensor().cloned();
+        let mask_key_offsets = if let Some(mask) = &mask {
+            let width = *mask
+                .dims()
+                .last()
+                .ok_or_else(|| candle_core::Error::msg("empty Metal prefill mask shape"))?;
+            let local_width = if packed {
+                context_lens.iter().sum()
+            } else {
+                shape.max_context_len
+            };
+            let full_width = if packed {
+                full_context_lens.iter().sum()
+            } else {
+                *full_context_lens.iter().max().unwrap()
+            };
+            if width == 1 {
+                None
+            } else if width >= full_width {
+                let mut base = 0;
+                Some(
+                    key_starts
+                        .iter()
+                        .zip(&full_context_lens)
+                        .map(|(&start, &length)| {
+                            let offset = base + start;
+                            if packed {
+                                base += length;
+                            }
+                            offset
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            } else if width == local_width {
+                None
+            } else {
+                candle_core::bail!("Metal prefill mask width {width} matches neither its local KV view ({local_width}) nor full context ({full_width})");
+            }
+        } else {
+            None
+        };
+        if let Some(mask) = mask
+            .as_ref()
+            .filter(|mask| !mask.device().same_device(device))
+        {
+            let upload = mask
+                .elem_count()
+                .checked_mul(mask.dtype().size_in_bytes())
+                .ok_or_else(|| candle_core::Error::msg("Metal prefill mask size overflow"))?;
+            required = required
+                .checked_add(crate::paged_attention::plan::metal_gather_workspace_bytes(
+                    upload,
+                )?)
+                .ok_or_else(|| candle_core::Error::msg("Metal prefill workspace overflow"))?;
+        }
+        crate::paged_attention::plan::check_metal_attention_workspace(
+            device,
+            required,
+            ctx.input_metadata.attention_memory.as_ref(),
+        )?;
+        let query = if expanded_decode {
+            tensors.query.transpose(1, 2)?.contiguous()?.reshape((
+                query_lens.len(),
+                ctx.dims.attention_heads,
+                1,
+                ctx.dims.head_size,
+            ))?
+        } else {
+            tensors.query.clone()
+        };
+        let mask = mask.map(|mask| mask.to_device(device)).transpose()?;
+        if write_cache {
+            let scales = self.cache_scales(key_cache.as_ref().unwrap());
+            write_kv_cache(
+                &tensors.key.transpose(1, 2)?,
+                &tensors.value.transpose(1, 2)?,
+                key_cache.as_mut().unwrap(),
+                value_cache.as_mut().unwrap(),
+                CacheWriteParams {
+                    scales,
+                    slot_mapping: &ctx.slot_mapping,
+                    memory: ctx.input_metadata.attention_memory.as_ref(),
+                },
+            )?;
+        }
+        let scales = self.cache_scales(key_cache.as_ref().unwrap());
+        let bidirectional = matches!(tensors.attention_mask, AttentionMask::Bidirectional);
+        let causal = mask.is_none()
+            && !bidirectional
+            && (matches!(tensors.attention_mask, AttentionMask::ChunkedCausal { .. })
+                || ranges.is_some()
+                || ctx.flash_params.map_or(
+                    ctx.input_metadata.prompt_chunk_attention_policy
+                        == crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
+                    |params| params.causal,
+                ));
+        let output = metal_paged_prefill(MetalPagedPrefillRequest {
+            query: &query,
+            key_cache: key_cache.as_ref().unwrap(),
+            value_cache: value_cache.as_ref().unwrap(),
+            block_tables,
+            query_lens: &query_lens,
+            context_lens,
+            query_start_positions: &query_starts,
+            key_start_positions: &key_starts,
+            packed_queries: packed,
+            causal,
+            sliding_window: mask
+                .is_none()
+                .then_some(ctx.sdpa_params.sliding_window)
+                .flatten(),
+            window_right: bidirectional
+                .then_some(ctx.sdpa_params.sliding_window)
+                .flatten(),
+            attention_chunk_size: match tensors.attention_mask {
+                AttentionMask::ChunkedCausal { chunk_size } => Some(*chunk_size),
+                _ => None,
+            },
+            multimodal_ranges: if mask.is_none() {
+                ranges.as_deref()
+            } else {
+                None
+            },
+            additive_mask: mask.as_ref(),
+            mask_key_offsets: mask_key_offsets.as_deref(),
+            packed_mask: packed,
+            alibi_slopes: ctx.alibi_slopes.as_ref(),
+            sinks: ctx.sdpa_params.sinks.as_ref(),
+            k_scale: scales.k,
+            v_scale: scales.v,
+            scale: ctx.sdpa_params.softmax_scale,
+            softcap: ctx.sdpa_params.softcap,
+        })?;
+        if expanded_decode {
+            return Ok(Some(output.reshape((
+                ctx.dims.batch_size,
+                ctx.dims.seq_len,
+                ctx.dims.attention_heads,
+                value_dim,
+            ))?));
+        }
+        prefix_attention_output_layout(output, tensors.attention_mask).map(Some)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn try_prefix_gather_prefill(
         &self,
@@ -567,33 +1417,44 @@ impl PagedAttention {
         value_cache: &mut Option<Tensor>,
         write_cache: bool,
     ) -> Result<Option<Tensor>> {
+        let dev = tensors.query.device().location();
+        let block_tables = ctx.block_tables(&dev);
+        let mm_prefix_ranges = ctx.mm_prefix_ranges(&dev);
+        if !noncausal_mm_view_is_valid(
+            ctx.has_noncausal_mm_context(),
+            block_tables.is_some(),
+            mm_prefix_ranges.is_some(),
+        ) {
+            let view = if ctx.use_full { "full" } else { "sliding" };
+            candle_core::bail!(
+                "noncausal multimodal prefix attention is missing {view} cache metadata for {dev:?}"
+            );
+        }
         if !ctx.use_gather_path(tensors.attention_mask, write_cache) {
             return Ok(None);
         }
 
-        let dev = tensors.query.device().location();
-        let block_tables = ctx.block_tables(&dev).unwrap();
+        let block_tables = block_tables.ok_or_else(|| {
+            candle_core::Error::msg(format!(
+                "paged prefix attention is missing block tables for {dev:?}"
+            ))
+        })?;
         if write_cache && key_cache.as_ref().is_some_and(|_| value_cache.is_some()) {
-            let k_flat = tensors.key.transpose(1, 2)?.reshape((
-                (),
-                ctx.dims.key_value_heads,
-                ctx.dims.head_size,
-            ))?;
-            let v_flat = tensors.value.transpose(1, 2)?.reshape((
-                (),
-                ctx.dims.key_value_heads,
-                ctx.dims.head_size,
-            ))?;
+            let k_flat = tensors.key.transpose(1, 2)?;
+            let v_flat = tensors.value.transpose(1, 2)?;
             let key_cache = key_cache.as_mut().unwrap();
             let value_cache = value_cache.as_mut().unwrap();
+            let scales = self.cache_scales(key_cache);
             write_kv_cache(
                 &k_flat,
                 &v_flat,
-                self.k_scale.as_ref(),
-                self.v_scale.as_ref(),
                 key_cache,
                 value_cache,
-                &ctx.slot_mapping,
+                CacheWriteParams {
+                    scales,
+                    slot_mapping: &ctx.slot_mapping,
+                    memory: ctx.input_metadata.attention_memory.as_ref(),
+                },
             )?;
         }
 
@@ -612,19 +1473,30 @@ impl PagedAttention {
                 ctx.dims.seq_len,
             )?,
         };
-        let full_kv_lens =
-            if let Some(num_cached_tokens) = ctx.input_metadata.num_cached_tokens.as_ref() {
-                num_cached_tokens
-                    .iter()
-                    .zip(query_lens.iter())
-                    .map(|(&cached, &query_len)| cached + query_len)
-                    .collect::<Vec<_>>()
-            } else {
-                query_lens.clone()
-            };
+        let full_kv_lens = if let Some(lens) = ctx
+            .input_metadata
+            .full_paged_context_lens_cpu
+            .as_deref()
+            .filter(|lens| lens.len() == query_lens.len())
+        {
+            lens.to_vec()
+        } else if let Some(num_cached_tokens) = ctx.input_metadata.num_cached_tokens.as_ref() {
+            num_cached_tokens
+                .iter()
+                .zip(query_lens.iter())
+                .map(|(&cached, &query_len)| cached + query_len)
+                .collect::<Vec<_>>()
+        } else {
+            query_lens.clone()
+        };
         let block_size =
             cache_block_size(key_cache.as_ref().unwrap(), value_cache.as_ref().unwrap())?;
-        let kv_lens = if let Some(window) = ctx.sdpa_params.sliding_window {
+        let kv_lens = if let Some(lens) = ctx
+            .context_lens_cpu()
+            .filter(|lens| lens.len() == query_lens.len())
+        {
+            lens.to_vec()
+        } else if let Some(window) = ctx.sdpa_params.sliding_window {
             if !ctx.use_full {
                 full_kv_lens
                     .iter()
@@ -648,81 +1520,193 @@ impl PagedAttention {
         } else {
             cumulative_seqlens_from_lengths(&kv_lens, device)?
         };
-        let query_lens_match_seq_len = query_lens.iter().all(|&len| len == ctx.dims.seq_len);
+        let num_kv_tokens = checked_sequence_token_count(&kv_lens)?;
+        let query_layout_is_dense =
+            query_layout_is_dense(&query_lens, ctx.dims.batch_size, ctx.dims.seq_len);
+        let declared_causal = ctx.flash_params.map_or(
+            ctx.input_metadata.prompt_chunk_attention_policy
+                == crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
+            |params| params.causal,
+        );
+        let prefix_causal = prefix_prefill_is_causal(
+            query_lens.iter().any(|&len| len > 1),
+            declared_causal,
+            mm_prefix_ranges.is_some(),
+        );
         let causality_known = !tensors.attention_mask.is_custom() || ctx.flash_params.is_some();
         let attention_backend = AttentionBackendKind::from_cache(
             key_cache.as_ref().unwrap(),
             value_cache.as_ref().unwrap(),
         );
-        let mm_prefix_ranges = ctx.mm_prefix_ranges(&device.location());
-        let prefill_plan = PrefixPrefillPlan::choose(PrefixPrefillPlanInput {
+        #[cfg(all(feature = "cuda", target_family = "unix"))]
+        let fa3_supported = fa3_prefill_cache_num_sm(
+            key_cache.as_ref().unwrap(),
+            value_cache.as_ref().unwrap(),
+            ctx.dims.attention_heads,
+            ctx.dims.key_value_heads,
+            ctx.dims.head_size,
+            block_size,
+        )?
+        .is_some();
+        #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+        let fa3_supported = false;
+        let prefill_plan_input = PrefixPrefillPlanInput {
             device_is_cuda: tensors.query.device().is_cuda(),
             dtype: tensors.query.dtype(),
+            cache_dtype: key_cache.as_ref().unwrap().dtype(),
+            has_alibi: ctx.alibi_slopes.is_some(),
             has_sinks: ctx.sdpa_params.sinks.is_some(),
             has_custom_mask: tensors.attention_mask.is_custom(),
             causality_known,
             head_size: ctx.dims.head_size,
-            query_lens_match_seq_len,
+            has_softcap: ctx.sdpa_params.softcap.is_some(),
+            has_sliding_window: ctx.sdpa_params.sliding_window.is_some(),
+            query_layout_is_dense,
+            query_len: ctx.dims.seq_len,
+            q_heads: ctx.dims.attention_heads,
+            kv_heads: ctx.dims.key_value_heads,
+            writes_cache: write_cache,
+            is_causal: prefix_causal
+                || ctx.sdpa_params.sinks.is_some() && query_lens.iter().all(|&len| len == 1),
+            has_noncausal_mm_context: mm_prefix_ranges.is_some(),
+            fa3_supported,
             block_size,
             attention_backend,
-        });
-        match prefill_plan {
-            #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
-            PrefixPrefillPlan::FlashAttentionPaged => {
-                let mask_is_prefill = !matches!(tensors.attention_mask, AttentionMask::None);
-                let prefill_causal = query_lens.iter().any(|&len| len > 1)
-                    && ctx.flash_params.map_or(mask_is_prefill, |fp| fp.causal);
-                return self
-                    .run_flash_attention_paged_prefill(
-                        ctx,
-                        tensors.query,
-                        key_cache.as_ref().unwrap(),
-                        value_cache.as_ref().unwrap(),
-                        block_tables,
-                        &query_lens,
-                        &kv_lens,
-                        &cu_kv,
-                        block_size,
-                        prefill_causal,
-                        mm_prefix_ranges,
-                    )
-                    .map(Some);
-            }
-            PrefixPrefillPlan::GatherSdpa => {}
-        }
+        };
+        let prefill_plan = PrefixPrefillPlan::choose(prefill_plan_input);
         let simple_full_causal = matches!(tensors.attention_mask, AttentionMask::CausalFlash)
             && ctx.sdpa_params.sliding_window.is_none()
             && mm_prefix_ranges.is_none()
             && query_lens.len() == 1;
-
+        if matches!(prefill_plan, PrefixPrefillPlan::GatherSdpa)
+            && (ctx.input_metadata.prefix_gather_workspace_limit.is_some()
+                || tensors.query.device().is_metal())
+        {
+            let v_head_dim = tensors
+                .value
+                .dims()
+                .last()
+                .copied()
+                .ok_or_else(|| candle_core::Error::msg("value tensor has no head dimension"))?;
+            let required = gather_prefill_workspace_for_lengths(GatherPrefillWorkspaceRequest {
+                device_is_metal: tensors.query.device().is_metal(),
+                packed_queries: ctx.flash_params.is_some_and(|params| params.packed),
+                metal_mask_is_compatible: !simple_full_causal
+                    && metal_gather_mask_is_compatible(
+                        tensors.attention_mask,
+                        tensors.query,
+                        ctx.dims.batch_size,
+                        ctx.dims.seq_len,
+                        kv_lens.iter().copied().max().unwrap_or_default(),
+                    )?,
+                query_lens: &query_lens,
+                kv_lens: &kv_lens,
+                q_heads: ctx.dims.attention_heads,
+                kv_heads: ctx.dims.key_value_heads,
+                k_head_dim: ctx.dims.head_size,
+                v_head_dim,
+                dtype: tensors.query.dtype(),
+                plan_input: prefill_plan_input,
+            })?;
+            if let Some(limit) = ctx.input_metadata.prefix_gather_workspace_limit {
+                if required > limit {
+                    candle_core::bail!(
+                            "prompt KV gather requires {required} bytes, exceeding its preflight workspace limit of {limit} bytes"
+                        );
+                }
+            }
+            #[cfg(feature = "metal")]
+            if tensors.query.device().is_metal() {
+                crate::paged_attention::plan::check_metal_attention_workspace(
+                    tensors.query.device(),
+                    crate::paged_attention::plan::metal_gather_workspace_bytes(required)?,
+                    ctx.input_metadata.attention_memory.as_ref(),
+                )?;
+            }
+        }
+        match prefill_plan {
+            #[cfg(all(feature = "cuda", target_family = "unix"))]
+            PrefixPrefillPlan::Fa3Fp8Paged => {
+                let output = self.run_fa3_paged_prefill(
+                    ctx,
+                    tensors.query,
+                    key_cache.as_ref().unwrap(),
+                    value_cache.as_ref().unwrap(),
+                    prefix_causal,
+                )?;
+                return prefix_attention_output_layout(output, tensors.attention_mask).map(Some);
+            }
+            #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+            PrefixPrefillPlan::FlashAttentionPaged => {
+                let output = self.run_flash_attention_paged_prefill(
+                    ctx,
+                    tensors.query,
+                    key_cache.as_ref().unwrap(),
+                    value_cache.as_ref().unwrap(),
+                    block_tables,
+                    &query_lens,
+                    &kv_lens,
+                    &cu_kv,
+                    block_size,
+                    prefix_causal,
+                    mm_prefix_ranges,
+                )?;
+                return prefix_attention_output_layout(output, tensors.attention_mask).map(Some);
+            }
+            PrefixPrefillPlan::GatherSdpa => {}
+        }
+        let key_cache_ref = key_cache.as_ref().unwrap();
+        let scales = self.cache_scales(key_cache_ref);
         let (k_gathered, v_gathered) = gather_kv_cache_for_layout(
-            key_cache.as_ref().unwrap(),
+            key_cache_ref,
             value_cache.as_ref().unwrap(),
-            self.k_scale.as_ref(),
-            self.v_scale.as_ref(),
+            scales,
             block_tables,
             &cu_kv,
+            num_kv_tokens,
             tensors.query.dtype(),
         )?;
+        #[cfg(all(feature = "cuda", target_family = "unix"))]
+        if gather_prefill_uses_sinks(prefill_plan_input) && v_gathered.dim(2)? == ctx.dims.head_size
+        {
+            let cu_q = match ctx.input_metadata.cu_seqlens_q.as_ref() {
+                Some(offsets) => resolve_tensor_for_device(offsets, device, "cu_seqlens_q")?,
+                None => cumulative_seqlens_from_lengths(&query_lens, device)?,
+            };
+            let sinks = ctx.sdpa_params.sinks.as_ref();
+            let window = ctx.sdpa_params.sliding_window.unwrap_or(0);
+            let output = if ctx.dims.batch_size == 1 && query_lens.len() > 1 {
+                mistralrs_paged_attn::flash_attn_sinks_varlen_packed(
+                    &tensors.query.squeeze(0)?.transpose(0, 1)?,
+                    &k_gathered,
+                    &v_gathered,
+                    sinks,
+                    &cu_q,
+                    &cu_kv,
+                    query_lens.iter().copied().max().unwrap(),
+                    ctx.sdpa_params.softmax_scale,
+                    window,
+                )?
+                .transpose(0, 1)?
+                .unsqueeze(0)?
+            } else {
+                mistralrs_paged_attn::flash_attn_sinks_varlen(
+                    tensors.query,
+                    &k_gathered,
+                    &v_gathered,
+                    sinks,
+                    &cu_q,
+                    &cu_kv,
+                    ctx.sdpa_params.softmax_scale,
+                    window,
+                )?
+            };
+            return prefix_attention_output_layout(output, tensors.attention_mask).map(Some);
+        }
         let max_kv = kv_lens.iter().copied().max().unwrap_or(0);
-        let mm_prefix_ranges_cpu = mm_prefix_ranges_from_tensor(mm_prefix_ranges)?;
-        let adjusted_mask = match tensors.attention_mask {
-            AttentionMask::Custom(t) => AttentionMask::Custom(adjust_kv_mask(t, max_kv)?),
-            AttentionMask::CausalFlash if simple_full_causal => AttentionMask::None,
-            AttentionMask::CausalFlash => prefix_gather_causal_mask(
-                &query_lens,
-                &kv_lens,
-                mm_prefix_ranges_cpu.as_deref(),
-                ctx.dims.seq_len,
-                max_kv,
-                ctx.sdpa_params.sliding_window,
-                tensors.query.dtype(),
-                device,
-            )?,
-            other => other.clone(),
-        };
-
-        if supports_packed_varlen_sdpa(tensors.query) {
+        // Pure-causal prefix prefills run flash varlen over the gathered KV: fa2 aligns causal
+        // bottom-right when kv_len > q_len, so no O(q*kv) mask or score materialization is needed.
+        if gather_prefill_uses_packed_varlen(prefill_plan_input) {
             let cu_q = if let Some(fp) = ctx.flash_params {
                 if !fp.cumulative_seqlens_q.is_empty() {
                     resolve_tensor_for_device(
@@ -742,7 +1726,6 @@ impl PagedAttention {
             cu_q_map.insert(device.location(), cu_q);
             let mut cu_kv_map = HashMap::new();
             cu_kv_map.insert(device.location(), cu_kv);
-            let mask_is_prefill = !matches!(tensors.attention_mask, AttentionMask::None);
             let prefix_flash_params = FlashParams {
                 max_q: u32::try_from(query_lens.iter().copied().max().unwrap_or(0))
                     .map_err(candle_core::Error::wrap)?,
@@ -753,31 +1736,179 @@ impl PagedAttention {
                     cumulative_seqlens: cu_kv_map,
                 },
                 sliding_k: None,
-                causal: query_lens.iter().any(|&len| len > 1)
-                    && ctx.flash_params.map_or(mask_is_prefill, |fp| fp.causal),
+                causal: true,
+                packed: ctx.flash_params.is_some_and(|params| params.packed),
+                varlen_segment_lens: None,
+            };
+            let output = Sdpa.run_attention(
+                tensors.query,
+                &k_4d,
+                &v_4d,
+                &AttentionMask::CausalFlash,
+                Some(&prefix_flash_params),
+                ctx.sdpa_params,
+            )?;
+            return prefix_attention_output_layout(output, tensors.attention_mask).map(Some);
+        }
+        let mm_prefix_ranges_cpu = mm_prefix_ranges_from_tensor(mm_prefix_ranges)?;
+        let has_padding_or_window = query_lens.iter().any(|&len| len != ctx.dims.seq_len)
+            || kv_lens.iter().any(|&len| len != max_kv)
+            || ctx.sdpa_params.sliding_window.is_some();
+        let dense_flash_causal = query_layout_is_dense
+            && mm_prefix_ranges.is_none()
+            && tensors.query.device().is_cuda()
+            && (ctx.sdpa_params.sinks.is_none() || ctx.dims.batch_size > 1)
+            && supports_packed_varlen_sdpa(tensors.query, ctx.dims.head_size, ctx.sdpa_params);
+        if should_use_packed_prefix_mask(
+            ctx.flash_params.is_some_and(|params| params.packed),
+            query_layout_is_dense,
+            tensors.attention_mask,
+            dense_flash_causal,
+        ) {
+            let mask = packed_prefix_gather_causal_mask(
+                PrefixMaskRequest {
+                    query_lens: &query_lens,
+                    kv_lens: &kv_lens,
+                    mm_prefix_ranges: mm_prefix_ranges_cpu.as_deref(),
+                    sliding_window: ctx.sdpa_params.sliding_window,
+                    dtype: tensors.query.dtype(),
+                    device,
+                },
+                &ctx.input_metadata.prefix_masks,
+            )?;
+            let k_4d = k_gathered.unsqueeze(0)?.transpose(1, 2)?;
+            let v_4d = v_gathered.unsqueeze(0)?.transpose(1, 2)?;
+            let output = if ctx.sdpa_params.sinks.is_some() {
+                Sdpa.run_attention(
+                    tensors.query,
+                    &k_4d,
+                    &v_4d,
+                    &AttentionMask::Custom(mask),
+                    None,
+                    ctx.sdpa_params,
+                )?
+            } else {
+                Sdpa.run_attention_noflash(
+                    tensors.query,
+                    &k_4d,
+                    &v_4d,
+                    Some(&mask),
+                    ctx.sdpa_params,
+                    false,
+                )?
+            };
+            return prefix_attention_output_layout(output, tensors.attention_mask).map(Some);
+        }
+        let adjusted_mask = match tensors.attention_mask {
+            AttentionMask::Custom(t) => AttentionMask::Custom(adjust_kv_mask(t, max_kv)?),
+            AttentionMask::CausalFlash if simple_full_causal => AttentionMask::None,
+            AttentionMask::CausalFlash if dense_flash_causal => AttentionMask::CausalFlash,
+            AttentionMask::CausalFlash => prefix_gather_causal_mask(
+                PrefixMaskRequest {
+                    query_lens: &query_lens,
+                    kv_lens: &kv_lens,
+                    mm_prefix_ranges: mm_prefix_ranges_cpu.as_deref(),
+                    sliding_window: ctx.sdpa_params.sliding_window,
+                    dtype: tensors.query.dtype(),
+                    device,
+                },
+                ctx.dims.seq_len,
+                max_kv,
+                &ctx.input_metadata.prefix_masks,
+            )?,
+            AttentionMask::None
+                if should_reconstruct_prefix_mask(
+                    tensors.attention_mask,
+                    prefix_causal,
+                    ctx.has_noncausal_mm_context(),
+                    has_padding_or_window,
+                ) =>
+            {
+                prefix_gather_causal_mask(
+                    PrefixMaskRequest {
+                        query_lens: &query_lens,
+                        kv_lens: &kv_lens,
+                        mm_prefix_ranges: mm_prefix_ranges_cpu.as_deref(),
+                        sliding_window: ctx.sdpa_params.sliding_window,
+                        dtype: tensors.query.dtype(),
+                        device,
+                    },
+                    ctx.dims.seq_len,
+                    max_kv,
+                    &ctx.input_metadata.prefix_masks,
+                )?
+            }
+            other => other.clone(),
+        };
+
+        if query_layout_is_dense
+            && !adjusted_mask.is_custom()
+            && supports_packed_varlen_sdpa(tensors.query, ctx.dims.head_size, ctx.sdpa_params)
+        {
+            let cu_q = if let Some(fp) = ctx.flash_params {
+                if !fp.cumulative_seqlens_q.is_empty() {
+                    resolve_tensor_for_device(
+                        &fp.cumulative_seqlens_q,
+                        device,
+                        "cumulative_seqlens_q",
+                    )?
+                } else {
+                    cumulative_seqlens_from_lengths(&query_lens, device)?
+                }
+            } else {
+                cumulative_seqlens_from_lengths(&query_lens, device)?
+            };
+            let k_4d = k_gathered.unsqueeze(0)?.transpose(1, 2)?;
+            let v_4d = v_gathered.unsqueeze(0)?.transpose(1, 2)?;
+            let mut cu_q_map = HashMap::new();
+            cu_q_map.insert(device.location(), cu_q);
+            let mut cu_kv_map = HashMap::new();
+            cu_kv_map.insert(device.location(), cu_kv);
+            let prefix_flash_params = FlashParams {
+                max_q: u32::try_from(query_lens.iter().copied().max().unwrap_or(0))
+                    .map_err(candle_core::Error::wrap)?,
+                cumulative_seqlens_q: cu_q_map,
+                logical_k: FlashKMeta {
+                    max: u32::try_from(kv_lens.iter().copied().max().unwrap_or(0))
+                        .map_err(candle_core::Error::wrap)?,
+                    cumulative_seqlens: cu_kv_map,
+                },
+                sliding_k: None,
+                causal: prefix_causal,
+                packed: ctx.flash_params.is_some_and(|params| params.packed),
+                varlen_segment_lens: None,
             };
             if simple_full_causal {
-                return Sdpa
-                    .run_attention_noflash(
+                let output = if ctx.sdpa_params.sinks.is_some() {
+                    Sdpa.run_attention(
+                        tensors.query,
+                        &k_4d,
+                        &v_4d,
+                        &AttentionMask::None,
+                        None,
+                        ctx.sdpa_params,
+                    )?
+                } else {
+                    Sdpa.run_attention_noflash(
                         tensors.query,
                         &k_4d,
                         &v_4d,
                         None,
                         ctx.sdpa_params,
                         prefix_flash_params.causal,
-                    )
-                    .map(Some);
+                    )?
+                };
+                return prefix_attention_output_layout(output, tensors.attention_mask).map(Some);
             }
-            return Sdpa
-                .run_attention(
-                    tensors.query,
-                    &k_4d,
-                    &v_4d,
-                    &adjusted_mask,
-                    Some(&prefix_flash_params),
-                    ctx.sdpa_params,
-                )
-                .map(Some);
+            let output = Sdpa.run_attention(
+                tensors.query,
+                &k_4d,
+                &v_4d,
+                &adjusted_mask,
+                Some(&prefix_flash_params),
+                ctx.sdpa_params,
+            )?;
+            return prefix_attention_output_layout(output, tensors.attention_mask).map(Some);
         }
 
         let k_batched = unpack_gathered_kv(
@@ -794,15 +1925,96 @@ impl PagedAttention {
             ctx.dims.head_size,
             device,
         )?;
-        Sdpa.run_attention(
+        let output = Sdpa.run_attention(
             tensors.query,
             &k_batched,
             &v_batched,
             &adjusted_mask,
             None,
             ctx.sdpa_params,
-        )
-        .map(Some)
+        )?;
+        prefix_attention_output_layout(output, tensors.attention_mask).map(Some)
+    }
+
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    fn run_fa3_paged_prefill(
+        &self,
+        ctx: &PagedForwardCtx<'_>,
+        query: &Tensor,
+        key_cache: &Tensor,
+        value_cache: &Tensor,
+        causal: bool,
+    ) -> Result<Tensor> {
+        let metadata = ctx
+            .input_metadata
+            .flashinfer
+            .as_ref()
+            .ok_or_else(|| candle_core::Error::msg("FA3 prefill metadata is missing"))?;
+        let num_sm = fa3_device_num_sm(query.device())
+            .ok_or_else(|| candle_core::Error::msg("FA3 prefill requires an SM90 CUDA device"))?;
+        let (num_pages, kv_heads, page_size, head_dim) = key_cache.dims4()?;
+        if num_pages == 0
+            || value_cache.dims4()? != key_cache.dims4()?
+            || query.dims4()?
+                != (
+                    ctx.dims.batch_size,
+                    ctx.dims.attention_heads,
+                    ctx.dims.seq_len,
+                    head_dim,
+                )
+        {
+            candle_core::bail!("FA3 prefill cache/query shape invariant failed");
+        }
+        let key = (Fa3PagedScheduleShape {
+            device: query.device().location(),
+            view: Fa3DecodeView::Logical,
+            batch: ctx.dims.batch_size,
+            query_len: ctx.dims.seq_len,
+            causal,
+            q_heads: ctx.dims.attention_heads,
+            kv_heads,
+            head_dim,
+            page_size,
+        })
+        .prefill_schedule_key(num_sm)
+        .ok_or_else(|| candle_core::Error::msg("FA3 prefill schedule invariant failed"))?;
+        let query = query
+            .transpose(1, 2)?
+            .reshape((
+                ctx.dims.batch_size.saturating_mul(ctx.dims.seq_len),
+                ctx.dims.attention_heads,
+                ctx.dims.head_size,
+            ))?
+            .contiguous()?;
+        let output =
+            with_fa3_prefill_workspace(metadata, key, key_cache, query.device(), |buffers| {
+                fa3_fp8_decode(Fa3DecodeParams {
+                    query: &query,
+                    quantized_query: &buffers.query,
+                    key_cache,
+                    value_cache,
+                    page_table: &buffers.page_table,
+                    seqused_k: &buffers.seqused_k,
+                    cu_seqlens_q: &buffers.cu_seqlens_q,
+                    scheduler_metadata: &buffers.scheduler_metadata,
+                    output_accum: &buffers.output_accum,
+                    lse_accum: &buffers.lse_accum,
+                    output_lse: &buffers.output_lse,
+                    q_descale: &self.fp8_q_scale,
+                    k_descale: &self.fp8_k_scale,
+                    v_descale: &self.fp8_v_scale,
+                    schedule: buffers.schedule(key)?,
+                    softmax_scale: ctx.sdpa_params.softmax_scale,
+                })
+            })?;
+        output
+            .reshape((
+                ctx.dims.batch_size,
+                ctx.dims.seq_len,
+                ctx.dims.attention_heads,
+                ctx.dims.head_size,
+            ))?
+            .transpose(1, 2)
     }
 
     #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
@@ -849,7 +2061,7 @@ impl PagedAttention {
             query_lens.iter().copied().max().unwrap_or(0),
             kv_lens.iter().copied().max().unwrap_or(0),
             ctx.sdpa_params.softmax_scale,
-            ctx.sdpa_params.sliding_window,
+            sliding_window_left(ctx.sdpa_params.sliding_window),
             window_size_right,
             block_size,
             ctx.sdpa_params.softcap,
@@ -873,56 +2085,59 @@ impl PagedAttention {
     ) -> Result<Option<Tensor>> {
         let single_token_first_prompt =
             write_cache && ctx.input_metadata.is_first_prompt_chunk && ctx.dims.seq_len == 1;
-        let Some(att) = (if matches!(tensors.attention_mask, AttentionMask::None)
-            && !single_token_first_prompt
+        let custom_decode = tensors.attention_mask.is_custom()
+            && ctx.input_metadata.query_lens.is_none()
+            && !ctx.input_metadata.is_first_prompt_chunk;
+        if custom_decode
+            || matches!(tensors.attention_mask, AttentionMask::None) && !single_token_first_prompt
         {
-            None
+            return Ok(None);
+        }
+
+        let att = if ctx.flash_params.is_some_and(|params| params.packed)
+            && ctx.sdpa_params.sinks.is_some()
+            && !tensors.query.device().is_cuda()
+        {
+            let query_lens = ctx.input_metadata.query_lens.as_deref().ok_or_else(|| {
+                candle_core::Error::msg("packed sinks prefill is missing logical query lengths")
+            })?;
+            let padded_query = pad_packed_query(tensors.query, query_lens)?;
+            let padded_output = Sdpa.run_attention(
+                &padded_query,
+                tensors.key,
+                tensors.value,
+                tensors.attention_mask,
+                ctx.flash_params,
+                ctx.sdpa_params,
+            )?;
+            repack_padded_query(&padded_output, query_lens)?
         } else {
-            Some(Sdpa.run_attention(
+            Sdpa.run_attention(
                 tensors.query,
                 tensors.key,
                 tensors.value,
                 tensors.attention_mask,
                 ctx.flash_params,
                 ctx.sdpa_params,
-            )?)
-        }) else {
-            return Ok(None);
+            )?
         };
 
         if write_cache && key_cache.as_ref().is_some_and(|_| value_cache.is_some()) {
-            let (key, value) = if ctx.dims.seq_len > 1 {
-                let k = tensors.key.transpose(1, 2)?.reshape((
-                    (),
-                    ctx.dims.key_value_heads,
-                    ctx.dims.head_size,
-                ))?;
-                let v = tensors.value.transpose(1, 2)?.reshape((
-                    (),
-                    ctx.dims.key_value_heads,
-                    ctx.dims.head_size,
-                ))?;
-                (k, v)
-            } else {
-                (
-                    tensors
-                        .key
-                        .reshape(((), ctx.dims.key_value_heads, ctx.dims.head_size))?,
-                    tensors
-                        .value
-                        .reshape(((), ctx.dims.key_value_heads, ctx.dims.head_size))?,
-                )
-            };
+            let key = tensors.key.transpose(1, 2)?;
+            let value = tensors.value.transpose(1, 2)?;
             let key_cache = key_cache.as_mut().unwrap();
             let value_cache = value_cache.as_mut().unwrap();
+            let scales = self.cache_scales(key_cache);
             write_kv_cache(
                 &key,
                 &value,
-                self.k_scale.as_ref(),
-                self.v_scale.as_ref(),
                 key_cache,
                 value_cache,
-                &ctx.slot_mapping,
+                CacheWriteParams {
+                    scales,
+                    slot_mapping: &ctx.slot_mapping,
+                    memory: ctx.input_metadata.attention_memory.as_ref(),
+                },
             )?;
         }
         Ok(Some(att))
@@ -948,33 +2163,10 @@ impl PagedAttention {
                 .reshape(((), ctx.dims.attention_heads, ctx.dims.head_size))?
         };
         let (key, value) = if write_cache {
-            if ctx.dims.seq_len > 1 {
-                (
-                    Some(tensors.key.transpose(1, 2)?.reshape((
-                        (),
-                        ctx.dims.key_value_heads,
-                        ctx.dims.head_size,
-                    ))?),
-                    Some(tensors.value.transpose(1, 2)?.reshape((
-                        (),
-                        ctx.dims.key_value_heads,
-                        ctx.dims.head_size,
-                    ))?),
-                )
-            } else {
-                (
-                    Some(tensors.key.reshape((
-                        (),
-                        ctx.dims.key_value_heads,
-                        ctx.dims.head_size,
-                    ))?),
-                    Some(tensors.value.reshape((
-                        (),
-                        ctx.dims.key_value_heads,
-                        ctx.dims.head_size,
-                    ))?),
-                )
-            }
+            (
+                Some(tensors.key.transpose(1, 2)?),
+                Some(tensors.value.transpose(1, 2)?),
+            )
         } else {
             (None, None)
         };
@@ -982,34 +2174,65 @@ impl PagedAttention {
         if write_cache && key_cache.as_ref().is_some_and(|_| value_cache.is_some()) {
             let key_cache = key_cache.as_mut().unwrap();
             let value_cache = value_cache.as_mut().unwrap();
+            let scales = self.cache_scales(key_cache);
             write_kv_cache(
                 key.as_ref().unwrap(),
                 value.as_ref().unwrap(),
-                self.k_scale.as_ref(),
-                self.v_scale.as_ref(),
                 key_cache,
                 value_cache,
-                &ctx.slot_mapping,
+                CacheWriteParams {
+                    scales,
+                    slot_mapping: &ctx.slot_mapping,
+                    memory: ctx.input_metadata.attention_memory.as_ref(),
+                },
             )?;
         }
 
         let dev = query.device().location();
         let key_cache_ref = key_cache.as_ref().unwrap();
         let value_cache_ref = value_cache.as_ref().unwrap();
+        if tensors.attention_mask.is_custom() {
+            return self.run_decode_gather_sdpa(
+                ctx,
+                &query,
+                key_cache_ref,
+                value_cache_ref,
+                &dev,
+                tensors.attention_mask,
+            );
+        }
         let attention_backend = AttentionBackendKind::from_cache(key_cache_ref, value_cache_ref);
-        match DecodePlan::choose(DecodePlanInput {
+        let mut plan = DecodePlan::choose(DecodePlanInput {
             attention_backend,
             head_size: ctx.dims.head_size,
             has_alibi: ctx.alibi_slopes.is_some(),
             has_sinks: ctx.sdpa_params.sinks.is_some(),
-        })? {
-            DecodePlan::GatherSdpa => {
-                self.run_decode_gather_sdpa(ctx, &query, key_cache_ref, value_cache_ref, &dev)
-            }
+            has_sliding_window: ctx.sdpa_params.sliding_window.is_some(),
+        })?;
+        if is_metal_hnd_cache(key_cache_ref, value_cache_ref)
+            && ctx.dims.seq_len == 1
+            && ctx.sdpa_params.sliding_window.is_some()
+        {
+            plan = DecodePlan::PagedAttention;
+        }
+        match plan {
+            DecodePlan::GatherSdpa => self.run_decode_gather_sdpa(
+                ctx,
+                &query,
+                key_cache_ref,
+                value_cache_ref,
+                &dev,
+                tensors.attention_mask,
+            ),
             #[cfg(all(feature = "cuda", target_family = "unix"))]
-            DecodePlan::FlashInfer(plan) => {
-                self.run_flashinfer_decode(ctx, &query, key_cache_ref, value_cache_ref, &dev, plan)
-            }
+            DecodePlan::FlashInfer(_) => self.run_flashinfer_decode(FlashInferDecodeCall {
+                ctx,
+                query: &query,
+                key_cache: key_cache_ref,
+                value_cache: value_cache_ref,
+                dev: &dev,
+                attention_mask: tensors.attention_mask,
+            }),
             DecodePlan::PagedAttention => {
                 self.run_standard_paged_decode(ctx, &query, key_cache_ref, value_cache_ref, &dev)
             }
@@ -1023,6 +2246,7 @@ impl PagedAttention {
         key_cache: &Tensor,
         value_cache: &Tensor,
         dev: &DeviceLocation,
+        attention_mask: &AttentionMask,
     ) -> Result<Tensor> {
         let block_tables = ctx.block_tables(dev).unwrap();
         let kv_lens: Vec<usize> = match ctx.context_lens_cpu() {
@@ -1045,28 +2269,102 @@ impl PagedAttention {
                 }
             }
         };
+        let query_rows = decode_query_rows(query, &kv_lens)?;
+        #[cfg(feature = "metal")]
+        if query.device().is_metal() {
+            let query_lens = vec![1; query_rows];
+            let required = gather_prefill_workspace_for_lengths(GatherPrefillWorkspaceRequest {
+                device_is_metal: true,
+                packed_queries: false,
+                metal_mask_is_compatible: false,
+                query_lens: &query_lens,
+                kv_lens: &kv_lens,
+                q_heads: ctx.dims.attention_heads,
+                kv_heads: ctx.dims.key_value_heads,
+                k_head_dim: ctx.dims.head_size,
+                v_head_dim: ctx.dims.head_size,
+                dtype: query.dtype(),
+                plan_input: PrefixPrefillPlanInput {
+                    device_is_cuda: false,
+                    dtype: query.dtype(),
+                    cache_dtype: key_cache.dtype(),
+                    has_alibi: ctx.alibi_slopes.is_some(),
+                    has_sinks: ctx.sdpa_params.sinks.is_some(),
+                    has_custom_mask: attention_mask.is_custom(),
+                    causality_known: true,
+                    head_size: ctx.dims.head_size,
+                    has_softcap: ctx.sdpa_params.softcap.is_some(),
+                    has_sliding_window: ctx.sdpa_params.sliding_window.is_some(),
+                    query_layout_is_dense: true,
+                    query_len: 1,
+                    q_heads: ctx.dims.attention_heads,
+                    kv_heads: ctx.dims.key_value_heads,
+                    writes_cache: false,
+                    is_causal: true,
+                    has_noncausal_mm_context: false,
+                    fa3_supported: false,
+                    block_size: ctx.input_metadata.block_size.unwrap(),
+                    attention_backend: AttentionBackendKind::Standard,
+                },
+            })?;
+            crate::paged_attention::plan::check_metal_attention_workspace(
+                query.device(),
+                crate::paged_attention::plan::metal_gather_workspace_bytes(required)?,
+                ctx.input_metadata.attention_memory.as_ref(),
+            )?;
+        }
+        let num_kv_tokens = checked_sequence_token_count(&kv_lens)?;
         let cu_kv = cumulative_seqlens_from_lengths(&kv_lens, query.device())?;
+        let scales = self.cache_scales(key_cache);
         let (k_gathered, v_gathered) = gather_kv_cache_for_layout(
             key_cache,
             value_cache,
-            self.k_scale.as_ref(),
-            self.v_scale.as_ref(),
+            scales,
             block_tables,
             &cu_kv,
+            num_kv_tokens,
             query.dtype(),
         )?;
-        let q_4d = query.reshape((
-            ctx.dims.batch_size,
-            ctx.dims.attention_heads,
-            1,
-            ctx.dims.head_size,
-        ))?;
+        let q_4d = query.reshape((query_rows, ctx.dims.attention_heads, 1, ctx.dims.head_size))?;
 
-        if supports_packed_varlen_sdpa(query) {
-            let cu_q = cumulative_seqlens_from_lengths(
-                &vec![1usize; ctx.dims.batch_size],
-                query.device(),
-            )?;
+        if query.device().is_metal()
+            && query_rows == 1
+            && ctx.dims.seq_len == 1
+            && attention_mask.is_none()
+            && ctx.alibi_slopes.is_none()
+            && ctx.sdpa_params.sinks.is_none()
+        {
+            if let Some(window) = ctx.sdpa_params.sliding_window {
+                let retained = kv_lens[0].min(window);
+                let start = kv_lens[0] - retained;
+                let k = k_gathered
+                    .narrow(0, start, retained)?
+                    .unsqueeze(0)?
+                    .transpose(1, 2)?;
+                let v = v_gathered
+                    .narrow(0, start, retained)?
+                    .unsqueeze(0)?
+                    .transpose(1, 2)?;
+                return Sdpa.run_attention(
+                    &q_4d,
+                    &k,
+                    &v,
+                    &AttentionMask::None,
+                    None,
+                    ctx.sdpa_params,
+                );
+            }
+        }
+
+        if !attention_mask.is_custom()
+            && should_use_decode_gather_varlen(
+                supports_packed_varlen_sdpa(query, ctx.dims.head_size, ctx.sdpa_params),
+                ctx.sdpa_params.sinks.is_some(),
+                supports_sinks_varlen_sdpa(query, ctx.dims.head_size),
+                query_rows,
+            )
+        {
+            let cu_q = cumulative_seqlens_from_lengths(&vec![1usize; query_rows], query.device())?;
             let k_4d = k_gathered.unsqueeze(0)?.transpose(1, 2)?;
             let v_4d = v_gathered.unsqueeze(0)?.transpose(1, 2)?;
             let mut cu_q_map = HashMap::new();
@@ -1083,6 +2381,8 @@ impl PagedAttention {
                 },
                 sliding_k: None,
                 causal: false,
+                packed: false,
+                varlen_segment_lens: None,
             };
             return Sdpa.run_attention(
                 &q_4d,
@@ -1108,26 +2408,139 @@ impl PagedAttention {
             ctx.dims.head_size,
             query.device(),
         )?;
+        let max_kv = kv_lens.iter().copied().max().unwrap_or(0);
+        let decode_mask = match attention_mask {
+            AttentionMask::Custom(mask) => AttentionMask::Custom(adjust_kv_mask(mask, max_kv)?),
+            _ if ctx.sdpa_params.sliding_window.is_some()
+                || kv_lens.iter().any(|&kv_len| kv_len != max_kv) =>
+            {
+                prefix_gather_causal_mask(
+                    PrefixMaskRequest {
+                        query_lens: &vec![1; query_rows],
+                        kv_lens: &kv_lens,
+                        mm_prefix_ranges: None,
+                        sliding_window: ctx.sdpa_params.sliding_window,
+                        dtype: query.dtype(),
+                        device: query.device(),
+                    },
+                    1,
+                    max_kv,
+                    &ctx.input_metadata.prefix_masks,
+                )?
+            }
+            _ => AttentionMask::None,
+        };
         Sdpa.run_attention(
             &q_4d,
             &k_batched,
             &v_batched,
-            &AttentionMask::None,
+            &decode_mask,
             None,
             ctx.sdpa_params,
         )
     }
 
     #[cfg(all(feature = "cuda", target_family = "unix"))]
-    fn run_flashinfer_decode(
-        &self,
-        ctx: &PagedForwardCtx<'_>,
-        query: &Tensor,
-        key_cache: &Tensor,
-        value_cache: &Tensor,
-        dev: &DeviceLocation,
-        _flashinfer_plan: crate::flashinfer::FlashInferDecodePlan,
-    ) -> Result<Tensor> {
+    fn try_run_fa3_decode(&self, call: FlashInferDecodeCall<'_, '_>) -> Result<Option<Tensor>> {
+        let FlashInferDecodeCall {
+            ctx,
+            query,
+            key_cache,
+            value_cache,
+            dev,
+            attention_mask,
+        } = call;
+        let (_, kv_heads, page_size, head_dim) = key_cache.dims4()?;
+        let Some(key) = (Fa3PagedScheduleShape {
+            device: *dev,
+            view: Fa3DecodeView::Logical,
+            batch: ctx.dims.batch_size,
+            query_len: ctx.dims.seq_len,
+            causal: ctx.dims.seq_len > 1,
+            q_heads: ctx.dims.attention_heads,
+            kv_heads,
+            head_dim,
+            page_size,
+        })
+        .decode_schedule_key() else {
+            return Ok(None);
+        };
+        let Some(key) = (Fa3DecodeCandidate {
+            key,
+            query_dtype: query.dtype(),
+            query_contiguous: query.is_contiguous(),
+            key_cache_dtype: key_cache.dtype(),
+            value_cache_dtype: value_cache.dtype(),
+            mask_is_none: attention_mask.is_none(),
+            shapes_match: value_cache.dims4()? == key_cache.dims4()?
+                && query.dims3()?
+                    == (
+                        ctx.dims.batch_size.saturating_mul(ctx.dims.seq_len),
+                        ctx.dims.attention_heads,
+                        head_dim,
+                    ),
+            has_alibi: ctx.alibi_slopes.is_some(),
+            has_sinks: ctx.sdpa_params.sinks.is_some(),
+            has_softcap: ctx.sdpa_params.softcap.is_some(),
+            has_sliding_window: ctx.sdpa_params.sliding_window.is_some(),
+            has_noncausal_mm_context: ctx.has_noncausal_mm_context(),
+        })
+        .schedule_key() else {
+            return Ok(None);
+        };
+        let Some(buffers) = ctx
+            .input_metadata
+            .flashinfer
+            .as_ref()
+            .and_then(|metadata| metadata.fa3_decode_buffers(&key))
+        else {
+            return Ok(None);
+        };
+        let output = fa3_fp8_decode(Fa3DecodeParams {
+            query,
+            quantized_query: &buffers.query,
+            key_cache,
+            value_cache,
+            page_table: &buffers.page_table,
+            seqused_k: &buffers.seqused_k,
+            cu_seqlens_q: &buffers.cu_seqlens_q,
+            scheduler_metadata: &buffers.scheduler_metadata,
+            output_accum: &buffers.output_accum,
+            lse_accum: &buffers.lse_accum,
+            output_lse: &buffers.output_lse,
+            q_descale: &self.fp8_q_scale,
+            k_descale: &self.fp8_k_scale,
+            v_descale: &self.fp8_v_scale,
+            schedule: buffers.schedule(key)?,
+            softmax_scale: ctx.sdpa_params.softmax_scale,
+        })
+        .map_err(|err| {
+            err.context(format!(
+                "FA3 FP8 decode failed: batch={} query_len={} qo_heads={} kv_heads={} head_size={} page_size={}",
+                ctx.dims.batch_size,
+                ctx.dims.seq_len,
+                ctx.dims.attention_heads,
+                kv_heads,
+                head_dim,
+                page_size,
+            ))
+        })?;
+        Ok(Some(output))
+    }
+
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    fn run_flashinfer_decode(&self, call: FlashInferDecodeCall<'_, '_>) -> Result<Tensor> {
+        if let Some(output) = self.try_run_fa3_decode(call)? {
+            return Ok(output);
+        }
+        let FlashInferDecodeCall {
+            ctx,
+            query,
+            key_cache,
+            value_cache,
+            dev,
+            ..
+        } = call;
         let fi_meta = ctx
             .input_metadata
             .flashinfer
@@ -1139,6 +2552,7 @@ impl PagedAttention {
             query,
             key_cache,
             value_cache,
+            self.cache_scales(key_cache).flashinfer(key_cache),
             fi_meta.paged_kv_indptr,
             fi_meta.paged_kv_indices,
             fi_meta.paged_kv_last_page_len,
@@ -1148,7 +2562,7 @@ impl PagedAttention {
             fi_meta.kv_chunk_size,
             fi_meta.block_valid_mask,
             ctx.sdpa_params.softmax_scale,
-            ctx.sdpa_params.sliding_window,
+            sliding_window_left(ctx.sdpa_params.sliding_window),
             ctx.sdpa_params.softcap,
             fi_meta
                 .tmp_v
@@ -1175,10 +2589,72 @@ impl PagedAttention {
         value_cache: &Tensor,
         dev: &DeviceLocation,
     ) -> Result<Tensor> {
+        let scales = self.cache_scales(key_cache);
+        #[cfg(feature = "metal")]
+        if query.device().is_metal() {
+            let (num_seqs, num_heads, head_size) = query.dims3()?;
+            let hnd = is_metal_hnd_cache(key_cache, value_cache);
+            let required = mistralrs_paged_attn::MetalPagedAttentionWorkspace {
+                num_seqs,
+                num_heads,
+                num_kv_heads: key_cache.dim(1)?,
+                head_size,
+                block_size: if hnd {
+                    key_cache.dim(2)?
+                } else {
+                    key_cache.dim(3)?
+                },
+                max_context_len: if ctx.use_full {
+                    ctx.input_metadata.full_max_context_len.unwrap()
+                } else {
+                    ctx.input_metadata.max_context_len.unwrap()
+                },
+                sliding_window: if hnd {
+                    ctx.sdpa_params.sliding_window
+                } else {
+                    None
+                },
+                dtype: query.dtype(),
+                cache_dtype: key_cache.dtype(),
+                hnd,
+                packed_x: if hnd { 1 } else { key_cache.dim(4)? },
+                has_alibi: ctx.alibi_slopes.is_some(),
+                has_sinks: ctx.sdpa_params.sinks.is_some(),
+                has_scales: scales.k.is_some(),
+                softcapping: ctx.sdpa_params.softcap.unwrap_or(1.0),
+            }
+            .bytes()?;
+            crate::paged_attention::plan::check_metal_attention_workspace(
+                query.device(),
+                required,
+                ctx.input_metadata.attention_memory.as_ref(),
+            )?;
+        }
+        if query.device().is_cuda() || is_metal_hnd_cache(key_cache, value_cache) {
+            return mistralrs_paged_attn::paged_attention_with_window(
+                query,
+                scales.k,
+                scales.v,
+                key_cache,
+                value_cache,
+                ctx.block_tables(dev).unwrap(),
+                ctx.context_lens(dev).unwrap(),
+                ctx.alibi_slopes.as_ref(),
+                if ctx.use_full {
+                    ctx.input_metadata.full_max_context_len.unwrap()
+                } else {
+                    ctx.input_metadata.max_context_len.unwrap()
+                },
+                ctx.sdpa_params.softmax_scale,
+                ctx.sdpa_params.softcap.unwrap_or(1.0f32),
+                ctx.sdpa_params.sinks.as_ref(),
+                ctx.sdpa_params.sliding_window,
+            );
+        }
         paged_attention(
             query,
-            self.k_scale.as_ref(),
-            self.v_scale.as_ref(),
+            scales.k,
+            scales.v,
             key_cache,
             value_cache,
             ctx.block_tables(dev).unwrap(),
@@ -1215,7 +2691,6 @@ impl PagedAttention {
             value,
             attention_mask,
         };
-        self.update_kv_scale_if_needed(tensors, key_cache.as_ref(), write_cache)?;
         let donor_cache_shape = if write_cache {
             None
         } else {
@@ -1233,6 +2708,95 @@ impl PagedAttention {
             write_cache,
         })?;
 
+        if let Some((flash_params, segment_lens)) = flash_params.and_then(|params| {
+            params
+                .varlen_segment_lens
+                .as_deref()
+                .map(|segment_lens| (params, segment_lens))
+        }) {
+            let query_lens = input_metadata.query_lens.as_deref().ok_or_else(|| {
+                candle_core::Error::msg("packed varlen segments are missing logical query lengths")
+            })?;
+            let max_segment = validate_varlen_segment_partition(query_lens, segment_lens)?;
+            let token_count = query_lens.iter().sum::<usize>();
+            let location = query.device().location();
+            let cu_q = flash_params
+                .cumulative_seqlens_q
+                .get(&location)
+                .ok_or_else(|| {
+                    candle_core::Error::msg(
+                        "packed varlen segments are missing query offsets for the layer device",
+                    )
+                })?;
+            let cu_k = flash_params
+                .logical_k
+                .cumulative_seqlens
+                .get(&location)
+                .ok_or_else(|| {
+                    candle_core::Error::msg(
+                        "packed varlen segments are missing key offsets for the layer device",
+                    )
+                })?;
+            if !write_cache
+                || input_metadata.num_cached_tokens.is_some()
+                || input_metadata.has_noncausal_mm_context
+                || !flash_params.packed
+                || !flash_params.causal
+                || flash_params.sliding_k.is_some()
+                || sdpa_params.sliding_window.is_some()
+                || !matches!(attention_mask, AttentionMask::CausalFlash)
+                || !query.device().is_cuda()
+                || !crate::using_flash_attn()
+                || query.dtype() == DType::F32
+                || ctx.dims.batch_size != 1
+                || ctx.dims.seq_len != token_count
+                || key.dim(0)? != 1
+                || key.dim(2)? != token_count
+                || value.dim(0)? != 1
+                || value.dim(2)? != token_count
+                || ctx.slot_mapping.dim(0)? != token_count
+                || flash_params.max_q as usize != max_segment
+                || flash_params.logical_k.max as usize != max_segment
+                || cu_q.dims1()? != segment_lens.len() + 1
+                || cu_k.dims1()? != segment_lens.len() + 1
+            {
+                candle_core::bail!("packed varlen segment metadata is not safe for direct prefill");
+            }
+        }
+
+        // A donor-prefill tail with one query per sequence already has a complete decode view.
+        if !write_cache
+            && is_metal_hnd_cache(key_cache.as_ref().unwrap(), value_cache.as_ref().unwrap())
+            && METAL_DONOR_DECODE_HEAD_SIZES.contains(&ctx.dims.head_size)
+            && query.stride()[3] == 1
+            && query.stride()[1] == ctx.dims.head_size
+            && (key_cache.as_ref().unwrap().dtype() == query.dtype()
+                || key_cache.as_ref().unwrap().dtype() == DType::F8E4M3)
+            && ctx.dims.seq_len == 1
+            && attention_mask.is_none()
+            && !input_metadata.has_noncausal_mm_context
+            && !ctx.has_noncausal_mm_context()
+            && flash_params.is_none_or(|params| params.causal)
+            && input_metadata.query_lens.as_ref().is_some_and(|lengths| {
+                lengths.len() == ctx.dims.batch_size && lengths.iter().all(|&len| len == 1)
+            })
+        {
+            return self
+                .run_decode(&ctx, tensors, &mut key_cache, &mut value_cache, false)?
+                .reshape((
+                    ctx.dims.batch_size,
+                    1,
+                    ctx.dims.attention_heads,
+                    ctx.dims.head_size,
+                ));
+        }
+
+        #[cfg(feature = "metal")]
+        if let Some(out) =
+            self.try_metal_prefill(&ctx, tensors, &mut key_cache, &mut value_cache, write_cache)?
+        {
+            return Ok(out);
+        }
         if let Some(out) = self.try_prefix_gather_prefill(
             &ctx,
             tensors,
@@ -1248,6 +2812,33 @@ impl PagedAttention {
             return Ok(out);
         }
         self.run_decode(&ctx, tensors, &mut key_cache, &mut value_cache, write_cache)
+    }
+
+    /// Write key/value into the paged cache without running attention.
+    #[cfg(feature = "cuda")]
+    pub fn write_cache(
+        &self,
+        key: &Tensor,
+        value: &Tensor,
+        key_cache: &mut Tensor,
+        value_cache: &mut Tensor,
+        input_metadata: &PagedAttentionInputMetadata,
+    ) -> Result<()> {
+        let scales = self.cache_scales(key_cache);
+        write_kv_cache(
+            key,
+            value,
+            key_cache,
+            value_cache,
+            CacheWriteParams {
+                scales,
+                slot_mapping: input_metadata
+                    .slot_mappings
+                    .get(&key.device().location())
+                    .unwrap(),
+                memory: input_metadata.attention_memory.as_ref(),
+            },
+        )
     }
 
     /// Standard paged attention forward: writes key/value to cache, then
@@ -1309,5 +2900,1822 @@ impl PagedAttention {
             flash_params,
             false,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle_core::D;
+
+    #[test]
+    fn cumulative_seqlens_match_checked_host_token_count() -> Result<()> {
+        let lengths = [3usize, 0, 5];
+        let num_tokens = checked_sequence_token_count(&lengths)?;
+        let cu_seqlens = cumulative_seqlens_from_lengths(&lengths, &Device::Cpu)?;
+
+        assert_eq!(num_tokens, 8);
+        assert_eq!(cu_seqlens.to_vec1::<u32>()?, vec![0, 3, 3, 8]);
+        Ok(())
+    }
+
+    #[test]
+    fn checked_sequence_token_count_rejects_invalid_kernel_sizes() {
+        let kernel_limit = usize::try_from(i32::MAX).unwrap();
+        assert!(checked_sequence_token_count(&[kernel_limit, 1]).is_err());
+        assert!(checked_sequence_token_count(&[usize::MAX, 1]).is_err());
+    }
+
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    fn supported_fa3_decode_candidate() -> Fa3DecodeCandidate {
+        Fa3DecodeCandidate {
+            key: Fa3PagedScheduleShape {
+                device: DeviceLocation::Cuda { gpu_id: 0 },
+                view: Fa3DecodeView::Logical,
+                batch: 8,
+                query_len: 1,
+                causal: false,
+                q_heads: 16,
+                kv_heads: 4,
+                head_dim: 256,
+                page_size: 32,
+            }
+            .decode_schedule_key()
+            .expect("supported FA3 decode schedule"),
+            query_dtype: DType::BF16,
+            query_contiguous: true,
+            key_cache_dtype: DType::F8E4M3,
+            value_cache_dtype: DType::F8E4M3,
+            mask_is_none: true,
+            shapes_match: true,
+            has_alibi: false,
+            has_sinks: false,
+            has_softcap: false,
+            has_sliding_window: false,
+            has_noncausal_mm_context: false,
+        }
+    }
+
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[test]
+    fn fa3_decode_candidate_requires_supported_full_decode() {
+        let supported = supported_fa3_decode_candidate();
+        assert_eq!(supported.schedule_key(), Some(supported.key));
+
+        macro_rules! reject {
+            ($field:ident, $value:expr) => {{
+                let mut candidate = supported;
+                candidate.$field = $value;
+                assert!(candidate.schedule_key().is_none());
+            }};
+        }
+
+        reject!(query_dtype, DType::F16);
+        reject!(query_contiguous, false);
+        reject!(key_cache_dtype, DType::BF16);
+        reject!(value_cache_dtype, DType::BF16);
+        reject!(mask_is_none, false);
+        reject!(shapes_match, false);
+        reject!(has_alibi, true);
+        reject!(has_sinks, true);
+        reject!(has_softcap, true);
+        reject!(has_sliding_window, true);
+        reject!(has_noncausal_mm_context, true);
+
+        let mut unsupported_shape = supported;
+        unsupported_shape.key.head_dim = 128;
+        assert!(unsupported_shape.schedule_key().is_none());
+
+        let mut speculative = supported;
+        speculative.key.query_len = 8;
+        speculative.key.causal = true;
+        assert_eq!(speculative.schedule_key(), Some(speculative.key));
+    }
+
+    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[test]
+    fn fa3_decode_schedule_lookup_is_exact() {
+        let candidate = supported_fa3_decode_candidate();
+        let schedules = HashMap::from([(candidate.key, ())]);
+        assert!(schedules.contains_key(&candidate.schedule_key().unwrap()));
+
+        let mut different_batch = candidate;
+        different_batch.key.batch /= 2;
+        assert!(!schedules.contains_key(&different_batch.schedule_key().unwrap()));
+
+        let mut different_heads = candidate;
+        different_heads.key.q_heads /= 2;
+        assert!(!schedules.contains_key(&different_heads.schedule_key().unwrap()));
+
+        let mut different_query = candidate;
+        different_query.key.query_len = 8;
+        different_query.key.causal = true;
+        assert!(!schedules.contains_key(&different_query.schedule_key().unwrap()));
+    }
+
+    #[test]
+    fn owns_validated_fp8_attention_scales() -> Result<()> {
+        let scales = Fp8AttentionScales {
+            q: 0.25,
+            k: 0.5,
+            v: 0.75,
+        };
+        let attention =
+            PagedAttention::new_with_fp8_attention_scales(128, &Device::Cpu, None, Some(scales))?;
+        assert_eq!(attention.fp8_attention_scales(), scales);
+        assert!(attention.has_calibrated_fp8_attention_scales());
+        let [q_scale, k_scale, v_scale] = attention.fp8_scale_tensors();
+        assert_eq!(q_scale.to_scalar::<f32>()?, scales.q);
+        assert_eq!(k_scale.to_scalar::<f32>()?, scales.k);
+        assert_eq!(v_scale.to_scalar::<f32>()?, scales.v);
+        #[cfg(all(feature = "cuda", target_family = "unix"))]
+        {
+            let fp8_cache = Tensor::zeros((1,), DType::F8E4M3, &Device::Cpu)?;
+            let flashinfer_scales = attention.cache_scales(&fp8_cache).flashinfer(&fp8_cache);
+            assert_eq!(flashinfer_scales.k, scales.k);
+            assert_eq!(flashinfer_scales.v, scales.v);
+        }
+
+        let default = PagedAttention::new(128, &Device::Cpu, None)?;
+        assert_eq!(default.fp8_attention_scales(), Fp8AttentionScales::UNIT);
+        assert!(!default.has_calibrated_fp8_attention_scales());
+
+        assert!(PagedAttention::new_with_fp8_attention_scales(
+            128,
+            &Device::Cpu,
+            None,
+            Some(Fp8AttentionScales {
+                q: 1.0,
+                k: 0.0,
+                v: 1.0,
+            }),
+        )
+        .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn cache_write_accepts_row_strided_dense_heads() -> Result<()> {
+        let packed = Tensor::zeros((2, 3, 16), DType::F32, &Device::Cpu)?;
+        let row_strided = packed.narrow(D::Minus1, 4, 8)?.unfold(D::Minus1, 4, 4)?;
+        assert_eq!(row_strided.dims(), &[2, 3, 2, 4]);
+        assert_eq!(row_strided.stride(), &[48, 16, 4, 1]);
+        assert_eq!(cache_input_shape(&row_strided)?, (6, 2, 4));
+        assert_eq!(
+            cache_input_can_write_directly(&row_strided)?,
+            cfg!(all(feature = "cuda", target_family = "unix"))
+        );
+
+        let row_strided = packed
+            .narrow(1, 0, 1)?
+            .squeeze(1)?
+            .narrow(D::Minus1, 4, 8)?
+            .unfold(D::Minus1, 4, 4)?;
+        assert_eq!(row_strided.stride(), &[48, 4, 1]);
+        assert!(cache_input_can_write_directly(&row_strided)?);
+        Ok(())
+    }
+
+    #[test]
+    fn cache_write_packs_singleton_token_stride() -> Result<()> {
+        let source = Tensor::zeros((8, 1, 128), DType::F32, &Device::Cpu)?;
+        let singleton = source.transpose(0, 1)?;
+        assert_eq!(singleton.dims(), &[1, 8, 128]);
+        assert!(!cache_input_can_write_directly(&singleton)?);
+
+        let packed = singleton.force_contiguous()?;
+        assert_eq!(packed.stride(), &[1024, 128, 1]);
+        assert!(cache_input_can_write_directly(&packed)?);
+        Ok(())
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn metal_cache_packing_preserves_offset_and_strided_inputs() -> Result<()> {
+        const HEADS: usize = 8;
+        const HEAD_DIM: usize = 128;
+        const BLOCK_SIZE: usize = 32;
+        const BLOCKS: usize = 2;
+        const PACK: usize = 8;
+        const SOURCE_BATCH: usize = 3;
+        const VALUE_PERIOD: usize = 97;
+        const VALUE_MIDPOINT: f32 = 48.;
+        const SENTINEL: f32 = -97.;
+        const SLOTS: [i64; 4] = [39, 2, 63, 32];
+
+        let device = Device::new_metal(0)?;
+        for dtype in [DType::BF16, DType::F16] {
+            for query_len in [1, 2] {
+                let source_shape = (SOURCE_BATCH, HEADS, query_len, HEAD_DIM);
+                let elements = SOURCE_BATCH * HEADS * query_len * HEAD_DIM;
+                let source = |factor: usize| -> Result<Tensor> {
+                    let data = (0..elements)
+                        .map(|index| {
+                            f32::from(u8::try_from((index * factor) % VALUE_PERIOD).unwrap())
+                                - VALUE_MIDPOINT
+                        })
+                        .collect::<Vec<_>>();
+                    Tensor::from_vec(data, source_shape, &device)?
+                        .to_dtype(dtype)?
+                        .narrow(0, 1, query_len)?
+                        .transpose(1, 2)
+                };
+                let key = source(7)?;
+                let value = source(11)?;
+                assert!(!cache_input_can_write_directly(&key)?);
+                assert!(!cache_input_can_write_directly(&value)?);
+                assert_eq!(key.is_contiguous(), query_len == 1);
+                assert_eq!(value.is_contiguous(), query_len == 1);
+                assert!(key.layout().start_offset() > 0);
+                assert!(value.layout().start_offset() > 0);
+                let (tokens, _, _) = cache_input_shape(&key)?;
+                let read =
+                    |tensor: &Tensor| tensor.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>();
+                let key_values = read(&key)?;
+                let value_values = read(&value)?;
+                let mut expected_key = vec![SENTINEL; BLOCKS * HEADS * HEAD_DIM * BLOCK_SIZE];
+                let mut expected_value = expected_key.clone();
+                let mut expected_hnd_key = expected_key.clone();
+                let mut expected_hnd_value = expected_key.clone();
+                for (token, &slot) in SLOTS.iter().take(tokens).enumerate() {
+                    let slot = usize::try_from(slot).unwrap();
+                    let (block, offset) = (slot / BLOCK_SIZE, slot % BLOCK_SIZE);
+                    for head in 0..HEADS {
+                        for dim in 0..HEAD_DIM {
+                            let source = (token * HEADS + head) * HEAD_DIM + dim;
+                            let key_index = (((block * HEADS + head) * (HEAD_DIM / PACK)
+                                + dim / PACK)
+                                * BLOCK_SIZE
+                                + offset)
+                                * PACK
+                                + dim % PACK;
+                            let value_index =
+                                ((block * HEADS + head) * HEAD_DIM + dim) * BLOCK_SIZE + offset;
+                            expected_key[key_index] = key_values[source];
+                            expected_value[value_index] = value_values[source];
+                            let hnd_index =
+                                ((block * HEADS + head) * BLOCK_SIZE + offset) * HEAD_DIM + dim;
+                            expected_hnd_key[hnd_index] = key_values[source];
+                            expected_hnd_value[hnd_index] = value_values[source];
+                        }
+                    }
+                }
+                let mut padded_slots = vec![-1];
+                padded_slots.extend(SLOTS);
+                let slots = Tensor::new(padded_slots, &device)?.narrow(0, 1, tokens)?;
+                let packed_key = pack_cache_input(&key)?;
+                let packed_value = pack_cache_input(&value)?;
+                assert_eq!(packed_key.dims(), &[tokens, HEADS, HEAD_DIM]);
+                assert_eq!(packed_key.stride(), &[HEADS * HEAD_DIM, HEAD_DIM, 1]);
+                let expected_offset = if key.is_contiguous() {
+                    key.layout().start_offset()
+                } else {
+                    0
+                };
+                assert_eq!(packed_key.layout().start_offset(), expected_offset);
+                for hnd in [false, true] {
+                    let (key_shape, value_shape, expected_key, expected_value) = if hnd {
+                        (
+                            vec![BLOCKS, HEADS, BLOCK_SIZE, HEAD_DIM],
+                            vec![BLOCKS, HEADS, BLOCK_SIZE, HEAD_DIM],
+                            &expected_hnd_key,
+                            &expected_hnd_value,
+                        )
+                    } else {
+                        (
+                            vec![BLOCKS, HEADS, HEAD_DIM / PACK, BLOCK_SIZE, PACK],
+                            vec![BLOCKS, HEADS, HEAD_DIM, BLOCK_SIZE],
+                            &expected_key,
+                            &expected_value,
+                        )
+                    };
+                    let key_cache = Tensor::full(SENTINEL, key_shape, &device)?.to_dtype(dtype)?;
+                    let value_cache =
+                        Tensor::full(SENTINEL, value_shape, &device)?.to_dtype(dtype)?;
+                    assert_eq!(
+                        AttentionBackendKind::from_cache(&key_cache, &value_cache),
+                        AttentionBackendKind::Standard,
+                    );
+                    assert_eq!(cache_block_size(&key_cache, &value_cache)?, BLOCK_SIZE);
+                    assert_eq!(cache_kv_shape(&key_cache, &value_cache)?, (HEADS, HEAD_DIM));
+                    reshape_and_cache(
+                        &packed_key,
+                        &packed_value,
+                        None,
+                        None,
+                        &key_cache,
+                        &value_cache,
+                        &slots,
+                    )?;
+                    assert_eq!(
+                        &read(&key_cache)?,
+                        expected_key,
+                        "{dtype:?} query_len={query_len} hnd={hnd}: key cache mismatch"
+                    );
+                    assert_eq!(
+                        &read(&value_cache)?,
+                        expected_value,
+                        "{dtype:?} query_len={query_len} hnd={hnd}: value cache mismatch"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn varlen_segments_partition_each_logical_query() {
+        assert_eq!(
+            validate_varlen_segment_partition(&[3, 2], &[2, 1, 2]).unwrap(),
+            2
+        );
+    }
+
+    #[test]
+    fn varlen_segments_reject_boundary_crossing_and_trailing_segments() {
+        assert!(validate_varlen_segment_partition(&[3, 2], &[2, 2, 1]).is_err());
+        assert!(validate_varlen_segment_partition(&[3, 2], &[2, 1, 2, 1]).is_err());
+        assert!(validate_varlen_segment_partition(&[3, 2], &[2, 1]).is_err());
+        assert!(validate_varlen_segment_partition(&[3, 0], &[2, 1]).is_err());
+    }
+
+    #[test]
+    fn ragged_decode_mask_excludes_padding() {
+        let mask = prefix_gather_causal_mask(
+            PrefixMaskRequest {
+                query_lens: &[1, 1],
+                kv_lens: &[2, 4],
+                mm_prefix_ranges: None,
+                sliding_window: None,
+                dtype: DType::F32,
+                device: &Device::Cpu,
+            },
+            1,
+            4,
+            &PrefixMaskCache::default(),
+        )
+        .unwrap();
+        let AttentionMask::Custom(mask) = mask else {
+            panic!("expected custom mask");
+        };
+        let mask = mask.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+
+        assert_eq!(
+            mask,
+            vec![
+                0.0,
+                0.0,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+                0.0,
+                0.0,
+                0.0,
+                0.0
+            ]
+        );
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn metal_prefix_masks_reuse_uploads_without_reusing_different_windows() -> Result<()> {
+        let device = Device::new_metal(0)?;
+        let cache = PrefixMaskCache::default();
+        let mm_prefix_ranges = [vec![(1, 3)], vec![]];
+        let mut previous = None;
+        for sliding_window in [None, Some(2)] {
+            let request = PrefixMaskRequest {
+                query_lens: &[2, 1],
+                kv_lens: &[4, 3],
+                mm_prefix_ranges: Some(&mm_prefix_ranges),
+                sliding_window,
+                dtype: DType::BF16,
+                device: &device,
+            };
+            let AttentionMask::Custom(mask) = prefix_gather_causal_mask(request, 2, 4, &cache)?
+            else {
+                unreachable!()
+            };
+            let AttentionMask::Custom(reused) =
+                prefix_gather_causal_mask(request, 2, 4, &cache.clone())?
+            else {
+                unreachable!()
+            };
+            assert_eq!(mask.id(), reused.id());
+            assert_ne!(previous, Some(mask.id()));
+            previous = Some(mask.id());
+            let AttentionMask::Custom(expected) = prefix_gather_causal_mask(
+                PrefixMaskRequest {
+                    device: &Device::Cpu,
+                    dtype: DType::F32,
+                    ..request
+                },
+                2,
+                4,
+                &PrefixMaskCache::default(),
+            )?
+            else {
+                unreachable!()
+            };
+            assert_eq!(
+                mask.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?,
+                expected.flatten_all()?.to_vec1::<f32>()?
+            );
+            let packed = packed_prefix_gather_causal_mask(request, &cache)?;
+            let reused = packed_prefix_gather_causal_mask(request, &cache)?;
+            assert_eq!(packed.id(), reused.id());
+            assert_ne!(packed.id(), mask.id());
+            let expected = packed_prefix_gather_causal_mask(
+                PrefixMaskRequest {
+                    device: &Device::Cpu,
+                    dtype: DType::F32,
+                    ..request
+                },
+                &PrefixMaskCache::default(),
+            )?;
+            assert_eq!(
+                packed
+                    .to_dtype(DType::F32)?
+                    .flatten_all()?
+                    .to_vec1::<f32>()?,
+                expected.flatten_all()?.to_vec1::<f32>()?
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn ragged_prompt_mask_keeps_padding_rows_finite() {
+        let mask = prefix_gather_causal_mask(
+            PrefixMaskRequest {
+                query_lens: &[2],
+                kv_lens: &[2],
+                mm_prefix_ranges: None,
+                sliding_window: None,
+                dtype: DType::F32,
+                device: &Device::Cpu,
+            },
+            4,
+            2,
+            &PrefixMaskCache::default(),
+        )
+        .unwrap();
+        let AttentionMask::Custom(mask) = mask else {
+            panic!("expected custom mask");
+        };
+        let mask = mask.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+
+        assert_eq!(
+            mask,
+            vec![
+                0.0,
+                f32::NEG_INFINITY,
+                0.0,
+                0.0,
+                0.0,
+                f32::NEG_INFINITY,
+                0.0,
+                f32::NEG_INFINITY
+            ]
+        );
+    }
+
+    #[test]
+    fn sliding_mask_uses_window_as_token_capacity() {
+        let mask = prefix_gather_causal_mask(
+            PrefixMaskRequest {
+                query_lens: &[1],
+                kv_lens: &[6],
+                mm_prefix_ranges: None,
+                sliding_window: Some(4),
+                dtype: DType::F32,
+                device: &Device::Cpu,
+            },
+            1,
+            6,
+            &PrefixMaskCache::default(),
+        )
+        .unwrap();
+        let AttentionMask::Custom(mask) = mask else {
+            panic!("expected custom mask");
+        };
+
+        assert_eq!(
+            mask.flatten_all().unwrap().to_vec1::<f32>().unwrap(),
+            vec![f32::NEG_INFINITY, f32::NEG_INFINITY, 0.0, 0.0, 0.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn sliding_mask_moves_with_each_chunked_query_row() {
+        let mask = prefix_gather_causal_mask(
+            PrefixMaskRequest {
+                query_lens: &[3],
+                kv_lens: &[8],
+                mm_prefix_ranges: None,
+                sliding_window: Some(4),
+                dtype: DType::F32,
+                device: &Device::Cpu,
+            },
+            3,
+            8,
+            &PrefixMaskCache::default(),
+        )
+        .unwrap();
+        let AttentionMask::Custom(mask) = mask else {
+            panic!("expected custom mask");
+        };
+        let mask = mask.squeeze(0).unwrap().squeeze(0).unwrap();
+
+        for (row, visible_start) in [2, 3, 4].into_iter().enumerate() {
+            let values = mask.get(row).unwrap().to_vec1::<f32>().unwrap();
+            for (column, value) in values.into_iter().enumerate() {
+                let visible = column >= visible_start && column <= row + 5;
+                assert_eq!(value == 0.0, visible);
+            }
+        }
+    }
+
+    #[test]
+    fn sliding_mask_handles_unit_window_and_query_longer_than_window() {
+        let unit = prefix_gather_causal_mask(
+            PrefixMaskRequest {
+                query_lens: &[1],
+                kv_lens: &[3],
+                mm_prefix_ranges: None,
+                sliding_window: Some(1),
+                dtype: DType::F32,
+                device: &Device::Cpu,
+            },
+            1,
+            3,
+            &PrefixMaskCache::default(),
+        )
+        .unwrap();
+        let AttentionMask::Custom(unit) = unit else {
+            panic!("expected custom mask");
+        };
+        assert_eq!(
+            unit.flatten_all().unwrap().to_vec1::<f32>().unwrap(),
+            vec![f32::NEG_INFINITY, f32::NEG_INFINITY, 0.0]
+        );
+
+        let chunk = prefix_gather_causal_mask(
+            PrefixMaskRequest {
+                query_lens: &[5],
+                kv_lens: &[7],
+                mm_prefix_ranges: None,
+                sliding_window: Some(2),
+                dtype: DType::F32,
+                device: &Device::Cpu,
+            },
+            5,
+            7,
+            &PrefixMaskCache::default(),
+        )
+        .unwrap();
+        let AttentionMask::Custom(chunk) = chunk else {
+            panic!("expected custom mask");
+        };
+        let chunk = chunk.squeeze(0).unwrap().squeeze(0).unwrap();
+        for row in 0..5 {
+            let values = chunk.get(row).unwrap().to_vec1::<f32>().unwrap();
+            assert_eq!(values.iter().filter(|&&value| value == 0.0).count(), 2);
+        }
+    }
+
+    #[test]
+    fn noncausal_media_range_overrides_both_sliding_window_edges() {
+        let mask = prefix_gather_causal_mask(
+            PrefixMaskRequest {
+                query_lens: &[2],
+                kv_lens: &[8],
+                mm_prefix_ranges: Some(&[vec![(1, 8)]]),
+                sliding_window: Some(3),
+                dtype: DType::F32,
+                device: &Device::Cpu,
+            },
+            2,
+            8,
+            &PrefixMaskCache::default(),
+        )
+        .unwrap();
+        let AttentionMask::Custom(mask) = mask else {
+            panic!("expected custom mask");
+        };
+        let mask = mask.squeeze(0).unwrap().squeeze(0).unwrap();
+
+        assert_eq!(
+            mask.get(0).unwrap().to_vec1::<f32>().unwrap(),
+            vec![f32::NEG_INFINITY, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        );
+        assert_eq!(
+            mask.get(1).unwrap().to_vec1::<f32>().unwrap(),
+            vec![f32::NEG_INFINITY, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+        );
+    }
+
+    #[test]
+    fn packed_query_layout_is_dense_without_rectangular_lengths() {
+        assert!(query_layout_is_dense(&[3, 5], 1, 8));
+        assert!(query_layout_is_dense(&[5, 5], 2, 5));
+        assert!(!query_layout_is_dense(&[3, 5], 2, 5));
+    }
+
+    #[test]
+    fn packed_prefix_selects_block_diagonal_mask_before_padded_mask() {
+        assert!(should_use_packed_prefix_mask(
+            true,
+            true,
+            &AttentionMask::CausalFlash,
+            false
+        ));
+        assert!(!should_use_packed_prefix_mask(
+            true,
+            true,
+            &AttentionMask::CausalFlash,
+            true
+        ));
+        assert!(!should_use_packed_prefix_mask(
+            false,
+            true,
+            &AttentionMask::CausalFlash,
+            false
+        ));
+        assert!(!should_use_packed_prefix_mask(
+            true,
+            true,
+            &AttentionMask::None,
+            false
+        ));
+    }
+
+    #[test]
+    fn cached_suffix_reconstructs_mask_and_decode_layout() {
+        assert!(should_reconstruct_prefix_mask(
+            &AttentionMask::None,
+            true,
+            false,
+            false
+        ));
+        assert!(should_reconstruct_prefix_mask(
+            &AttentionMask::None,
+            false,
+            true,
+            false
+        ));
+        assert!(should_reconstruct_prefix_mask(
+            &AttentionMask::None,
+            false,
+            false,
+            true
+        ));
+        assert!(!should_reconstruct_prefix_mask(
+            &AttentionMask::CausalFlash,
+            true,
+            false,
+            true
+        ));
+
+        let output =
+            Tensor::from_vec(vec![0u32, 1, 2, 3, 4, 5], (1, 2, 3, 1), &Device::Cpu).unwrap();
+        let output = prefix_attention_output_layout(output, &AttentionMask::None).unwrap();
+        assert_eq!(output.dims(), &[1, 3, 2, 1]);
+        assert_eq!(
+            output.flatten_all().unwrap().to_vec1::<u32>().unwrap(),
+            vec![0, 3, 1, 4, 2, 5]
+        );
+    }
+
+    #[test]
+    fn single_token_suffix_mask_excludes_padding_and_sliding_history() {
+        let mask = prefix_gather_causal_mask(
+            PrefixMaskRequest {
+                query_lens: &[1, 1],
+                kv_lens: &[3, 5],
+                mm_prefix_ranges: None,
+                sliding_window: Some(3),
+                dtype: DType::F32,
+                device: &Device::Cpu,
+            },
+            1,
+            5,
+            &PrefixMaskCache::default(),
+        )
+        .unwrap();
+        let AttentionMask::Custom(mask) = mask else {
+            panic!("expected custom mask");
+        };
+        assert_eq!(
+            mask.flatten_all().unwrap().to_vec1::<f32>().unwrap(),
+            vec![
+                0.0,
+                0.0,
+                0.0,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+                0.0,
+                0.0,
+                0.0,
+            ]
+        );
+    }
+
+    #[test]
+    fn gathered_decode_counts_each_query_token_as_a_row() {
+        let query = Tensor::zeros((6, 4, 8), DType::F32, &Device::Cpu).unwrap();
+
+        assert_eq!(
+            decode_query_rows(&query, &[7, 8, 9, 10, 11, 12]).unwrap(),
+            6
+        );
+        assert!(decode_query_rows(&query, &[7, 8]).is_err());
+    }
+
+    #[test]
+    fn packed_sinks_query_round_trips_through_padded_varlen_layout() {
+        let query =
+            Tensor::from_vec(vec![0u32, 1, 2, 3, 4, 5], (1, 1, 6, 1), &Device::Cpu).unwrap();
+        let padded = pad_packed_query(&query, &[2, 4]).unwrap();
+
+        assert_eq!(padded.dims(), &[2, 1, 4, 1]);
+        assert_eq!(
+            padded.flatten_all().unwrap().to_vec1::<u32>().unwrap(),
+            vec![0, 1, 0, 0, 2, 3, 4, 5]
+        );
+        let repacked = repack_padded_query(&padded, &[2, 4]).unwrap();
+        assert_eq!(
+            repacked.flatten_all().unwrap().to_vec1::<u32>().unwrap(),
+            query.flatten_all().unwrap().to_vec1::<u32>().unwrap()
+        );
+    }
+
+    #[test]
+    fn packed_sinks_query_rejects_inconsistent_lengths() {
+        let query = Tensor::zeros((1, 2, 5, 4), DType::F32, &Device::Cpu).unwrap();
+
+        assert!(pad_packed_query(&query, &[2, 2]).is_err());
+        assert!(pad_packed_query(&query, &[5, 0]).is_err());
+    }
+
+    #[test]
+    fn sinks_decode_uses_varlen_without_general_flash_support() {
+        assert!(should_use_decode_gather_varlen(false, true, true, 2));
+        assert!(!should_use_decode_gather_varlen(false, true, true, 1));
+        assert!(!should_use_decode_gather_varlen(false, true, false, 2));
+        assert!(!should_use_decode_gather_varlen(true, true, false, 2));
+        assert!(!should_use_decode_gather_varlen(false, false, true, 2));
+        assert!(should_use_decode_gather_varlen(true, false, false, 1));
+    }
+
+    #[test]
+    fn packed_varlen_requires_a_compatible_flash_backend() {
+        assert!(!packed_varlen_flash_is_usable(
+            false,
+            true,
+            DType::F16,
+            128,
+            false,
+            false
+        ));
+        assert!(!packed_varlen_flash_is_usable(
+            true,
+            false,
+            DType::F16,
+            128,
+            false,
+            false
+        ));
+        assert!(!packed_varlen_flash_is_usable(
+            true,
+            true,
+            DType::F32,
+            128,
+            false,
+            false
+        ));
+        assert!(!packed_varlen_flash_is_usable(
+            true,
+            true,
+            DType::F16,
+            640,
+            false,
+            false
+        ));
+        assert!(!packed_varlen_flash_is_usable(
+            true,
+            true,
+            DType::F16,
+            512,
+            true,
+            false
+        ));
+        assert!(!packed_varlen_flash_is_usable(
+            true,
+            true,
+            DType::F16,
+            320,
+            false,
+            true
+        ));
+        assert_eq!(
+            packed_varlen_flash_is_usable(true, true, DType::F16, 128, false, false),
+            cfg!(any(feature = "flash-attn", feature = "flash-attn-v3"))
+        );
+    }
+
+    #[test]
+    fn uncached_noncausal_prompt_uses_gather_path() {
+        assert!(should_use_gather_path(true, false, true, true, false, true));
+        assert!(!should_use_gather_path(
+            true, false, false, false, false, true
+        ));
+    }
+
+    #[test]
+    fn uncached_later_prompt_mask_uses_gather_path() {
+        assert!(should_use_gather_path(
+            true, false, false, true, false, true
+        ));
+        assert!(!should_use_gather_path(
+            false, false, false, true, false, true
+        ));
+    }
+
+    #[test]
+    fn exact_mm_ranges_keep_the_direct_prefix_path_causal() {
+        assert!(prefix_prefill_is_causal(true, false, true));
+        assert!(prefix_prefill_is_causal(true, true, false));
+        assert!(!prefix_prefill_is_causal(true, false, false));
+        assert!(!prefix_prefill_is_causal(false, true, true));
+    }
+
+    #[test]
+    fn full_mm_range_view_does_not_reuse_sliding_ranges() {
+        let regular = 7;
+        let selected = select_optional_view(true, None, Some(&regular));
+
+        assert_eq!(selected, None);
+        assert_eq!(
+            select_optional_view(false, Some(&11), Some(&regular)),
+            Some(&regular)
+        );
+    }
+
+    #[test]
+    fn noncausal_mm_context_requires_the_selected_cache_view() {
+        assert!(noncausal_mm_view_is_valid(false, false, false));
+        assert!(noncausal_mm_view_is_valid(true, true, true));
+        assert!(!noncausal_mm_view_is_valid(true, false, true));
+        assert!(!noncausal_mm_view_is_valid(true, true, false));
+    }
+
+    #[test]
+    fn packed_custom_mask_preserves_boundaries_and_mm_prefixes() {
+        let mask = packed_prefix_gather_causal_mask(
+            PrefixMaskRequest {
+                query_lens: &[2, 3],
+                kv_lens: &[2, 3],
+                mm_prefix_ranges: Some(&[vec![(0, 2)], vec![]]),
+                sliding_window: Some(2),
+                dtype: DType::F32,
+                device: &Device::Cpu,
+            },
+            &PrefixMaskCache::default(),
+        )
+        .unwrap()
+        .squeeze(0)
+        .unwrap()
+        .squeeze(0)
+        .unwrap()
+        .to_vec2::<f32>()
+        .unwrap();
+
+        assert_eq!(
+            mask[0],
+            vec![
+                0.0,
+                0.0,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY
+            ]
+        );
+        assert_eq!(
+            mask[2],
+            vec![
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+                0.0,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY
+            ]
+        );
+        assert_eq!(
+            mask[4],
+            vec![
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+                0.0,
+                0.0
+            ]
+        );
+    }
+
+    #[test]
+    fn overlapping_mm_ranges_do_not_merge_attention_groups() {
+        let mask = packed_prefix_gather_causal_mask(
+            PrefixMaskRequest {
+                query_lens: &[6],
+                kv_lens: &[6],
+                mm_prefix_ranges: Some(&[vec![(0, 4), (2, 6)]]),
+                sliding_window: None,
+                dtype: DType::F32,
+                device: &Device::Cpu,
+            },
+            &PrefixMaskCache::default(),
+        )
+        .unwrap()
+        .squeeze(0)
+        .unwrap()
+        .squeeze(0)
+        .unwrap()
+        .to_vec2::<f32>()
+        .unwrap();
+
+        assert_eq!(
+            mask[0],
+            vec![0.0, 0.0, 0.0, 0.0, f32::NEG_INFINITY, f32::NEG_INFINITY]
+        );
+        assert_eq!(mask[3], vec![0.0; 6]);
+    }
+}
+
+#[cfg(all(test, feature = "cuda", target_family = "unix"))]
+mod sinks_cached_prefix_tests {
+    use super::*;
+
+    const QUERY_HEADS: usize = 4;
+    const KV_HEADS: usize = 2;
+    const HEAD_DIM: usize = 128;
+    const BLOCK_SIZE: usize = 32;
+    const SLIDING_WINDOW: usize = 3;
+    const BF16_TOLERANCE: f32 = 0.01;
+    const F32_TOLERANCE: f32 = 1e-5;
+    const QUERY_WORKSPACE_BUFFERS: usize = 4;
+
+    #[test]
+    fn cuda_fused_sinks_handles_cold_and_cached_packed_and_padded_chunks() -> Result<()> {
+        let device = Device::new_cuda(0)?;
+        let location = device.location();
+        let attention = PagedAttention::new(HEAD_DIM, &device, None)?;
+        for dtype in [DType::BF16, DType::F32] {
+            for (query_lens, kv_lens) in [
+                (vec![2usize], vec![5usize]),
+                (vec![2, 3], vec![5, 7]),
+                (vec![1, 1], vec![5, 7]),
+                (vec![2, 3], vec![2, 3]),
+            ] {
+                let cold = query_lens == kv_lens;
+                for packed in [false, true] {
+                    if cold && !packed {
+                        continue;
+                    }
+                    for sliding_window in [None, Some(SLIDING_WINDOW)] {
+                        let total_q = query_lens.iter().sum::<usize>();
+                        let sequences = query_lens.len();
+                        let max_q = *query_lens.iter().max().unwrap();
+                        let batch = if packed { 1 } else { sequences };
+                        let query_len = if packed { total_q } else { max_q };
+                        let query_rows = batch * query_len;
+                        let query = Tensor::zeros(
+                            (batch, QUERY_HEADS, query_len, HEAD_DIM),
+                            dtype,
+                            &device,
+                        )?;
+                        let key =
+                            Tensor::zeros((batch, KV_HEADS, query_len, HEAD_DIM), dtype, &device)?;
+                        let values = query_lens
+                            .iter()
+                            .enumerate()
+                            .flat_map(|(sequence, &len)| {
+                                let rows = if packed { len } else { max_q };
+                                std::iter::repeat_n(
+                                    f32::from(u16::try_from(sequence + 1).unwrap()),
+                                    rows * KV_HEADS * HEAD_DIM,
+                                )
+                            })
+                            .collect::<Vec<_>>();
+                        let value = Tensor::from_vec(
+                            values,
+                            (batch, query_len, KV_HEADS, HEAD_DIM),
+                            &device,
+                        )?
+                        .to_dtype(dtype)?
+                        .transpose(1, 2)?;
+                        let cache_shape = (sequences, KV_HEADS, BLOCK_SIZE, HEAD_DIM);
+                        let key_cache = Tensor::zeros(cache_shape, dtype, &device)?;
+                        let values = (0..sequences)
+                            .flat_map(|sequence| {
+                                std::iter::repeat_n(
+                                    f32::from(u16::try_from(sequence + 1).unwrap()),
+                                    KV_HEADS * BLOCK_SIZE * HEAD_DIM,
+                                )
+                            })
+                            .collect::<Vec<_>>();
+                        let value_cache =
+                            Tensor::from_vec(values, cache_shape, &device)?.to_dtype(dtype)?;
+                        let slots = query_lens
+                            .iter()
+                            .zip(&kv_lens)
+                            .enumerate()
+                            .flat_map(|(sequence, (&q, &kv))| {
+                                let rows = if packed { q } else { max_q };
+                                (0..rows).map(move |row| {
+                                    if row < q {
+                                        (sequence * BLOCK_SIZE + kv - q + row) as i64
+                                    } else {
+                                        _PAD_SLOT_ID
+                                    }
+                                })
+                            })
+                            .collect::<Vec<_>>();
+                        let cu_q = cumulative_seqlens_from_lengths(&query_lens, &device)?;
+                        let cu_kv = cumulative_seqlens_from_lengths(&kv_lens, &device)?;
+                        let mut metadata = PagedAttentionInputMetadata::dummy(&device)?;
+                        metadata.block_tables = Some(HashMap::from([(
+                            location,
+                            Tensor::from_vec(
+                                (0..u32::try_from(sequences).unwrap()).collect::<Vec<_>>(),
+                                (sequences, 1),
+                                &device,
+                            )?,
+                        )]));
+                        metadata.block_size = Some(BLOCK_SIZE);
+                        metadata.paged_context_lens_cpu = Some(kv_lens.clone());
+                        metadata.max_context_len = kv_lens.iter().copied().max();
+                        metadata.slot_mappings = HashMap::from([(
+                            location,
+                            Tensor::from_vec(slots, query_rows, &device)?,
+                        )]);
+                        let max_kv = *kv_lens.iter().max().unwrap();
+                        let kv_rows = kv_lens.iter().sum::<usize>().max(sequences * max_kv);
+                        let output_rows = total_q.max(sequences * max_q);
+                        metadata.prefix_gather_workspace_limit = Some(
+                            (2 * kv_rows * KV_HEADS * HEAD_DIM
+                                + QUERY_WORKSPACE_BUFFERS * output_rows * QUERY_HEADS * HEAD_DIM)
+                                * dtype.size_in_bytes()
+                                + QUERY_HEADS * DType::F32.size_in_bytes()
+                                + 2 * (sequences + 1) * DType::U32.size_in_bytes(),
+                        );
+                        metadata.is_first_prompt_chunk = cold;
+                        metadata.num_cached_tokens = (!cold).then(|| {
+                            kv_lens
+                                .iter()
+                                .zip(&query_lens)
+                                .map(|(kv, q)| kv - q)
+                                .collect()
+                        });
+                        metadata.query_lens = Some(query_lens.clone());
+                        metadata.cu_seqlens_q = Some(HashMap::from([(location, cu_q.clone())]));
+                        metadata.cu_seqlens_kv = Some(HashMap::from([(location, cu_kv)]));
+                        let mut flash = FlashParams::empty(true);
+                        flash.packed = packed;
+                        flash.max_q = u32::try_from(*query_lens.iter().max().unwrap()).unwrap();
+                        flash.cumulative_seqlens_q = HashMap::from([(location, cu_q.clone())]);
+                        flash.logical_k = FlashKMeta {
+                            max: flash.max_q,
+                            cumulative_seqlens: HashMap::from([(location, cu_q)]),
+                        };
+                        let sinks = Tensor::full(std::f32::consts::LN_2, QUERY_HEADS, &device)?
+                            .to_dtype(dtype)?;
+                        let sink_mass = sinks.to_dtype(DType::F32)?.to_vec1::<f32>()?[0].exp();
+                        let params = SdpaParams {
+                            n_kv_groups: QUERY_HEADS / KV_HEADS,
+                            softmax_scale: 1. / f32::from(u16::try_from(HEAD_DIM).unwrap()).sqrt(),
+                            softcap: None,
+                            sliding_window,
+                            sinks: Some(sinks),
+                        };
+                        let output = attention.forward(
+                            &query,
+                            &key,
+                            &value,
+                            &AttentionMask::CausalFlash,
+                            Some(key_cache),
+                            Some(value_cache),
+                            &metadata,
+                            &params,
+                            Some(&flash),
+                        )?;
+                        let output = output
+                            .to_dtype(DType::F32)?
+                            .flatten_all()?
+                            .to_vec1::<f32>()?;
+                        let tolerance = if dtype == DType::BF16 {
+                            BF16_TOLERANCE
+                        } else {
+                            F32_TOLERANCE
+                        };
+                        for head in 0..QUERY_HEADS {
+                            let mut offset = 0;
+                            for (sequence, (&q, &kv)) in query_lens.iter().zip(&kv_lens).enumerate()
+                            {
+                                for token in 0..q {
+                                    let visible = kv - q + token + 1;
+                                    let visible = sliding_window
+                                        .map_or(visible, |window| visible.min(window));
+                                    let visible = f32::from(u16::try_from(visible).unwrap());
+                                    let expected = f32::from(u16::try_from(sequence + 1).unwrap())
+                                        * visible
+                                        / (visible + sink_mass);
+                                    for dim in 0..HEAD_DIM {
+                                        let row = if packed {
+                                            head * total_q + offset + token
+                                        } else {
+                                            (sequence * QUERY_HEADS + head) * max_q + token
+                                        };
+                                        let actual = output[row * HEAD_DIM + dim];
+                                        assert!(
+                                        (actual - expected).abs() <= tolerance,
+                                        "{dtype:?} queries={query_lens:?} packed={packed} window={sliding_window:?} head={head} token={token}: {actual} vs {expected}"
+                                    );
+                                    }
+                                }
+                                if !packed {
+                                    for token in q..max_q {
+                                        let start = ((sequence * QUERY_HEADS + head) * max_q
+                                            + token)
+                                            * HEAD_DIM;
+                                        assert!(output[start..start + HEAD_DIM]
+                                            .iter()
+                                            .all(|&value| value == 0.));
+                                    }
+                                }
+                                offset += q;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "cuda", target_family = "unix"))]
+mod sinks_decode_graph_tests {
+    use super::*;
+    use crate::pipeline::cuda_graph::{
+        disable_event_tracking_for_capture, prepare_cuda_graph_memory_pool,
+        restore_event_tracking_after_capture, CudaGraphHandle,
+    };
+    use anyhow::Context;
+    use candle_core::{cuda::cudarc::driver::sys, Var};
+
+    const ISOLATED_TEST_ENV: &str = "MISTRALRS_SINKS_DECODE_GRAPH_TEST_CHILD";
+    const HEADS: usize = 4;
+    const KV_HEADS: usize = 2;
+    const HEAD_DIM: usize = 128;
+    const BLOCK_SIZE: usize = 32;
+    const MAX_CONTEXT: usize = 4096;
+    const WINDOW: usize = 513;
+    const CACHE_VECTOR_BYTES: usize = 16;
+    const CONTEXT_CASES: [usize; 10] = [31, 32, 33, 511, 512, 513, 514, 545, 1024, MAX_CONTEXT];
+    const ROW_VALUE_OFFSET: usize = 8;
+    const NEW_VALUE: usize = 512;
+    const BF16_TOLERANCE: f32 = 0.6;
+    const F32_TOLERANCE: f32 = 1e-3;
+
+    fn check_decode_graph(
+        device: &Device,
+        dtype: DType,
+        rows: usize,
+        window: Option<usize>,
+    ) -> Result<()> {
+        let blocks_per_row = MAX_CONTEXT / BLOCK_SIZE;
+        let blocks = rows * blocks_per_row;
+        let pack = CACHE_VECTOR_BYTES / dtype.size_in_bytes();
+        let key_cache = Tensor::zeros(
+            (blocks, KV_HEADS, HEAD_DIM / pack, BLOCK_SIZE, pack),
+            dtype,
+            device,
+        )?;
+        let mut reference = (0..rows)
+            .map(|row| {
+                (0..MAX_CONTEXT)
+                    .map(|token| {
+                        f32::from(
+                            u16::try_from(token / BLOCK_SIZE + row * ROW_VALUE_OFFSET).unwrap(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let mut values = Vec::with_capacity(blocks * KV_HEADS * HEAD_DIM * BLOCK_SIZE);
+        for block in 0..blocks {
+            let row = block / blocks_per_row;
+            let logical_block = block % blocks_per_row;
+            for _head in 0..KV_HEADS {
+                for _dim in 0..HEAD_DIM {
+                    values.extend_from_slice(
+                        &reference[row]
+                            [logical_block * BLOCK_SIZE..(logical_block + 1) * BLOCK_SIZE],
+                    );
+                }
+            }
+        }
+        let value_cache =
+            Tensor::from_vec(values, (blocks, KV_HEADS, HEAD_DIM, BLOCK_SIZE), device)?
+                .to_dtype(dtype)?;
+        let query = Tensor::zeros((rows, HEADS, 1, HEAD_DIM), dtype, device)?;
+        let key = Tensor::zeros((rows, KV_HEADS, 1, HEAD_DIM), dtype, device)?;
+        let value = Tensor::from_vec(
+            (0..rows)
+                .flat_map(|row| {
+                    std::iter::repeat_n(
+                        f32::from(u16::try_from(NEW_VALUE + row * ROW_VALUE_OFFSET).unwrap()),
+                        KV_HEADS * HEAD_DIM,
+                    )
+                })
+                .collect::<Vec<_>>(),
+            (rows, KV_HEADS, 1, HEAD_DIM),
+            device,
+        )?
+        .to_dtype(dtype)?;
+        let context_lens = Var::from_tensor(&Tensor::ones(rows, DType::U32, device)?)?;
+        let slots = Var::from_tensor(&Tensor::full(_PAD_SLOT_ID, rows, device)?)?;
+        let tables = Tensor::from_vec(
+            (0..u32::try_from(blocks).unwrap()).collect::<Vec<_>>(),
+            (rows, blocks_per_row),
+            device,
+        )?;
+        let location = device.location();
+        let mut metadata = PagedAttentionInputMetadata::dummy(device)?;
+        metadata.slot_mappings = HashMap::from([(location, slots.as_detached_tensor())]);
+        metadata.block_tables = Some(HashMap::from([(location, tables)]));
+        metadata.full_block_tables = metadata.block_tables.clone();
+        metadata.context_lens = Some(HashMap::from([(
+            location,
+            context_lens.as_detached_tensor(),
+        )]));
+        metadata.full_context_lens = metadata.context_lens.clone();
+        metadata.block_size = Some(BLOCK_SIZE);
+        metadata.max_context_len = Some(MAX_CONTEXT);
+        metadata.full_max_context_len = Some(MAX_CONTEXT);
+        metadata.is_first_prompt_chunk = false;
+        let sinks = Tensor::full(std::f32::consts::LN_2, HEADS, device)?.to_dtype(dtype)?;
+        let sink_mass = sinks.to_dtype(DType::F32)?.to_vec1::<f32>()?[0].exp();
+        let params = SdpaParams {
+            n_kv_groups: HEADS / KV_HEADS,
+            softmax_scale: 1. / f32::from(u16::try_from(HEAD_DIM).unwrap()).sqrt(),
+            softcap: None,
+            sliding_window: window,
+            sinks: Some(sinks),
+        };
+        let attention = PagedAttention::new(HEAD_DIM, device, None)?;
+        let forward = || {
+            attention.forward(
+                &query,
+                &key,
+                &value,
+                &AttentionMask::None,
+                Some(key_cache.clone()),
+                Some(value_cache.clone()),
+                &metadata,
+                &params,
+                None,
+            )
+        };
+        drop(forward()?);
+        device.synchronize()?;
+        let cuda = device.as_cuda_device()?;
+        let stream = cuda.cuda_stream();
+        let _pool_guard = prepare_cuda_graph_memory_pool(&stream)?;
+        let _htod_guard = cuda.enable_cuda_graph_htod_cache();
+        let restore = disable_event_tracking_for_capture(&stream);
+        if let Err(error) =
+            stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+        {
+            restore_event_tracking_after_capture(&stream, restore);
+            return Err(candle_core::Error::msg(error.to_string()));
+        }
+        let captured = forward();
+        let graph = CudaGraphHandle::end_capture(&stream);
+        restore_event_tracking_after_capture(&stream, restore);
+        let output =
+            captured.map_err(|error| error.context("paged sink graph captured forward failed"))?;
+        let graph = graph?.ok_or_else(|| candle_core::Error::msg("missing paged decode graph"))?;
+        graph.upload()?;
+        for (case, context) in CONTEXT_CASES.into_iter().enumerate() {
+            let lengths = (0..rows)
+                .map(|row| {
+                    if row > 0 && case % 2 == 0 {
+                        0
+                    } else {
+                        context - row
+                    }
+                })
+                .collect::<Vec<_>>();
+            let slot_values = lengths
+                .iter()
+                .enumerate()
+                .map(|(row, &len)| {
+                    if len == 0 {
+                        _PAD_SLOT_ID
+                    } else {
+                        (row * MAX_CONTEXT + len - 1) as i64
+                    }
+                })
+                .collect::<Vec<_>>();
+            slots.set(&Tensor::from_vec(slot_values, rows, device)?)?;
+            context_lens.set(&Tensor::from_vec(
+                lengths
+                    .iter()
+                    .map(|&len| u32::try_from(len).unwrap())
+                    .collect::<Vec<_>>(),
+                rows,
+                device,
+            )?)?;
+            graph.launch()?;
+            device.synchronize()?;
+            let actual = output
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            for (row, &len) in lengths.iter().enumerate() {
+                let expected = if len == 0 {
+                    0.
+                } else {
+                    reference[row][len - 1] =
+                        f32::from(u16::try_from(NEW_VALUE + row * ROW_VALUE_OFFSET).unwrap());
+                    let first = window.map_or(0, |window| len.saturating_sub(window));
+                    reference[row][first..len].iter().sum::<f32>()
+                        / (f32::from(u16::try_from(len - first).unwrap()) + sink_mass)
+                };
+                let tolerance = if dtype == DType::BF16 {
+                    BF16_TOLERANCE
+                } else {
+                    F32_TOLERANCE
+                };
+                for &value in &actual[row * HEADS * HEAD_DIM..(row + 1) * HEADS * HEAD_DIM] {
+                    assert!(
+                        (value - expected).abs() <= tolerance,
+                        "{dtype:?} rows={rows} row={row} context={len} window={window:?}: {value} vs {expected}"
+                    );
+                }
+            }
+        }
+        drop(graph);
+        drop(output);
+        device.synchronize()?;
+        Ok(())
+    }
+
+    #[test]
+    fn cuda_paged_sinks_decode_graph_updates_context_and_cache_without_host_lengths(
+    ) -> anyhow::Result<()> {
+        if std::env::var_os(ISOLATED_TEST_ENV).is_none() {
+            // Other CUDA tests share the primary context and can invalidate stream capture.
+            let name = std::any::type_name_of_val(
+                &cuda_paged_sinks_decode_graph_updates_context_and_cache_without_host_lengths,
+            );
+            let name = name.split_once("::").unwrap().1;
+            let output = std::process::Command::new(std::env::current_exe()?)
+                .args(["--exact", name, "--nocapture", "--test-threads=1"])
+                .env(ISOLATED_TEST_ENV, "1")
+                .output()?;
+            anyhow::ensure!(
+                output.status.success(),
+                "isolated paged sink graph test failed ({}):\n{}\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+            return Ok(());
+        }
+        let device = Device::new_cuda(0)?;
+        for dtype in [DType::BF16, DType::F32] {
+            for rows in [1, 2] {
+                for window in [None, Some(WINDOW)] {
+                    check_decode_graph(&device, dtype, rows, window)
+                        .with_context(|| format!("{dtype:?} rows={rows} window={window:?}"))?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+mod mixed_cached_prefix_tests {
+    use super::*;
+    use std::ops::Range;
+
+    const QUERY_LENS: [usize; 3] = [1, 1, 5];
+    const KV_CASES: [[usize; 3]; 2] = [[11, 9, 5], [65, 39, 37]];
+    const GROUP_RATIOS: [usize; 5] = [1, 2, 3, 5, 8];
+    const KV_HEADS: usize = 2;
+    const HEAD_DIM: usize = 128;
+    const BLOCK_SIZE: usize = 32;
+    const POOL_BLOCKS: usize = 13;
+    const PHYSICAL_BLOCKS: [usize; 7] = [9, 2, 11, 5, 1, 8, 3];
+    const QUERY_GUARD_ROWS: usize = 1;
+    const QUERY_SENTINEL: f32 = 8.0;
+    const KEY_SENTINEL: f32 = 16.0;
+    const VALUE_SENTINEL: f32 = -32.0;
+    const BF16_ABS_TOLERANCE: f64 = 0.004;
+    const F16_ABS_TOLERANCE: f64 = 0.0006;
+
+    struct Fixture {
+        device: Device,
+        dtype: DType,
+        groups: usize,
+        q_heads: usize,
+        kv_lens: [usize; 3],
+        query_storage: Tensor,
+        query_storage_expected: Vec<f32>,
+        query_data: Vec<f32>,
+        keys: Vec<Vec<f32>>,
+        values: Vec<Vec<f32>>,
+        new_keys: Tensor,
+        new_values: Tensor,
+        block_tables: Tensor,
+        slots: Tensor,
+        initial_keys: Vec<f32>,
+        initial_values: Vec<f32>,
+        expected_keys: Vec<f32>,
+        expected_values: Vec<f32>,
+    }
+
+    fn host_f32(tensor: &Tensor) -> Result<Vec<f32>> {
+        tensor.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()
+    }
+
+    impl Fixture {
+        fn new(device: &Device, dtype: DType, groups: usize, kv_lens: [usize; 3]) -> Result<Self> {
+            let q_heads = KV_HEADS * groups;
+            let query_tokens = QUERY_LENS.iter().sum::<usize>();
+            let query_data = (0..query_tokens * q_heads * HEAD_DIM)
+                .map(|i| {
+                    let token = i / (q_heads * HEAD_DIM);
+                    let head = (i / HEAD_DIM) % q_heads;
+                    let dim = i % HEAD_DIM;
+                    f32::from(u8::try_from((token * 31 + head * 17 + dim * 13) % 61).unwrap())
+                        / 32.0
+                        - 30.0 / 32.0
+                })
+                .collect::<Vec<_>>();
+            let query_row = q_heads * HEAD_DIM;
+            let mut query_storage_expected =
+                vec![QUERY_SENTINEL; (query_tokens + 2 * QUERY_GUARD_ROWS) * query_row];
+            let query_start = QUERY_GUARD_ROWS * query_row;
+            query_storage_expected[query_start..query_start + query_data.len()]
+                .copy_from_slice(&query_data);
+            let query_storage = Tensor::from_vec(
+                query_storage_expected.clone(),
+                (query_tokens + 2 * QUERY_GUARD_ROWS, q_heads, HEAD_DIM),
+                device,
+            )?
+            .to_dtype(dtype)?;
+            let cache_elements = POOL_BLOCKS * KV_HEADS * BLOCK_SIZE * HEAD_DIM;
+            let mut initial_keys = vec![KEY_SENTINEL; cache_elements];
+            let mut initial_values = vec![VALUE_SENTINEL; cache_elements];
+            let mut expected_keys = initial_keys.clone();
+            let mut expected_values = initial_values.clone();
+            let mut keys = Vec::new();
+            let mut values = Vec::new();
+            let mut new_keys = Vec::new();
+            let mut new_values = Vec::new();
+            let mut slots = Vec::new();
+            let table_width = kv_lens.iter().copied().max().unwrap().div_ceil(BLOCK_SIZE);
+            let mut table = vec![0u32; QUERY_LENS.len() * table_width];
+            let mut next_block = 0;
+            for (sequence, (&kv_len, &query_len)) in kv_lens.iter().zip(&QUERY_LENS).enumerate() {
+                let cached = kv_len - query_len;
+                let page_count = kv_len.div_ceil(BLOCK_SIZE);
+                let pages = &PHYSICAL_BLOCKS[next_block..next_block + page_count];
+                next_block += page_count;
+                for (logical, &physical) in pages.iter().enumerate() {
+                    table[sequence * table_width + logical] = u32::try_from(physical).unwrap();
+                }
+                let mut sequence_keys = Vec::with_capacity(kv_len * KV_HEADS * HEAD_DIM);
+                let mut sequence_values = Vec::with_capacity(kv_len * KV_HEADS * HEAD_DIM);
+                for token in 0..kv_len {
+                    let physical = pages[token / BLOCK_SIZE];
+                    if token >= cached {
+                        slots.push((physical * BLOCK_SIZE + token % BLOCK_SIZE) as i64);
+                    }
+                    for head in 0..KV_HEADS {
+                        for dim in 0..HEAD_DIM {
+                            let key = f32::from(
+                                u8::try_from(
+                                    (sequence * 19 + token * 7 + head * 11 + dim * 3) % 59,
+                                )
+                                .unwrap(),
+                            ) / 64.0
+                                - 29.0 / 64.0;
+                            let value = f32::from(
+                                u8::try_from(
+                                    (sequence * 29 + token * 13 + head * 7 + dim * 5) % 67,
+                                )
+                                .unwrap(),
+                            ) / 64.0
+                                - 33.0 / 64.0;
+                            let cache_index = ((physical * KV_HEADS + head) * BLOCK_SIZE
+                                + token % BLOCK_SIZE)
+                                * HEAD_DIM
+                                + dim;
+                            expected_keys[cache_index] = key;
+                            expected_values[cache_index] = value;
+                            if token < cached {
+                                initial_keys[cache_index] = key;
+                                initial_values[cache_index] = value;
+                            } else {
+                                new_keys.push(key);
+                                new_values.push(value);
+                            }
+                            sequence_keys.push(key);
+                            sequence_values.push(value);
+                        }
+                    }
+                }
+                keys.push(sequence_keys);
+                values.push(sequence_values);
+            }
+            Ok(Self {
+                device: device.clone(),
+                dtype,
+                groups,
+                q_heads,
+                kv_lens,
+                query_storage,
+                query_storage_expected,
+                query_data,
+                keys,
+                values,
+                new_keys: Tensor::from_vec(new_keys, (query_tokens, KV_HEADS, HEAD_DIM), device)?
+                    .to_dtype(dtype)?,
+                new_values: Tensor::from_vec(
+                    new_values,
+                    (query_tokens, KV_HEADS, HEAD_DIM),
+                    device,
+                )?
+                .to_dtype(dtype)?,
+                block_tables: Tensor::from_vec(table, (QUERY_LENS.len(), table_width), device)?,
+                slots: Tensor::from_vec(slots, (query_tokens,), device)?,
+                initial_keys,
+                initial_values,
+                expected_keys,
+                expected_values,
+            })
+        }
+
+        fn cache(&self) -> Result<(Tensor, Tensor)> {
+            let shape = (POOL_BLOCKS, KV_HEADS, BLOCK_SIZE, HEAD_DIM);
+            Ok((
+                Tensor::from_vec(self.initial_keys.clone(), shape, &self.device)?
+                    .to_dtype(self.dtype)?,
+                Tensor::from_vec(self.initial_values.clone(), shape, &self.device)?
+                    .to_dtype(self.dtype)?,
+            ))
+        }
+
+        fn forward(
+            &self,
+            attention: &PagedAttention,
+            cache: &(Tensor, Tensor),
+            sequences: Range<usize>,
+        ) -> Result<Tensor> {
+            let query_lens = &QUERY_LENS[sequences.clone()];
+            let kv_lens = &self.kv_lens[sequences.clone()];
+            let query_offset = QUERY_LENS[..sequences.start].iter().sum::<usize>();
+            let tokens = query_lens.iter().sum::<usize>();
+            let query = self
+                .query_storage
+                .narrow(0, QUERY_GUARD_ROWS + query_offset, tokens)?
+                .unsqueeze(0)?
+                .transpose(1, 2)?;
+            let key = self
+                .new_keys
+                .narrow(0, query_offset, tokens)?
+                .unsqueeze(0)?
+                .transpose(1, 2)?;
+            let value = self
+                .new_values
+                .narrow(0, query_offset, tokens)?
+                .unsqueeze(0)?
+                .transpose(1, 2)?;
+            let cu_q = cumulative_seqlens_from_lengths(query_lens, &self.device)?;
+            let cu_kv = cumulative_seqlens_from_lengths(kv_lens, &self.device)?;
+            let location = self.device.location();
+            let mut metadata = PagedAttentionInputMetadata::dummy(&self.device)?;
+            metadata.block_tables = Some(HashMap::from([(
+                location,
+                self.block_tables
+                    .narrow(0, sequences.start, sequences.len())?,
+            )]));
+            metadata.context_lens = Some(HashMap::from([(
+                location,
+                Tensor::from_vec(
+                    kv_lens
+                        .iter()
+                        .map(|&n| u32::try_from(n).unwrap())
+                        .collect::<Vec<_>>(),
+                    (sequences.len(),),
+                    &self.device,
+                )?,
+            )]));
+            metadata.block_size = Some(BLOCK_SIZE);
+            metadata.paged_context_lens_cpu = Some(kv_lens.to_vec());
+            metadata.max_context_len = kv_lens.iter().copied().max();
+            metadata.slot_mappings =
+                HashMap::from([(location, self.slots.narrow(0, query_offset, tokens)?)]);
+            metadata.is_first_prompt_chunk = false;
+            metadata.num_cached_tokens = Some(
+                kv_lens
+                    .iter()
+                    .zip(query_lens)
+                    .map(|(&k, &q)| k - q)
+                    .collect(),
+            );
+            metadata.query_lens = Some(query_lens.to_vec());
+            metadata.cu_seqlens_q = Some(HashMap::from([(location, cu_q.clone())]));
+            metadata.cu_seqlens_kv = Some(HashMap::from([(location, cu_kv)]));
+            // A successful call must use direct paged attention, not a gathered fallback.
+            metadata.prefix_gather_workspace_limit = Some(0);
+            metadata.prefill_attention_heads = self.q_heads;
+            metadata.prefill_key_value_heads = KV_HEADS;
+            metadata.prefill_head_dim = HEAD_DIM;
+            let mut flash = FlashParams::empty(true);
+            flash.packed = true;
+            flash.max_q = u32::try_from(query_lens.iter().copied().max().unwrap()).unwrap();
+            flash.cumulative_seqlens_q = HashMap::from([(location, cu_q.clone())]);
+            flash.logical_k = FlashKMeta {
+                max: flash.max_q,
+                cumulative_seqlens: HashMap::from([(location, cu_q)]),
+            };
+            let params = SdpaParams {
+                n_kv_groups: self.groups,
+                softmax_scale: 1.0 / f32::from(u16::try_from(HEAD_DIM).unwrap()).sqrt(),
+                softcap: None,
+                sliding_window: None,
+                sinks: None,
+            };
+            assert!(query_layout_is_dense(query_lens, 1, tokens));
+            assert_eq!(
+                AttentionBackendKind::from_cache(&cache.0, &cache.1),
+                AttentionBackendKind::FlashInfer
+            );
+            let output = attention.forward(
+                &query,
+                &key,
+                &value,
+                &AttentionMask::None,
+                Some(cache.0.clone()),
+                Some(cache.1.clone()),
+                &metadata,
+                &params,
+                Some(&flash),
+            )?;
+            assert_eq!(output.dims(), &[1, tokens, self.q_heads, HEAD_DIM]);
+            output.squeeze(0)
+        }
+
+        fn reference(&self) -> Vec<f64> {
+            let scale = f64::from(1.0 / f32::from(u16::try_from(HEAD_DIM).unwrap()).sqrt());
+            let mut result = Vec::with_capacity(self.query_data.len());
+            let mut query_offset = 0;
+            for (sequence, (&kv_len, &query_len)) in
+                self.kv_lens.iter().zip(&QUERY_LENS).enumerate()
+            {
+                for local_query in 0..query_len {
+                    let visible = kv_len - query_len + local_query + 1;
+                    for head in 0..self.q_heads {
+                        let kv_head = head / self.groups;
+                        let query_start =
+                            ((query_offset + local_query) * self.q_heads + head) * HEAD_DIM;
+                        let mut scores = Vec::with_capacity(visible);
+                        for token in 0..visible {
+                            let key_start = (token * KV_HEADS + kv_head) * HEAD_DIM;
+                            let dot = (0..HEAD_DIM)
+                                .map(|dim| {
+                                    f64::from(self.query_data[query_start + dim])
+                                        * f64::from(self.keys[sequence][key_start + dim])
+                                })
+                                .sum::<f64>();
+                            scores.push(dot * scale);
+                        }
+                        let maximum = scores.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+                        let probabilities = scores
+                            .iter()
+                            .map(|&score| (score - maximum).exp())
+                            .collect::<Vec<_>>();
+                        let denominator = probabilities.iter().sum::<f64>();
+                        for dim in 0..HEAD_DIM {
+                            let weighted = probabilities
+                                .iter()
+                                .enumerate()
+                                .map(|(token, probability)| {
+                                    probability
+                                        * f64::from(
+                                            self.values[sequence]
+                                                [(token * KV_HEADS + kv_head) * HEAD_DIM + dim],
+                                        )
+                                })
+                                .sum::<f64>();
+                            result.push(weighted / denominator);
+                        }
+                    }
+                }
+                query_offset += query_len;
+            }
+            result
+        }
+
+        fn validate_cache(&self, cache: &(Tensor, Tensor)) -> Result<()> {
+            for (name, actual, expected) in [
+                ("key", &cache.0, &self.expected_keys),
+                ("value", &cache.1, &self.expected_values),
+            ] {
+                let actual = host_f32(actual)?;
+                assert_eq!(actual.len(), expected.len());
+                for (index, (&actual, &expected)) in actual.iter().zip(expected.iter()).enumerate()
+                {
+                    assert_eq!(
+                        actual.to_bits(),
+                        expected.to_bits(),
+                        "{name} cache/sentinel index {index}"
+                    );
+                }
+            }
+            let query = host_f32(&self.query_storage)?;
+            for (index, (&actual, &expected)) in
+                query.iter().zip(&self.query_storage_expected).enumerate()
+            {
+                assert_eq!(
+                    actual.to_bits(),
+                    expected.to_bits(),
+                    "query input/sentinel index {index}"
+                );
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn cuda_mixed_cached_prefix_packed_paged_attention_matches_individual_and_reference(
+    ) -> Result<()> {
+        let device = Device::new_cuda(0)?;
+        let attention = PagedAttention::new(HEAD_DIM, &device, None)?;
+        for dtype in [DType::BF16, DType::F16] {
+            let tolerance = if dtype == DType::BF16 {
+                BF16_ABS_TOLERANCE
+            } else {
+                F16_ABS_TOLERANCE
+            };
+            for groups in GROUP_RATIOS {
+                for kv_lens in KV_CASES {
+                    let fixture = Fixture::new(&device, dtype, groups, kv_lens)?;
+                    let mixed_cache = fixture.cache()?;
+                    let mixed = host_f32(&fixture.forward(
+                        &attention,
+                        &mixed_cache,
+                        0..QUERY_LENS.len(),
+                    )?)?;
+                    fixture.validate_cache(&mixed_cache)?;
+                    let separate_cache = fixture.cache()?;
+                    let mut separate = Vec::with_capacity(mixed.len());
+                    for sequence in 0..QUERY_LENS.len() {
+                        separate.extend(host_f32(&fixture.forward(
+                            &attention,
+                            &separate_cache,
+                            sequence..sequence + 1,
+                        )?)?);
+                    }
+                    fixture.validate_cache(&separate_cache)?;
+                    let reference = fixture.reference();
+                    assert_eq!(mixed.len(), reference.len());
+                    assert_eq!(separate.len(), reference.len());
+                    for (index, ((&mixed, &separate), &reference)) in
+                        mixed.iter().zip(&separate).zip(&reference).enumerate()
+                    {
+                        assert!(
+                            mixed.is_finite() && separate.is_finite() && reference.is_finite(),
+                            "nonfinite {dtype:?} groups={groups} kv={kv_lens:?} index={index}"
+                        );
+                        assert!((f64::from(mixed) - reference).abs() <= tolerance,
+                                "mixed/reference {dtype:?} groups={groups} kv={kv_lens:?} index={index}: {mixed} vs {reference}");
+                        assert!((f64::from(separate) - reference).abs() <= tolerance,
+                                "separate/reference {dtype:?} groups={groups} kv={kv_lens:?} index={index}: {separate} vs {reference}");
+                        assert!((f64::from(mixed) - f64::from(separate)).abs() <= tolerance,
+                                "mixed/separate {dtype:?} groups={groups} kv={kv_lens:?} index={index}: {mixed} vs {separate}");
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }

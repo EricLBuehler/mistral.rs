@@ -6,7 +6,11 @@ use anyhow::Result;
 use axum::response::Sse;
 use mistralrs_core::{DrySamplingParams, MistralRs, StopTokens as InternalStopTokens};
 
-use crate::{openai::StopTokens, types::SharedMistralRsState, util::sanitize_error_message};
+use crate::{
+    handler_core::{ApiError, ApiErrorKind},
+    openai::StopTokens,
+    types::SharedMistralRsState,
+};
 
 /// Generic responder enum for different completion types.
 #[derive(Debug)]
@@ -28,14 +32,22 @@ pub(crate) fn handle_completion_error<R, S>(
     state: SharedMistralRsState,
     e: Box<dyn std::error::Error + Send + Sync + 'static>,
 ) -> BaseCompletionResponder<R, S> {
-    // Log the full error internally
-    let full_error = anyhow::Error::msg(e.to_string());
-    MistralRs::maybe_log_error(state, &*full_error);
+    MistralRs::maybe_log_error(state, e.as_ref());
+    BaseCompletionResponder::InternalError(e)
+}
 
-    // But return sanitized error to the user
-    let sanitized_msg = sanitize_error_message(&*e);
-    let sanitized_error = anyhow::Error::msg(sanitized_msg);
-    BaseCompletionResponder::InternalError(sanitized_error.into())
+pub(crate) fn handle_completion_validation_error<R, S>(
+    state: SharedMistralRsState,
+    e: Box<dyn std::error::Error + Send + Sync + 'static>,
+) -> BaseCompletionResponder<R, S> {
+    let error = ApiError::from_error(e.as_ref(), ApiErrorKind::InvalidRequest);
+    if matches!(
+        error.kind,
+        ApiErrorKind::Internal | ApiErrorKind::Unavailable | ApiErrorKind::Overloaded
+    ) {
+        MistralRs::maybe_log_error(state, e.as_ref());
+    }
+    BaseCompletionResponder::ValidationError(e)
 }
 
 /// Helper function to convert from the OpenAI stop tokens to the mistral.rs

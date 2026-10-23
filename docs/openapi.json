@@ -9,7 +9,7 @@
     "license": {
       "name": "MIT"
     },
-    "version": "0.8.23"
+    "version": "0.9.5"
   },
   "paths": {
     "/calibration/apply": {
@@ -133,7 +133,13 @@
         },
         "responses": {
           "200": {
-            "description": "Reapply ISQ to a non GGUF or GGML model."
+            "description": "Reapply ISQ to a model that was loaded with ISQ."
+          },
+          "400": {
+            "description": "Invalid ISQ type"
+          },
+          "500": {
+            "description": "Failed to dispatch the ISQ request"
           }
         }
       }
@@ -176,15 +182,17 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid decision payload"
+          },
           "404": {
-            "description": "Unknown approval ID",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApprovalDecisionResponse"
-                }
-              }
-            }
+            "description": "Unknown approval ID"
+          },
+          "413": {
+            "description": "Decision payload is too large"
+          },
+          "415": {
+            "description": "Unsupported content type"
           }
         }
       }
@@ -232,7 +240,19 @@
         },
         "responses": {
           "200": {
-            "description": "Chat completions"
+            "description": "Chat completion JSON or server-sent event chunks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatCompletionResponse"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatCompletionChunkResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -256,7 +276,19 @@
         },
         "responses": {
           "200": {
-            "description": "Completions"
+            "description": "Completion JSON or server-sent event chunks",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompletionResponse"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompletionChunkResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -291,6 +323,9 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "Internal server error"
           }
         }
       }
@@ -334,6 +369,9 @@
           },
           "404": {
             "description": "File not found or expired"
+          },
+          "500": {
+            "description": "Internal server error"
           }
         }
       }
@@ -373,6 +411,9 @@
           },
           "410": {
             "description": "File body was elided and is no longer fetchable"
+          },
+          "500": {
+            "description": "Internal server error"
           }
         }
       }
@@ -426,6 +467,9 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "Internal server error"
           }
         }
       },
@@ -486,6 +530,9 @@
           },
           "404": {
             "description": "File not found or expired"
+          },
+          "500": {
+            "description": "Internal server error"
           }
         }
       },
@@ -511,6 +558,9 @@
           },
           "404": {
             "description": "File not found or expired"
+          },
+          "500": {
+            "description": "Internal server error"
           }
         }
       }
@@ -541,6 +591,9 @@
           },
           "410": {
             "description": "File body was elided and is no longer fetchable"
+          },
+          "500": {
+            "description": "Internal server error"
           }
         }
       }
@@ -565,6 +618,202 @@
         "responses": {
           "200": {
             "description": "Image generation"
+          }
+        }
+      }
+    },
+    "/v1/load_lora_adapter": {
+      "post": {
+        "tags": [
+          "LoRA adapters"
+        ],
+        "description": "Registered only when runtime LoRA mutation is enabled. CLI servers enable it with MISTRALRS_ALLOW_RUNTIME_LORA_UPDATING.",
+        "operationId": "load_lora_adapter",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoadLoraAdapterRequest"
+              },
+              "example": {
+                "lora_name": "production",
+                "lora_path": "/srv/adapters/production"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "LoRA adapter loaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoraAdapterObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoraAdapterErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Adapter path is not allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoraAdapterErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Model or adapter path was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoraAdapterErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "LoRA runtime is unavailable or at capacity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoraAdapterErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Adapter input files exceed the configured safety limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoraAdapterErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Request content type is not JSON",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoraAdapterErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Another adapter load is already in progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoraAdapterErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Adapter loading task failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoraAdapterErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Adapter storage or model device is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoraAdapterErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/lora_adapters": {
+      "get": {
+        "tags": [
+          "LoRA adapters"
+        ],
+        "description": "Always registered for adapter discovery and status, even when runtime LoRA mutation is disabled.",
+        "operationId": "list_lora_adapters",
+        "parameters": [
+          {
+            "name": "model",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Loaded LoRA adapters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoraAdapterListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoraAdapterErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Model was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoraAdapterErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "LoRA runtime is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoraAdapterErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoraAdapterErrorResponse"
+                }
+              }
+            }
           }
         }
       }
@@ -645,6 +894,9 @@
                 }
               }
             }
+          },
+          "500": {
+            "description": "Failed to inspect the model registry"
           }
         }
       }
@@ -667,7 +919,7 @@
         },
         "responses": {
           "200": {
-            "description": "Model reloaded successfully",
+            "description": "Model reloaded or already loaded",
             "content": {
               "application/json": {
                 "schema": {
@@ -677,14 +929,22 @@
             }
           },
           "400": {
-            "description": "Failed to reload model",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ModelStatusResponse"
-                }
-              }
-            }
+            "description": "Invalid request or model cannot be reloaded"
+          },
+          "404": {
+            "description": "Model not found"
+          },
+          "409": {
+            "description": "Model state conflicts with the operation"
+          },
+          "413": {
+            "description": "Request body is too large"
+          },
+          "415": {
+            "description": "Request content type is not JSON"
+          },
+          "500": {
+            "description": "Model reload failure"
           }
         }
       }
@@ -716,15 +976,20 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid request"
+          },
           "404": {
-            "description": "Model not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ModelStatusResponse"
-                }
-              }
-            }
+            "description": "Model not found"
+          },
+          "413": {
+            "description": "Request body is too large"
+          },
+          "415": {
+            "description": "Request content type is not JSON"
+          },
+          "500": {
+            "description": "Model registry failure"
           }
         }
       }
@@ -748,6 +1013,15 @@
         "responses": {
           "200": {
             "description": "Auto-tune result with recommended settings"
+          },
+          "400": {
+            "description": "Invalid tuning request"
+          },
+          "413": {
+            "description": "Request body is too large"
+          },
+          "415": {
+            "description": "Request content type is not JSON"
           },
           "500": {
             "description": "Tuning failed"
@@ -773,7 +1047,7 @@
         },
         "responses": {
           "200": {
-            "description": "Model unloaded successfully",
+            "description": "Model unloaded or already unloaded",
             "content": {
               "application/json": {
                 "schema": {
@@ -783,14 +1057,22 @@
             }
           },
           "400": {
-            "description": "Failed to unload model",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ModelStatusResponse"
-                }
-              }
-            }
+            "description": "Invalid request or model cannot be unloaded"
+          },
+          "404": {
+            "description": "Model not found"
+          },
+          "409": {
+            "description": "Model state conflicts with the operation"
+          },
+          "413": {
+            "description": "Request body is too large"
+          },
+          "415": {
+            "description": "Request content type is not JSON"
+          },
+          "500": {
+            "description": "Model registry failure"
           }
         }
       }
@@ -814,7 +1096,19 @@
         },
         "responses": {
           "200": {
-            "description": "Response created"
+            "description": "Response resource or server-sent response events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponseResource"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenResponsesStreamEvent"
+                }
+              }
+            }
           }
         }
       }
@@ -839,7 +1133,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Response object"
+            "description": "Response object",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponseResource"
+                }
+              }
+            }
           }
         }
       },
@@ -887,7 +1188,14 @@
         ],
         "responses": {
           "200": {
-            "description": "Response cancelled"
+            "description": "Response cancelled",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResponseResource"
+                }
+              }
+            }
           }
         }
       }
@@ -1087,10 +1395,131 @@
           }
         }
       }
+    },
+    "/v1/unload_lora_adapter": {
+      "post": {
+        "tags": [
+          "LoRA adapters"
+        ],
+        "description": "Registered only when runtime LoRA mutation is enabled. CLI servers enable it with MISTRALRS_ALLOW_RUNTIME_LORA_UPDATING.",
+        "operationId": "unload_lora_adapter",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnloadLoraAdapterRequest"
+              },
+              "example": {
+                "lora_name": "production"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "LoRA adapter unloaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoraAdapterObject"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoraAdapterErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Model or adapter was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoraAdapterErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "LoRA runtime is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoraAdapterErrorResponse"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds the configured limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoraAdapterErrorResponse"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Request content type is not JSON",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoraAdapterErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoraAdapterErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
     "schemas": {
+      "AdapterGenerationSelection": {
+        "type": "object",
+        "description": "An exact immutable LoRA adapter generation.",
+        "required": [
+          "generation"
+        ],
+        "properties": {
+          "generation": {
+            "type": "string",
+            "description": "The 64-character hexadecimal generation ID returned by the adapter management API.",
+            "example": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+          }
+        }
+      },
+      "AdapterSelection": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "Resolve this alias when the request is admitted."
+          },
+          {
+            "$ref": "#/components/schemas/AdapterGenerationSelection",
+            "description": "Pin this exact resident generation."
+          }
+        ],
+        "description": "A request-scoped LoRA adapter alias or exact immutable generation."
+      },
       "AllowedToolChoice": {
         "oneOf": [
           {
@@ -1358,6 +1787,21 @@
           }
         }
       },
+      "AnthropicJsonOutputFormat": {
+        "type": "object",
+        "required": [
+          "type",
+          "schema"
+        ],
+        "properties": {
+          "schema": {
+            "type": "object"
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
       "AnthropicMessage": {
         "type": "object",
         "required": [
@@ -1508,7 +1952,8 @@
             "type": [
               "boolean",
               "null"
-            ]
+            ],
+            "description": "mistral.rs extension for toggling reasoning."
           },
           "files": {
             "type": [
@@ -1588,6 +2033,16 @@
           "model": {
             "type": "string"
           },
+          "output_config": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AnthropicOutputConfig"
+              }
+            ]
+          },
           "presence_penalty": {
             "type": [
               "number",
@@ -1596,9 +2051,14 @@
             "format": "float"
           },
           "reasoning_effort": {
-            "type": [
-              "string",
-              "null"
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ReasoningEffort",
+                "description": "mistral.rs extension for local reasoning effort. \"none\" aliases \"off\"; \"max\" aliases \"xhigh\"."
+              }
             ]
           },
           "repetition_penalty": {
@@ -1724,6 +2184,27 @@
           }
         }
       },
+      "AnthropicOutputConfig": {
+        "type": "object",
+        "properties": {
+          "effort": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "format": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AnthropicJsonOutputFormat"
+              }
+            ]
+          }
+        }
+      },
       "AnthropicResponseContentBlock": {
         "type": "object",
         "required": [
@@ -1743,6 +2224,12 @@
             ]
           },
           "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "signature": {
             "type": [
               "string",
               "null"
@@ -1929,6 +2416,12 @@
             ],
             "minimum": 0
           },
+          "display": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "type": {
             "type": "string"
           }
@@ -2019,9 +2512,19 @@
         "type": "object",
         "required": [
           "input_tokens",
+          "cache_creation_input_tokens",
+          "cache_read_input_tokens",
           "output_tokens"
         ],
         "properties": {
+          "cache_creation_input_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "cache_read_input_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
           "input_tokens": {
             "type": "integer",
             "minimum": 0
@@ -2105,7 +2608,7 @@
         "properties": {
           "status": {
             "type": "string",
-            "description": "\"resolved\", \"queued\", or \"not_found\"."
+            "description": "\"resolved\" or \"queued\"."
           }
         }
       },
@@ -2178,7 +2681,7 @@
               "string",
               "null"
             ],
-            "description": "Optionally save the collected imatrix to this `.cimatrix` path before requantizing."
+            "description": "Optionally save the collected imatrix to this `.cimatrix` file name in the server's working directory."
           }
         }
       },
@@ -2218,6 +2721,116 @@
           }
         }
       },
+      "ChatCompletionChunkChoice": {
+        "type": "object",
+        "required": [
+          "index",
+          "delta"
+        ],
+        "properties": {
+          "delta": {
+            "$ref": "#/components/schemas/ChatCompletionChunkDelta"
+          },
+          "finish_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "logprobs": {}
+        }
+      },
+      "ChatCompletionChunkDelta": {
+        "type": "object",
+        "required": [
+          "role"
+        ],
+        "properties": {
+          "content": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reasoning_content": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "type": "string"
+          },
+          "tool_calls": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {}
+          }
+        }
+      },
+      "ChatCompletionChunkResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "choices",
+          "created",
+          "model",
+          "system_fingerprint",
+          "object"
+        ],
+        "properties": {
+          "adapter_generation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "choices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChatCompletionChunkChoice"
+            }
+          },
+          "created": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "system_fingerprint": {
+            "type": "string"
+          },
+          "usage": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/CompletionUsageResponse"
+              }
+            ]
+          }
+        }
+      },
       "ChatCompletionRequest": {
         "type": "object",
         "description": "Chat completion request following OpenAI's specification",
@@ -2225,12 +2838,35 @@
           "messages"
         ],
         "properties": {
+          "adapter": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AdapterSelection",
+                "description": "Adapter alias or exact generation to activate for this request."
+              }
+            ]
+          },
           "agent_permission": {
             "type": [
               "string",
               "null"
             ],
             "description": "Permission policy for agentic tools.",
+            "example": null
+          },
+          "chat_template_kwargs": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "vLLM-style template variables; `enable_thinking` and `reasoning_effort` map onto the fields above.",
+            "additionalProperties": {},
+            "propertyNames": {
+              "type": "string"
+            },
             "example": null
           },
           "code_execution_permission": {
@@ -2320,6 +2956,11 @@
               }
             ]
           },
+          "ignore_eos": {
+            "type": "boolean",
+            "description": "Ignore model EOS tokens while still honoring explicit stops and the token limit.",
+            "example": false
+          },
           "logit_bias": {
             "type": [
               "object",
@@ -2403,12 +3044,15 @@
             "example": null
           },
           "reasoning_effort": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Reasoning effort level for Harmony-format models (GPT-OSS).\nControls the depth of reasoning/analysis: \"low\", \"medium\", or \"high\".",
-            "example": null
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ReasoningEffort",
+                "description": "Reasoning effort level for models and templates that support it.\nValid values are \"off\", \"low\", \"medium\", \"high\", and \"xhigh\".\n\"none\" is accepted as an alias for \"off\"."
+              }
+            ]
           },
           "repetition_penalty": {
             "type": [
@@ -2429,6 +3073,16 @@
                 "description": "Force plain text or JSON-schema constrained output."
               }
             ]
+          },
+          "seed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Seed for deterministic request-scoped sampling.",
+            "example": null,
+            "minimum": 0
           },
           "session_id": {
             "type": [
@@ -2535,6 +3189,187 @@
           }
         }
       },
+      "ChatCompletionResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "choices",
+          "created",
+          "model",
+          "system_fingerprint",
+          "object",
+          "usage"
+        ],
+        "properties": {
+          "adapter_generation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "agentic_tool_calls": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {}
+          },
+          "choices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChatCompletionResponseChoice"
+            }
+          },
+          "created": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "files": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {}
+          },
+          "id": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "system_fingerprint": {
+            "type": "string"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/CompletionUsageResponse"
+          }
+        }
+      },
+      "ChatCompletionResponseChoice": {
+        "type": "object",
+        "required": [
+          "finish_reason",
+          "index",
+          "message"
+        ],
+        "properties": {
+          "finish_reason": {
+            "type": "string"
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "logprobs": {},
+          "message": {
+            "$ref": "#/components/schemas/ChatCompletionResponseMessage"
+          }
+        }
+      },
+      "ChatCompletionResponseMessage": {
+        "type": "object",
+        "required": [
+          "role"
+        ],
+        "properties": {
+          "content": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reasoning_content": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "role": {
+            "type": "string"
+          },
+          "tool_calls": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {}
+          }
+        }
+      },
+      "CompletionChunkChoice": {
+        "type": "object",
+        "required": [
+          "text",
+          "index"
+        ],
+        "properties": {
+          "finish_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "logprobs": {},
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "CompletionChunkResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "choices",
+          "created",
+          "model",
+          "system_fingerprint",
+          "object"
+        ],
+        "properties": {
+          "adapter_generation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "choices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CompletionChunkChoice"
+            }
+          },
+          "created": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string"
+          },
+          "system_fingerprint": {
+            "type": "string"
+          }
+        }
+      },
       "CompletionRequest": {
         "type": "object",
         "description": "Legacy OpenAI compatible text completion request",
@@ -2542,6 +3377,17 @@
           "prompt"
         ],
         "properties": {
+          "adapter": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AdapterSelection",
+                "description": "Adapter alias or exact generation to activate for this request."
+              }
+            ]
+          },
           "best_of": {
             "type": [
               "integer",
@@ -2612,6 +3458,11 @@
                 "description": "Constrain output with a regex, JSON schema, Lark, or LLGuidance grammar."
               }
             ]
+          },
+          "ignore_eos": {
+            "type": "boolean",
+            "description": "Ignore model EOS tokens while still honoring explicit stops and the token limit.",
+            "example": false
           },
           "logit_bias": {
             "type": [
@@ -2689,6 +3540,16 @@
             "format": "float",
             "description": "Multiplicative repetition penalty; 1.0 disables it.",
             "example": null
+          },
+          "seed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Seed for deterministic request-scoped sampling.",
+            "example": null,
+            "minimum": 0
           },
           "stop": {
             "oneOf": [
@@ -2778,6 +3639,135 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "CompletionResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "choices",
+          "created",
+          "model",
+          "system_fingerprint",
+          "object",
+          "usage"
+        ],
+        "properties": {
+          "adapter_generation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "choices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CompletionResponseChoice"
+            }
+          },
+          "created": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string"
+          },
+          "system_fingerprint": {
+            "type": "string"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/CompletionUsageResponse"
+          }
+        }
+      },
+      "CompletionResponseChoice": {
+        "type": "object",
+        "required": [
+          "finish_reason",
+          "index",
+          "text"
+        ],
+        "properties": {
+          "finish_reason": {
+            "type": "string"
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "logprobs": {},
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "CompletionUsageResponse": {
+        "type": "object",
+        "required": [
+          "completion_tokens",
+          "prompt_tokens",
+          "total_tokens",
+          "avg_tok_per_sec",
+          "avg_prompt_tok_per_sec",
+          "avg_compl_tok_per_sec",
+          "total_time_sec",
+          "total_prompt_time_sec",
+          "total_completion_time_sec"
+        ],
+        "properties": {
+          "avg_compl_tok_per_sec": {
+            "type": "number",
+            "format": "float"
+          },
+          "avg_prompt_tok_per_sec": {
+            "type": "number",
+            "format": "float"
+          },
+          "avg_tok_per_sec": {
+            "type": "number",
+            "format": "float"
+          },
+          "completion_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "prompt_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "prompt_tokens_details": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PromptTokensDetailsResponse"
+              }
+            ]
+          },
+          "total_completion_time_sec": {
+            "type": "number",
+            "format": "float"
+          },
+          "total_prompt_time_sec": {
+            "type": "number",
+            "format": "float"
+          },
+          "total_time_sec": {
+            "type": "number",
+            "format": "float"
+          },
+          "total_tokens": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },
@@ -3319,6 +4309,66 @@
           "reasoning.encrypted_content"
         ]
       },
+      "IncompleteDetails": {
+        "type": "object",
+        "description": "Details about incomplete responses",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "$ref": "#/components/schemas/IncompleteReason",
+            "description": "Reason for incompleteness"
+          }
+        }
+      },
+      "IncompleteReason": {
+        "type": "string",
+        "description": "Reason for incomplete response",
+        "enum": [
+          "max_output_tokens",
+          "content_filter",
+          "interrupted"
+        ]
+      },
+      "InputTokensDetails": {
+        "type": "object",
+        "description": "Detailed input token breakdown",
+        "properties": {
+          "audio_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Audio tokens",
+            "minimum": 0
+          },
+          "cached_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Cached tokens",
+            "minimum": 0
+          },
+          "image_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Image tokens",
+            "minimum": 0
+          },
+          "text_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Text tokens",
+            "minimum": 0
+          }
+        }
+      },
       "JsonSchemaResponseFormat": {
         "type": "object",
         "description": "JSON Schema for structured responses",
@@ -3333,9 +4383,216 @@
           "schema": {}
         }
       },
+      "LoadLoraAdapterRequest": {
+        "type": "object",
+        "required": [
+          "lora_name",
+          "lora_path"
+        ],
+        "properties": {
+          "expected_generation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Replace only if the alias still points at this generation.",
+            "example": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+          },
+          "load_inplace": {
+            "type": "boolean",
+            "description": "Atomically replace an existing alias. Defaults to false, matching vLLM.",
+            "default": false,
+            "example": false
+          },
+          "lora_name": {
+            "type": "string",
+            "description": "Request-facing adapter alias.",
+            "example": "production"
+          },
+          "lora_path": {
+            "type": "string",
+            "description": "Local server filesystem directory containing PEFT safetensors files.",
+            "example": "/srv/adapters/production-v2"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "LoraAdapterErrorBody": {
+        "type": "object",
+        "required": [
+          "message",
+          "type",
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "LoraAdapterErrorResponse": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "$ref": "#/components/schemas/LoraAdapterErrorBody"
+          }
+        }
+      },
+      "LoraAdapterListResponse": {
+        "type": "object",
+        "required": [
+          "object",
+          "data",
+          "generations",
+          "resident_generations",
+          "retired_generations",
+          "resident_bytes",
+          "max_adapters",
+          "max_rank",
+          "max_bytes"
+        ],
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LoraAdapterObject"
+            }
+          },
+          "generations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LoraResidentGenerationObject"
+            }
+          },
+          "max_adapters": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "max_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "max_rank": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "object": {
+            "type": "string"
+          },
+          "resident_bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "resident_generations": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "retired_generations": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "LoraAdapterObject": {
+        "type": "object",
+        "required": [
+          "id",
+          "object",
+          "generation",
+          "rank",
+          "bytes"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "generation": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "object": {
+            "type": "string"
+          },
+          "rank": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "revision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "LoraResidentGenerationObject": {
+        "type": "object",
+        "required": [
+          "generation",
+          "aliases",
+          "rank",
+          "bytes",
+          "retired",
+          "active_leases"
+        ],
+        "properties": {
+          "active_leases": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "generation": {
+            "type": "string"
+          },
+          "rank": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "retired": {
+            "type": "boolean"
+          }
+        }
+      },
       "Message": {
         "type": "object",
-        "description": "Represents a single message in a conversation\n\n### Examples\n\n```ignore\nuse either::Either;\nuse mistralrs_server_core::openai::{Message, MessageContent};\n\n// User message\nlet user_msg = Message {\n    content: Some(MessageContent(Either::Left(\"What's 2+2?\".to_string()))),\n    role: \"user\".to_string(),\n    name: None,\n    tool_calls: None,\n};\n\n// System message\nlet system_msg = Message {\n    content: Some(MessageContent(Either::Left(\"You are a helpful assistant.\".to_string()))),\n    role: \"system\".to_string(),\n    name: None,\n    tool_calls: None,\n};\n```",
+        "description": "Represents a single message in a conversation\n\n### Examples\n\n```ignore\nuse either::Either;\nuse mistralrs_server_core::openai::{Message, MessageContent};\n\n// User message\nlet user_msg = Message {\n    content: Some(MessageContent(Either::Left(\"What's 2+2?\".to_string()))),\n    role: \"user\".to_string(),\n    name: None,\n    tool_calls: None,\n    tool_call_id: None,\n    reasoning_content: None,\n};\n\n// System message\nlet system_msg = Message {\n    content: Some(MessageContent(Either::Left(\"You are a helpful assistant.\".to_string()))),\n    role: \"system\".to_string(),\n    name: None,\n    tool_calls: None,\n    tool_call_id: None,\n    reasoning_content: None,\n};\n```",
         "required": [
           "role"
         ],
@@ -3357,6 +4614,13 @@
               "null"
             ],
             "description": "Optional participant name for this message"
+          },
+          "reasoning_content": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Reasoning emitted with an assistant message (`reasoning` is the OpenAI-compatible alias)."
           },
           "role": {
             "type": "string",
@@ -3420,6 +4684,13 @@
           "owned_by"
         ],
         "properties": {
+          "adapter_generation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Current immutable LoRA generation for adapter model cards."
+          },
           "created": {
             "type": "integer",
             "format": "int64",
@@ -3449,6 +4720,20 @@
           },
           "owned_by": {
             "type": "string"
+          },
+          "parent": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Base model that owns this adapter, when the card represents a LoRA adapter."
+          },
+          "root": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Public source identifier for this model card."
           },
           "status": {
             "type": [
@@ -3504,10 +4789,7 @@
         "enum": [
           "loaded",
           "unloaded",
-          "reloading",
-          "not_found",
-          "no_loader_config",
-          "internal_error"
+          "reloading"
         ]
       },
       "ModelStatusResponse": {
@@ -3518,13 +4800,6 @@
           "status"
         ],
         "properties": {
-          "error": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Error message when status indicates an error condition"
-          },
           "model_id": {
             "type": "string",
             "example": "my-model"
@@ -3616,6 +4891,48 @@
         "type": "string",
         "enum": [
           "function"
+        ]
+      },
+      "OpenAiNamespaceEntry": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/OpenAiResponsesFunctionTool"
+          },
+          {}
+        ]
+      },
+      "OpenAiNamespaceTool": {
+        "type": "object",
+        "description": "A grouping of client-executed tools; the model sees each inner tool as `<namespace>.<name>`.",
+        "required": [
+          "type",
+          "name"
+        ],
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OpenAiNamespaceEntry"
+            }
+          },
+          "type": {
+            "$ref": "#/components/schemas/OpenAiNamespaceToolType"
+          }
+        }
+      },
+      "OpenAiNamespaceToolType": {
+        "type": "string",
+        "enum": [
+          "namespace"
         ]
       },
       "OpenAiResponsesFunctionTool": {
@@ -3793,6 +5110,9 @@
           },
           {
             "$ref": "#/components/schemas/OpenAiShellTool"
+          },
+          {
+            "$ref": "#/components/schemas/OpenAiNamespaceTool"
           }
         ]
       },
@@ -3928,6 +5248,17 @@
           "input"
         ],
         "properties": {
+          "adapter": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AdapterSelection",
+                "description": "Adapter alias or exact generation to activate for this request."
+              }
+            ]
+          },
           "background": {
             "type": [
               "boolean",
@@ -3995,6 +5326,10 @@
                 "description": "Grammar for constrained generation (mistral.rs extension)"
               }
             ]
+          },
+          "ignore_eos": {
+            "type": "boolean",
+            "description": "Continue generation past EOS until another stop condition is met"
           },
           "include": {
             "type": [
@@ -4132,6 +5467,15 @@
                 "description": "Response format (legacy, prefer `text` field)"
               }
             ]
+          },
+          "seed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Seed for deterministic request-scoped sampling",
+            "minimum": 0
           },
           "stop": {
             "oneOf": [
@@ -4577,6 +5921,9 @@
                     "name": {
                       "type": "string"
                     },
+                    "namespace": {
+                      "type": "string"
+                    },
                     "type": {
                       "type": "string",
                       "enum": [
@@ -4606,12 +5953,886 @@
                       ]
                     }
                   }
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "type"
+                  ],
+                  "properties": {
+                    "content": {
+                      "type": "array",
+                      "items": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "required": [
+                              "text",
+                              "type"
+                            ],
+                            "properties": {
+                              "text": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "reasoning_text"
+                                ]
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "summary": {
+                      "type": "array",
+                      "items": {
+                        "oneOf": [
+                          {
+                            "type": "object",
+                            "required": [
+                              "text",
+                              "type"
+                            ],
+                            "properties": {
+                              "text": {
+                                "type": "string"
+                              },
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "summary_text"
+                                ]
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "reasoning"
+                      ]
+                    }
+                  }
                 }
               ]
             },
             "description": "Array of input items (OpenResponses format)"
           }
         ]
+      },
+      "OpenResponsesStreamEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "description": "Response created event",
+            "required": [
+              "sequence_number",
+              "response",
+              "type"
+            ],
+            "properties": {
+              "response": {
+                "$ref": "#/components/schemas/ResponseResource"
+              },
+              "sequence_number": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "response.created"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Response in progress event",
+            "required": [
+              "sequence_number",
+              "response",
+              "type"
+            ],
+            "properties": {
+              "response": {
+                "$ref": "#/components/schemas/ResponseResource"
+              },
+              "sequence_number": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "response.in_progress"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Output item added event",
+            "required": [
+              "sequence_number",
+              "output_index",
+              "item",
+              "type"
+            ],
+            "properties": {
+              "item": {
+                "$ref": "#/components/schemas/OutputItem"
+              },
+              "output_index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "sequence_number": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "response.output_item.added"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Content part added event",
+            "required": [
+              "sequence_number",
+              "output_index",
+              "content_index",
+              "part",
+              "type"
+            ],
+            "properties": {
+              "content_index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "output_index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "part": {
+                "$ref": "#/components/schemas/OutputContent"
+              },
+              "sequence_number": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "response.content_part.added"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Text delta event",
+            "required": [
+              "sequence_number",
+              "output_index",
+              "content_index",
+              "delta",
+              "type"
+            ],
+            "properties": {
+              "content_index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "delta": {
+                "type": "string"
+              },
+              "output_index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "sequence_number": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "response.output_text.delta"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Content part done event",
+            "required": [
+              "sequence_number",
+              "output_index",
+              "content_index",
+              "part",
+              "type"
+            ],
+            "properties": {
+              "content_index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "output_index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "part": {
+                "$ref": "#/components/schemas/OutputContent"
+              },
+              "sequence_number": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "response.content_part.done"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Output item done event",
+            "required": [
+              "sequence_number",
+              "output_index",
+              "item",
+              "type"
+            ],
+            "properties": {
+              "item": {
+                "$ref": "#/components/schemas/OutputItem"
+              },
+              "output_index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "sequence_number": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "response.output_item.done"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Function call arguments delta",
+            "required": [
+              "sequence_number",
+              "output_index",
+              "call_id",
+              "delta",
+              "type"
+            ],
+            "properties": {
+              "call_id": {
+                "type": "string"
+              },
+              "delta": {
+                "type": "string"
+              },
+              "output_index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "sequence_number": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "response.function_call_arguments.delta"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Function call arguments done",
+            "required": [
+              "sequence_number",
+              "output_index",
+              "call_id",
+              "arguments",
+              "type"
+            ],
+            "properties": {
+              "arguments": {
+                "type": "string"
+              },
+              "call_id": {
+                "type": "string"
+              },
+              "output_index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "sequence_number": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "response.function_call_arguments.done"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Reasoning text delta",
+            "required": [
+              "sequence_number",
+              "item_id",
+              "output_index",
+              "content_index",
+              "delta",
+              "type"
+            ],
+            "properties": {
+              "content_index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "delta": {
+                "type": "string"
+              },
+              "item_id": {
+                "type": "string"
+              },
+              "output_index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "sequence_number": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "response.reasoning_text.delta"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Reasoning text done",
+            "required": [
+              "sequence_number",
+              "item_id",
+              "output_index",
+              "content_index",
+              "text",
+              "type"
+            ],
+            "properties": {
+              "content_index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "item_id": {
+                "type": "string"
+              },
+              "output_index": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "sequence_number": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "text": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "response.reasoning_text.done"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Response completed event",
+            "required": [
+              "sequence_number",
+              "response",
+              "type"
+            ],
+            "properties": {
+              "response": {
+                "$ref": "#/components/schemas/ResponseResource"
+              },
+              "sequence_number": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "response.completed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Response failed event",
+            "required": [
+              "sequence_number",
+              "response",
+              "type"
+            ],
+            "properties": {
+              "response": {
+                "$ref": "#/components/schemas/ResponseResource"
+              },
+              "sequence_number": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "response.failed"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Response incomplete event",
+            "required": [
+              "sequence_number",
+              "response",
+              "type"
+            ],
+            "properties": {
+              "response": {
+                "$ref": "#/components/schemas/ResponseResource"
+              },
+              "sequence_number": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "response.incomplete"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Error event",
+            "required": [
+              "sequence_number",
+              "code",
+              "message",
+              "type"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "param": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "sequence_number": {
+                "type": "integer",
+                "format": "int64",
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "error"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "OpenResponses streaming event format"
+      },
+      "OutputContent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "type",
+              "text"
+            ],
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "output_text"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type",
+              "refusal"
+            ],
+            "properties": {
+              "refusal": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "refusal"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "OutputItem": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "type",
+              "id",
+              "role",
+              "content",
+              "status"
+            ],
+            "properties": {
+              "content": {
+                "type": "array",
+                "items": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "required": [
+                        "type",
+                        "text"
+                      ],
+                      "properties": {
+                        "text": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "output_text"
+                          ]
+                        }
+                      }
+                    },
+                    {
+                      "type": "object",
+                      "required": [
+                        "type",
+                        "refusal"
+                      ],
+                      "properties": {
+                        "refusal": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "refusal"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              "id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "message"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type",
+              "id",
+              "call_id",
+              "name",
+              "arguments",
+              "status"
+            ],
+            "properties": {
+              "arguments": {
+                "type": "string"
+              },
+              "call_id": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "namespace": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "function_call"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type",
+              "id",
+              "call_id",
+              "action",
+              "status"
+            ],
+            "properties": {
+              "action": {
+                "type": "object"
+              },
+              "call_id": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "shell_call"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type",
+              "id",
+              "call_id",
+              "output",
+              "status"
+            ],
+            "properties": {
+              "call_id": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "output": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              },
+              "status": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "shell_call_output"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type",
+              "id",
+              "summary",
+              "content",
+              "status"
+            ],
+            "properties": {
+              "content": {
+                "type": "array",
+                "items": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "required": [
+                        "text",
+                        "type"
+                      ],
+                      "properties": {
+                        "text": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "reasoning_text"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              "id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "summary": {
+                "type": "array",
+                "items": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "required": [
+                        "text",
+                        "type"
+                      ],
+                      "properties": {
+                        "text": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "summary_text"
+                          ]
+                        }
+                      }
+                    }
+                  ]
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "reasoning"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "OutputTokensDetails": {
+        "type": "object",
+        "description": "Detailed output token breakdown",
+        "properties": {
+          "audio_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Audio tokens",
+            "minimum": 0
+          },
+          "reasoning_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Reasoning tokens",
+            "minimum": 0
+          },
+          "text_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Text tokens",
+            "minimum": 0
+          }
+        }
+      },
+      "PromptTokensDetailsResponse": {
+        "type": "object",
+        "required": [
+          "cached_tokens"
+        ],
+        "properties": {
+          "cached_tokens": {
+            "type": "integer",
+            "description": "Prompt tokens served from the prefix cache, not recomputed.",
+            "minimum": 0
+          }
+        }
       },
       "ReIsqRequest": {
         "type": "object",
@@ -4636,7 +6857,7 @@
               },
               {
                 "$ref": "#/components/schemas/ReasoningEffort",
-                "description": "Effort level for reasoning (low, medium, high)"
+                "description": "Effort level for reasoning (off, low, medium, high, xhigh). \"none\" aliases \"off\"."
               }
             ]
           },
@@ -4647,7 +6868,7 @@
               },
               {
                 "$ref": "#/components/schemas/ReasoningSummary",
-                "description": "Whether to generate a summary of reasoning"
+                "description": "Accepted for compatibility; currently does not change the response."
               }
             ]
           }
@@ -4655,12 +6876,15 @@
       },
       "ReasoningEffort": {
         "type": "string",
-        "description": "Reasoning effort level for models that support extended thinking",
+        "description": "Reasoning effort. `none` aliases `off`; `max` aliases `xhigh`.",
         "enum": [
+          "off",
           "none",
           "low",
           "medium",
-          "high"
+          "high",
+          "xhigh",
+          "max"
         ]
       },
       "ReasoningSummary": {
@@ -4671,6 +6895,24 @@
           "detailed",
           "auto"
         ]
+      },
+      "ResponseError": {
+        "type": "object",
+        "description": "Error information for a response",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Error code"
+          },
+          "message": {
+            "type": "string",
+            "description": "Error message"
+          }
+        }
       },
       "ResponseFormat": {
         "oneOf": [
@@ -4725,6 +6967,309 @@
           }
         ],
         "description": "Response format for model output"
+      },
+      "ResponseResource": {
+        "type": "object",
+        "description": "The main response resource returned by the OpenResponses API",
+        "required": [
+          "id",
+          "object",
+          "created_at",
+          "model",
+          "status",
+          "output"
+        ],
+        "properties": {
+          "adapter_generation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Exact LoRA generation used for this response."
+          },
+          "background": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether request runs in background"
+          },
+          "completed_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Unix timestamp when the response was completed (if completed)",
+            "minimum": 0
+          },
+          "created_at": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Unix timestamp when the response was created",
+            "minimum": 0
+          },
+          "error": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResponseError",
+                "description": "Error information (if status is failed)"
+              }
+            ]
+          },
+          "frequency_penalty": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Frequency penalty from the request"
+          },
+          "id": {
+            "type": "string",
+            "description": "Unique identifier for this response"
+          },
+          "incomplete_details": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/IncompleteDetails",
+                "description": "Details about why response is incomplete"
+              }
+            ]
+          },
+          "instructions": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "System instructions (if provided)"
+          },
+          "max_output_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Max output tokens from the request",
+            "minimum": 0
+          },
+          "max_tool_calls": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Max tool calls from the request (even if unsupported)",
+            "minimum": 0
+          },
+          "metadata": {
+            "description": "User-provided metadata"
+          },
+          "model": {
+            "type": "string",
+            "description": "The model used for this response"
+          },
+          "object": {
+            "type": "string",
+            "description": "Object type (always \"response\")"
+          },
+          "output": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OutputItem"
+            },
+            "description": "Output items generated by the model"
+          },
+          "output_text": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Concatenated text from all text output content"
+          },
+          "parallel_tool_calls": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether parallel tool calls are enabled"
+          },
+          "presence_penalty": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "float",
+            "description": "Presence penalty from the request"
+          },
+          "previous_response_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Previous response ID (for multi-turn conversations)"
+          },
+          "reasoning": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Reasoning/chain-of-thought content from the model"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ResponseStatus",
+            "description": "Current status of the response"
+          },
+          "store": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "Whether to store the response"
+          },
+          "temperature": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Temperature from the request"
+          },
+          "text": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TextConfig",
+                "description": "Text configuration from the request"
+              }
+            ]
+          },
+          "tool_choice": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ToolChoice",
+                "description": "Tool choice configuration from the request"
+              }
+            ]
+          },
+          "tools": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/OpenAiTool"
+            },
+            "description": "Tool definitions from the request"
+          },
+          "top_logprobs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Top logprobs from the request",
+            "minimum": 0
+          },
+          "top_p": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Top-p from the request"
+          },
+          "truncation": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TruncationStrategy",
+                "description": "Truncation strategy used"
+              }
+            ]
+          },
+          "usage": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ResponseUsage",
+                "description": "Token usage information"
+              }
+            ]
+          }
+        }
+      },
+      "ResponseStatus": {
+        "type": "string",
+        "description": "Status of a response in the OpenResponses API",
+        "enum": [
+          "queued",
+          "in_progress",
+          "completed",
+          "failed",
+          "incomplete",
+          "cancelled"
+        ]
+      },
+      "ResponseUsage": {
+        "type": "object",
+        "description": "Usage information for a response",
+        "required": [
+          "input_tokens",
+          "output_tokens",
+          "total_tokens"
+        ],
+        "properties": {
+          "input_tokens": {
+            "type": "integer",
+            "description": "Number of input tokens",
+            "minimum": 0
+          },
+          "input_tokens_details": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/InputTokensDetails",
+                "description": "Detailed input token breakdown"
+              }
+            ]
+          },
+          "output_tokens": {
+            "type": "integer",
+            "description": "Number of output tokens",
+            "minimum": 0
+          },
+          "output_tokens_details": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/OutputTokensDetails",
+                "description": "Detailed output token breakdown"
+              }
+            ]
+          },
+          "total_tokens": {
+            "type": "integer",
+            "description": "Total number of tokens",
+            "minimum": 0
+          }
+        }
       },
       "ResponsesAnnotation": {
         "type": "object",
@@ -4836,6 +7381,17 @@
           "input"
         ],
         "properties": {
+          "adapter": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AdapterSelection",
+                "description": "Adapter alias or exact generation to activate for this request."
+              }
+            ]
+          },
           "dry_allowed_length": {
             "type": [
               "integer",
@@ -4879,7 +7435,7 @@
               "boolean",
               "null"
             ],
-            "description": "Toggle thinking output for models that support it.",
+            "description": "Legacy schema field. The active Responses endpoint ignores this top-level control.",
             "example": null
           },
           "frequency_penalty": {
@@ -4901,6 +7457,11 @@
                 "description": "Constrain output with a regex, JSON schema, Lark, or LLGuidance grammar."
               }
             ]
+          },
+          "ignore_eos": {
+            "type": "boolean",
+            "description": "Continue generation past EOS until another stop condition is met.",
+            "example": false
           },
           "input": {
             "$ref": "#/components/schemas/ResponsesMessages",
@@ -5026,7 +7587,7 @@
               "string",
               "null"
             ],
-            "description": "Reasoning effort level for models that support extended thinking.\nValid values: \"low\", \"medium\", \"high\"",
+            "description": "Legacy schema field. Use `reasoning.effort` with the active Responses endpoint.",
             "example": null
           },
           "reasoning_enabled": {
@@ -5074,6 +7635,16 @@
                 "description": "Force plain text or JSON-schema constrained output."
               }
             ]
+          },
+          "seed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Seed for deterministic request-scoped sampling.",
+            "example": null,
+            "minimum": 0
           },
           "stop": {
             "oneOf": [
@@ -5965,14 +8536,6 @@
             ],
             "description": "Optional HF revision"
           },
-          "max_batch_size": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "description": "Optional max batch size for tuning",
-            "minimum": 0
-          },
           "max_image_length": {
             "type": [
               "integer",
@@ -5987,14 +8550,6 @@
               "null"
             ],
             "description": "Optional max num images (multimodal)",
-            "minimum": 0
-          },
-          "max_seq_len": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "description": "Optional max sequence length for tuning",
             "minimum": 0
           },
           "model_id": {
@@ -6035,6 +8590,41 @@
           "balanced",
           "fast"
         ]
+      },
+      "UnloadLoraAdapterRequest": {
+        "type": "object",
+        "required": [
+          "lora_name"
+        ],
+        "properties": {
+          "expected_generation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Remove only if the alias still points at this generation.",
+            "example": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+          },
+          "lora_int_id": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Accepted for vLLM request compatibility; aliases are authoritative in mistral.rs.",
+            "minimum": 0
+          },
+          "lora_name": {
+            "type": "string"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
       },
       "UrlCitation": {
         "type": "object",
@@ -6223,6 +8813,10 @@
     {
       "name": "Mistral.rs",
       "description": "Mistral.rs API"
+    },
+    {
+      "name": "LoRA adapters",
+      "description": "Dynamic LoRA discovery and lifecycle operations"
     }
   ]
 }

@@ -17,12 +17,19 @@ use crate::{
     layers_masker::PastKvLenCache,
     paged_attention::{
         encoder_cache::{CacheModality, EncoderCacheManager},
-        AttentionImplementation, ModelConfigMetadata,
+        AttentionImplementation, HybridPagedKvCacheConfig, ModelConfigLike, ModelConfigMetadata,
     },
     pipeline::{
         EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
     },
-    vision_models::qwen3_vl::{vision::Qwen3VLVisionModel, Qwen3VLVisionSpecificArgs},
+    vision_models::{
+        multimodal_layout::PackedMultimodalLayout,
+        qwen3_5::packed_visual::{PackedVisualEncoder, PackedVisualInput},
+        qwen3_vl::{
+            concatenate_visual_items, vision::Qwen3VLVisionModel, Qwen3VLVisionSpecificArgs,
+            VisualEncoder,
+        },
+    },
 };
 
 pub(crate) mod config;
@@ -51,12 +58,14 @@ impl Qwen3_5MoeModel {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        text::validate_text_checkpoint_namespace(&vb)?;
         // Support both original HuggingFace naming (model.visual.*) and MLX naming (vision_tower.*)
         let vision_vb = if vb.contains_tensor("vision_tower.patch_embed.proj.weight") {
             vb.pp("vision_tower")
         } else {
             vb.pp("model").pp("visual")
-        };
+        }
+        .without_lora_registry();
         let vision = Qwen3VLVisionModel::new(
             &cfg.vision_config,
             vision_vb.set_device(normal_loading_metadata.real_device.clone()),
@@ -100,26 +109,58 @@ impl Qwen3_5MoeModel {
         continuous_img_pad: Vec<Vec<(usize, usize)>>,
         continuous_vid_pad: Vec<Vec<(usize, usize)>>,
         image_hashes: &[u64],
+        video_hashes: &[u64],
+        packed_layout: Option<&PackedMultimodalLayout>,
+        prompt_position_ids: Option<&Tensor>,
         ctx: &ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let seqlen_offsets = ctx.seqlen_offsets();
-        let mut attention_mask = CausalMasker.make_causal_mask(
-            input_ids,
-            &seqlen_offsets as &dyn PastKvLenCache,
-            self.text.dtype,
-            &CausalMaskConfig {
-                sliding_window: self.text.cfg.sliding_window,
-                ..Default::default()
-            },
-        )?;
-        let is_first_chunk = ctx.is_first_prompt_chunk();
-        attention_mask = if is_first_chunk {
-            attention_mask
+        // Later chunks and decode rows attend through the paged cache, so only the first chunk needs a mask
+        let attention_mask = if ctx.is_first_prompt_chunk() {
+            CausalMasker.make_causal_mask(
+                input_ids,
+                &seqlen_offsets as &dyn PastKvLenCache,
+                self.text.dtype,
+                &CausalMaskConfig {
+                    sliding_window: self.text.cfg.sliding_window,
+                    ..Default::default()
+                },
+            )?
         } else {
             AttentionMask::None
         };
 
-        let mut input_embeds = self.text.embed_tokens(input_ids)?;
+        let input_embeds = self.text.embed_tokens(input_ids)?;
+        if let Some(layout) = packed_layout {
+            let position_ids = prompt_position_ids.ok_or_else(|| {
+                candle_core::Error::msg("packed Qwen3.5 MoE prefill is missing prompt position IDs")
+            })?;
+            let visual = PackedVisualEncoder::new(
+                &self.vision,
+                &self.encoder_cache,
+                self.spatial_merge_size,
+            )
+            .prepare(PackedVisualInput {
+                input_embeds,
+                pixel_values: pixel_values.as_ref(),
+                pixel_values_videos: pixel_values_videos.as_ref(),
+                image_grid_thw: image_grid_thw.as_ref(),
+                video_grid_thw: video_grid_thw.as_ref(),
+                image_hashes,
+                video_hashes,
+                layout,
+            })?;
+            return self.text.forward_embeds(
+                visual.input_embeds,
+                &attention_mask,
+                position_ids,
+                seqlen_offsets,
+                ctx,
+                visual.visual_pos_mask.as_ref(),
+                visual.deepstack_visual_embeds.as_deref(),
+            );
+        }
+        let mut input_embeds = input_embeds;
         let (batch_size, seq_len, hidden_dim) = input_embeds.dims3()?;
         let device = input_embeds.device().clone();
 
@@ -139,117 +180,18 @@ impl Qwen3_5MoeModel {
                 pixel_values = pixel_values.reshape(((), last_dim))?;
             }
 
-            let (image_embeds, deepstack_image_embeds) = if !image_hashes.is_empty() {
-                let n_images = image_hashes.len();
-                let grid_data = image_grid_thw_ref.to_vec2::<u32>()?;
-                let patches_per_image: Vec<usize> = grid_data
-                    .iter()
-                    .map(|row| row[0] as usize * row[1] as usize * row[2] as usize)
-                    .collect();
-                let merge = self.spatial_merge_size;
-                let output_tokens_per_image: Vec<usize> = grid_data
-                    .iter()
-                    .map(|row| {
-                        (row[0] as usize) * (row[1] as usize / merge) * (row[2] as usize / merge)
-                    })
-                    .collect();
-
-                let mut per_image: Vec<Option<Vec<Tensor>>> = vec![None; n_images];
-                let mut miss_indices = Vec::new();
-                {
-                    let mut guard = self
-                        .encoder_cache
-                        .lock()
-                        .expect("encoder cache lock poisoned");
-                    for (i, &hash) in image_hashes.iter().enumerate() {
-                        if let Some(cached) = guard.get(CacheModality::Image, hash) {
-                            per_image[i] = Some(cached);
-                        } else {
-                            miss_indices.push(i);
-                        }
-                    }
-                }
-
-                if miss_indices.is_empty() {
-                    let main_parts: Vec<Tensor> = per_image
-                        .iter()
-                        .map(|o| o.as_ref().unwrap()[0].clone())
-                        .collect();
-                    let image_embeds = Tensor::cat(&main_parts, 0)?;
-                    let n_ds_layers = per_image[0].as_ref().unwrap().len() - 1;
-                    let mut deepstack_layers = Vec::with_capacity(n_ds_layers);
-                    for layer_idx in 0..n_ds_layers {
-                        let layer_parts: Vec<Tensor> = per_image
-                            .iter()
-                            .map(|o| o.as_ref().unwrap()[1 + layer_idx].clone())
-                            .collect();
-                        deepstack_layers.push(Tensor::cat(&layer_parts, 0)?);
-                    }
-                    (image_embeds, deepstack_layers)
-                } else {
-                    let mut miss_pixel_slices = Vec::new();
-                    let mut miss_grid_rows = Vec::new();
-                    let mut pv_offset = 0usize;
-                    for (i, &n_patches) in patches_per_image.iter().enumerate() {
-                        if miss_indices.contains(&i) {
-                            miss_pixel_slices.push(pixel_values.narrow(0, pv_offset, n_patches)?);
-                            miss_grid_rows.push(image_grid_thw_ref.i(i)?);
-                        }
-                        pv_offset += n_patches;
-                    }
-                    let miss_pixels = Tensor::cat(&miss_pixel_slices, 0)?;
-                    let miss_grid = Tensor::stack(&miss_grid_rows, 0)?;
-
-                    let (encoded_main, encoded_ds) =
-                        self.vision.forward(&miss_pixels, &miss_grid)?;
-
-                    let miss_output_tokens: Vec<usize> = miss_indices
-                        .iter()
-                        .map(|&i| output_tokens_per_image[i])
-                        .collect();
-
-                    let mut enc_offset = 0usize;
-                    {
-                        let mut guard = self
-                            .encoder_cache
-                            .lock()
-                            .expect("encoder cache lock poisoned");
-                        for (j, &orig_idx) in miss_indices.iter().enumerate() {
-                            let n_out = miss_output_tokens[j];
-                            let single_main = encoded_main.narrow(0, enc_offset, n_out)?;
-                            let mut cache_entry = vec![single_main.clone()];
-                            for ds_layer in &encoded_ds {
-                                let single_ds = ds_layer.narrow(0, enc_offset, n_out)?;
-                                cache_entry.push(single_ds.clone());
-                            }
-                            enc_offset += n_out;
-                            guard.insert(
-                                CacheModality::Image,
-                                image_hashes[orig_idx],
-                                cache_entry.clone(),
-                            );
-                            per_image[orig_idx] = Some(cache_entry);
-                        }
-                    }
-
-                    let main_parts: Vec<Tensor> = per_image
-                        .iter()
-                        .map(|o| o.as_ref().unwrap()[0].clone())
-                        .collect();
-                    let image_embeds = Tensor::cat(&main_parts, 0)?;
-                    let n_ds_layers = per_image[0].as_ref().unwrap().len() - 1;
-                    let mut deepstack_layers = Vec::with_capacity(n_ds_layers);
-                    for layer_idx in 0..n_ds_layers {
-                        let layer_parts: Vec<Tensor> = per_image
-                            .iter()
-                            .map(|o| o.as_ref().unwrap()[1 + layer_idx].clone())
-                            .collect();
-                        deepstack_layers.push(Tensor::cat(&layer_parts, 0)?);
-                    }
-                    (image_embeds, deepstack_layers)
-                }
-            } else {
+            let (image_embeds, deepstack_image_embeds) = if image_hashes.is_empty() {
                 self.vision.forward(&pixel_values, image_grid_thw_ref)?
+            } else {
+                let per_image =
+                    VisualEncoder::new(&self.vision, &self.encoder_cache, self.spatial_merge_size)
+                        .encode(
+                            &pixel_values,
+                            image_grid_thw_ref,
+                            image_hashes,
+                            CacheModality::Image,
+                        )?;
+                concatenate_visual_items(&per_image)?
             };
 
             let image_embeds = image_embeds.to_device(&device)?.to_dtype(self.text.dtype)?;
@@ -300,8 +242,19 @@ impl Qwen3_5MoeModel {
                 let last_dim = pixel_values.dim(ndim - 1)?;
                 pixel_values = pixel_values.reshape(((), last_dim))?;
             }
-            let (video_embeds, deepstack_video_embeds) =
-                self.vision.forward(&pixel_values, video_grid_thw_ref)?;
+            let (video_embeds, deepstack_video_embeds) = if video_hashes.is_empty() {
+                self.vision.forward(&pixel_values, video_grid_thw_ref)?
+            } else {
+                let per_video =
+                    VisualEncoder::new(&self.vision, &self.encoder_cache, self.spatial_merge_size)
+                        .encode(
+                            &pixel_values,
+                            video_grid_thw_ref,
+                            video_hashes,
+                            CacheModality::Video,
+                        )?;
+                concatenate_visual_items(&per_video)?
+            };
             let video_embeds = video_embeds.to_device(&device)?.to_dtype(self.text.dtype)?;
             let deepstack_video_embeds = deepstack_video_embeds
                 .into_iter()
@@ -404,7 +357,15 @@ impl Qwen3_5MoeModel {
         };
 
         let position_ids = if rope_img_grid_thw.is_none() && rope_vid_grid_thw.is_none() {
-            crate::vision_models::text_decode_mrope_position_ids_from_context(input_ids, ctx)?
+            // Text-only rows use plain positions on all three MRoPE planes; no host round trip needed
+            match crate::vision_models::text_decode_mrope_position_ids_from_context(input_ids, ctx)?
+            {
+                Some(position_ids) => Some(position_ids),
+                None => Some(crate::vision_models::text_mrope_position_ids(
+                    input_ids,
+                    seqlen_offsets,
+                )?),
+            }
         } else {
             None
         };
@@ -461,6 +422,14 @@ impl crate::speculative::SpeculativeTargetMixin for Qwen3_5MoeModel {}
 impl crate::block_diffusion::BlockDiffusionMixin for Qwen3_5MoeModel {}
 
 impl MultimodalModel for Qwen3_5MoeModel {
+    fn supports_packed_prefill(&self) -> bool {
+        true
+    }
+
+    fn supports_mixed_media_batches(&self) -> bool {
+        true
+    }
+
     fn forward(
         &self,
         input_ids: &Tensor,
@@ -470,6 +439,7 @@ impl MultimodalModel for Qwen3_5MoeModel {
     ) -> Result<Tensor> {
         let Qwen3VLVisionSpecificArgs {
             input_ids_full,
+            pixel_values_videos,
             image_grid_thw,
             video_grid_thw,
             rope_img_grid_thw,
@@ -478,17 +448,18 @@ impl MultimodalModel for Qwen3_5MoeModel {
             continuous_img_pad,
             continuous_vid_pad,
             image_hashes,
+            video_hashes,
+            packed_layout,
+            prompt_position_ids,
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Qwen3VLVisionSpecificArgs`");
-        let (pixel_values, pixel_values_video) = match (&image_grid_thw, &video_grid_thw) {
-            (Some(_), None) => (pixel_values, None),
-            (None, Some(_)) => (None, pixel_values),
-            (None, None) => (None, None),
-            (Some(_), Some(_)) => {
-                candle_core::bail!("Images and videos cannot be provided together.")
-            }
-        };
+        let pixel_values_video = pixel_values_videos.or_else(|| {
+            (image_grid_thw.is_none() && video_grid_thw.is_some())
+                .then(|| pixel_values.clone())
+                .flatten()
+        });
+        let pixel_values = (image_grid_thw.is_some()).then_some(pixel_values).flatten();
         let rope_img = rope_img_grid_thw.or(image_grid_thw.clone());
         let rope_vid = rope_vid_grid_thw.or(video_grid_thw.clone());
         self.forward(
@@ -504,6 +475,9 @@ impl MultimodalModel for Qwen3_5MoeModel {
             continuous_img_pad,
             continuous_vid_pad,
             &image_hashes,
+            &video_hashes,
+            packed_layout.as_ref(),
+            prompt_position_ids.as_ref(),
             ctx,
         )
     }
@@ -520,22 +494,48 @@ impl MultimodalModel for Qwen3_5MoeModel {
     fn supports_cuda_decode_graphs(&self) -> bool {
         true
     }
+    #[cfg(feature = "cuda")]
+    fn supports_cuda_decode_graphs_for_args(&self, model_specific_args: &dyn Any) -> bool {
+        model_specific_args
+            .downcast_ref::<Qwen3VLVisionSpecificArgs>()
+            .is_some()
+    }
     fn config(&self) -> &ModelConfigMetadata {
         &self.text.cfg
     }
+    fn model_config(&self) -> Arc<dyn ModelConfigLike + Send + Sync> {
+        Arc::new(
+            HybridPagedKvCacheConfig::new(
+                self.text.cfg.clone(),
+                self.text
+                    .layer_types
+                    .iter()
+                    .map(|ty| matches!(ty, config::LayerType::FullAttention))
+                    .collect(),
+            )
+            .with_uniform_prefix_prefill_attention_features(Default::default()),
+        )
+    }
     fn default_model_specific_args(&self, input_ids: &Tensor) -> Box<dyn Any> {
-        assert_eq!(input_ids.dims()[0], 1);
+        let (batch_size, seq_len) = input_ids.dims2().expect("input ids must be rank 2");
         Box::new(Qwen3VLVisionSpecificArgs {
             input_ids_full: input_ids.clone(),
+            pixel_values_videos: None,
             image_grid_thw: None,
             video_grid_thw: None,
             rope_img_grid_thw: None,
             rope_vid_grid_thw: None,
-            seqlens: vec![input_ids.dims()[1]],
+            seqlens: vec![seq_len; batch_size],
             continuous_img_pad: vec![],
             continuous_vid_pad: vec![],
             image_hashes: vec![],
+            video_hashes: vec![],
+            packed_layout: None,
+            prompt_position_ids: None,
         })
+    }
+    fn encoder_cache(&self) -> Option<&Mutex<EncoderCacheManager>> {
+        Some(&self.encoder_cache)
     }
     fn encoder_cache_counters(
         &self,

@@ -28,6 +28,27 @@ pub fn best_device(force_cpu: bool) -> Result<Device> {
     }
 }
 
+fn validate_reasoning_controls(message: &RequestMessage) -> crate::error::Result<()> {
+    let controls = match message {
+        RequestMessage::Chat {
+            enable_thinking,
+            reasoning_effort,
+            ..
+        }
+        | RequestMessage::MultimodalChat {
+            enable_thinking,
+            reasoning_effort,
+            ..
+        } => Some((*enable_thinking, *reasoning_effort)),
+        _ => None,
+    };
+    if let Some((enable_thinking, reasoning_effort)) = controls {
+        resolve_reasoning_controls(enable_thinking, reasoning_effort)
+            .map_err(|error| SdkError::RequestValidation(error.to_string()))?;
+    }
+    Ok(())
+}
+
 /// The object used to interact with the model. This can be used with many varieties of models, \
 /// and as such may be created with one of:
 /// - [`ModelBuilder`] (auto-detecting)
@@ -101,6 +122,141 @@ impl Model {
         self.runner.find_file(id)
     }
 
+    /// Load a local LoRA adapter directory under a new alias.
+    pub async fn load_lora_adapter(
+        &self,
+        alias: impl Into<String>,
+        adapter_dir: impl Into<PathBuf>,
+    ) -> crate::error::Result<LoraAdapterInfo> {
+        self.runner
+            .load_lora_adapter(None, alias, adapter_dir)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Load an adapter using an explicit atomic publication policy.
+    pub async fn load_lora_adapter_with_policy(
+        &self,
+        alias: impl Into<String>,
+        adapter_dir: impl Into<PathBuf>,
+        policy: LoraAdapterLoadPolicy,
+    ) -> crate::error::Result<LoraAdapterInfo> {
+        self.runner
+            .load_lora_adapter_with_policy(None, alias, adapter_dir, policy)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Load an adapter under a new alias on a selected model.
+    pub async fn load_lora_adapter_with_model(
+        &self,
+        alias: impl Into<String>,
+        adapter_dir: impl Into<PathBuf>,
+        model_id: &str,
+    ) -> crate::error::Result<LoraAdapterInfo> {
+        self.runner
+            .load_lora_adapter(Some(model_id), alias, adapter_dir)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Load an adapter on a selected model using an atomic publication policy.
+    pub async fn load_lora_adapter_with_model_and_policy(
+        &self,
+        alias: impl Into<String>,
+        adapter_dir: impl Into<PathBuf>,
+        model_id: &str,
+        policy: LoraAdapterLoadPolicy,
+    ) -> crate::error::Result<LoraAdapterInfo> {
+        self.runner
+            .load_lora_adapter_with_policy(Some(model_id), alias, adapter_dir, policy)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Unregister an adapter alias while allowing in-flight requests to finish.
+    pub async fn unload_lora_adapter(&self, alias: &str) -> crate::error::Result<LoraAdapterInfo> {
+        self.runner
+            .unload_lora_adapter(None, alias)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Unregister an alias only if it still points at the expected generation.
+    pub async fn unload_lora_adapter_if_generation(
+        &self,
+        alias: &str,
+        expected_generation: AdapterGenerationId,
+    ) -> crate::error::Result<LoraAdapterInfo> {
+        self.runner
+            .unload_lora_adapter_if_generation(None, alias, Some(expected_generation))
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Unregister an adapter alias from a selected model in a multi-model engine.
+    pub async fn unload_lora_adapter_with_model(
+        &self,
+        alias: &str,
+        model_id: &str,
+    ) -> crate::error::Result<LoraAdapterInfo> {
+        self.runner
+            .unload_lora_adapter(Some(model_id), alias)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Conditionally unregister an alias from a selected model.
+    pub async fn unload_lora_adapter_with_model_if_generation(
+        &self,
+        alias: &str,
+        model_id: &str,
+        expected_generation: AdapterGenerationId,
+    ) -> crate::error::Result<LoraAdapterInfo> {
+        self.runner
+            .unload_lora_adapter_if_generation(Some(model_id), alias, Some(expected_generation))
+            .await
+            .map_err(Into::into)
+    }
+
+    /// List the loaded adapter aliases on the default model.
+    pub async fn list_lora_adapters(&self) -> crate::error::Result<Vec<LoraAdapterInfo>> {
+        self.runner
+            .list_lora_adapters(None)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// List the loaded adapter aliases on a selected model.
+    pub async fn list_lora_adapters_with_model(
+        &self,
+        model_id: &str,
+    ) -> crate::error::Result<Vec<LoraAdapterInfo>> {
+        self.runner
+            .list_lora_adapters(Some(model_id))
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Return loaded aliases and complete resident-generation capacity usage.
+    pub async fn lora_adapter_status(&self) -> crate::error::Result<LoraRuntimeStatus> {
+        self.runner
+            .lora_adapter_status(None)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Return dynamic LoRA capacity usage for a selected model.
+    pub async fn lora_adapter_status_with_model(
+        &self,
+        model_id: &str,
+    ) -> crate::error::Result<LoraRuntimeStatus> {
+        self.runner
+            .lora_adapter_status(Some(model_id))
+            .await
+            .map_err(Into::into)
+    }
+
     // ========================================================================
     // Chat Request Methods
     // ========================================================================
@@ -131,13 +287,17 @@ impl Model {
         } else {
             (None, None)
         };
+        let messages = request.take_messages();
+        validate_reasoning_controls(&messages)?;
         let request = Request::Normal(Box::new(NormalRequest {
-            messages: request.take_messages(),
+            messages,
             sampling_params: request.take_sampling_params(),
+            seed: None,
             response: tx,
             return_logprobs: request.return_logprobs(),
             is_streaming: true,
             id: 0,
+            queued_at: None,
             constraint: request.take_constraint(),
             suffix: None,
             tools,
@@ -156,6 +316,7 @@ impl Model {
             max_tool_rounds: request.max_tool_rounds(),
             tool_dispatch_url: request.tool_dispatch_url().map(|s| s.to_string()),
             model_id: model_id.map(|s| s.to_string()),
+            adapter: request.take_adapter(),
             truncate_sequence,
             session_id: request.session_id().map(|s| s.to_string()),
             files: request.take_files(),
@@ -195,13 +356,17 @@ impl Model {
         } else {
             (None, None)
         };
+        let messages = request.take_messages();
+        validate_reasoning_controls(&messages)?;
         let request = Request::Normal(Box::new(NormalRequest {
-            messages: request.take_messages(),
+            messages,
             sampling_params: request.take_sampling_params(),
+            seed: None,
             response: tx,
             return_logprobs: request.return_logprobs(),
             is_streaming: false,
             id: 0,
+            queued_at: None,
             constraint: request.take_constraint(),
             suffix: None,
             tools,
@@ -220,6 +385,7 @@ impl Model {
             max_tool_rounds: request.max_tool_rounds(),
             tool_dispatch_url: request.tool_dispatch_url().map(|s| s.to_string()),
             model_id: model_id.map(|s| s.to_string()),
+            adapter: request.take_adapter(),
             truncate_sequence,
             session_id: request.session_id().map(|s| s.to_string()),
             files: request.take_files(),
@@ -277,13 +443,17 @@ impl Model {
         } else {
             (None, None)
         };
+        let messages = request.take_messages();
+        validate_reasoning_controls(&messages)?;
         let request = Request::Normal(Box::new(NormalRequest {
-            messages: request.take_messages(),
+            messages,
             sampling_params: request.take_sampling_params(),
+            seed: None,
             response: tx,
             return_logprobs: request.return_logprobs(),
             is_streaming: false,
             id: 0,
+            queued_at: None,
             constraint: request.take_constraint(),
             suffix: None,
             tools,
@@ -302,6 +472,7 @@ impl Model {
             max_tool_rounds: request.max_tool_rounds(),
             tool_dispatch_url: request.tool_dispatch_url().map(|s| s.to_string()),
             model_id: model_id.map(|s| s.to_string()),
+            adapter: request.take_adapter(),
             truncate_sequence,
             session_id: request.session_id().map(|s| s.to_string()),
             files: request.take_files(),
@@ -448,6 +619,7 @@ impl Model {
 
         let request = Request::Normal(Box::new(NormalRequest {
             id: 0,
+            queued_at: None,
             messages: RequestMessage::ImageGeneration {
                 prompt: prompt.to_string(),
                 format: response_format,
@@ -455,6 +627,7 @@ impl Model {
                 save_file,
             },
             sampling_params: SamplingParams::deterministic(),
+            seed: None,
             response: tx,
             return_logprobs: false,
             is_streaming: false,
@@ -476,6 +649,7 @@ impl Model {
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: model_id.map(|s| s.to_string()),
+            adapter: None,
             truncate_sequence: false,
             session_id: None,
             files: None,
@@ -525,10 +699,12 @@ impl Model {
 
         let request = Request::Normal(Box::new(NormalRequest {
             id: 0,
+            queued_at: None,
             messages: RequestMessage::SpeechGeneration {
                 prompt: prompt.to_string(),
             },
             sampling_params: SamplingParams::deterministic(),
+            seed: None,
             response: tx,
             return_logprobs: false,
             is_streaming: false,
@@ -550,6 +726,7 @@ impl Model {
             max_tool_rounds: None,
             tool_dispatch_url: None,
             model_id: model_id.map(|s| s.to_string()),
+            adapter: None,
             truncate_sequence: false,
             session_id: None,
             files: None,
@@ -614,8 +791,10 @@ impl Model {
 
                 let request = Request::Normal(Box::new(NormalRequest {
                     id: 0,
+                    queued_at: None,
                     messages: message,
                     sampling_params: SamplingParams::deterministic(),
+                    seed: None,
                     response: tx,
                     return_logprobs: false,
                     is_streaming: false,
@@ -637,6 +816,7 @@ impl Model {
                     max_tool_rounds: None,
                     tool_dispatch_url: None,
                     model_id: model_id_owned.clone(),
+                    adapter: None,
                     truncate_sequence,
                     session_id: None,
                     files: None,
@@ -796,6 +976,7 @@ impl Model {
 
     /// Tokenize some text or messages.
     /// - `tools` is only used if messages are provided.
+    /// - `enable_thinking` is only used if messages are provided.
     pub async fn tokenize(
         &self,
         text: Either<TextMessages, String>,
@@ -804,7 +985,7 @@ impl Model {
         add_generation_prompt: bool,
         enable_thinking: Option<bool>,
     ) -> crate::error::Result<Vec<u32>> {
-        self.tokenize_with_model(
+        self.tokenize_with_reasoning_effort(
             text,
             tools,
             add_special_tokens,
@@ -815,9 +996,34 @@ impl Model {
         .await
     }
 
+    /// Tokenize some text or messages with an optional reasoning effort.
+    /// - `tools` is only used if messages are provided.
+    /// - Reasoning controls are only used if messages are provided.
+    pub async fn tokenize_with_reasoning_effort(
+        &self,
+        text: Either<TextMessages, String>,
+        tools: Option<Vec<Tool>>,
+        add_special_tokens: bool,
+        add_generation_prompt: bool,
+        enable_thinking: Option<bool>,
+        reasoning_effort: Option<ReasoningEffort>,
+    ) -> crate::error::Result<Vec<u32>> {
+        self.tokenize_with_reasoning_effort_and_model(
+            text,
+            tools,
+            add_special_tokens,
+            add_generation_prompt,
+            enable_thinking,
+            reasoning_effort,
+            None,
+        )
+        .await
+    }
+
     /// Tokenize some text or messages using a specific model.
     /// If `model_id` is `None`, the request is sent to the default model.
     /// - `tools` is only used if messages are provided.
+    /// - `enable_thinking` is only used if messages are provided.
     pub async fn tokenize_with_model(
         &self,
         text: Either<TextMessages, String>,
@@ -827,6 +1033,35 @@ impl Model {
         enable_thinking: Option<bool>,
         model_id: Option<&str>,
     ) -> crate::error::Result<Vec<u32>> {
+        self.tokenize_with_reasoning_effort_and_model(
+            text,
+            tools,
+            add_special_tokens,
+            add_generation_prompt,
+            enable_thinking,
+            None,
+            model_id,
+        )
+        .await
+    }
+
+    /// Tokenize some text or messages with an optional reasoning effort using a specific model.
+    /// If `model_id` is `None`, the request is sent to the default model.
+    /// - `tools` is only used if messages are provided.
+    /// - Reasoning controls are only used if messages are provided.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn tokenize_with_reasoning_effort_and_model(
+        &self,
+        text: Either<TextMessages, String>,
+        tools: Option<Vec<Tool>>,
+        add_special_tokens: bool,
+        add_generation_prompt: bool,
+        enable_thinking: Option<bool>,
+        reasoning_effort: Option<ReasoningEffort>,
+        model_id: Option<&str>,
+    ) -> crate::error::Result<Vec<u32>> {
+        resolve_reasoning_controls(enable_thinking, reasoning_effort)
+            .map_err(|error| SdkError::RequestValidation(error.to_string()))?;
         let (tx, mut rx) = channel(1);
         let request = Request::Tokenize(TokenizationRequest {
             text: text.map_left(Into::into),
@@ -835,7 +1070,7 @@ impl Model {
             add_generation_prompt,
             response: tx,
             enable_thinking,
-            reasoning_effort: None,
+            reasoning_effort,
         });
         self.runner.get_sender(model_id)?.send(request).await?;
 

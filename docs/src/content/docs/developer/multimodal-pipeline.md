@@ -23,7 +23,7 @@ Multiple images in one request are encoded as a batch.
 
 Video is decoded to frames before model preprocessing. Each selected frame then flows through the image path.
 
-Supported containers and FFmpeg installation are covered in [Set up video input](/mistral.rs/guides/models/video-setup/).
+Supported containers and FFmpeg installation are covered in [Set up video input](/guides/models/video-setup/).
 
 ## Audio path
 
@@ -38,10 +38,10 @@ Encoder outputs are cached by content hash and modality. When the same image, vi
 
 The modality is part of the key: identical bytes processed as an image versus as a video frame can yield different token counts, and the cache keeps them separate.
 
-The cache is LRU (least-recently-used) with a fixed capacity of 32 entries per model, not configurable. Hit and miss counters are exposed for observability.
+The cache is LRU (least-recently-used). It retains 32 entries per model by default. Serving commands can instead bound retained tensor memory with `--encoder-cache-memory-mb`; matching headroom is reserved before PagedAttention sizes the KV cache, and cached views are copied into compact storage. Hit, miss, eviction, and resident-memory metrics are exposed for observability.
 
 ## See also
 
-- Guide: [multimodal input](/mistral.rs/guides/models/multimodal-input/).
-- Setup: [set up video input](/mistral.rs/guides/models/video-setup/).
-- Reference: [supported models](/mistral.rs/reference/supported-models/).
+- Guide: [multimodal input](/guides/models/multimodal-input/).
+- Setup: [set up video input](/guides/models/video-setup/).
+- Reference: [supported models](/reference/supported-models/).

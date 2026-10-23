@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -20,19 +20,23 @@ use crate::{
         isq::UQFF_RESIDUAL_SAFETENSORS,
     },
     xlora_models::XLoraConfig,
-    ModelPaths, Ordering, TokenSource,
+    LoraAdapterSpec, ModelPaths, Ordering, TokenSource,
 };
 
 // Match files against these
 const SAFETENSOR_MATCH: &str = r"model-\d+-of-\d+\.safetensors\b";
 const QUANT_SAFETENSOR_MATCH: &str = r"model\.safetensors\b";
 const CONSOLIDATED_SAFETENSOR_MATCH: &str = r"consolidated\.safetensors\b";
+const SAFETENSOR_INDEX: &str = "model.safetensors.index.json";
 const PICKLE_MATCH: &str = r"pytorch_model-\d{5}-of-\d{5}.((pth)|(pt)|(bin))\b";
 
 #[derive(Clone, Debug)]
-pub struct LoraAdapterPaths {
-    pub lora_config: mistralrs_quant::LoraConfig,
-    pub adapter_path: PathBuf,
+pub struct ResolvedLoraAdapter {
+    pub alias: String,
+    pub source: String,
+    pub revision: Option<String>,
+    pub config_path: PathBuf,
+    pub weights_path: PathBuf,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -46,28 +50,46 @@ pub enum AdapterPaths {
         xlora_config: Option<XLoraConfig>,
         lora_preload_adapter_info: Option<HashMap<String, (PathBuf, LoraConfig)>>,
     },
-    Lora(Vec<LoraAdapterPaths>),
+    Lora(Vec<ResolvedLoraAdapter>),
     None,
 }
 
-pub fn get_xlora_paths(
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum XLoraPreload {
+    Skip,
+    Load,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AdapterPathOptions<'a> {
+    pub(crate) xlora_model_id: Option<&'a String>,
+    pub(crate) lora_adapters: Option<&'a [LoraAdapterSpec]>,
+    pub(crate) xlora_order: Option<&'a Ordering>,
+    pub(crate) xlora_preload: XLoraPreload,
+}
+
+pub(crate) fn get_adapter_paths(
     base_model_id: String,
-    xlora_model_id: Option<&String>,
-    lora_adapter_ids: Option<&Vec<String>>,
+    options: AdapterPathOptions<'_>,
     token_source: &TokenSource,
-    revision: String,
-    xlora_order: Option<&Ordering>,
+    base_revision: String,
 ) -> Result<AdapterPaths> {
-    match (lora_adapter_ids, xlora_model_id, xlora_order) {
+    let AdapterPathOptions {
+        xlora_model_id,
+        lora_adapters,
+        xlora_order,
+        xlora_preload,
+    } = options;
+    match (lora_adapters, xlora_model_id, xlora_order) {
         (None, Some(xlora_id), Some(xlora_order)) => {
             let api = build_api(token_source, true).map_err(candle_core::Error::msg)?;
             let api = api.repo(Repo::with_revision(
                 xlora_id.clone(),
                 RepoType::Model,
-                revision.clone(),
+                base_revision.clone(),
             ));
             let model_id = Path::new(&xlora_id);
-            let dir_list = api_dir_list!(api, model_id, true, &revision).collect::<Vec<_>>();
+            let dir_list = api_dir_list!(api, model_id, true, &base_revision).collect::<Vec<_>>();
             // Get the path for the xlora classifier
             let xlora_classifier = &dir_list
                 .clone()
@@ -82,7 +104,12 @@ pub fn get_xlora_paths(
 
             let classifier_path = xlora_classifier
                 .map(|xlora_classifier| -> candle_core::Result<_> {
-                    Ok(api_get_file!(api, xlora_classifier, model_id, &revision))
+                    Ok(api_get_file!(
+                        api,
+                        xlora_classifier,
+                        model_id,
+                        &base_revision
+                    ))
                 })
                 .transpose()?;
 
@@ -103,7 +130,7 @@ pub fn get_xlora_paths(
                 if xlora_configs.len() != 1 {
                     warn!("Selecting config: `{}`", config_path);
                 }
-                let config_path = api_get_file!(api, config_path, model_id, &revision);
+                let config_path = api_get_file!(api, config_path, model_id, &base_revision);
                 let conf = fs::read_to_string(config_path)?;
                 let deser: Result<XLoraConfig, serde_json::Error> = serde_json::from_str(&conf);
                 match deser {
@@ -149,10 +176,12 @@ pub fn get_xlora_paths(
             let mut adapters_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
             for (file, name) in adapter_files {
                 if let Some(paths) = adapters_paths.get_mut(&name) {
-                    paths.push(api_get_file!(api, &file, model_id, &revision));
+                    paths.push(api_get_file!(api, &file, model_id, &base_revision));
                 } else {
-                    adapters_paths
-                        .insert(name, vec![api_get_file!(api, &file, model_id, &revision)]);
+                    adapters_paths.insert(
+                        name,
+                        vec![api_get_file!(api, &file, model_id, &base_revision)],
+                    );
                 }
             }
 
@@ -197,21 +226,21 @@ pub fn get_xlora_paths(
                 );
             }
 
-            let lora_preload_adapter_info =
-                // If preload adapters are specified, get their metadata like above
+            let lora_preload_adapter_info = if matches!(xlora_preload, XLoraPreload::Load) {
                 if let Some(preload_adapters) = &xlora_order.preload_adapters {
                     let mut output = HashMap::new();
                     for adapter in preload_adapters {
                         // Get the names and remote paths of the files associated with this adapter
-                        let adapter_files = api_dir_list!(api, &adapter.adapter_model_id, true, &revision)
-                            .filter_map(|f| {
-                                if f.contains(&adapter.name) {
-                                    Some((f, adapter.name.clone()))
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect::<Vec<_>>();
+                        let adapter_files =
+                            api_dir_list!(api, &adapter.adapter_model_id, true, &base_revision)
+                                .filter_map(|f| {
+                                    if f.contains(&adapter.name) {
+                                        Some((f, adapter.name.clone()))
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect::<Vec<_>>();
                         if adapter_files.is_empty() {
                             anyhow::bail!("Adapter files are empty. Perhaps the ordering file adapters does not match the actual adapters?")
                         }
@@ -219,10 +248,12 @@ pub fn get_xlora_paths(
                         let mut adapters_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
                         for (file, name) in adapter_files {
                             if let Some(paths) = adapters_paths.get_mut(&name) {
-                                paths.push(api_get_file!(api, &file, model_id, &revision));
+                                paths.push(api_get_file!(api, &file, model_id, &base_revision));
                             } else {
-                                adapters_paths
-                                    .insert(name, vec![api_get_file!(api, &file, model_id, &revision)]);
+                                adapters_paths.insert(
+                                    name,
+                                    vec![api_get_file!(api, &file, model_id, &base_revision)],
+                                );
                             }
                         }
 
@@ -249,7 +280,10 @@ pub fn get_xlora_paths(
                     Some(output)
                 } else {
                     None
-                };
+                }
+            } else {
+                None
+            };
 
             Ok(AdapterPaths::XLora {
                 adapter_configs: Some(adapters_configs),
@@ -260,37 +294,74 @@ pub fn get_xlora_paths(
                 lora_preload_adapter_info,
             })
         }
-        (Some(adapter_ids), None, None) => {
+        (Some(adapters), None, None) => {
             let mut lora_adapter_paths = Vec::new();
-            for adapter_id in adapter_ids {
-                info!("Loading adapter at `{adapter_id}`");
+            let mut aliases = HashSet::new();
+            for adapter in adapters {
+                let alias = adapter.alias.trim();
+                let source = adapter.source.trim();
+                if alias.is_empty() {
+                    anyhow::bail!("LoRA adapter alias must not be empty");
+                }
+                if source.is_empty() {
+                    anyhow::bail!(
+                        "LoRA adapter source for alias `{}` must not be empty",
+                        adapter.alias
+                    );
+                }
+                if adapter.revision().is_empty() {
+                    anyhow::bail!(
+                        "LoRA adapter revision for alias `{}` must not be empty",
+                        adapter.alias
+                    );
+                }
+                if let Some(expected) = adapter.base_model_name.as_deref().map(str::trim) {
+                    if expected.is_empty() {
+                        anyhow::bail!(
+                            "LoRA adapter `{}` has an empty base_model_name",
+                            adapter.alias
+                        );
+                    }
+                }
+                if !aliases.insert(alias) {
+                    anyhow::bail!(
+                        "LoRA adapter alias `{}` is specified more than once",
+                        adapter.alias
+                    );
+                }
+                info!(
+                    "Loading LoRA adapter `{}` from `{}` at revision `{}`",
+                    alias,
+                    source,
+                    adapter.revision()
+                );
 
                 let api = build_api(token_source, true).map_err(candle_core::Error::msg)?;
                 let api = api.repo(Repo::with_revision(
-                    adapter_id.clone(),
+                    source.to_string(),
                     RepoType::Model,
-                    revision.clone(),
+                    adapter.revision().to_string(),
                 ));
 
-                let adapter_path_buf = std::path::Path::new(adapter_id);
+                let adapter_path_buf = std::path::Path::new(source);
                 let config_path = crate::pipeline::hf::get_file(
                     &api,
                     adapter_path_buf,
                     "adapter_config.json",
-                    &revision,
+                    adapter.revision(),
                 )?;
-                let adapter_path = crate::pipeline::hf::get_file(
+                let weights_path = crate::pipeline::hf::get_file(
                     &api,
                     adapter_path_buf,
                     "adapter_model.safetensors",
-                    &revision,
+                    adapter.revision(),
                 )?;
-                let lora_config: mistralrs_quant::LoraConfig =
-                    serde_json::from_str(&fs::read_to_string(config_path)?)?;
-
-                lora_adapter_paths.push(LoraAdapterPaths {
-                    lora_config,
-                    adapter_path,
+                lora_adapter_paths.push(ResolvedLoraAdapter {
+                    alias: alias.to_string(),
+                    source: source.to_string(),
+                    revision: (!adapter_path_buf.exists()).then(|| adapter.revision().to_string()),
+                    config_path,
+                    weights_path,
                 });
             }
 
@@ -330,31 +401,37 @@ pub fn get_model_paths(
             Ok(files)
         }
         None => {
-            // We only match these patterns for model names
             let safetensor_match = Regex::new(SAFETENSOR_MATCH)?;
             let quant_safetensor_match = Regex::new(QUANT_SAFETENSOR_MATCH)?;
             let consolidated_safetensor_match = Regex::new(CONSOLIDATED_SAFETENSOR_MATCH)?;
             let pickle_match = Regex::new(PICKLE_MATCH)?;
 
             let mut filenames = vec![];
-            let listing = api_dir_list!(api, model_id, true, &revision).filter(|x| {
-                safetensor_match.is_match(x)
-                    || pickle_match.is_match(x)
-                    || quant_safetensor_match.is_match(x)
-                    || consolidated_safetensor_match.is_match(x)
-                    || x == UQFF_RESIDUAL_SAFETENSORS
-            });
-            let safetensors = listing
-                .clone()
-                .filter(|x| x.ends_with(".safetensors"))
-                .collect::<Vec<_>>();
-            let pickles = listing
-                .clone()
+            let repo_files = api_dir_list!(api, model_id, true, &revision).collect::<Vec<_>>();
+            let safetensors = if repo_files.iter().any(|file| file == SAFETENSOR_INDEX) {
+                let index_path = api_get_file!(api, SAFETENSOR_INDEX, model_id, &revision);
+                parse_safetensor_index(&fs::read_to_string(index_path)?)?
+            } else {
+                repo_files
+                    .iter()
+                    .filter(|file| {
+                        safetensor_match.is_match(file)
+                            || quant_safetensor_match.is_match(file)
+                            || consolidated_safetensor_match.is_match(file)
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>()
+            };
+            let pickles = repo_files
+                .iter()
+                .filter(|file| pickle_match.is_match(file))
                 .filter(|x| x.ends_with(".pth") || x.ends_with(".pt") || x.ends_with(".bin"))
+                .cloned()
                 .collect::<Vec<_>>();
-            let uqff_residual = listing
-                .clone()
-                .filter(|x| x == UQFF_RESIDUAL_SAFETENSORS)
+            let uqff_residual = repo_files
+                .iter()
+                .filter(|file| file.as_str() == UQFF_RESIDUAL_SAFETENSORS)
+                .cloned()
                 .collect::<Vec<_>>();
             let files = if !safetensors.is_empty() {
                 // Always prefer safetensors
@@ -382,6 +459,30 @@ pub fn get_model_paths(
     }
 }
 
+fn parse_safetensor_index(contents: &str) -> Result<Vec<String>> {
+    let index: Value = serde_json::from_str(contents)?;
+    let weight_map = index
+        .get("weight_map")
+        .and_then(Value::as_object)
+        .ok_or_else(|| anyhow::anyhow!("Safetensors index has no object `weight_map`"))?;
+    let mut files = HashSet::new();
+    for filename in weight_map.values() {
+        let filename = filename
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("Safetensors index contains a non-string filename"))?;
+        if !filename.ends_with(".safetensors") {
+            anyhow::bail!("Safetensors index references non-safetensors file `{filename}`")
+        }
+        files.insert(filename.to_string());
+    }
+    if files.is_empty() {
+        anyhow::bail!("Safetensors index has an empty `weight_map`")
+    }
+    let mut files = files.into_iter().collect::<Vec<_>>();
+    files.sort_unstable();
+    Ok(files)
+}
+
 /// Find and parse the appropriate [`ChatTemplate`], and ensure is has a valid [`ChatTemplate.chat_template`].
 /// If the provided `tokenizer_config.json` from [`ModelPaths.get_template_filename`] does not
 /// have a `chat_template`, use the provided one.
@@ -396,7 +497,7 @@ pub fn get_model_paths(
 ///  the chat template is overwritten with this chat template.
 #[allow(clippy::borrowed_box)]
 pub(crate) fn get_chat_template(
-    paths: &Box<dyn ModelPaths>,
+    paths: &dyn ModelPaths,
     jinja_explicit: Option<&String>,
     chat_template_explicit: Option<&String>,
     chat_template_fallback: Option<&String>,
@@ -540,17 +641,6 @@ pub(crate) fn get_chat_template(
         }
     }
 
-    // JINJA explicit
-    if let Some(jinja_explicit) = jinja_explicit {
-        if !jinja_explicit.ends_with(".jinja") {
-            panic!("jinja_explicit must end with .jinja!");
-        }
-
-        let ct = fs::read_to_string(jinja_explicit).expect("Loading chat template failed.");
-
-        template.chat_template = Some(ChatTemplateValue(Either::Left(ct)));
-    }
-
     let processor_conf: Option<crate::vision_models::processor_config::ProcessorConfig> = paths
         .get_processor_config()
         .as_ref()
@@ -561,6 +651,15 @@ pub(crate) fn get_chat_template(
                 .chat_template
                 .map(|x| ChatTemplateValue(Either::Left(x)));
         }
+    }
+
+    if let Some(jinja_explicit) = jinja_explicit {
+        if !jinja_explicit.ends_with(".jinja") {
+            panic!("jinja_explicit must end with .jinja!");
+        }
+
+        let ct = fs::read_to_string(jinja_explicit).expect("Loading chat template failed.");
+        template.chat_template = Some(ChatTemplateValue(Either::Left(ct)));
     }
 
     #[derive(Debug, serde::Deserialize)]
@@ -619,7 +718,38 @@ pub(crate) fn get_chat_template(
     }
 }
 
+#[cfg(test)]
 mod tests {
+    use crate::pipeline::loaders::LocalModelPaths;
+
+    use super::{get_chat_template, parse_safetensor_index, AdapterPaths};
+
+    #[test]
+    fn explicit_jinja_overrides_processor_template() {
+        let dir = tempfile::tempdir().unwrap();
+        let processor_path = dir.path().join("processor_config.json");
+        let jinja_path = dir.path().join("explicit.jinja");
+        std::fs::write(&processor_path, r#"{"chat_template":"processor"}"#).unwrap();
+        std::fs::write(&jinja_path, "explicit").unwrap();
+        let paths = LocalModelPaths {
+            tokenizer_filename: dir.path().join("tokenizer.json"),
+            config_filename: dir.path().join("config.json"),
+            template_filename: None,
+            filenames: Vec::new(),
+            adapter_paths: AdapterPaths::None,
+            gen_conf: None,
+            preprocessor_config: None,
+            video_preprocessor_config: None,
+            processor_config: Some(processor_path),
+            chat_template_json_filename: None,
+        };
+        let jinja_path = jinja_path.to_string_lossy().into_owned();
+
+        let template = get_chat_template(&paths, Some(&jinja_path), None, None, None);
+
+        assert_eq!(template.get_template_contents(), ["explicit"]);
+    }
+
     #[test]
     fn match_safetensors() -> anyhow::Result<()> {
         use regex_automata::meta::Regex;
@@ -646,6 +776,37 @@ mod tests {
             assert!(!safetensor_match.is_match(id));
         }
         Ok(())
+    }
+
+    #[test]
+    fn safetensor_index_drives_arbitrary_shard_names() -> anyhow::Result<()> {
+        let files = parse_safetensor_index(
+            r#"{
+                "metadata": {"total_size": 42},
+                "weight_map": {
+                    "model.embed_tokens.weight": "embeddings.safetensors",
+                    "model.layers.0.weight": "layers-0.safetensors",
+                    "model.layers.0.weight_scale_inv": "layers-0.safetensors",
+                    "model.visual.weight": "vision.safetensors"
+                }
+            }"#,
+        )?;
+        assert_eq!(
+            files,
+            [
+                "embeddings.safetensors",
+                "layers-0.safetensors",
+                "vision.safetensors"
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn safetensor_index_rejects_non_safetensor_shards() {
+        let err = parse_safetensor_index(r#"{"weight_map":{"model.weight":"pytorch_model.bin"}}"#)
+            .unwrap_err();
+        assert!(err.to_string().contains("non-safetensors"));
     }
 
     #[test]

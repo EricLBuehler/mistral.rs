@@ -6,8 +6,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use axum::{
-    extract::{Json, State},
-    http::{self},
+    extract::{rejection::JsonRejection, Json, State},
     response::{
         sse::{Event, KeepAlive, KeepAliveStream},
         IntoResponse, Sse,
@@ -20,10 +19,11 @@ use image::DynamicImage;
 use indexmap::IndexMap;
 use itertools::Itertools;
 use mistralrs_core::{
-    AgentPermission, AgentToolApprovalHandler, AgentToolApprovalNotifier, AgenticToolCallData,
-    AgenticToolCallPhase, AgenticToolCallRecord, ChatCompletionChunkResponse,
-    ChatCompletionResponse, Constraint, MistralRs, ModelCategory, NormalRequest, ReasoningEffort,
-    Request, RequestMessage, Response, SamplingParams,
+    resolve_reasoning_controls, AgentPermission, AgentToolApprovalHandler,
+    AgentToolApprovalNotifier, AgenticToolCallData, AgenticToolCallPhase, AgenticToolCallRecord,
+    ChatCompletionChunkResponse, ChatCompletionResponse, Constraint, MessageContent, MistralRs,
+    ModelCategory, NormalRequest, ReasoningEffort, Request, RequestMessage, Response,
+    SamplingParams,
 };
 use serde_json::{json, Value};
 use tokio::sync::mpsc::{Receiver, Sender};
@@ -31,26 +31,29 @@ use tokio::sync::mpsc::{Receiver, Sender};
 use crate::{
     completion_core::{
         convert_stop_tokens, get_dry_sampling_params, handle_completion_error,
-        BaseCompletionResponder,
+        handle_completion_validation_error, BaseCompletionResponder,
     },
     handler_core::{
-        create_response_channel, send_request_with_model, BaseJsonModelError, ErrorToResponse,
-        JsonError, ModelErrorMessage,
+        apply_model_override, create_response_channel, openai_error_from_error,
+        openai_error_response, request_model_override, send_request_with_model, ApiError,
+        ApiErrorKind, JsonError, ModelErrorMessage,
     },
     input_files::{resolve_input_file, InputFileSpec},
+    lora_adapters::resolve_lora_adapter_model,
     mistralrs_server_router_builder::AgenticDefaults,
     openai::{
         normalize_chat_completion_tools, normalize_responses_tools, validate_openai_tool_choice,
-        ChatCompletionRequest, Grammar, JsonSchemaResponseFormat, MessageInnerContent,
-        OpenAiToolSurface, ResponseFormat,
+        ChatCompletionChunkResponseBody, ChatCompletionRequest, ChatCompletionResponseBody,
+        Grammar, JsonSchemaResponseFormat, Message, MessageInnerContent, OpenAiToolSurface,
+        ResponseFormat,
     },
     skills::SkillStore,
-    streaming::{base_create_streamer, get_keep_alive_interval, BaseStreamer, DoneState},
-    types::{ExtractedMistralRsState, OnChunkCallback, OnDoneCallback, SharedMistralRsState},
-    util::{
-        parse_audio_url_for_server, parse_image_url_for_server, sanitize_error_message,
-        validate_model_name,
+    streaming::{
+        base_create_streamer, get_keep_alive_interval, observe_response, openai_error_event,
+        BaseStreamer, DoneState, StreamOutcomeHandle,
     },
+    types::{ExtractedMistralRsState, OnChunkCallback, OnDoneCallback, SharedMistralRsState},
+    util::{parse_audio_url_for_server, parse_image_url_for_server, validate_model_name},
     video::parse_video_url_for_server,
 };
 
@@ -402,96 +405,104 @@ impl futures::Stream for ChatCompletionStreamer {
         }
 
         match self.rx.poll_recv(cx) {
-            Poll::Ready(Some(resp)) => match resp {
-                Response::ModelError(msg, _) => {
-                    MistralRs::maybe_log_error(
-                        self.state.clone(),
-                        &ModelErrorMessage(msg.to_string()),
-                    );
-                    // Done now, just need to send the [DONE]
-                    self.done_state = DoneState::SendingDone;
-                    Poll::Ready(Some(Ok(Event::default().data(msg))))
-                }
-                Response::ValidationError(e) => {
-                    self.done_state = DoneState::SendingDone;
-                    Poll::Ready(Some(Ok(
-                        Event::default().data(sanitize_error_message(e.as_ref()))
-                    )))
-                }
-                Response::InternalError(e) => {
-                    MistralRs::maybe_log_error(self.state.clone(), &*e);
-                    self.done_state = DoneState::SendingDone;
-                    Poll::Ready(Some(Ok(
-                        Event::default().data(sanitize_error_message(e.as_ref()))
-                    )))
-                }
-                Response::Chunk(mut response) => {
-                    if response.choices.iter().all(|x| x.finish_reason.is_some()) {
+            Poll::Ready(Some(resp)) => {
+                observe_response(&self.outcome, &resp);
+                match resp {
+                    Response::ModelError(msg, _) => {
+                        MistralRs::maybe_log_error(
+                            self.state.clone(),
+                            &ModelErrorMessage(msg.to_string()),
+                        );
+                        // Done now, just need to send the [DONE]
                         self.done_state = DoneState::SendingDone;
+                        Poll::Ready(Some(Ok(openai_error_event(ApiError::model_error()))))
                     }
-                    // Done now, just need to send the [DONE]
-                    MistralRs::maybe_log_response(self.state.clone(), &response);
-
-                    if let Some(on_chunk) = &self.on_chunk {
-                        response = on_chunk(response);
+                    Response::ValidationError(e) => {
+                        self.done_state = DoneState::SendingDone;
+                        Poll::Ready(Some(Ok(openai_error_event(ApiError::from_error(
+                            e.as_ref(),
+                            ApiErrorKind::InvalidRequest,
+                        )))))
                     }
-
-                    if self.store_chunks {
-                        self.chunks.push(response.clone());
+                    Response::InternalError(e) => {
+                        MistralRs::maybe_log_error(self.state.clone(), &*e);
+                        self.done_state = DoneState::SendingDone;
+                        Poll::Ready(Some(Ok(openai_error_event(ApiError::from_error(
+                            e.as_ref(),
+                            ApiErrorKind::Internal,
+                        )))))
                     }
+                    Response::Chunk(mut response) => {
+                        if response.choices.iter().all(|x| x.finish_reason.is_some()) {
+                            self.done_state = DoneState::SendingDone;
+                        }
+                        // Done now, just need to send the [DONE]
+                        MistralRs::maybe_log_response(self.state.clone(), &response);
 
-                    Poll::Ready(Some(Event::default().json_data(response)))
+                        if let Some(on_chunk) = &self.on_chunk {
+                            response = on_chunk(response);
+                        }
+
+                        if self.store_chunks {
+                            self.chunks.push(response.clone());
+                        }
+
+                        Poll::Ready(Some(Event::default().json_data(response)))
+                    }
+                    Response::AgenticToolCallProgress {
+                        round,
+                        tool_name,
+                        phase,
+                    } => {
+                        let payload = serialize_agentic_progress(round, &tool_name, &phase);
+                        Poll::Ready(Some(
+                            Event::default()
+                                .event("agentic_tool_call_progress")
+                                .json_data(payload),
+                        ))
+                    }
+                    Response::AgenticToolApprovalRequired {
+                        approval_id,
+                        session_id,
+                        round,
+                        tool,
+                        arguments,
+                    } => {
+                        let payload = json!({
+                            "type": "agentic_tool_approval_required",
+                            "approval_id": approval_id,
+                            "session_id": session_id,
+                            "round": round,
+                            "tool": tool,
+                            "arguments": arguments,
+                        });
+                        Poll::Ready(Some(
+                            Event::default()
+                                .event("agentic_tool_approval_required")
+                                .json_data(payload),
+                        ))
+                    }
+                    Response::BlockDenoisingProgress(_) => {
+                        cx.waker().wake_by_ref();
+                        Poll::Pending
+                    }
+                    Response::File(file) => Poll::Ready(Some(
+                        Event::default().event("file_produced").json_data(file),
+                    )),
+                    Response::Done(_) => unreachable!(),
+                    Response::CompletionDone(_) => unreachable!(),
+                    Response::CompletionModelError(_, _) => unreachable!(),
+                    Response::CompletionChunk(_) => unreachable!(),
+                    Response::ImageGeneration(_) => unreachable!(),
+                    Response::Speech { .. } => unreachable!(),
+                    Response::Raw { .. } => unreachable!(),
+                    Response::Embeddings { .. } => unreachable!(),
                 }
-                Response::AgenticToolCallProgress {
-                    round,
-                    tool_name,
-                    phase,
-                } => {
-                    let payload = serialize_agentic_progress(round, &tool_name, &phase);
-                    Poll::Ready(Some(
-                        Event::default()
-                            .event("agentic_tool_call_progress")
-                            .json_data(payload),
-                    ))
-                }
-                Response::AgenticToolApprovalRequired {
-                    approval_id,
-                    session_id,
-                    round,
-                    tool,
-                    arguments,
-                } => {
-                    let payload = json!({
-                        "type": "agentic_tool_approval_required",
-                        "approval_id": approval_id,
-                        "session_id": session_id,
-                        "round": round,
-                        "tool": tool,
-                        "arguments": arguments,
-                    });
-                    Poll::Ready(Some(
-                        Event::default()
-                            .event("agentic_tool_approval_required")
-                            .json_data(payload),
-                    ))
-                }
-                Response::BlockDenoisingProgress(_) => {
-                    cx.waker().wake_by_ref();
-                    Poll::Pending
-                }
-                Response::File(file) => Poll::Ready(Some(
-                    Event::default().event("file_produced").json_data(file),
-                )),
-                Response::Done(_) => unreachable!(),
-                Response::CompletionDone(_) => unreachable!(),
-                Response::CompletionModelError(_, _) => unreachable!(),
-                Response::CompletionChunk(_) => unreachable!(),
-                Response::ImageGeneration(_) => unreachable!(),
-                Response::Speech { .. } => unreachable!(),
-                Response::Raw { .. } => unreachable!(),
-                Response::Embeddings { .. } => unreachable!(),
-            },
-            Poll::Ready(None) => Poll::Ready(None),
+            }
+            Poll::Ready(None) => {
+                self.done_state = DoneState::SendingDone;
+                Poll::Ready(Some(Ok(openai_error_event(ApiError::internal()))))
+            }
             Poll::Pending => Poll::Pending,
         }
     }
@@ -501,9 +512,6 @@ impl futures::Stream for ChatCompletionStreamer {
 pub type ChatCompletionResponder =
     BaseCompletionResponder<ChatCompletionResponse, KeepAliveStream<ChatCompletionStreamer>>;
 
-type JsonModelError = BaseJsonModelError<ChatCompletionResponse>;
-impl ErrorToResponse for JsonModelError {}
-
 impl IntoResponse for ChatCompletionResponder {
     /// Converts the chat completion responder into an HTTP response.
     fn into_response(self) -> axum::response::Response {
@@ -511,31 +519,34 @@ impl IntoResponse for ChatCompletionResponder {
             ChatCompletionResponder::Sse(s) => s.into_response(),
             ChatCompletionResponder::Json(s) => Json(s).into_response(),
             ChatCompletionResponder::InternalError(e) => {
-                JsonError::new(sanitize_error_message(e.as_ref()))
-                    .to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
+                openai_error_from_error(e.as_ref(), ApiErrorKind::Internal)
             }
             ChatCompletionResponder::ValidationError(e) => {
-                JsonError::new(sanitize_error_message(e.as_ref()))
-                    .to_response(http::StatusCode::UNPROCESSABLE_ENTITY)
+                openai_error_from_error(e.as_ref(), ApiErrorKind::InvalidRequest)
             }
-            ChatCompletionResponder::ModelError(msg, response) => {
-                JsonModelError::new(msg, response)
-                    .to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
+            ChatCompletionResponder::ModelError(_, _) => {
+                openai_error_response(ApiError::model_error())
             }
         }
     }
 }
 
-/// Parse reasoning_effort string to ReasoningEffort enum
-fn parse_reasoning_effort(effort: &Option<String>) -> Option<ReasoningEffort> {
-    effort
-        .as_ref()
-        .and_then(|e| match e.to_lowercase().as_str() {
-            "low" => Some(ReasoningEffort::Low),
-            "medium" => Some(ReasoningEffort::Medium),
-            "high" => Some(ReasoningEffort::High),
-            _ => None,
-        })
+fn parse_reasoning_controls(
+    enable_thinking: Option<bool>,
+    effort: Option<&str>,
+) -> Result<(Option<bool>, Option<ReasoningEffort>)> {
+    let effort = effort.map(str::parse).transpose()?;
+    resolve_reasoning_controls(enable_thinking, effort)?;
+    Ok((enable_thinking, effort))
+}
+
+fn insert_reasoning_content(output: &mut IndexMap<String, MessageContent>, message: &Message) {
+    if let Some(reasoning_content) = &message.reasoning_content {
+        output.insert(
+            "reasoning_content".to_string(),
+            Either::Left(reasoning_content.clone()),
+        );
+    }
 }
 
 pub struct ChatCompletionParseContext {
@@ -572,8 +583,24 @@ pub async fn parse_request(
     // Validate that the requested model matches the loaded model
     validate_model_name(&oairequest.model, state.clone())?;
 
-    // Parse reasoning effort for Harmony-format models
-    let reasoning_effort = parse_reasoning_effort(&oairequest.reasoning_effort);
+    let mut enable_thinking = oairequest.enable_thinking;
+    let mut reasoning_effort = oairequest.reasoning_effort.clone();
+    if let Some(kwargs) = &oairequest.chat_template_kwargs {
+        for (key, value) in kwargs {
+            match (key.as_str(), value) {
+                ("enable_thinking", Value::Bool(flag)) if enable_thinking.is_none() => {
+                    enable_thinking = Some(*flag);
+                }
+                ("reasoning_effort", Value::String(effort)) if reasoning_effort.is_none() => {
+                    reasoning_effort = Some(effort.clone());
+                }
+                ("enable_thinking" | "reasoning_effort", _) => {}
+                _ => tracing::warn!("Ignoring unsupported chat_template_kwargs entry `{key}`"),
+            }
+        }
+    }
+    let (enable_thinking, reasoning_effort) =
+        parse_reasoning_controls(enable_thinking, reasoning_effort.as_deref())?;
 
     let mut normalized_tools = match tool_surface {
         OpenAiToolSurface::ChatCompletions => {
@@ -608,18 +635,11 @@ pub async fn parse_request(
                 let content = match message.content.as_deref() {
                     Some(content) => content.clone(),
                     None => {
-                        // Handle tool call
-                        let calls = message
-                            .tool_calls
-                            .as_ref()
-                            .context(
-                                "No content was provided, expected tool calls to be provided.",
-                            )?
-                            .iter()
-                            .map(|call| &call.function)
-                            .collect::<Vec<_>>();
-
-                        Either::Left(serde_json::to_string(&calls)?)
+                        // Templates render tool_calls themselves; HF treats a missing content as empty text
+                        message.tool_calls.as_ref().context(
+                            "No content was provided, expected tool calls to be provided.",
+                        )?;
+                        Either::Left(String::new())
                     }
                 };
 
@@ -631,6 +651,7 @@ pub async fn parse_request(
                         > = IndexMap::new();
                         message_map.insert("role".to_string(), Either::Left(message.role.clone()));
                         message_map.insert("content".to_string(), Either::Left(content.clone()));
+                        insert_reasoning_content(&mut message_map, &message);
 
                         // Add tool_calls for assistant messages that have them
                         if let Some(ref tool_calls) = message.tool_calls {
@@ -698,8 +719,10 @@ pub async fn parse_request(
                                 String,
                                 Either<String, Vec<IndexMap<String, Value>>>,
                             > = IndexMap::new();
-                            message_map.insert("role".to_string(), Either::Left(message.role));
+                            message_map
+                                .insert("role".to_string(), Either::Left(message.role.clone()));
                             message_map.insert("content".to_string(), Either::Left(content));
+                            insert_reasoning_content(&mut message_map, &message);
                             messages.push(message_map);
                             continue;
                         }
@@ -848,7 +871,7 @@ pub async fn parse_request(
                             || !audio_urls_iter.is_empty()
                             || !video_urls_iter.is_empty()
                         {
-                            if let Ok(ModelCategory::Multimodal { prefixer }) =
+                            if let Ok(ModelCategory::Multimodal { prefixer, .. }) =
                                 state.get_model_category(None)
                             {
                                 let mut prefixed = text_content;
@@ -947,9 +970,13 @@ pub async fn parse_request(
                 }
 
                 // Parse videos
+                let video_sampling = match state.get_model_category(None) {
+                    Ok(ModelCategory::Multimodal { video_sampling, .. }) => Some(video_sampling),
+                    _ => None,
+                };
                 let mut videos = Vec::new();
                 for url_unparsed in video_urls {
-                    let video = parse_video_url_for_server(&url_unparsed, None)
+                    let video = parse_video_url_for_server(&url_unparsed, video_sampling)
                         .await
                         .context(format!("Failed to parse video resource: {url_unparsed}"))?;
                     videos.push(video);
@@ -960,13 +987,13 @@ pub async fn parse_request(
                     images,
                     audios,
                     videos,
-                    enable_thinking: oairequest.enable_thinking,
+                    enable_thinking,
                     reasoning_effort,
                 }
             } else {
                 RequestMessage::Chat {
                     messages,
-                    enable_thinking: oairequest.enable_thinking,
+                    enable_thinking,
                     reasoning_effort,
                 }
             }
@@ -980,7 +1007,7 @@ pub async fn parse_request(
             messages.push(message_map);
             RequestMessage::Chat {
                 messages,
-                enable_thinking: oairequest.enable_thinking,
+                enable_thinking,
                 reasoning_effort,
             }
         }
@@ -1021,6 +1048,7 @@ pub async fn parse_request(
     Ok((
         Request::Normal(Box::new(NormalRequest {
             id: state.next_request_id(),
+            queued_at: None,
             messages,
             sampling_params: SamplingParams {
                 temperature: oairequest.temperature,
@@ -1033,10 +1061,12 @@ pub async fn parse_request(
                 repetition_penalty: oairequest.repetition_penalty,
                 max_len: oairequest.max_tokens,
                 stop_toks,
+                ignore_eos: oairequest.ignore_eos,
                 logits_bias: oairequest.logit_bias,
                 n_choices: oairequest.n_choices,
                 dry_params,
             },
+            seed: oairequest.seed,
             response: tx,
             return_logprobs: oairequest.logprobs,
             is_streaming,
@@ -1065,6 +1095,7 @@ pub async fn parse_request(
             } else {
                 Some(oairequest.model.clone())
             },
+            adapter: oairequest.adapter.map(Into::into),
             truncate_sequence: oairequest.truncate_sequence.unwrap_or(false),
         })),
         is_streaming,
@@ -1077,15 +1108,39 @@ pub async fn parse_request(
     tag = "Mistral.rs",
     path = "/v1/chat/completions",
     request_body = ChatCompletionRequest,
-    responses((status = 200, description = "Chat completions"))
+    responses((
+        status = 200,
+        description = "Chat completion JSON or server-sent event chunks",
+        content(
+            (ChatCompletionResponseBody = "application/json"),
+            (ChatCompletionChunkResponseBody = "text/event-stream")
+        )
+    ))
 )]
 pub async fn chatcompletions(
     State(state): ExtractedMistralRsState,
     Extension(agentic_defaults): Extension<AgenticDefaults>,
     Extension(skill_store): Extension<Arc<SkillStore>>,
-    Json(mut oairequest): Json<ChatCompletionRequest>,
+    stream_outcome: Option<Extension<StreamOutcomeHandle>>,
+    payload: Result<Json<ChatCompletionRequest>, JsonRejection>,
 ) -> ChatCompletionResponder {
+    let mut oairequest = match payload {
+        Ok(Json(request)) => request,
+        Err(error) => {
+            return ChatCompletionResponder::ValidationError(Box::new(
+                ApiError::from_json_rejection(error),
+            ));
+        }
+    };
     let (tx, mut rx) = create_response_channel(None);
+    let requested_model = oairequest.model.clone();
+
+    if let Err(error) =
+        resolve_lora_adapter_model(&state, &mut oairequest.model, &mut oairequest.adapter)
+    {
+        return ChatCompletionResponder::ValidationError(Box::new(error));
+    }
+    let model_override = request_model_override(requested_model, &oairequest.model);
 
     // Apply server-level default for max_tool_rounds (per-request value takes priority)
     oairequest.max_tool_rounds = oairequest
@@ -1143,7 +1198,7 @@ pub async fn chatcompletions(
     .await
     {
         Ok(x) => x,
-        Err(e) => return handle_error(state, e.into()),
+        Err(e) => return handle_completion_validation_error(state, e.into()),
     };
 
     if let Err(e) = send_request_with_model(&state, request, model_id.as_deref()).await {
@@ -1151,9 +1206,21 @@ pub async fn chatcompletions(
     }
 
     if is_streaming {
-        ChatCompletionResponder::Sse(create_streamer(rx, state, None, None))
+        let on_chunk = model_override.map(|model| {
+            Box::new(move |mut response: ChatCompletionChunkResponse| {
+                apply_model_override(&mut response.model, Some(&model));
+                response
+            }) as ChatCompletionOnChunkCallback
+        });
+        ChatCompletionResponder::Sse(create_streamer_with_outcome(
+            rx,
+            state,
+            on_chunk,
+            None,
+            stream_outcome.map(|Extension(handle)| handle),
+        ))
     } else {
-        process_non_streaming_response(&mut rx, state).await
+        process_non_streaming_response_with_model(&mut rx, state, model_override.as_deref()).await
     }
 }
 
@@ -1172,7 +1239,18 @@ pub fn create_streamer(
     on_chunk: Option<ChatCompletionOnChunkCallback>,
     on_done: Option<ChatCompletionOnDoneCallback>,
 ) -> Sse<KeepAliveStream<ChatCompletionStreamer>> {
-    let streamer = base_create_streamer(rx, state, on_chunk, on_done);
+    create_streamer_with_outcome(rx, state, on_chunk, on_done, None)
+}
+
+/// Like [`create_streamer`], also reporting usage and errors to the access log at stream end.
+pub fn create_streamer_with_outcome(
+    rx: Receiver<Response>,
+    state: SharedMistralRsState,
+    on_chunk: Option<ChatCompletionOnChunkCallback>,
+    on_done: Option<ChatCompletionOnDoneCallback>,
+    outcome: Option<StreamOutcomeHandle>,
+) -> Sse<KeepAliveStream<ChatCompletionStreamer>> {
+    let streamer = base_create_streamer(rx, state, on_chunk, on_done, outcome);
     let keep_alive_interval = get_keep_alive_interval();
 
     Sse::new(streamer)
@@ -1183,6 +1261,14 @@ pub fn create_streamer(
 pub async fn process_non_streaming_response(
     rx: &mut Receiver<Response>,
     state: SharedMistralRsState,
+) -> ChatCompletionResponder {
+    process_non_streaming_response_with_model(rx, state, None).await
+}
+
+async fn process_non_streaming_response_with_model(
+    rx: &mut Receiver<Response>,
+    state: SharedMistralRsState,
+    model_override: Option<&str>,
 ) -> ChatCompletionResponder {
     let mut tool_call_records = Vec::new();
     let mut pending_args = std::collections::HashMap::new();
@@ -1224,6 +1310,7 @@ pub async fn process_non_streaming_response(
                 if !files.is_empty() {
                     response.files = Some(files);
                 }
+                apply_model_override(&mut response.model, model_override);
                 return match_responses(state, Response::Done(response));
             }
             Some(Response::ModelError(msg, response)) => {
@@ -1234,6 +1321,7 @@ pub async fn process_non_streaming_response(
                 if !files.is_empty() {
                     response.files = Some(files);
                 }
+                apply_model_override(&mut response.model, model_override);
                 return match_responses(state, Response::ModelError(msg, response));
             }
             Some(response) => return match_responses(state, response),
@@ -1274,5 +1362,53 @@ pub fn match_responses(state: SharedMistralRsState, response: Response) -> ChatC
         Response::BlockDenoisingProgress(_) => unreachable!(),
         Response::AgenticToolApprovalRequired { .. } => unreachable!(),
         Response::File(_) => unreachable!(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reasoning_controls_normalize_http_values() {
+        assert_eq!(parse_reasoning_controls(None, None).unwrap(), (None, None));
+        assert_eq!(
+            parse_reasoning_controls(None, Some(" NONE ")).unwrap(),
+            (None, Some(ReasoningEffort::Off))
+        );
+        assert_eq!(
+            parse_reasoning_controls(None, Some("XHIGH")).unwrap(),
+            (None, Some(ReasoningEffort::XHigh))
+        );
+    }
+
+    #[test]
+    fn reasoning_controls_validate_http_values() {
+        assert!(parse_reasoning_controls(None, Some("extreme")).is_err());
+        assert!(parse_reasoning_controls(Some(true), Some("off")).is_err());
+        assert!(parse_reasoning_controls(Some(false), Some("high")).is_err());
+    }
+
+    #[test]
+    fn assistant_reasoning_content_reaches_the_core_message() {
+        let message: Message = serde_json::from_value(json!({
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [{
+                "id": "call-1",
+                "type": "function",
+                "function": {"name": "get_weather", "arguments": "{}"}
+            }],
+            "reasoning_content": "Need weather"
+        }))
+        .unwrap();
+        let mut output = IndexMap::new();
+
+        insert_reasoning_content(&mut output, &message);
+
+        assert_eq!(
+            output.get("reasoning_content"),
+            Some(&Either::Left("Need weather".to_string()))
+        );
     }
 }

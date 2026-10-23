@@ -248,6 +248,34 @@ pub struct GgufDeviceMapLoaderInner<'a, 'f> {
 }
 
 impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
+    fn activation_model_config(
+        &self,
+        _config: &str,
+    ) -> Result<crate::pipeline::ActivationModelConfig> {
+        let metadata = self.model.get_metadata();
+        let intermediate_size =
+            usize::try_from(metadata[&format!("{}.feed_forward_length", self.arch)].to_u64()?)?;
+        let active_experts = metadata
+            .get(&format!("{}.expert_used_count", self.arch))
+            .map(|value| {
+                value
+                    .to_u64()
+                    .and_then(|count| usize::try_from(count).map_err(candle_core::Error::wrap))
+            })
+            .transpose()?
+            .unwrap_or(1)
+            .max(1);
+        let intermediate_size = intermediate_size
+            .checked_mul(active_experts)
+            .ok_or_else(|| anyhow::anyhow!("GGUF activation width overflow"))?;
+        let vocab_size = self.model.tensor_info("token_embd.weight")?.shape.dims()[0];
+        Ok(crate::pipeline::ActivationModelConfig {
+            intermediate_size,
+            vocab_size,
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         _config: &str,
@@ -277,6 +305,7 @@ impl DeviceMappedModelLoader for GgufDeviceMapLoaderInner<'_, '_> {
         _config: &str,
         _dtype: DType,
         _weight_pack_factor: usize,
+        _quantization: Option<&crate::pipeline::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let size_in_bytes = match self.arch {

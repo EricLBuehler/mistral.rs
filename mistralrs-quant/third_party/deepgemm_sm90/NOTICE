@@ -1,0 +1,41 @@
+TensorRT-LLM DeepGEMM SM90 provider
+
+The official SM90 1D2D kernel family is imported from DeepGEMM 2.6.1:
+https://github.com/deepseek-ai/DeepGEMM/commit/559d79fb6994a58b8a15b4b93bf13ccc16edf247
+
+DeepGEMM
+Copyright (c) 2025 DeepSeek
+
+Its device runtime uses CUTLASS commit:
+https://github.com/NVIDIA/cutlass/commit/f3fde58372d33e9a5650ba7b80fc48b3b49d40c8
+
+CUTLASS
+Copyright (c) 2017 - 2025 NVIDIA CORPORATION & AFFILIATES
+
+This directory contains code adapted from the TensorRT-LLM DeepGEMM integration
+distributed by FlashInfer.
+
+FlashInfer
+Copyright 2025-2026 NVIDIA
+Copyright 2023-2026 FlashInfer community (https://flashinfer.ai/)
+
+FlashInfer source revision:
+https://github.com/flashinfer-ai/flashinfer/commit/4927c0e15cb63a2abb6df09019c39a172222f0eb
+
+The files under include/deep_gemm retain their original copyright and SPDX
+headers except for integration changes documented above. Portions are Copyright
+(c) 2025 DeepSeek and licensed under the MIT License. Portions are Copyright
+(c) 2025 NVIDIA CORPORATION & AFFILIATES and licensed under the Apache License,
+Version 2.0.
+
+The mistral.rs provider and ABI wrapper are maintained by the mistral.rs
+project. They adapt cache placement, error propagation, shape planning, and
+CUDA graph preparation for integration with the mistral.rs runtime.
+
+The BF16-to-FP8 1x128 quantization kernel in mistralrs_deepgemm_sm90.cu is
+adapted from TensorRT-LLM's fp8_blockscale_gemm_kernel.cuh as distributed at
+the FlashInfer revision above. It is Copyright (c) 2025 NVIDIA CORPORATION and
+licensed under the Apache License, Version 2.0.
+
+See LICENSE-MIT, LICENSE-APACHE, and LICENSE-BSD-3-CLAUSE in this directory for
+the applicable terms.

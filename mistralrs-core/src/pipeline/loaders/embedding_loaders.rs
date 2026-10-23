@@ -22,7 +22,7 @@ use crate::{
     pipeline::{isq::IsqModelLoader, text_models_inputs_processor::FlashParams, IsqModel},
     utils::varbuilder_utils::DeviceForLoadTensor,
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use candle_core::{DType, Device, Tensor};
 use mistralrs_quant::log::once_log_debug;
 
@@ -150,6 +150,16 @@ pub enum EmbeddingModulePaths {
 }
 
 impl EmbeddingModulePaths {
+    pub(crate) fn runtime_size(&self, dtype: DType) -> Result<usize> {
+        match self {
+            Self::Dense { model, .. } => {
+                super::checkpoint_runtime_size(std::slice::from_ref(model), dtype)?
+                    .context("Expected safetensors weights for embedding dense module")
+            }
+            _ => Ok(0),
+        }
+    }
+
     pub fn serialize_modules(modules: &[EmbeddingModulePaths]) -> String {
         #[derive(Serialize)]
         struct OutputModule {
@@ -306,6 +316,10 @@ impl EmbeddingModelLoader for AutoEmbeddingLoader {
 }
 
 impl IsqModelLoader for AutoEmbeddingLoader {
+    fn promoted_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        Self::get_loader(config)?.promoted_isq_predicates(config)
+    }
+
     fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
         Self::get_loader(config)?.immediate_isq_predicates(config)
     }
@@ -321,17 +335,23 @@ impl IsqModelLoader for AutoEmbeddingLoader {
 }
 
 impl DeviceMappedModelLoader for AutoEmbeddingLoader {
+    fn activation_model_config(&self, config: &str) -> Result<super::ActivationModelConfig> {
+        Self::get_loader(config)?.activation_model_config(config)
+    }
+
     fn non_mapped_size_in_bytes(
         &self,
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         Self::get_loader(config)?.non_mapped_size_in_bytes(
             config,
             dtype,
             weight_pack_factor,
+            quantization,
             _matformer_config,
         )
     }
@@ -407,6 +427,10 @@ impl EmbeddingModelLoader for EmbeddingGemmaLoader {
 }
 
 impl IsqModelLoader for EmbeddingGemmaLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![Regex::new(r"^embed_tokens\.weight$")?])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -428,6 +452,17 @@ impl IsqModelLoader for EmbeddingGemmaLoader {
 }
 
 impl DeviceMappedModelLoader for EmbeddingGemmaLoader {
+    fn activation_model_config(&self, config: &str) -> Result<super::ActivationModelConfig> {
+        let cfg: EmbeddingGemmaConfig = serde_json::from_str(config)?;
+        Ok(super::ActivationModelConfig {
+            intermediate_size: cfg.intermediate_size,
+            // Embedding models have no vocabulary projection.
+            vocab_size: 0,
+            custom_prefill_mask: true,
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -463,12 +498,19 @@ impl DeviceMappedModelLoader for EmbeddingGemmaLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: EmbeddingGemmaConfig = serde_json::from_str(config)?;
 
         let elems = {
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
+            let embed_tokens_pack_factor = super::promoted_tensor_pack_factor(
+                _quantization,
+                "embed_tokens.weight",
+                dtype,
+                weight_pack_factor,
+            )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
             let norm = cfg.hidden_size;
             embed_tokens + norm
         };
@@ -588,6 +630,10 @@ impl EmbeddingModelLoader for Qwen3EmbeddingLoader {
 }
 
 impl IsqModelLoader for Qwen3EmbeddingLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![Regex::new(r"^embed_tokens\.weight$")?])
+    }
+
     fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![
             Regex::new(r"lm_head\.(weight|bias)$")?,
@@ -608,6 +654,19 @@ impl IsqModelLoader for Qwen3EmbeddingLoader {
 }
 
 impl DeviceMappedModelLoader for Qwen3EmbeddingLoader {
+    fn activation_model_config(&self, config: &str) -> Result<super::ActivationModelConfig> {
+        let cfg: Qwen3EmbeddingConfig = serde_json::from_str(config)?;
+        Ok(super::ActivationModelConfig {
+            intermediate_size: cfg.intermediate_size,
+            // Embedding models have no vocabulary projection.
+            vocab_size: 0,
+            custom_prefill_mask: true,
+            attention_features: (!(cfg.use_sliding_window && cfg.sliding_window.is_some()))
+                .then_some(Default::default()),
+            ..Default::default()
+        })
+    }
+
     fn mapped_max_act_size_elems(
         &self,
         config: &str,
@@ -642,19 +701,20 @@ impl DeviceMappedModelLoader for Qwen3EmbeddingLoader {
         config: &str,
         dtype: DType,
         weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
         _matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Qwen3EmbeddingConfig = serde_json::from_str(config)?;
         let elems = {
-            let embed_tokens = cfg.hidden_size * cfg.vocab_size / weight_pack_factor;
-            // If embeddings are tied and no packing, reuse weights -> no separate lm_head needed
-            let lm_head = if !cfg.tie_word_embeddings || weight_pack_factor != 1 {
-                cfg.hidden_size * cfg.vocab_size / weight_pack_factor
-            } else {
-                0
-            };
+            let embed_tokens_pack_factor = super::promoted_tensor_pack_factor(
+                _quantization,
+                "embed_tokens.weight",
+                dtype,
+                weight_pack_factor,
+            )?;
+            let embed_tokens = cfg.hidden_size * cfg.vocab_size / embed_tokens_pack_factor;
             let norm = cfg.hidden_size;
-            embed_tokens + lm_head + norm
+            embed_tokens + norm
         };
         Ok(elems * dtype.size_in_bytes())
     }
@@ -727,5 +787,151 @@ impl DeviceMappedModelLoader for Qwen3EmbeddingLoader {
         };
 
         Ok(Box::new(cfg))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use crate::pipeline::{AdapterPaths, EmbeddingModelPaths, ModelPaths};
+    use safetensors::{serialize_to_file, tensor::Dtype, tensor::TensorView};
+
+    use super::*;
+
+    #[test]
+    fn dense_modules_have_independent_weight_namespaces_and_budgets() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let transformer = dir.path().join("model.safetensors");
+        let weight = [0u8; 16];
+        serialize_to_file(
+            HashMap::from([
+                (
+                    "layers.0.proj.weight",
+                    TensorView::new(Dtype::BF16, vec![4, 2], &weight)?,
+                ),
+                (
+                    "layers.1.proj.weight",
+                    TensorView::new(Dtype::BF16, vec![4, 2], &weight)?,
+                ),
+            ]),
+            None,
+            &transformer,
+        )?;
+        let mut modules = vec![EmbeddingModulePaths::Transformer {
+            path: String::new(),
+        }];
+        let mut flattened_paths = vec![transformer.clone()];
+        for (name, out_features, in_features) in [("2_Dense", 4, 2), ("3_Dense", 2, 4)] {
+            let module_dir = dir.path().join(name);
+            std::fs::create_dir(&module_dir)?;
+            let model = module_dir.join("model.safetensors");
+            let bias = vec![0u8; out_features * 2];
+            serialize_to_file(
+                HashMap::from([
+                    (
+                        "linear.weight",
+                        TensorView::new(Dtype::BF16, vec![out_features, in_features], &weight)?,
+                    ),
+                    (
+                        "linear.bias",
+                        TensorView::new(Dtype::BF16, vec![out_features], &bias)?,
+                    ),
+                ]),
+                None,
+                &model,
+            )?;
+            flattened_paths.push(model.clone());
+            modules.push(EmbeddingModulePaths::Dense {
+                path: name.into(),
+                config: module_dir.join("config.json"),
+                model,
+            });
+        }
+        for filenames in [flattened_paths, vec![transformer.clone()]] {
+            let paths = EmbeddingModelPaths::new(
+                dir.path().join("tokenizer.json"),
+                dir.path().join("config.json"),
+                filenames,
+                AdapterPaths::None,
+                modules.clone(),
+            );
+            assert_eq!(
+                paths.get_weight_filenames(),
+                std::slice::from_ref(&transformer)
+            );
+            let sizes = super::super::checkpoint_device_map_sizes(
+                paths.get_weight_filenames(),
+                2,
+                DType::F32,
+                super::super::checkpoint_inventory::standard_layer_index,
+            )?
+            .unwrap();
+            assert_eq!(sizes.layer_sizes_in_bytes, [32, 32]);
+            assert_eq!(sizes.non_mapped_size_in_bytes, 0);
+            assert_eq!(sizes.total_model_size_in_bytes, 64);
+            let module_bytes = paths
+                .get_modules()
+                .unwrap()
+                .iter()
+                .map(|module| module.runtime_size(DType::F32))
+                .collect::<Result<Vec<_>>>()?;
+            assert_eq!(module_bytes, [0, 48, 40]);
+        }
+        Ok(())
+    }
+
+    fn assert_promotes_only_embedding_weight(predicates: &[Regex]) {
+        assert_eq!(predicates.len(), 1);
+        assert!(predicates
+            .iter()
+            .any(|predicate| predicate.is_match("embed_tokens.weight")));
+
+        for name in [
+            "lm_head.weight",
+            "lm_head.bias",
+            "model.embed_tokens.weight",
+            "embed_tokens.bias",
+            "embed_tokens.weight.extra",
+            "other_embed_tokens.weight",
+        ] {
+            assert!(
+                predicates.iter().all(|predicate| !predicate.is_match(name)),
+                "unexpected promoted match for {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn embedding_gemma_promotes_only_exact_embedding_weight() {
+        let predicates = EmbeddingGemmaLoader.promoted_isq_predicates("{}").unwrap();
+        assert_promotes_only_embedding_weight(&predicates);
+    }
+
+    #[test]
+    fn qwen3_embedding_promotes_only_exact_embedding_weight() {
+        let predicates = Qwen3EmbeddingLoader.promoted_isq_predicates("{}").unwrap();
+        assert_promotes_only_embedding_weight(&predicates);
+    }
+
+    #[test]
+    fn auto_embedding_delegates_promoted_predicates() {
+        for (config, expected) in [
+            (
+                r#"{"architectures":["Gemma3TextModel"]}"#,
+                EmbeddingGemmaLoader.promoted_isq_predicates("{}").unwrap(),
+            ),
+            (
+                r#"{"architectures":["Qwen3ForCausalLM"]}"#,
+                Qwen3EmbeddingLoader.promoted_isq_predicates("{}").unwrap(),
+            ),
+        ] {
+            let actual = AutoEmbeddingLoader.promoted_isq_predicates(config).unwrap();
+            assert_eq!(
+                actual.iter().map(Regex::as_str).collect::<Vec<_>>(),
+                expected.iter().map(Regex::as_str).collect::<Vec<_>>()
+            );
+            assert_promotes_only_embedding_weight(&actual);
+        }
     }
 }

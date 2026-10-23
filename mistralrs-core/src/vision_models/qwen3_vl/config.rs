@@ -39,7 +39,7 @@ pub struct VisionConfig {
     pub intermediate_size: usize,
     #[serde(default = "default_num_heads")]
     pub num_heads: usize,
-    #[serde(default = "default_in_channels")]
+    #[serde(default = "default_in_channels", alias = "in_channels")]
     pub in_chans: usize,
     #[serde(default = "default_patch_size")]
     pub patch_size: usize,
@@ -91,4 +91,15 @@ pub struct Config {
     pub tie_word_embeddings: bool,
     /// Top-level quantization_config takes precedence
     pub quantization_config: Option<QuantizedConfig>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vision_config_accepts_transformers_in_channels() {
+        let config: VisionConfig = serde_json::from_str(r#"{"in_channels": 5}"#).unwrap();
+        assert_eq!(config.in_chans, 5);
+    }
 }

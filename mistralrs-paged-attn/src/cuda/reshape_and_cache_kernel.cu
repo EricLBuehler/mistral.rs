@@ -75,8 +75,7 @@ __global__ void reshape_and_cache_kernel(
       value_cache[tgt_value_idx] = tgt_value;
     } else {
       key_cache[tgt_key_idx] =
-          vllm::fp8::scaled_convert<cache_t, scalar_t, kv_dt>(tgt_key,
-                                                              *k_scale);
+          vllm::fp8::scaled_convert<cache_t, scalar_t, kv_dt>(tgt_key, *k_scale);
       value_cache[tgt_value_idx] =
           vllm::fp8::scaled_convert<cache_t, scalar_t, kv_dt>(tgt_value,
                                                               *v_scale);

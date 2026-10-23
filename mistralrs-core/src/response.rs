@@ -33,7 +33,7 @@ pub struct ResponseMessage {
     pub content: Option<String>,
     pub role: String,
     pub tool_calls: Option<Vec<ToolCallResponse>>,
-    /// Reasoning/analysis content from Harmony format (separate from final content).
+    /// Reasoning/analysis content separated from final content.
     /// This contains chain-of-thought reasoning that is not intended for end users.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
@@ -49,7 +49,7 @@ pub struct Delta {
     pub content: Option<String>,
     pub role: String,
     pub tool_calls: Option<Vec<ToolCallResponse>>,
-    /// Reasoning/analysis content delta from Harmony format.
+    /// Reasoning/analysis content delta.
     /// This contains incremental chain-of-thought reasoning.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning_content: Option<String>,
@@ -86,6 +86,8 @@ generate_repr!(Logprobs);
 /// Chat completion choice.
 pub struct Choice {
     pub finish_reason: String,
+    #[serde(skip)]
+    pub stop_sequence: Option<String>,
     pub index: usize,
     pub message: ResponseMessage,
     pub logprobs: Option<Logprobs>,
@@ -99,6 +101,8 @@ generate_repr!(Choice);
 /// Chat completion streaming chunk choice.
 pub struct ChunkChoice {
     pub finish_reason: Option<String>,
+    #[serde(skip)]
+    pub stop_sequence: Option<String>,
     pub index: usize,
     pub delta: Delta,
     pub logprobs: Option<ResponseLogprob>,
@@ -122,11 +126,25 @@ generate_repr!(CompletionChunkChoice);
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
+/// OpenAI compatible prompt token breakdown.
+pub struct PromptTokensDetails {
+    /// Prompt tokens served from the prefix cache, not recomputed.
+    pub cached_tokens: usize,
+}
+
+generate_repr!(PromptTokensDetails);
+
+#[cfg_attr(feature = "pyo3_macros", pyclass)]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
+#[derive(Debug, Clone, Serialize)]
 /// OpenAI compatible (superset) usage during a request.
 pub struct Usage {
     pub completion_tokens: usize,
     pub prompt_tokens: usize,
     pub total_tokens: usize,
+    /// Present when some prompt tokens were served from the prefix cache.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens_details: Option<PromptTokensDetails>,
     pub avg_tok_per_sec: f32,
     pub avg_prompt_tok_per_sec: f32,
     pub avg_compl_tok_per_sec: f32,
@@ -167,6 +185,9 @@ pub struct ChatCompletionResponse {
     pub system_fingerprint: String,
     pub object: String,
     pub usage: Usage,
+    /// Exact LoRA generation used for this response.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adapter_generation: Option<String>,
     /// Ordered record of all tool calls made during the agentic loop.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agentic_tool_calls: Option<Vec<AgenticToolCallRecord>>,
@@ -192,6 +213,9 @@ pub struct ChatCompletionChunkResponse {
     pub system_fingerprint: String,
     pub object: String,
     pub usage: Option<Usage>,
+    /// Exact LoRA generation used for this chunk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adapter_generation: Option<String>,
     /// Set on the final chunk so streaming clients can read it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
@@ -224,6 +248,9 @@ pub struct CompletionResponse {
     pub system_fingerprint: String,
     pub object: String,
     pub usage: Usage,
+    /// Exact LoRA generation used for this response.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adapter_generation: Option<String>,
 }
 
 generate_repr!(CompletionResponse);
@@ -239,6 +266,9 @@ pub struct CompletionChunkResponse {
     pub model: String,
     pub system_fingerprint: String,
     pub object: String,
+    /// Exact LoRA generation used for this chunk.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adapter_generation: Option<String>,
 }
 
 generate_repr!(CompletionChunkResponse);
@@ -317,6 +347,10 @@ pub struct BlockDenoisingProgress {
     pub finished: bool,
     pub final_block: bool,
 }
+
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct ServiceUnavailableError(pub String);
 
 /// The response enum contains 3 types of variants:
 /// - Error (-Error suffix)

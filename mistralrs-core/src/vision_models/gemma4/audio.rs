@@ -219,7 +219,7 @@ impl ClippableLinear {
         out_features: usize,
         vb: ShardedVarBuilder,
     ) -> Result<Self> {
-        let has_linear_prefix = vb.pp("linear").contains_tensor("weight");
+        let has_linear_prefix = super::has_clippable_linear_prefix(&vb);
         let linear_vb = if has_linear_prefix {
             vb.pp("linear")
         } else {

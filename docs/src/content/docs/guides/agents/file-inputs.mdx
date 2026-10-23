@@ -7,15 +7,15 @@ import { Tabs, TabItem } from '@astrojs/starlight/components';
 
 mistral.rs supports OpenAI-compatible user file inputs on the server API and local SDKs:
 
-- [`POST /v1/files`](/mistral.rs/reference/http-api-generated/operations/upload_file/) multipart uploads with `purpose="user_data"`.
-- [`POST /v1/responses`](/mistral.rs/reference/http-api-generated/operations/create_response/) `input_file` content parts with `file_id`, `file_data`, or `file_url`.
-- [`POST /v1/chat/completions`](/mistral.rs/reference/http-api-generated/operations/chatcompletions/) `file` content parts with `file_id` or `file_data`.
-- Rust SDK [`InputFile`](/mistral.rs/reference/rust-sdk/) on `RequestBuilder::with_input_file(...)`.
-- Python SDK [`InputFile`](/mistral.rs/reference/python/files/) on `ChatCompletionRequest.input_files`.
+- [`POST /v1/files`](/reference/http-api-generated/operations/upload_file/) multipart uploads with `purpose="user_data"`.
+- [`POST /v1/responses`](/reference/http-api-generated/operations/create_response/) `input_file` content parts with `file_id`, `file_data`, or `file_url`.
+- [`POST /v1/chat/completions`](/reference/http-api-generated/operations/chatcompletions/) `file` content parts with `file_id` or `file_data`.
+- Rust SDK [`InputFile`](/reference/rust-sdk/) on `RequestBuilder::with_input_file(...)`.
+- Python SDK [`InputFile`](/reference/python/files/) on `ChatCompletionRequest.input_files`.
 
 Use this when a request needs to analyze or transform user-provided files, or when a Responses shell/Skill workflow should see request files in the session working directory.
 
-For field-level compatibility notes, see [OpenAI compatibility](/mistral.rs/reference/openai-compatibility/). For wire schema and lifetime rules, see [HTTP API file semantics](/mistral.rs/reference/http-api/#file-wire-schemas-and-semantics).
+For field-level compatibility notes, see [OpenAI compatibility](/reference/openai-compatibility/). For wire schema and lifetime rules, see [HTTP API file semantics](/reference/http-api/#file-wire-schemas-and-semantics).
 
 ## File handling
 
@@ -23,9 +23,9 @@ For field-level compatibility notes, see [OpenAI compatibility](/mistral.rs/refe
 
 Uploaded, inline, URL-fetched, and SDK-provided files are visible through the server file endpoints:
 
-- [`GET /v1/files`](/mistral.rs/reference/http-api-generated/operations/list_files/)
-- [`GET /v1/files/{id}`](/mistral.rs/reference/http-api-generated/operations/get_file/)
-- [`GET /v1/files/{id}/content`](/mistral.rs/reference/http-api-generated/operations/get_file_content/)
+- [`GET /v1/files`](/reference/http-api-generated/operations/list_files/)
+- [`GET /v1/files/{id}`](/reference/http-api-generated/operations/get_file/)
+- [`GET /v1/files/{id}/content`](/reference/http-api-generated/operations/get_file_content/)
 
 Text-like UTF-8 files get:
 
@@ -55,10 +55,10 @@ mistralrs serve --agent -m <model>
 
 Related setup guides:
 
-- [Build an agent](/mistral.rs/guides/agents/build-an-agent/) for the `--agent` preset.
-- [Code execution](/mistral.rs/guides/agents/enable-code-execution/) and [shell execution](/mistral.rs/guides/agents/enable-shell/) for workdir mounting behavior.
-- [OpenAI-compatible Skills](/mistral.rs/guides/agents/skills/) for using request files alongside uploaded Skills.
-- [Agentic runtime](/mistral.rs/guides/agents/agentic-runtime/) for streaming progress, sessions, and file events.
+- [Build an agent](/guides/agents/build-an-agent/) for the `--agent` preset.
+- [Code execution](/guides/agents/enable-code-execution/) and [shell execution](/guides/agents/enable-shell/) for workdir mounting behavior.
+- [OpenAI-compatible Skills](/guides/agents/skills/) for using request files alongside uploaded Skills.
+- [Agentic runtime](/guides/agents/agentic-runtime/) for streaming progress, sessions, and file events.
 
 ## Examples
 
@@ -164,9 +164,9 @@ async fn main() -> Result<()> {
 
 Full examples:
 
-- [Server API](/mistral.rs/examples/server/file-inputs/)
-- [Python SDK](/mistral.rs/examples/python/file-inputs/)
-- [Rust SDK](/mistral.rs/examples/rust/advanced/file-inputs/)
+- [Server API](/examples/server/file-inputs/)
+- [Python SDK](/examples/python/file-inputs/)
+- [Rust SDK](/examples/rust/advanced/file-inputs/)
 
 ## Other server shapes
 

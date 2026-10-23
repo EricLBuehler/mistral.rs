@@ -272,7 +272,20 @@ impl MmapedSafetensors {
     ///
     /// The unsafe is inherited from [`memmap2::MmapOptions`].
     pub unsafe fn multi<P: AsRef<Path>>(paths: &[P]) -> Result<Self> {
-        let mut routing = HashMap::new();
+        Self::multi_impl(paths, false)
+    }
+
+    /// Creates a wrapper around multiple memory mapped files and rejects duplicate tensor names.
+    ///
+    /// # Safety
+    ///
+    /// The unsafe is inherited from [`memmap2::MmapOptions`].
+    pub unsafe fn multi_unique<P: AsRef<Path>>(paths: &[P]) -> Result<Self> {
+        Self::multi_impl(paths, true)
+    }
+
+    unsafe fn multi_impl<P: AsRef<Path>>(paths: &[P], reject_duplicates: bool) -> Result<Self> {
+        let mut routing: HashMap<String, usize> = HashMap::new();
         let mut safetensors = vec![];
         for (index, p) in paths.iter().enumerate() {
             let p = p.as_ref();
@@ -289,6 +302,15 @@ impl MmapedSafetensors {
                 },
             )?;
             for k in data.get().0.names() {
+                if let Some(previous_index) = routing.get(k).copied().filter(|_| reject_duplicates)
+                {
+                    let previous = paths[previous_index].as_ref();
+                    candle_core::bail!(
+                        "Duplicate tensor key `{k}` found in `{}` and `{}`.",
+                        previous.display(),
+                        p.display()
+                    );
+                }
                 routing.insert(k.to_string(), index);
             }
             safetensors.push(data)
@@ -309,6 +331,13 @@ impl MmapedSafetensors {
             tensors.push(safetensors.get().0.tensors())
         }
         tensors.into_iter().flatten().collect()
+    }
+
+    pub(crate) fn tensors_by_file(&self) -> Vec<Vec<(String, st::TensorView<'_>)>> {
+        self.safetensors
+            .iter()
+            .map(|safetensors| safetensors.get().0.tensors())
+            .collect()
     }
 
     pub fn get(&self, name: &str) -> Result<st::TensorView<'_>> {
@@ -360,7 +389,7 @@ impl SimpleBackend for MmapedSafetensors {
 
 pub enum ShardedSafeTensors {
     Sharded {
-        b: MmapedSafetensors,
+        b: Arc<MmapedSafetensors>,
         make_dummy_regexes: Option<Arc<Vec<Regex>>>,
         predicate: Arc<dyn Fn(String) -> bool + Send + Sync + 'static>,
     },
@@ -402,7 +431,7 @@ impl ShardedSafeTensors {
         make_dummy_regexes: Option<Arc<Vec<Regex>>>,
         predicate: Arc<dyn Fn(String) -> bool + Send + Sync + 'static>,
     ) -> Result<ShardedVarBuilder> {
-        let tensors = MmapedSafetensors::multi(paths)?;
+        let tensors = Arc::new(MmapedSafetensors::multi(paths)?);
         // mirror get()'s gating so tensor_shape never reports a tensor get() would refuse
         let shapes = tensors
             .tensors()
@@ -413,13 +442,14 @@ impl ShardedSafeTensors {
             .map(|(name, view)| (name, view.shape().to_vec()))
             .collect();
         let backend = ShardedSafeTensors::Sharded {
-            b: tensors,
+            b: tensors.clone(),
             make_dummy_regexes,
             predicate,
         };
         Ok(
             ShardedVarBuilder::from_varbuilder(VarBuilderArgs::new_with_args(backend, dtype, dev))
-                .with_shapes(shapes),
+                .with_shapes(shapes)
+                .with_raw_safetensors(tensors),
         )
     }
 }
@@ -596,7 +626,7 @@ impl Backend for ShardedSafeTensors {
                     }
 
                     return SimpleBackend::get(
-                        b,
+                        b.as_ref(),
                         target_shape,
                         path,
                         Default::default(),
@@ -790,7 +820,7 @@ impl Backend for ShardedSafeTensors {
                         path: name.to_string(),
                     });
                 }
-                <MmapedSafetensors as SimpleBackend>::get_unchecked(b, name, dtype, dev)
+                <MmapedSafetensors as SimpleBackend>::get_unchecked(b.as_ref(), name, dtype, dev)
             }
             Self::SimpleBackend { b, .. } => b.as_ref().get_unchecked(name, dtype, dev),
         }

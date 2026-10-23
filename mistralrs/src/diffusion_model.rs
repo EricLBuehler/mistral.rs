@@ -32,7 +32,7 @@ impl DiffusionModelBuilder {
             force_cpu: false,
             token_source: TokenSource::CacheToken,
             hf_revision: None,
-            max_num_seqs: 32,
+            max_num_seqs: mistralrs_core::memory_plan::DEFAULT_MAX_NUM_SEQS,
             with_logging: false,
         }
     }

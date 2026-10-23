@@ -1,5 +1,6 @@
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use tokio::sync::RwLock;
 
 use mistralrs::{ModelGenerationDefaults, SearchEmbeddingModel};
@@ -109,16 +110,16 @@ impl GenerationParams {
             params.temperature = Some(0.0);
             params.top_k = Some(1);
             params.top_p = Some(1.0);
-        }
-
-        if let Some(temperature) = defaults.temperature {
-            params.temperature = Some(temperature);
-        }
-        if let Some(top_p) = defaults.top_p {
-            params.top_p = Some(top_p);
-        }
-        if let Some(top_k) = defaults.top_k.filter(|top_k| *top_k > 0) {
-            params.top_k = Some(top_k);
+        } else {
+            if let Some(temperature) = defaults.temperature {
+                params.temperature = Some(temperature);
+            }
+            if let Some(top_p) = defaults.top_p {
+                params.top_p = Some(top_p);
+            }
+            if let Some(top_k) = defaults.top_k.filter(|top_k| *top_k > 0) {
+                params.top_k = Some(top_k);
+            }
         }
         if let Some(max_tokens) = defaults.max_new_tokens {
             params.max_tokens = Some(max_tokens);
@@ -154,6 +155,28 @@ pub struct AppState {
     pub tool_dispatch_url: Option<String>,
 }
 
+const CHAT_FILE_EXT: &str = "json";
+const CHAT_SESSION_FILE_EXT: &str = "session.json";
+
+impl AppState {
+    pub fn chat_path(&self, chat_id: &str) -> Option<PathBuf> {
+        chat_file_path(&self.chats_dir, chat_id, CHAT_FILE_EXT)
+    }
+
+    pub fn chat_session_path(&self, chat_id: &str) -> Option<PathBuf> {
+        chat_file_path(&self.chats_dir, chat_id, CHAT_SESSION_FILE_EXT)
+    }
+}
+
+// ids are server-generated (`chat_<n>`), so anything else is a client trying to leave chats_dir
+fn chat_file_path(chats_dir: &str, chat_id: &str, ext: &str) -> Option<PathBuf> {
+    let valid = !chat_id.is_empty()
+        && chat_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    valid.then(|| Path::new(chats_dir).join(format!("{chat_id}.{ext}")))
+}
+
 // Request/Response types
 #[derive(Deserialize)]
 pub struct SelectRequest {
@@ -179,4 +202,45 @@ pub struct LoadChatRequest {
 pub struct RenameChatRequest {
     pub id: String,
     pub title: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{chat_file_path, GenerationParams, ModelGenerationDefaults};
+
+    #[test]
+    fn chat_paths_stay_inside_chats_dir() {
+        assert_eq!(
+            chat_file_path("/c", "chat_12", "json"),
+            Some(std::path::Path::new("/c").join("chat_12.json"))
+        );
+        for id in [
+            "",
+            "..",
+            "../x",
+            "../../home/u/.config/app",
+            "/etc/passwd",
+            "a/b",
+            "a\\b",
+            "chat_1.session",
+            "chat 1",
+        ] {
+            assert_eq!(chat_file_path("/c", id, "json"), None, "{id:?}");
+        }
+    }
+
+    #[test]
+    fn do_sample_false_overrides_sampling_defaults() {
+        let params = GenerationParams::from_model_defaults(Some(&ModelGenerationDefaults {
+            do_sample: Some(false),
+            temperature: Some(0.6),
+            top_k: Some(20),
+            top_p: Some(0.9),
+            ..Default::default()
+        }));
+
+        assert_eq!(params.temperature, Some(0.0));
+        assert_eq!(params.top_k, Some(1));
+        assert_eq!(params.top_p, Some(1.0));
+    }
 }

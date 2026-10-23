@@ -6,8 +6,7 @@ use std::sync::Arc;
 /// Mistral LLM, https://github.com/mistralai/mistral-src
 use candle_core::{DType, Device, Module, Result, Tensor};
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantMethodConfig, RowParallelLayer, ShardedVarBuilder,
-    UnquantLinear,
+    ColumnParallelLayer, QuantMethod, ReplicatedLayer, RowParallelLayer, ShardedVarBuilder,
 };
 
 use crate::{
@@ -15,18 +14,18 @@ use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     get_delta_from_lora_ab,
-    layers::{self, linear_no_bias, Activation, CausalMasker, MatMul, RmsNorm, Sdpa},
+    layers::{self, Activation, CausalMasker, MatMul, RmsNorm, Sdpa},
     layers_masker::PastKvLenCache,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
         Cache, EitherCache, IsqModel, ModelForwardContext, NormalLoadingMetadata, NormalModel,
     },
-    utils::progress::NiceProgressBar,
+    utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
     AnyMoeConfig, AnyMoeExpertType,
 };
 
-use super::{LLaVALLM, OrdinaryRoPE};
+use super::{rope_positions, LLaVALLM, OrdinaryRoPE};
 use crate::models::mistral::Config;
 
 #[derive(Clone)]
@@ -221,7 +220,7 @@ impl Attention {
         &self,
         xs: &Tensor,
         attention_mask: &AttentionMask,
-        ctx: &ModelForwardContext<'_>,
+        ctx: &mut ModelForwardContext<'_>,
         layer_idx: usize,
         kv_cache: &mut Option<(Tensor, Tensor)>,
         rope_parameter: (&Tensor, &Tensor),
@@ -238,14 +237,7 @@ impl Attention {
             .reshape((b_sz, q_len, self.num_kv_heads, self.head_dim))?
             .transpose(1, 2)?
             .contiguous()?;
-        let positions = ctx
-            .seqlen_offsets()
-            .iter()
-            .copied()
-            .map(u32::try_from)
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .map_err(candle_core::Error::wrap)?;
-        let positions = Tensor::from_vec(positions, ctx.seqlen_offsets().len(), q.device())?;
+        let positions = rope_positions(ctx, q.device(), q_len)?;
         q = OrdinaryRoPE::forward(&q, &positions, rope_parameter.0, rope_parameter.1)?;
         k = OrdinaryRoPE::forward(&k, &positions, rope_parameter.0, rope_parameter.1)?;
         let v = v
@@ -292,10 +284,6 @@ impl Attention {
                     attention_mask,
                     self.sliding_window,
                 )?;
-                let attn_mask = match attn_mask {
-                    Some(t) => AttentionMask::Custom(t),
-                    None => AttentionMask::None,
-                };
 
                 Sdpa.run_attention(
                     &q,
@@ -373,7 +361,7 @@ impl DecoderLayer {
         &self,
         xs: &Tensor,
         attention_mask: &AttentionMask,
-        ctx: &ModelForwardContext<'_>,
+        ctx: &mut ModelForwardContext<'_>,
         layer_idx: usize,
         kv_cache: &mut Option<(Tensor, Tensor)>,
     ) -> Result<Tensor> {
@@ -387,20 +375,20 @@ impl DecoderLayer {
             kv_cache,
             (&self.rope_parameter.0, &self.rope_parameter.1),
         )?;
-        xs = (xs + residual)?;
-        let residual = &xs;
-        let xs = self
-            .mlp
-            .forward(&xs.apply(&self.post_attention_layernorm)?)?;
+        let (residual, xs) = self
+            .post_attention_layernorm
+            .forward_add_rms_norm(&xs, residual)?;
+        let xs = self.mlp.forward(&xs)?;
         residual + xs
     }
 }
 
 pub struct Model {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
+    dtype: DType,
     sliding_window: Option<usize>,
     device: Device,
     cache: EitherCache,
@@ -445,10 +433,11 @@ impl Model {
             );
         }
         let mapper = normal_loading_metadata.mapper;
+        let dtype = vb_m.dtype();
         let embed_tokens = layers::embedding(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
             &cfg.quantization_config,
         )?;
         let head_dim = cfg.hidden_size / cfg.num_attention_heads;
@@ -492,16 +481,19 @@ impl Model {
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
         )?;
-        let lm_head = linear_no_bias(
+        let lm_head = ReplicatedLayer::new(
             cfg.hidden_size,
             cfg.vocab_size,
+            &None,
+            false,
             mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
         )?;
         Ok(Self {
             embed_tokens,
             layers,
             norm,
-            lm_head: Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(lm_head))?),
+            lm_head,
+            dtype,
             sliding_window: cfg.sliding_window,
             device: normal_loading_metadata.real_device,
             cache: EitherCache::Full(Cache::new(cfg.num_hidden_layers, false)),
@@ -523,11 +515,15 @@ impl Model {
     }
 
     pub fn get_input_embeddings(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.forward(input_ids)
+        self.embed_tokens.embedding_forward(input_ids, self.dtype)
     }
 
     pub fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
-        self.forward_embeds(input_ids, self.embed_tokens.forward(input_ids)?, ctx)
+        self.forward_embeds(
+            input_ids,
+            self.embed_tokens.embedding_forward(input_ids, self.dtype)?,
+            ctx,
+        )
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -567,13 +563,24 @@ impl Model {
         xs = xs.to_device(&self.device)?;
         xs = xs.apply(&self.norm)?;
         let xs = ctx.logits(&xs)?;
-        self.lm_head.forward(&xs)
+        ctx.lm_head(&*self.lm_head, &xs)
     }
 }
 
 impl IsqModel for Model {
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
-        Vec::new()
+        let uvb = UnVarBuilder::new();
+        let uvb_m = uvb.pp("model");
+        uvb_m.pp("embed_tokens").add(&self.embed_tokens);
+        uvb_m.pp("norm").add(&self.norm);
+        for (layer_idx, layer) in self.layers.iter().enumerate() {
+            let uvb_l = uvb_m.pp("layers").pp(layer_idx);
+            uvb_l.pp("input_layernorm").add(&layer.input_layernorm);
+            uvb_l
+                .pp("post_attention_layernorm")
+                .add(&layer.post_attention_layernorm);
+        }
+        uvb.to_safetensors()
     }
 }
 
@@ -754,5 +761,87 @@ impl AnyMoeBaseModelMixin for Model {
     }
     fn amoe_supported(&self) -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{HashMap, HashSet};
+
+    use super::*;
+
+    #[test]
+    fn residual_tensors_cover_llava_mistral_non_linear_state() -> Result<()> {
+        let cfg = Config {
+            vocab_size: 8,
+            hidden_size: 4,
+            intermediate_size: 8,
+            num_hidden_layers: 1,
+            num_attention_heads: 1,
+            num_key_value_heads: 1,
+            hidden_act: Activation::Silu,
+            max_position_embeddings: 16,
+            rms_norm_eps: 1e-5,
+            rope_theta: 10_000.0,
+            rope_parameters: None,
+            sliding_window: None,
+            head_dim: None,
+            quantization_config: None,
+            tie_word_embeddings: false,
+        };
+        let shapes = [
+            ("model.embed_tokens.weight", vec![8, 4]),
+            ("model.norm.weight", vec![4]),
+            ("model.layers.0.input_layernorm.weight", vec![4]),
+            ("model.layers.0.post_attention_layernorm.weight", vec![4]),
+            ("model.layers.0.self_attn.q_proj.weight", vec![4, 4]),
+            ("model.layers.0.self_attn.k_proj.weight", vec![4, 4]),
+            ("model.layers.0.self_attn.v_proj.weight", vec![4, 4]),
+            ("model.layers.0.self_attn.o_proj.weight", vec![4, 4]),
+            ("model.layers.0.mlp.gate_proj.weight", vec![8, 4]),
+            ("model.layers.0.mlp.up_proj.weight", vec![8, 4]),
+            ("model.layers.0.mlp.down_proj.weight", vec![4, 8]),
+            ("lm_head.weight", vec![8, 4]),
+        ];
+        let tensors = shapes
+            .into_iter()
+            .map(|(name, shape)| {
+                Ok((
+                    name.to_string(),
+                    Tensor::zeros(shape, DType::F32, &Device::Cpu)?,
+                ))
+            })
+            .collect::<Result<HashMap<_, _>>>()?;
+        let vb = mistralrs_quant::ShardedSafeTensors::wrap(tensors, DType::F32, Device::Cpu);
+        let metadata = NormalLoadingMetadata {
+            mapper: Box::new(crate::device_map::DummyDeviceMapper {
+                nm_device: Device::Cpu,
+            }),
+            loading_isq: false,
+            real_device: Device::Cpu,
+            multi_progress: Arc::new(indicatif::MultiProgress::new()),
+            matformer_slicing_config: None,
+            rope_pairing: None,
+        };
+        let model = Model::new(&cfg, vb, false, metadata, AttentionImplementation::Eager)?;
+        let names = model
+            .residual_tensors()
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect::<HashSet<_>>();
+
+        assert_eq!(
+            names,
+            [
+                "model.embed_tokens.weight",
+                "model.norm.weight",
+                "model.layers.0.input_layernorm.weight",
+                "model.layers.0.post_attention_layernorm.weight",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect()
+        );
+        Ok(())
     }
 }

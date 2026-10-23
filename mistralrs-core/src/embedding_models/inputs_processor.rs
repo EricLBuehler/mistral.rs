@@ -86,6 +86,7 @@ pub fn make_prompt_chunk<T: WithDType + Debug>(
             &seqlens_k,
             sliding_window,
             has_causal_attention,
+            false,
         )?
     } else {
         FlashParams::empty(has_causal_attention)

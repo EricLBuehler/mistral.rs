@@ -21,6 +21,34 @@ pub struct InputProcessorOutput {
     pub seq_indices: Vec<usize>,
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub(crate) struct InputsProcessorValidationError(pub(crate) String);
+
+pub(crate) fn is_inputs_processor_validation_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|source| {
+        source
+            .downcast_ref::<InputsProcessorValidationError>()
+            .is_some()
+    })
+}
+
+#[cfg(test)]
+mod validation_error_tests {
+    use super::*;
+
+    #[test]
+    fn detects_validation_errors_through_context() {
+        let error = anyhow::Error::new(InputsProcessorValidationError("bad input".to_string()))
+            .context("planning failed");
+
+        assert!(is_inputs_processor_validation_error(&error));
+        assert!(!is_inputs_processor_validation_error(&anyhow::anyhow!(
+            "internal failure"
+        )));
+    }
+}
+
 /// Processor: Prepare inputs for the model (potentially preparing the images if applicable)
 pub trait InputsProcessor {
     fn prepare_for_paged_prompt_planning(
@@ -70,6 +98,7 @@ pub mod text_models_inputs_processor {
     use crate::{
         device_map::DeviceMapper,
         flashinfer::{
+            decode_split_capacity_pages as flashinfer_decode_split_capacity_pages,
             decode_split_pages as flashinfer_decode_split_pages, flashinfer_metadata,
             flashinfer_paged_kv, flashinfer_tile_plan, flashinfer_view,
             make_paged_kv_decode_tensors, make_paged_kv_decode_tensors_from_lens,
@@ -78,31 +107,50 @@ pub mod text_models_inputs_processor {
         },
         get_mut_arcmutex,
         paged_attention::{
+            block_aligned_sliding_window_start,
             block_hash::{noncausal_mm_ranges, MultimodalAttentionPolicy},
+            block_table_rows::{BlockTableRanges, BlockTableRows, BlockTableSnapshot},
             AttentionBackendKind, KVCacheManager, _PAD_SLOT_ID,
         },
-        pipeline::RecurrentBatchKind,
+        pipeline::{recurrent_batch_kind_for_input, RecurrentBatchKind},
         sequence::Sequence,
+        AdapterLease,
     };
 
     use super::{InputProcessorOutput, InputsProcessor, InputsProcessorType};
 
-    const CUDA_GRAPH_CONTEXT_BUCKET_TOKENS: usize = 2048;
+    const CUDA_GRAPH_CONTEXT_BUCKET_MIN_TOKENS: usize = 512;
+    const CUDA_GRAPH_DECODE_CONTEXT_FLOOR_TOKENS: usize = 2048;
+
+    fn cuda_graph_context_bucket_tokens(
+        required_tokens: usize,
+        max_context_len: Option<usize>,
+    ) -> usize {
+        let required_tokens = required_tokens.max(1);
+        let bucket = required_tokens
+            .max(CUDA_GRAPH_CONTEXT_BUCKET_MIN_TOKENS)
+            .checked_next_power_of_two()
+            .unwrap_or(usize::MAX);
+        max_context_len
+            .map(|limit| bucket.min(limit.max(required_tokens)))
+            .unwrap_or(bucket)
+    }
 
     fn cuda_graph_block_table_len_with_cap(
         blocks: usize,
         block_size: usize,
         enable_cuda_graph_padding: bool,
+        live_context_len: usize,
         max_context_len: Option<usize>,
     ) -> usize {
         if !enable_cuda_graph_padding || !crate::perf_flags::cuda_graphs_enabled() {
             return blocks;
         }
-        if let Some(max_context_len) = max_context_len {
-            return max_context_len.div_ceil(block_size).max(blocks).max(1);
-        }
-        let block_bucket = CUDA_GRAPH_CONTEXT_BUCKET_TOKENS.div_ceil(block_size).max(1);
-        blocks.div_ceil(block_bucket).max(1) * block_bucket
+        let required_tokens = live_context_len.max(blocks.saturating_mul(block_size));
+        cuda_graph_context_bucket_tokens(required_tokens, max_context_len)
+            .div_ceil(block_size)
+            .max(blocks)
+            .max(1)
     }
 
     fn _make_tensor_with_pad<D: WithDType>(
@@ -121,6 +169,52 @@ pub mod text_models_inputs_processor {
         Tensor::cat(&padded_x[..], 0).map_err(anyhow::Error::msg)
     }
 
+    fn make_block_table_tensor<T: BlockTableRows + ?Sized>(
+        rows: &T,
+        max_len: usize,
+    ) -> Result<Tensor> {
+        let mut values = Vec::with_capacity(rows.len() * max_len);
+        for row in 0..rows.len() {
+            let table = rows.row(row);
+            assert!(table.len() <= max_len);
+            values.extend(table.iter().map(|&block| block as u32));
+            values.extend(std::iter::repeat_n(0, max_len - table.len()));
+        }
+        Ok(Tensor::from_vec(
+            values,
+            (rows.len(), max_len),
+            &Device::Cpu,
+        )?)
+    }
+
+    fn decode_metadata_tensor(
+        tensor: &Tensor,
+        device: &Device,
+        stage_on_host: bool,
+    ) -> candle_core::Result<Tensor> {
+        if stage_on_host {
+            Ok(tensor.clone())
+        } else {
+            tensor.to_device(device)
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    pub struct AttentionMemoryBudget {
+        pub workspace_bytes: usize,
+        pub metal_allocation_limits: Option<Arc<Vec<(DeviceLocation, usize)>>>,
+    }
+
+    impl AttentionMemoryBudget {
+        #[cfg(any(feature = "metal", test))]
+        pub(crate) fn metal_allocation_limit(&self, location: DeviceLocation) -> Option<usize> {
+            self.metal_allocation_limits
+                .as_ref()?
+                .iter()
+                .find_map(|&(device, limit)| (device == location).then_some(limit))
+        }
+    }
+
     #[derive(Clone)]
     pub struct PagedAttentionMeta {
         pub sliding_window: Option<usize>,
@@ -132,30 +226,55 @@ pub mod text_models_inputs_processor {
         pub prefill_key_value_heads: usize,
         pub prefill_head_dim: usize,
         pub kv_cache_manager: Arc<tokio::sync::Mutex<KVCacheManager>>,
+        pub prompt_chunk_size: Option<usize>,
+        pub(crate) scheduled_prompt_chunks:
+            Option<Vec<crate::pipeline::prompt_chunks::PromptChunkPlan>>,
         pub prompt_chunk_attention_policy: MultimodalAttentionPolicy,
         pub has_noncausal_mm_context: bool,
+        pub prefix_gather_workspace_limit: Option<usize>,
+        pub attention_memory: Option<AttentionMemoryBudget>,
         pub mm_prefix_ranges_by_seq_id: HashMap<usize, Vec<(usize, usize)>>,
+        pub full_mm_prefix_ranges_by_seq_id: HashMap<usize, Vec<(usize, usize)>>,
+        pub(crate) enable_packed_prefill: bool,
         /// False only for non-final chunks of a chunked prompt; block-diffusion models skip
         /// canvas generation until the prompt is fully encoded.
         pub is_final_prompt_chunk: bool,
+        /// False when the pipeline discards this forward's logits, so models skip the lm_head.
+        pub needs_logits: bool,
     }
 
     impl PagedAttentionMeta {
         pub(crate) fn set_noncausal_mm_context(&mut self, input_seqs: &[&mut Sequence]) {
+            self.set_noncausal_mm_context_views(input_seqs, true);
+        }
+
+        pub(crate) fn set_noncausal_mm_context_views(
+            &mut self,
+            input_seqs: &[&mut Sequence],
+            include_full_attention: bool,
+        ) {
             self.mm_prefix_ranges_by_seq_id.clear();
+            self.full_mm_prefix_ranges_by_seq_id.clear();
             for seq in input_seqs {
-                let ranges = noncausal_mm_ranges(seq.mm_features(), self.sliding_window);
-                if !ranges.is_empty() {
-                    self.mm_prefix_ranges_by_seq_id.insert(*seq.id(), ranges);
+                let full_ranges = noncausal_mm_ranges(seq.mm_features(), None);
+                if !full_ranges.is_empty() {
+                    if include_full_attention {
+                        self.full_mm_prefix_ranges_by_seq_id
+                            .insert(*seq.id(), full_ranges.clone());
+                    }
+                    self.mm_prefix_ranges_by_seq_id
+                        .insert(*seq.id(), full_ranges);
                 }
             }
-            self.has_noncausal_mm_context = !self.mm_prefix_ranges_by_seq_id.is_empty();
+            self.has_noncausal_mm_context = !self.mm_prefix_ranges_by_seq_id.is_empty()
+                || !self.full_mm_prefix_ranges_by_seq_id.is_empty();
         }
     }
 
     #[derive(Clone, Debug)]
     #[allow(dead_code)]
     pub struct PagedAttentionInputMetadata {
+        pub(crate) prefix_masks: crate::paged_attention::mask_cache::PrefixMaskCache,
         /// Block tables, windowed when a global sliding_window is set.
         pub block_tables: Option<HashMap<DeviceLocation, Tensor>>,
         /// Context lens, capped by sliding_window when set.
@@ -174,9 +293,13 @@ pub mod text_models_inputs_processor {
         pub full_max_context_len: Option<usize>,
         pub is_first_prompt_chunk: bool,
         pub is_final_prompt_chunk: bool,
+        pub needs_logits: bool,
         pub prompt_chunk_attention_policy: MultimodalAttentionPolicy,
         pub has_noncausal_mm_context: bool,
+        pub prefix_gather_workspace_limit: Option<usize>,
+        pub attention_memory: Option<AttentionMemoryBudget>,
         pub mm_prefix_ranges: Option<HashMap<DeviceLocation, Tensor>>,
+        pub full_mm_prefix_ranges: Option<HashMap<DeviceLocation, Tensor>>,
         pub prefill_attention_heads: usize,
         pub prefill_key_value_heads: usize,
         pub prefill_head_dim: usize,
@@ -195,9 +318,33 @@ pub mod text_models_inputs_processor {
         /// Cumulative KV lengths [batch+1], u32, for gather_kv_cache and flash_attn_varlen.
         /// Each entry is sum of (cached + new) tokens.
         pub cu_seqlens_kv: Option<HashMap<DeviceLocation, Tensor>>,
+        /// Host rows this decode metadata was built from (decode steps only).
+        pub decode_rows: Option<Arc<DecodePagedRows>>,
     }
 
     impl PagedAttentionInputMetadata {
+        pub(crate) fn is_decode_step(&self) -> bool {
+            !self.is_first_prompt_chunk && self.query_lens.is_none()
+        }
+
+        pub(crate) fn has_host_staged_decode_tensors(&self) -> bool {
+            self.decode_rows.is_some()
+                && self
+                    .slot_mappings
+                    .iter()
+                    .any(|(location, tensor)| *location != tensor.device().location())
+        }
+
+        pub(crate) fn materialize_decode_tensors(&self) -> Result<Self> {
+            if !self.has_host_staged_decode_tensors() {
+                return Ok(self.clone());
+            }
+            self.decode_rows
+                .as_ref()
+                .expect("host-staged decode metadata requires source rows")
+                .build_materialized()
+        }
+
         /// Create a dummy input metadata, assuming that this will NOT be used for decoding.
         /// This is used for the case of imatrix generation.
         pub fn dummy(dev: &Device) -> candle_core::Result<Self> {
@@ -214,9 +361,14 @@ pub mod text_models_inputs_processor {
                 slot_mappings: HashMap::from([(dev.location(), Tensor::new(&[0f32], dev)?)]),
                 is_first_prompt_chunk: true,
                 is_final_prompt_chunk: true,
+                needs_logits: true,
                 prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: false,
+                prefix_gather_workspace_limit: None,
+                attention_memory: None,
+                prefix_masks: Default::default(),
                 mm_prefix_ranges: None,
+                full_mm_prefix_ranges: None,
                 prefill_attention_heads: 1,
                 prefill_key_value_heads: 1,
                 prefill_head_dim: 1,
@@ -226,6 +378,7 @@ pub mod text_models_inputs_processor {
                 query_lens: None,
                 cu_seqlens_q: None,
                 cu_seqlens_kv: None,
+                decode_rows: None,
             })
         }
 
@@ -265,14 +418,6 @@ pub mod text_models_inputs_processor {
                 .zip(query_lens.iter())
                 .map(|(cached, query)| cached + query)
                 .collect::<Vec<_>>();
-            let context_lens_cpu = Tensor::from_vec(
-                context_lens
-                    .iter()
-                    .map(|len| *len as u32)
-                    .collect::<Vec<_>>(),
-                (batch_size,),
-                &Device::Cpu,
-            )?;
             let mut rope_positions = Vec::with_capacity(batch_size * max_query_len);
             for (&cached, &query_len) in num_cached_tokens.iter().zip(query_lens.iter()) {
                 for seq_idx in 0..max_query_len {
@@ -307,6 +452,15 @@ pub mod text_models_inputs_processor {
                 .full_paged_context_lens_cpu
                 .as_deref()
                 .unwrap_or(paged_decode_context_lens);
+            let context_lens_tensor = |lengths: &[usize]| {
+                Tensor::from_vec(
+                    lengths.iter().map(|&len| len as u32).collect::<Vec<_>>(),
+                    batch_size,
+                    &Device::Cpu,
+                )
+            };
+            let context_lens_cpu = context_lens_tensor(paged_decode_context_lens)?;
+            let full_context_lens_cpu = context_lens_tensor(full_decode_context_lens)?;
             let (
                 decode_request_indices_cpu,
                 decode_kv_tile_indices_cpu,
@@ -316,7 +470,12 @@ pub mod text_models_inputs_processor {
             ) = make_paged_kv_decode_tensors_from_lens(
                 paged_decode_context_lens,
                 block_size,
-                Some(flashinfer_decode_split_pages(block_size)),
+                Some(flashinfer_decode_split_pages(
+                    block_size,
+                    batch_size,
+                    self.prefill_key_value_heads,
+                    paged_decode_context_lens.iter().copied().max().unwrap_or(0),
+                )),
             )?;
             let (
                 full_decode_request_indices_cpu,
@@ -327,11 +486,17 @@ pub mod text_models_inputs_processor {
             ) = make_paged_kv_decode_tensors_from_lens(
                 full_decode_context_lens,
                 block_size,
-                Some(flashinfer_decode_split_pages(block_size)),
+                Some(flashinfer_decode_split_pages(
+                    block_size,
+                    batch_size,
+                    self.prefill_key_value_heads,
+                    full_decode_context_lens.iter().copied().max().unwrap_or(0),
+                )),
             )?;
 
             let mut slot_mappings = HashMap::new();
             let mut context_lens_map = HashMap::new();
+            let mut full_context_lens_map = HashMap::new();
             let mut rope_positions = HashMap::new();
             let mut cu_q_map = HashMap::new();
             let mut cu_kv_map = HashMap::new();
@@ -348,6 +513,10 @@ pub mod text_models_inputs_processor {
             for device in devices {
                 slot_mappings.insert(device.location(), slot_mappings_cpu.to_device(device)?);
                 context_lens_map.insert(device.location(), context_lens_cpu.to_device(device)?);
+                if self.full_block_tables.is_some() {
+                    full_context_lens_map
+                        .insert(device.location(), full_context_lens_cpu.to_device(device)?);
+                }
                 rope_positions.insert(device.location(), rope_positions_cpu.to_device(device)?);
                 cu_q_map.insert(device.location(), cu_q_cpu.to_device(device)?);
                 cu_kv_map.insert(device.location(), cu_kv_cpu.to_device(device)?);
@@ -393,11 +562,11 @@ pub mod text_models_inputs_processor {
             let full_context_lens = self
                 .full_block_tables
                 .as_ref()
-                .map(|_| context_lens_map.clone());
+                .map(|_| full_context_lens_map);
             let full_max_context_len = self
                 .full_block_tables
                 .as_ref()
-                .and_then(|_| context_lens.iter().copied().max());
+                .and_then(|_| full_decode_context_lens.iter().copied().max());
             let flashinfer =
                 self.flashinfer.as_ref().map(|flashinfer| {
                     let decode_tile_plan = flashinfer_tile_plan(
@@ -433,6 +602,9 @@ pub mod text_models_inputs_processor {
                         views: FlashInferPagedAttentionViews { logical, sliding },
                         decode_tmp_v: None,
                         decode_tmp_s: None,
+                        fa3_decode: None,
+                        #[cfg(feature = "cuda")]
+                        decode_tile_plan_used: None,
                     }
                 });
 
@@ -443,15 +615,20 @@ pub mod text_models_inputs_processor {
                 paged_context_lens_cpu: Some(paged_decode_context_lens.to_vec()),
                 full_paged_context_lens_cpu: Some(full_decode_context_lens.to_vec()),
                 slot_mappings,
-                max_context_len: context_lens.iter().copied().max(),
+                max_context_len: paged_decode_context_lens.iter().copied().max(),
                 full_block_tables: self.full_block_tables.clone(),
                 full_context_lens,
                 full_max_context_len,
                 is_first_prompt_chunk: false,
                 is_final_prompt_chunk: self.is_final_prompt_chunk,
+                needs_logits: self.needs_logits,
                 prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: self.has_noncausal_mm_context,
+                prefix_gather_workspace_limit: self.prefix_gather_workspace_limit,
+                attention_memory: self.attention_memory.clone(),
+                prefix_masks: self.prefix_masks.clone(),
                 mm_prefix_ranges: self.mm_prefix_ranges.clone(),
+                full_mm_prefix_ranges: self.full_mm_prefix_ranges.clone(),
                 prefill_attention_heads: self.prefill_attention_heads,
                 prefill_key_value_heads: self.prefill_key_value_heads,
                 prefill_head_dim: self.prefill_head_dim,
@@ -461,19 +638,18 @@ pub mod text_models_inputs_processor {
                 query_lens: Some(query_lens.to_vec()),
                 cu_seqlens_q: Some(cu_q_map),
                 cu_seqlens_kv: Some(cu_kv_map),
+                decode_rows: None,
             })
         }
     }
 
     /// Flash attention sequence length metadata.
     ///
-    /// `cumulative_seqlens_q/k` use **padded** lengths (each sequence is padded to
-    /// `max_len` in the batch). This matches the padded Q tensor in the normal
-    /// prefill and decode paths.
+    /// `cumulative_seqlens_q/k` describe the physical Q/K layout. They use padded
+    /// lengths for normal batches and logical lengths when `packed` is true.
     ///
     /// `logical_k` describes full logical K lengths. `sliding_k`, when present,
-    /// describes retained K lengths after a rotating/sliding KV cache has already
-    /// truncated K/V to the configured window.
+    /// describes the physical K lengths returned by a rotating/sliding KV cache.
     ///
     /// For the **prefix cache path**, K/V are gathered from the paged cache into a
     /// packed (non-padded) layout via `gather_kv_cache`. The packed K/V lengths are
@@ -502,6 +678,12 @@ pub mod text_models_inputs_processor {
         pub logical_k: FlashKMeta,
         pub sliding_k: Option<FlashKMeta>,
         pub causal: bool,
+        pub(crate) packed: bool,
+        #[cfg_attr(
+            not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")),
+            allow(dead_code)
+        )]
+        pub(crate) varlen_segment_lens: Option<Vec<usize>>,
     }
 
     impl FlashParams {
@@ -512,6 +694,8 @@ pub mod text_models_inputs_processor {
                 logical_k: FlashKMeta::empty(),
                 sliding_k: None,
                 causal,
+                packed: false,
+                varlen_segment_lens: None,
             }
         }
 
@@ -571,6 +755,57 @@ pub mod text_models_inputs_processor {
         Ok((max, cumulative_seqlens_map))
     }
 
+    fn packed_rope_positions(seqlen_offsets: &[usize], query_lens: &[usize]) -> Result<Vec<u32>> {
+        if seqlen_offsets.len() != query_lens.len() {
+            anyhow::bail!(
+                "packed RoPE position length mismatch: {} offsets for {} queries",
+                seqlen_offsets.len(),
+                query_lens.len()
+            );
+        }
+        let mut positions = Vec::with_capacity(query_lens.iter().sum());
+        for (&offset, &query_len) in seqlen_offsets.iter().zip(query_lens) {
+            for position in offset..offset + query_len {
+                positions.push(u32::try_from(position)?);
+            }
+        }
+        Ok(positions)
+    }
+
+    fn sliding_k_lengths(
+        seqlens_q: &[u32],
+        seqlens_k: &[u32],
+        sliding_window: usize,
+    ) -> Result<Vec<u32>> {
+        if seqlens_q.len() != seqlens_k.len() {
+            anyhow::bail!(
+                "sliding FlashAttention metadata length mismatch: q={} k={}",
+                seqlens_q.len(),
+                seqlens_k.len()
+            );
+        }
+        let window = u32::try_from(sliding_window)?;
+        seqlens_q
+            .iter()
+            .zip(seqlens_k)
+            .map(|(&query_len, &logical_k_len)| {
+                let past_len = logical_k_len.checked_sub(query_len).ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "sliding FlashAttention query length {query_len} exceeds K length {logical_k_len}"
+                    )
+                })?;
+                if query_len > 1 {
+                    past_len
+                        .min(window)
+                        .checked_add(query_len)
+                        .ok_or_else(|| anyhow::anyhow!("sliding FlashAttention K length overflow"))
+                } else {
+                    Ok(logical_k_len.min(window))
+                }
+            })
+            .collect()
+    }
+
     pub(crate) fn make_flash_params(
         device: &Device,
         mapper: Option<&dyn DeviceMapper>,
@@ -578,6 +813,7 @@ pub mod text_models_inputs_processor {
         seqlens_k: &[u32],
         sliding_window: Option<usize>,
         causal: bool,
+        packed: bool,
     ) -> Result<FlashParams> {
         let devices = flash_param_devices(device, mapper);
         let (max_q, cumulative_seqlens_q) = cumulative_seqlens_map(seqlens_q, &devices)?;
@@ -589,11 +825,7 @@ pub mod text_models_inputs_processor {
         };
         let sliding_k = sliding_window
             .map(|window| -> Result<FlashKMeta> {
-                let window = window as u32;
-                let sliding_seqlens_k = seqlens_k
-                    .iter()
-                    .map(|len| (*len).min(window))
-                    .collect::<Vec<_>>();
+                let sliding_seqlens_k = sliding_k_lengths(seqlens_q, seqlens_k, window)?;
                 let (sliding_max_k, sliding_cumulative_seqlens_k) =
                     cumulative_seqlens_map(&sliding_seqlens_k, &devices)?;
                 Ok(FlashKMeta {
@@ -609,7 +841,24 @@ pub mod text_models_inputs_processor {
             logical_k,
             sliding_k,
             causal,
+            packed,
+            varlen_segment_lens: None,
         })
+    }
+
+    pub(crate) fn uses_packed_prefill(
+        query_lens: &[usize],
+        permitted: bool,
+        cold: bool,
+        final_chunk: bool,
+        causal: bool,
+    ) -> bool {
+        permitted
+            && cold
+            && final_chunk
+            && causal
+            && query_lens.len() > 1
+            && query_lens.iter().any(|len| *len != query_lens[0])
     }
 
     // chunk_offset_toks is the number of tokens by which the tokens are offset,
@@ -631,6 +880,7 @@ pub mod text_models_inputs_processor {
         mapper: Option<&dyn DeviceMapper>,
         prefix_cache_lens: Option<&[usize]>,
         sliding_window: Option<usize>,
+        allow_packed_prefill: bool,
     ) -> Result<InputMetadata> {
         // Determine effective tokens per sequence after prefix cache trimming
         let effective_lens: Vec<usize> = toks
@@ -643,7 +893,42 @@ pub mod text_models_inputs_processor {
             .collect();
         let max_len = *effective_lens.iter().max().expect("No sequences");
         let padding_tok = T::zero();
-        // Pad each sequence by the padding token to the max len.
+        let has_any_cache_hit = prefix_cache_lens.is_some_and(|lens| lens.iter().any(|&l| l > 0));
+        let prompt_chunk_causal = paged_attn_metadata.as_ref().is_none_or(|metadata| {
+            metadata.prompt_chunk_attention_policy == MultimodalAttentionPolicy::Causal
+        });
+        let all_model_devices_cuda = mapper.is_none_or(|mapper| {
+            mapper
+                .get_unique_devices()
+                .iter()
+                .all(|device| device.is_cuda())
+        });
+        let packing_permitted = allow_packed_prefill
+            && device.is_cuda()
+            && all_model_devices_cuda
+            && crate::using_flash_attn()
+            && !return_raw_logits
+            && last_n_context_len.is_none()
+            && paged_attn_metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.enable_packed_prefill);
+        let packed_prefill = uses_packed_prefill(
+            &effective_lens,
+            packing_permitted,
+            chunk_offset_toks == 0 && !has_any_cache_hit,
+            paged_attn_metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.is_final_prompt_chunk),
+            prompt_chunk_causal,
+        );
+        if packed_prefill {
+            tracing::debug!(
+                sequences = effective_lens.len(),
+                tokens = effective_lens.iter().sum::<usize>(),
+                padded_tokens = effective_lens.len() * max_len,
+                "Using packed prompt prefill"
+            );
+        }
         let mut seqs_tensors = Vec::new();
         let mut seqlen_offsets = Vec::new();
         let mut context_lens = Vec::new();
@@ -658,10 +943,6 @@ pub mod text_models_inputs_processor {
         let mut seqlens_k = if flash_attn { vec![0] } else { Vec::new() };
         let mut num_cached_tokens_vec: Vec<usize> = Vec::new();
         let mut query_lens_vec: Vec<usize> = Vec::new();
-        let has_any_cache_hit = prefix_cache_lens.is_some_and(|lens| lens.iter().any(|&l| l > 0));
-        let prompt_chunk_causal = paged_attn_metadata.as_ref().is_none_or(|metadata| {
-            metadata.prompt_chunk_attention_policy == MultimodalAttentionPolicy::Causal
-        });
         for (seq_idx, (seq_id, ctxt)) in seq_ids.iter().zip(&toks).enumerate() {
             let cached = prefix_cache_lens.map_or(0, |lens| lens[seq_idx]);
             let full_prompt_len = ctxt.len();
@@ -674,34 +955,33 @@ pub mod text_models_inputs_processor {
             seqlen_offsets.push(offset.1 + chunk_offset_toks + cached);
 
             position_ids.push(new_len + chunk_offset_toks + cached);
-            let mut padded = new_toks.to_vec();
-            padded.extend(std::iter::repeat_n(
-                padding_tok,
-                max_len.saturating_sub(padded.len()),
-            ));
+            let mut input_toks = new_toks.to_vec();
+            if !packed_prefill {
+                input_toks.extend(std::iter::repeat_n(
+                    padding_tok,
+                    max_len.saturating_sub(input_toks.len()),
+                ));
+            }
             // If we are returning raw logits, we want to not trim the logits at all.
             if return_raw_logits {
                 if last_n_context_len.is_some() {
                     anyhow::bail!("`return_raw_logits` is incompatible with `last_n_context_len`");
                 }
 
-                context_lens.push((0, padded.len()));
+                context_lens.push((0, input_toks.len()));
             } else {
                 context_lens.push((
-                    padded
-                        .len()
-                        .saturating_sub(last_n_context_len.map(|(a, _)| a).unwrap_or(1)),
+                    new_len.saturating_sub(last_n_context_len.map(|(a, _)| a).unwrap_or(1)),
                     last_n_context_len.map(|(a, _)| a).unwrap_or(1),
                 ));
             }
 
             if flash_attn {
-                // Padded lengths, see FlashParams doc comment for prefix cache nuance.
-                seqlens_q.push(padded.len() as u32);
-                seqlens_k.push((padded.len() + chunk_offset_toks + cached) as u32);
+                seqlens_q.push(input_toks.len() as u32);
+                seqlens_k.push((input_toks.len() + chunk_offset_toks + cached) as u32);
             }
 
-            seqs_tensors.push(Tensor::new(padded, device)?.unsqueeze(0)?);
+            seqs_tensors.push(Tensor::new(input_toks, device)?.unsqueeze(0)?);
 
             if has_any_cache_hit {
                 num_cached_tokens_vec.push(cached);
@@ -755,21 +1035,32 @@ pub mod text_models_inputs_processor {
                 full_paged_attn_context_lens.push(full_context_len);
 
                 if let Some(sliding_window) = paged_attn_metadata.sliding_window {
-                    let window_start = full_context_len.saturating_sub(sliding_window);
-                    let block_aligned_start = (window_start / paged_attn_metadata.block_size)
-                        * paged_attn_metadata.block_size;
-                    if block_aligned_start <= slot_start {
-                        let paged_context_len = full_context_len - block_aligned_start;
-                        let slide_idx = block_aligned_start / paged_attn_metadata.block_size;
-                        let needed_blocks =
-                            paged_context_len.div_ceil(paged_attn_metadata.block_size);
-                        let slide_end = (slide_idx + needed_blocks).min(table.len());
-                        block_tables.push(table.get(slide_idx..slide_end).unwrap_or(&[]).to_vec());
-                        paged_attn_context_lens.push((0..paged_context_len).collect());
-                    } else {
-                        block_tables.push(table.clone());
-                        paged_attn_context_lens.push(ctxt_len);
+                    let mut block_aligned_start = block_aligned_sliding_window_start(
+                        full_context_len,
+                        new_len,
+                        sliding_window,
+                        paged_attn_metadata.block_size,
+                    );
+                    if let Some(mm_start) = paged_attn_metadata
+                        .mm_prefix_ranges_by_seq_id
+                        .get(seq_id)
+                        .into_iter()
+                        .flatten()
+                        .filter(|&&(start, end)| start < slot_end && slot_start < end)
+                        .map(|&(start, _)| start)
+                        .min()
+                    {
+                        block_aligned_start = block_aligned_start.min(
+                            mm_start / paged_attn_metadata.block_size
+                                * paged_attn_metadata.block_size,
+                        );
                     }
+                    let paged_context_len = full_context_len - block_aligned_start;
+                    let slide_idx = block_aligned_start / paged_attn_metadata.block_size;
+                    let needed_blocks = paged_context_len.div_ceil(paged_attn_metadata.block_size);
+                    let slide_end = (slide_idx + needed_blocks).min(table.len());
+                    block_tables.push(table.get(slide_idx..slide_end).unwrap_or(&[]).to_vec());
+                    paged_attn_context_lens.push((0..paged_context_len).collect());
                 } else {
                     block_tables.push(table.clone());
                     paged_attn_context_lens.push(ctxt_len);
@@ -785,23 +1076,31 @@ pub mod text_models_inputs_processor {
                 &seqlens_k,
                 sliding_window,
                 prompt_chunk_causal,
+                packed_prefill,
             )?
         } else {
             FlashParams::empty(prompt_chunk_causal)
         };
 
-        let input = Tensor::cat(&seqs_tensors, 0).unwrap();
+        let input_concat_dim = if packed_prefill { 1 } else { 0 };
+        let input = Tensor::cat(&seqs_tensors, input_concat_dim).unwrap();
 
         let paged_attn_meta = if let Some(paged_attn_metadata) = &paged_attn_metadata {
             // Create paged attention tensors on CPU first (see comment above about CUDA contexts)
-            let max_slot_mapping_len = slot_mappings.iter().map(|x| x.len()).max().unwrap();
             let prefill_query_lens = slot_mappings.iter().map(Vec::len).collect::<Vec<_>>();
-            let slot_mappings = _make_tensor_with_pad(
-                slot_mappings,
-                max_slot_mapping_len,
-                _PAD_SLOT_ID,
-                &Device::Cpu,
-            )?;
+            let slot_mappings = if packed_prefill {
+                let slots = slot_mappings.into_iter().flatten().collect::<Vec<_>>();
+                let slot_count = slots.len();
+                Tensor::from_vec(slots, (slot_count,), &Device::Cpu)?
+            } else {
+                let max_slot_mapping_len = slot_mappings.iter().map(Vec::len).max().unwrap();
+                _make_tensor_with_pad(
+                    slot_mappings,
+                    max_slot_mapping_len,
+                    _PAD_SLOT_ID,
+                    &Device::Cpu,
+                )?
+            };
 
             let max_block_table_len = block_tables.iter().map(|x| x.len()).max().unwrap();
             let block_size = paged_attn_metadata.block_size;
@@ -829,8 +1128,15 @@ pub mod text_models_inputs_processor {
                     block_size,
                     block_tables.len() * max_block_table_len,
                 )?;
-            let decode_split_pages = flashinfer_decode_split_pages(block_size);
-            let tiles_per_row = max_block_table_len.max(1).div_ceil(decode_split_pages);
+            let decode_split_pages = flashinfer_decode_split_pages(
+                block_size,
+                block_tables.len(),
+                paged_attn_metadata.prefill_key_value_heads,
+                paged_context_lens_for_fi.iter().copied().max().unwrap_or(0),
+            );
+            let tiles_per_row = max_block_table_len
+                .max(1)
+                .div_ceil(flashinfer_decode_split_capacity_pages(block_size));
             let (request_indices, kv_tile_indices, o_indptr, kv_chunk_size, block_valid_mask) =
                 make_paged_kv_decode_tensors(
                     &block_tables,
@@ -866,13 +1172,26 @@ pub mod text_models_inputs_processor {
                 &Device::Cpu,
             )?
             .reshape(((),))?;
+            let packed_rope_positions = if packed_prefill {
+                let positions = packed_rope_positions(&seqlen_offsets, &prefill_query_lens)?;
+                let position_count = positions.len();
+                Some(Tensor::from_vec(
+                    positions,
+                    (position_count,),
+                    &Device::Cpu,
+                )?)
+            } else {
+                None
+            };
 
             // For device mapping, make a copy of each tensor for each device
             let devices = mapper.unwrap().get_unique_devices();
             let mut slot_mappings_map = HashMap::new();
+            let mut rope_positions_map = HashMap::new();
             let mut block_tables_map = HashMap::new();
             let mut context_lens_map = HashMap::new();
             let mut mm_prefix_ranges_map = HashMap::new();
+            let mut full_mm_prefix_ranges_map = HashMap::new();
             let mut full_block_tables_map = HashMap::new();
             let mut full_context_lens_map = HashMap::new();
             let mut paged_kv_indptr_map = HashMap::new();
@@ -907,10 +1226,15 @@ pub mod text_models_inputs_processor {
                     block_size,
                     full_block_tables.len() * full_max_block_table_len,
                 )?);
-                let full_decode_split_pages = flashinfer_decode_split_pages(block_size);
+                let full_decode_split_pages = flashinfer_decode_split_pages(
+                    block_size,
+                    full_block_tables.len(),
+                    paged_attn_metadata.prefill_key_value_heads,
+                    full_context_lens_for_fi.iter().copied().max().unwrap_or(0),
+                );
                 let full_tiles_per_row = full_max_block_table_len
                     .max(1)
-                    .div_ceil(full_decode_split_pages);
+                    .div_ceil(flashinfer_decode_split_capacity_pages(block_size));
                 let full_decode_tensors = Some(make_paged_kv_decode_tensors(
                     &full_block_tables,
                     &full_paged_attn_context_lens,
@@ -959,10 +1283,34 @@ pub mod text_models_inputs_processor {
                 &paged_context_lens_for_fi,
                 &prefill_query_lens,
             )?;
+            let full_kv_window_starts = vec![0; seq_ids.len()];
+            let full_mm_prefix_ranges_tensor = if sliding_window.is_some() {
+                crate::paged_attention::mm_prefix::make_ranges_tensor(
+                    seq_ids,
+                    &paged_attn_metadata.full_mm_prefix_ranges_by_seq_id,
+                    &full_kv_window_starts,
+                    &full_paged_attn_context_lens,
+                    &prefill_query_lens,
+                )?
+            } else {
+                None
+            };
 
+            #[cfg(feature = "metal")]
+            if let Some(ranges) = &mm_prefix_ranges_tensor {
+                mm_prefix_ranges_map.insert(DeviceLocation::Cpu, ranges.clone());
+            }
+            #[cfg(feature = "metal")]
+            if let Some(ranges) = &full_mm_prefix_ranges_tensor {
+                full_mm_prefix_ranges_map.insert(DeviceLocation::Cpu, ranges.clone());
+            }
             for device in devices {
                 slot_mappings_map
                     .insert(device.location(), slot_mappings.clone().to_device(&device)?);
+                if let Some(positions) = &packed_rope_positions {
+                    rope_positions_map
+                        .insert(device.location(), positions.clone().to_device(&device)?);
+                }
                 block_tables_map
                     .insert(device.location(), block_tables.clone().to_device(&device)?);
                 context_lens_map
@@ -971,6 +1319,12 @@ pub mod text_models_inputs_processor {
                     mm_prefix_ranges_map.insert(
                         device.location(),
                         mm_prefix_ranges_tensor.clone().to_device(&device)?,
+                    );
+                }
+                if let Some(full_mm_prefix_ranges_tensor) = &full_mm_prefix_ranges_tensor {
+                    full_mm_prefix_ranges_map.insert(
+                        device.location(),
+                        full_mm_prefix_ranges_tensor.clone().to_device(&device)?,
                     );
                 }
                 paged_kv_indptr_map.insert(
@@ -1118,22 +1472,33 @@ pub mod text_models_inputs_processor {
                 full_max_context_len,
                 is_first_prompt_chunk: chunk_offset_toks == 0 && !has_any_cache_hit,
                 is_final_prompt_chunk: paged_attn_metadata.is_final_prompt_chunk,
+                needs_logits: paged_attn_metadata.needs_logits,
                 prompt_chunk_attention_policy,
-                // Per-forward flag: only true when a noncausal range actually reaches this
-                // chunk's query rows. The sticky per-conversation flag lives on
-                // PagedAttentionMeta; using it here would disable the fast prefill paths for
-                // every chunk after an image has scrolled out of the sliding window.
-                has_noncausal_mm_context: mm_prefix_ranges_tensor.is_some(),
+                // Keep the slow path local to chunks whose query rows overlap a noncausal range.
+                has_noncausal_mm_context: mm_prefix_ranges_tensor.is_some()
+                    || full_mm_prefix_ranges_tensor.is_some(),
+                prefix_gather_workspace_limit: paged_attn_metadata.prefix_gather_workspace_limit,
+                attention_memory: paged_attn_metadata.attention_memory.clone(),
+                prefix_masks: Default::default(),
                 mm_prefix_ranges: if mm_prefix_ranges_map.is_empty() {
                     None
                 } else {
                     Some(mm_prefix_ranges_map)
                 },
+                full_mm_prefix_ranges: if full_mm_prefix_ranges_map.is_empty() {
+                    None
+                } else {
+                    Some(full_mm_prefix_ranges_map)
+                },
                 prefill_attention_heads: paged_attn_metadata.prefill_attention_heads,
                 prefill_key_value_heads: paged_attn_metadata.prefill_key_value_heads,
                 prefill_head_dim: paged_attn_metadata.prefill_head_dim,
                 flashinfer,
-                rope_positions: None,
+                rope_positions: if rope_positions_map.is_empty() {
+                    None
+                } else {
+                    Some(rope_positions_map)
+                },
                 num_cached_tokens: if has_any_cache_hit {
                     Some(num_cached_tokens_vec.clone())
                 } else {
@@ -1174,6 +1539,7 @@ pub mod text_models_inputs_processor {
                 } else {
                     None
                 },
+                decode_rows: None,
             })
         } else {
             None
@@ -1189,6 +1555,30 @@ pub mod text_models_inputs_processor {
         })
     }
 
+    fn completion_input_tensor<T: WithDType>(
+        host_tokens: Vec<T>,
+        batch: usize,
+        host_width: usize,
+        staged_device_rows: &[Tensor],
+        device: &Device,
+    ) -> Result<Tensor> {
+        let host = Tensor::from_vec(host_tokens, (batch, host_width), device)?;
+        if staged_device_rows.is_empty() {
+            return Ok(host);
+        }
+        let staged_device_rows = staged_device_rows
+            .iter()
+            .map(|tokens| tokens.to_device(device)?.to_dtype(T::DTYPE))
+            .collect::<candle_core::Result<Vec<_>>>()?;
+        #[cfg(feature = "cuda")]
+        if T::DTYPE == DType::U32 && device.is_cuda() {
+            return crate::cuda::input_packing::pack_completion_input(&host, &staged_device_rows)
+                .map_err(anyhow::Error::msg);
+        }
+        let staged = Tensor::stack(&staged_device_rows, 0)?;
+        Ok(Tensor::cat(&[&host, &staged], 1)?)
+    }
+
     fn make_completion_chunk<T: WithDType + From<u32> + Clone + std::fmt::Debug>(
         toks: Vec<&[T]>,
         input_seqs: &[&mut Sequence],
@@ -1200,15 +1590,14 @@ pub mod text_models_inputs_processor {
     ) -> Result<InputMetadata> {
         // Pad each sequence by the padding token to the max len.
         let flash_attn = crate::using_flash_attn();
-        let mut seqs_tensors = Vec::new();
+        let mut input_tokens = Vec::new();
+        let mut input_width = None;
         let mut seqlen_offsets = Vec::new();
         let mut context_lens = Vec::new();
         let mut position_ids = Vec::new();
 
         let mut slot_mappings = Vec::new();
-        let mut block_tables = Vec::new();
         let mut paged_attn_context_lens = Vec::new();
-        let mut full_block_tables = Vec::new();
         let mut full_paged_attn_context_lens = Vec::new();
         let mut seqlens_q = if flash_attn { vec![0] } else { Vec::new() };
         let mut seqlens_k = if flash_attn { vec![0] } else { Vec::new() };
@@ -1219,16 +1608,42 @@ pub mod text_models_inputs_processor {
         // one-token decode and the driver clears the stale staged proposals.
         let use_staged_speculative =
             crate::speculative::staging::staged_batch_width(input_seqs).is_some();
-        for (seq, ctxt) in input_seqs.iter().zip(toks) {
-            let staged_speculative = if use_staged_speculative {
+        let use_device_staged = use_staged_speculative
+            && input_seqs
+                .iter()
+                .any(|seq| seq.active_staged_speculative_tokens().as_device().is_some());
+        let sequence_block_tables = paged_attn_metadata.as_ref().map(|paged_attn_metadata| {
+            let kv_mgr = get_mut_arcmutex!(paged_attn_metadata.kv_cache_manager);
+            input_seqs
+                .iter()
+                .map(|seq| {
+                    Arc::<[usize]>::from(
+                        kv_mgr
+                            .get_block_ids(*seq.id())
+                            .expect("Sequence must have allocated blocks for completion"),
+                    )
+                })
+                .collect::<Vec<_>>()
+        });
+        let mut host_input_width = None;
+        for (seq_idx, (seq, ctxt)) in input_seqs.iter().zip(toks).enumerate() {
+            let staged_speculative = if use_staged_speculative && !use_device_staged {
                 seq.active_staged_speculative_tokens()
+                    .as_host()
+                    .expect("host-backed speculative batch changed storage kind")
             } else {
                 &[]
             };
             let start_pos = ctxt.len().saturating_sub(decode_window);
             let mut ctxt = ctxt[start_pos..].to_vec();
             ctxt.extend(staged_speculative.iter().copied().map(T::from));
-            let query_len = ctxt.len();
+            let host_width = ctxt.len();
+            let query_len = host_width
+                + if use_device_staged {
+                    seq.active_staged_speculative_len()
+                } else {
+                    0
+                };
             let effective_context_len = start_pos + query_len;
             seqlen_offsets.push(start_pos);
             context_lens.push((0, query_len));
@@ -1239,15 +1654,26 @@ pub mod text_models_inputs_processor {
                 seqlens_k.push(effective_context_len as u32);
             }
 
-            seqs_tensors.push(Tensor::new(ctxt, device)?.unsqueeze(0)?);
+            match input_width {
+                Some(width) if width != query_len => {
+                    anyhow::bail!("completion input rows must have one query width")
+                }
+                None => input_width = Some(query_len),
+                Some(_) => {}
+            }
+            match host_input_width {
+                Some(width) if width != host_width => {
+                    anyhow::bail!("completion input host rows must have one query width")
+                }
+                None => host_input_width = Some(host_width),
+                Some(_) => {}
+            }
+            input_tokens.extend(ctxt);
 
             if let Some(paged_attn_metadata) = &mut paged_attn_metadata {
-                let kv_mgr = get_mut_arcmutex!(paged_attn_metadata.kv_cache_manager);
-                let table: Vec<usize> = kv_mgr
-                    .get_block_ids(*seq.id())
-                    .expect("Sequence must have allocated blocks for completion")
-                    .to_vec();
-                drop(kv_mgr);
+                let table = &sequence_block_tables
+                    .as_ref()
+                    .expect("paged block tables were snapshotted")[seq_idx];
 
                 let block_start = start_pos - seq.token_offset();
                 let block_end = block_start + query_len;
@@ -1277,8 +1703,6 @@ pub mod text_models_inputs_processor {
                 for row in 0..query_len {
                     let full_context_len = start_pos + row + 1;
 
-                    // Always collect the full (unwindowed) block tables.
-                    full_block_tables.push(table.clone());
                     full_paged_attn_context_lens.push(full_context_len);
 
                     let paged_attn_context_len = if let Some(sliding_window) =
@@ -1291,340 +1715,721 @@ pub mod text_models_inputs_processor {
                     } else {
                         full_context_len
                     };
-                    if let Some(sliding_window) = paged_attn_metadata.sliding_window {
-                        let window_start = full_context_len.saturating_sub(sliding_window);
-                        let slide_idx = window_start / paged_attn_metadata.block_size;
-                        let needed_blocks =
-                            paged_attn_context_len.div_ceil(paged_attn_metadata.block_size);
-                        let slide_end = (slide_idx + needed_blocks).min(table.len());
-                        block_tables.push(table.get(slide_idx..slide_end).unwrap_or(&[]).to_vec());
-                    } else {
-                        block_tables.push(table.clone());
-                    }
                     paged_attn_context_lens.push(paged_attn_context_len);
                 }
             }
         }
 
-        let flash_meta = if flash_attn {
-            make_flash_params(device, mapper, &seqlens_q, &seqlens_k, sliding_window, true)?
+        let paged_single_token_decode = paged_attn_metadata.is_some()
+            && context_lens.iter().all(|&(_, query_len)| query_len == 1);
+        let flash_meta = if flash_attn && !paged_single_token_decode {
+            make_flash_params(
+                device,
+                mapper,
+                &seqlens_q,
+                &seqlens_k,
+                sliding_window,
+                true,
+                false,
+            )?
         } else {
             FlashParams::empty(true)
         };
 
         let paged_attn_meta = if let Some(paged_attn_input) = &paged_attn_metadata {
-            // Create paged attention tensors on CPU first (see make_prompt_chunk for explanation)
-            let max_slot_mapping_len = slot_mappings.iter().map(Vec::len).max().unwrap_or(1);
-            let use_standard_metadata =
-                paged_attn_input.attention_backend == AttentionBackendKind::Standard;
-            let slot_mappings = _make_tensor_with_pad(
+            let query_len = context_lens.first().map_or(1, |(_, q)| *q);
+            let block_tables = BlockTableSnapshot::from_sequence_tables(
+                sequence_block_tables.expect("paged block tables were snapshotted"),
+                query_len,
+            );
+            let rows = Arc::new(DecodePagedRows {
                 slot_mappings,
+                block_tables,
+                context_lens: paged_attn_context_lens,
+                full_context_lens: full_paged_attn_context_lens,
+                query_len,
+                block_size: paged_attn_input.block_size,
+                use_standard_metadata: paged_attn_input.attention_backend
+                    == AttentionBackendKind::Standard,
+                max_paged_context_len: paged_attn_input.max_paged_context_len,
+                sliding_window: paged_attn_input.sliding_window,
+                decode_window,
+                devices: mapper.unwrap().get_unique_devices(),
+                num_kv_heads: paged_attn_input.prefill_key_value_heads,
+            });
+            Some(rows.build()?)
+        } else {
+            None
+        };
+
+        let staged_device_rows = if use_device_staged {
+            input_seqs
+                .iter()
+                .map(|seq| match seq.active_staged_speculative_tokens() {
+                    crate::speculative::SpeculativeTokens::Host(tokens) => {
+                        Tensor::new(tokens.as_slice(), device)
+                    }
+                    crate::speculative::SpeculativeTokens::Device(tokens) => Ok(tokens.clone()),
+                })
+                .collect::<candle_core::Result<Vec<_>>>()?
+        } else {
+            Vec::new()
+        };
+        let input = completion_input_tensor(
+            input_tokens,
+            input_seqs.len(),
+            host_input_width.unwrap_or_default(),
+            &staged_device_rows,
+            device,
+        )?;
+        if input.dims() != [input_seqs.len(), input_width.unwrap_or_default()] {
+            anyhow::bail!("completion input tensor shape changed while staging proposals");
+        }
+
+        Ok(InputMetadata {
+            input,
+            positions: seqlen_offsets,
+            context_lens,
+            position_ids,
+            paged_attn_meta,
+            flash_meta,
+        })
+    }
+
+    /// Host-side per-row decode inputs plus everything needed to materialize the paged-attention
+    /// metadata from them. Kept on the metadata so the CUDA graph layer can rebuild a batch-padded
+    /// twin through the same code path.
+    #[derive(Clone, Debug)]
+    pub struct DecodePagedRows {
+        pub slot_mappings: Vec<Vec<i64>>,
+        pub(crate) block_tables: BlockTableSnapshot,
+        pub context_lens: Vec<usize>,
+        pub full_context_lens: Vec<usize>,
+        pub query_len: usize,
+        pub block_size: usize,
+        pub use_standard_metadata: bool,
+        pub max_paged_context_len: usize,
+        pub sliding_window: Option<usize>,
+        pub decode_window: usize,
+        pub devices: Vec<Device>,
+        pub num_kv_heads: usize,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    pub(crate) struct PagedDecodeMetadataRequirements {
+        pub block_tables: bool,
+        pub context_lens: bool,
+        pub flashinfer_paged_kv: bool,
+        pub flashinfer_tile_plan: bool,
+    }
+
+    impl PagedDecodeMetadataRequirements {
+        fn conservative(rows: &DecodePagedRows) -> Self {
+            Self {
+                block_tables: rows.use_standard_metadata || rows.decode_window > 1,
+                context_lens: rows.use_standard_metadata,
+                flashinfer_paged_kv: true,
+                flashinfer_tile_plan: true,
+            }
+        }
+
+        #[cfg(any(feature = "cuda", test))]
+        pub(crate) fn graph(
+            block_tables: bool,
+            context_lens: bool,
+            flashinfer_paged_kv: bool,
+            flashinfer_tile_plan: bool,
+        ) -> Self {
+            Self {
+                block_tables: block_tables || context_lens,
+                context_lens,
+                flashinfer_paged_kv: flashinfer_paged_kv || flashinfer_tile_plan,
+                flashinfer_tile_plan,
+            }
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub(crate) struct DecodePagedRowsGraphKey {
+        batch_size: usize,
+        query_len: usize,
+        block_size: usize,
+        use_standard_metadata: bool,
+        sliding_window: Option<usize>,
+        decode_window: usize,
+        devices: Vec<DeviceLocation>,
+        num_kv_heads: usize,
+        paged_block_table_len: usize,
+        full_block_table_len: usize,
+    }
+
+    struct DecodeViewHostTensors {
+        block_tables: Option<Tensor>,
+        context_lens: Option<Tensor>,
+        paged_kv: Option<(Tensor, Tensor, Tensor)>,
+        tile_plan: Option<(Tensor, Tensor, Tensor, Tensor, Tensor)>,
+    }
+
+    #[derive(Default)]
+    struct DecodeViewDeviceMaps {
+        block_tables: HashMap<DeviceLocation, Tensor>,
+        context_lens: HashMap<DeviceLocation, Tensor>,
+        paged_kv_indptr: HashMap<DeviceLocation, Tensor>,
+        paged_kv_indices: HashMap<DeviceLocation, Tensor>,
+        paged_kv_last_page_len: HashMap<DeviceLocation, Tensor>,
+        request_indices: HashMap<DeviceLocation, Tensor>,
+        kv_tile_indices: HashMap<DeviceLocation, Tensor>,
+        o_indptr: HashMap<DeviceLocation, Tensor>,
+        kv_chunk_size: HashMap<DeviceLocation, Tensor>,
+        block_valid_mask: HashMap<DeviceLocation, Tensor>,
+    }
+
+    impl DecodeViewDeviceMaps {
+        fn insert(
+            &mut self,
+            host: &DecodeViewHostTensors,
+            device: &Device,
+            stage_on_host: bool,
+        ) -> candle_core::Result<()> {
+            let location = device.location();
+            if let Some(tensor) = host.block_tables.as_ref() {
+                self.block_tables.insert(
+                    location,
+                    decode_metadata_tensor(tensor, device, stage_on_host)?,
+                );
+            }
+            if let Some(tensor) = host.context_lens.as_ref() {
+                self.context_lens.insert(
+                    location,
+                    decode_metadata_tensor(tensor, device, stage_on_host)?,
+                );
+            }
+            if let Some((indptr, indices, last_page_len)) = host.paged_kv.as_ref() {
+                self.paged_kv_indptr.insert(
+                    location,
+                    decode_metadata_tensor(indptr, device, stage_on_host)?,
+                );
+                self.paged_kv_indices.insert(
+                    location,
+                    decode_metadata_tensor(indices, device, stage_on_host)?,
+                );
+                self.paged_kv_last_page_len.insert(
+                    location,
+                    decode_metadata_tensor(last_page_len, device, stage_on_host)?,
+                );
+            }
+            if let Some((request, tile, output, chunk, valid)) = host.tile_plan.as_ref() {
+                self.request_indices.insert(
+                    location,
+                    decode_metadata_tensor(request, device, stage_on_host)?,
+                );
+                self.kv_tile_indices.insert(
+                    location,
+                    decode_metadata_tensor(tile, device, stage_on_host)?,
+                );
+                self.o_indptr.insert(
+                    location,
+                    decode_metadata_tensor(output, device, stage_on_host)?,
+                );
+                self.kv_chunk_size.insert(
+                    location,
+                    decode_metadata_tensor(chunk, device, stage_on_host)?,
+                );
+                self.block_valid_mask.insert(
+                    location,
+                    decode_metadata_tensor(valid, device, stage_on_host)?,
+                );
+            }
+            Ok(())
+        }
+    }
+
+    impl DecodePagedRows {
+        pub fn batch_size(&self) -> usize {
+            self.slot_mappings.len()
+        }
+
+        fn paged_block_tables(&self) -> BlockTableRanges<'_> {
+            let ranges = self
+                .context_lens
+                .iter()
+                .zip(&self.full_context_lens)
+                .enumerate()
+                .map(|(row, (&context_len, &full_context_len))| {
+                    let table = self.block_tables.row(row);
+                    if self.sliding_window.is_none() {
+                        return 0..table.len();
+                    }
+                    let block_start =
+                        full_context_len.saturating_sub(context_len) / self.block_size;
+                    let block_end = block_start
+                        .saturating_add(context_len.div_ceil(self.block_size))
+                        .min(table.len());
+                    block_start.min(block_end)..block_end
+                })
+                .collect();
+            BlockTableRanges::new(&self.block_tables, ranges)
+        }
+
+        #[cfg(feature = "cuda")]
+        pub(crate) fn full_block_table(&self, row: usize) -> &[usize] {
+            self.block_tables.row(row)
+        }
+
+        #[cfg(test)]
+        pub(crate) fn materialized_block_tables(&self) -> Vec<Vec<usize>> {
+            let tables = self.paged_block_tables();
+            (0..tables.len())
+                .map(|row| tables.row(row).to_vec())
+                .collect()
+        }
+
+        /// Pad to `batch_size` rows. Pad rows alias row 0 for every read (same block table and context)
+        /// and carry `_PAD_SLOT_ID` slot mappings, so the cache kernels skip their KV writes.
+        pub fn padded(&self, batch_size: usize) -> Self {
+            let mut rows = self.clone();
+            let q = self.query_len;
+            while rows.slot_mappings.len() < batch_size {
+                rows.slot_mappings
+                    .push(vec![_PAD_SLOT_ID; self.slot_mappings[0].len()]);
+                rows.block_tables
+                    .push_rows_for_table(self.block_tables.row_table_index(0), q);
+                rows.context_lens.extend_from_slice(&self.context_lens[..q]);
+                rows.full_context_lens
+                    .extend_from_slice(&self.full_context_lens[..q]);
+            }
+            rows
+        }
+
+        fn graph_block_table_len(
+            &self,
+            blocks: usize,
+            live_context_len: usize,
+            capacity: Option<usize>,
+        ) -> usize {
+            let minimum_blocks = if crate::perf_flags::cuda_graphs_enabled()
+                && !self.use_standard_metadata
+                && self.query_len == 1
+                && self.decode_window == 1
+            {
+                capacity
+                    .unwrap_or(CUDA_GRAPH_DECODE_CONTEXT_FLOOR_TOKENS)
+                    .min(CUDA_GRAPH_DECODE_CONTEXT_FLOOR_TOKENS)
+                    .div_ceil(self.block_size)
+            } else {
+                0
+            };
+            cuda_graph_block_table_len_with_cap(
+                blocks.max(minimum_blocks),
+                self.block_size,
+                true,
+                live_context_len,
+                capacity,
+            )
+        }
+
+        #[cfg(feature = "cuda")]
+        pub(crate) fn graph_key(&self) -> DecodePagedRowsGraphKey {
+            let batch_size = self.batch_size();
+            assert!(self
+                .slot_mappings
+                .iter()
+                .all(|slots| slots.len() == self.query_len));
+            assert_eq!(self.block_tables.len(), batch_size * self.query_len);
+            assert_eq!(self.context_lens.len(), batch_size * self.query_len);
+            assert_eq!(self.full_context_lens.len(), batch_size * self.query_len);
+            let paged_block_tables = self.paged_block_tables();
+            let max_context_len = self.context_lens.iter().copied().max().unwrap_or(0);
+            let full_max_context_len = self.full_context_lens.iter().copied().max().unwrap_or(0);
+            let graph_capacity =
+                (!self.use_standard_metadata).then_some(self.max_paged_context_len);
+            let paged_graph_capacity = self
+                .sliding_window
+                .map(|window| {
+                    window
+                        .saturating_add(self.block_size.saturating_sub(1))
+                        .min(self.max_paged_context_len)
+                })
+                .or(graph_capacity);
+            let paged_block_table_len = self.graph_block_table_len(
+                (0..paged_block_tables.len())
+                    .map(|row| paged_block_tables.row(row).len())
+                    .max()
+                    .unwrap_or(1),
+                max_context_len,
+                paged_graph_capacity,
+            );
+            let full_block_table_len = self.graph_block_table_len(
+                (0..self.block_tables.len())
+                    .map(|row| self.block_tables.row(row).len())
+                    .max()
+                    .unwrap_or(1),
+                full_max_context_len,
+                graph_capacity,
+            );
+            DecodePagedRowsGraphKey {
+                batch_size,
+                query_len: self.query_len,
+                block_size: self.block_size,
+                use_standard_metadata: self.use_standard_metadata,
+                sliding_window: self.sliding_window,
+                decode_window: self.decode_window,
+                devices: self.devices.iter().map(Device::location).collect(),
+                num_kv_heads: self.num_kv_heads,
+                paged_block_table_len,
+                full_block_table_len,
+            }
+        }
+
+        pub fn build(self: &Arc<Self>) -> Result<PagedAttentionInputMetadata> {
+            let stage_on_host = crate::perf_flags::cuda_graphs_enabled()
+                && self.devices.iter().all(Device::is_cuda);
+            if stage_on_host {
+                self.build_graph_staged()
+            } else {
+                self.build_inner(false, PagedDecodeMetadataRequirements::conservative(self))
+            }
+        }
+
+        pub(crate) fn build_materialized(self: &Arc<Self>) -> Result<PagedAttentionInputMetadata> {
+            self.build_inner(false, PagedDecodeMetadataRequirements::conservative(self))
+        }
+
+        #[cfg(any(feature = "cuda", test))]
+        pub(crate) fn build_graph_update(
+            self: &Arc<Self>,
+            requirements: PagedDecodeMetadataRequirements,
+        ) -> Result<PagedAttentionInputMetadata> {
+            self.build_inner(true, requirements)
+        }
+
+        pub(crate) fn build_graph_staged(self: &Arc<Self>) -> Result<PagedAttentionInputMetadata> {
+            let max_slot_mapping_len = self.slot_mappings.iter().map(Vec::len).max().unwrap_or(1);
+            let slot_mappings = _make_tensor_with_pad(
+                self.slot_mappings.clone(),
+                max_slot_mapping_len,
+                _PAD_SLOT_ID,
+                &Device::Cpu,
+            )?;
+            let slot_mappings = self
+                .devices
+                .iter()
+                .map(|device| (device.location(), slot_mappings.clone()))
+                .collect();
+            let max_context_len = self.context_lens.iter().copied().max().unwrap_or(0);
+            let full_max_context_len = self.full_context_lens.iter().copied().max().unwrap_or(0);
+            Ok(PagedAttentionInputMetadata {
+                block_tables: None,
+                context_lens: None,
+                block_size: Some(self.block_size),
+                paged_context_lens_cpu: Some(self.context_lens.clone()),
+                full_paged_context_lens_cpu: Some(self.full_context_lens.clone()),
+                slot_mappings,
+                max_context_len: self.use_standard_metadata.then_some(max_context_len),
+                full_block_tables: None,
+                full_context_lens: None,
+                full_max_context_len: self.use_standard_metadata.then_some(full_max_context_len),
+                is_first_prompt_chunk: false,
+                is_final_prompt_chunk: true,
+                needs_logits: true,
+                prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
+                has_noncausal_mm_context: false,
+                prefix_gather_workspace_limit: None,
+                attention_memory: None,
+                prefix_masks: Default::default(),
+                mm_prefix_ranges: None,
+                full_mm_prefix_ranges: None,
+                prefill_attention_heads: 1,
+                prefill_key_value_heads: 1,
+                prefill_head_dim: 1,
+                flashinfer: None,
+                rope_positions: None,
+                num_cached_tokens: None,
+                query_lens: None,
+                cu_seqlens_q: None,
+                cu_seqlens_kv: None,
+                decode_rows: Some(self.clone()),
+            })
+        }
+
+        fn build_inner(
+            self: &Arc<Self>,
+            stage_on_host: bool,
+            requirements: PagedDecodeMetadataRequirements,
+        ) -> Result<PagedAttentionInputMetadata> {
+            // Create paged attention tensors on CPU first (see make_prompt_chunk for explanation)
+            let max_slot_mapping_len = self.slot_mappings.iter().map(Vec::len).max().unwrap_or(1);
+            let slot_mappings = _make_tensor_with_pad(
+                self.slot_mappings.clone(),
                 max_slot_mapping_len,
                 _PAD_SLOT_ID,
                 &Device::Cpu,
             )?;
 
-            let max_block_table_len = block_tables
-                .iter()
-                .map(|x| x.len())
+            let block_tables = self.paged_block_tables();
+            let paged_attn_context_lens = &self.context_lens;
+            let full_block_tables = &self.block_tables;
+            let full_paged_attn_context_lens = &self.full_context_lens;
+            let block_size = self.block_size;
+            let use_standard_metadata = self.use_standard_metadata;
+            let max_block_table_len = (0..block_tables.len())
+                .map(|row| block_tables.row(row).len())
                 .max()
                 .expect("block_tables should not be empty when paged attention is enabled");
-            let full_max_block_table_len = full_block_tables
-                .iter()
-                .map(|x| x.len())
+            let full_max_block_table_len = (0..full_block_tables.len())
+                .map(|row| full_block_tables.row(row).len())
                 .max()
                 .unwrap_or(0)
                 .max(1);
-            let block_size = paged_attn_input.block_size;
-            let graph_capacity =
-                (!use_standard_metadata).then_some(paged_attn_input.max_paged_context_len);
-            let paged_graph_capacity = paged_attn_input
+            let max_context_len = paged_attn_context_lens.iter().copied().max().unwrap_or(0);
+            let full_max_context_len = full_paged_attn_context_lens
+                .iter()
+                .copied()
+                .max()
+                .unwrap_or(0);
+            let graph_capacity = (!use_standard_metadata).then_some(self.max_paged_context_len);
+            let paged_graph_capacity = self
                 .sliding_window
                 .map(|window| {
                     window
                         .saturating_add(block_size.saturating_sub(1))
-                        .min(paged_attn_input.max_paged_context_len)
+                        .min(self.max_paged_context_len)
                 })
                 .or(graph_capacity);
-            let max_block_table_len = cuda_graph_block_table_len_with_cap(
+            let max_block_table_len = self.graph_block_table_len(
                 max_block_table_len,
-                block_size,
-                true,
+                max_context_len,
                 paged_graph_capacity,
             );
 
             let batch_size = block_tables.len();
-            let (paged_kv_indptr, paged_kv_indices, paged_kv_last_page_len) =
-                make_paged_kv_tensors(
-                    &block_tables,
-                    &paged_attn_context_lens,
-                    block_size,
-                    batch_size * max_block_table_len,
-                )?;
-
-            let decode_split_pages = flashinfer_decode_split_pages(block_size);
-            let split_pages = Some(decode_split_pages);
-            let tiles_per_row = max_block_table_len.max(1).div_ceil(decode_split_pages);
-            let (request_indices, kv_tile_indices, o_indptr, kv_chunk_size, block_valid_mask) =
-                make_paged_kv_decode_tensors(
-                    &block_tables,
-                    &paged_attn_context_lens,
-                    block_size,
-                    split_pages,
-                    batch_size * tiles_per_row,
-                )?;
-            let full_matches_paged = paged_attn_input.sliding_window.is_none();
-
-            let block_tables = _make_tensor_with_pad(
-                block_tables
-                    .iter()
-                    .map(|x| x.iter().map(|x| *x as u32).collect::<Vec<_>>())
-                    .collect::<Vec<_>>(),
-                max_block_table_len,
-                0,
-                &Device::Cpu,
-            )?;
-            let block_tables = block_tables.reshape(((), max_block_table_len))?;
-
-            let max_context_len = paged_attn_context_lens.iter().max().unwrap();
-
-            let context_lens = Tensor::from_vec(
-                paged_attn_context_lens
-                    .iter()
-                    .map(|x| *x as u32)
-                    .collect::<Vec<_>>(),
-                (paged_attn_context_lens.len(),),
-                &Device::Cpu,
-            )?;
-            // Build full (unwindowed) block tables and context lens.
-            let full_max_block_table_len = cuda_graph_block_table_len_with_cap(
-                full_max_block_table_len,
-                block_size,
-                true,
-                graph_capacity,
-            );
-
-            let full_block_tables_tensor = _make_tensor_with_pad(
-                full_block_tables
-                    .iter()
-                    .map(|x| x.iter().map(|x| *x as u32).collect::<Vec<_>>())
-                    .collect::<Vec<_>>(),
-                full_max_block_table_len,
-                0,
-                &Device::Cpu,
-            )?;
-            let full_block_tables_tensor =
-                full_block_tables_tensor.reshape(((), full_max_block_table_len))?;
-
-            let full_max_context_len = full_paged_attn_context_lens
-                .iter()
-                .max()
-                .copied()
-                .unwrap_or(0);
-
-            let (full_paged_kv_indptr, full_paged_kv_indices, full_paged_kv_last_page_len) =
-                make_paged_kv_tensors(
-                    &full_block_tables,
-                    &full_paged_attn_context_lens,
-                    block_size,
-                    full_block_tables.len() * full_max_block_table_len,
-                )?;
-            let full_decode_split_pages = flashinfer_decode_split_pages(block_size);
-            let full_split_pages = Some(full_decode_split_pages);
-            let full_tiles_per_row = full_max_block_table_len
-                .max(1)
-                .div_ceil(full_decode_split_pages);
-            let (
-                full_paged_kv_request_indices,
-                full_paged_kv_tile_indices,
-                full_paged_kv_o_indptr,
-                full_paged_kv_chunk_size,
-                full_paged_kv_block_valid_mask,
-            ) = make_paged_kv_decode_tensors(
-                &full_block_tables,
-                &full_paged_attn_context_lens,
-                block_size,
-                full_split_pages,
-                full_block_tables.len() * full_tiles_per_row,
-            )?;
-            let full_context_lens_tensor = Tensor::from_vec(
-                full_paged_attn_context_lens
-                    .iter()
-                    .map(|x| *x as u32)
-                    .collect::<Vec<_>>(),
-                (full_paged_attn_context_lens.len(),),
-                &Device::Cpu,
-            )?;
-
-            // For device mapping, make a copy of each tensor for each device
-            let devices = mapper.unwrap().get_unique_devices();
-            let mut slot_mappings_map = HashMap::new();
-            let mut block_tables_map = HashMap::new();
-            let mut context_lens_map = HashMap::new();
-            let mut full_block_tables_map = HashMap::new();
-            let mut full_context_lens_map = HashMap::new();
-            let mut paged_kv_indptr_map = HashMap::new();
-            let mut paged_kv_indices_map = HashMap::new();
-            let mut paged_kv_last_page_len_map = HashMap::new();
-            let mut full_paged_kv_indptr_map = HashMap::new();
-            let mut full_paged_kv_indices_map = HashMap::new();
-            let mut full_paged_kv_last_page_len_map = HashMap::new();
-            let mut paged_kv_request_indices_map = HashMap::new();
-            let mut paged_kv_tile_indices_map = HashMap::new();
-            let mut paged_kv_o_indptr_map = HashMap::new();
-            let mut paged_kv_chunk_size_map = HashMap::new();
-            let mut paged_kv_block_valid_mask_map = HashMap::new();
-            let mut full_paged_kv_request_indices_map = HashMap::new();
-            let mut full_paged_kv_tile_indices_map = HashMap::new();
-            let mut full_paged_kv_o_indptr_map = HashMap::new();
-            let mut full_paged_kv_chunk_size_map = HashMap::new();
-            let mut full_paged_kv_block_valid_mask_map = HashMap::new();
-
-            for device in devices {
-                let location = device.location();
-                let slot_mappings_device = slot_mappings.clone().to_device(&device)?;
-                let paged_kv_indptr_device = paged_kv_indptr.clone().to_device(&device)?;
-                let paged_kv_indices_device = paged_kv_indices.clone().to_device(&device)?;
-                let paged_kv_last_page_len_device =
-                    paged_kv_last_page_len.clone().to_device(&device)?;
-                let request_indices_device = request_indices.clone().to_device(&device)?;
-                let kv_tile_indices_device = kv_tile_indices.clone().to_device(&device)?;
-                let o_indptr_device = o_indptr.clone().to_device(&device)?;
-                let kv_chunk_size_device = kv_chunk_size.clone().to_device(&device)?;
-                let block_valid_mask_device = block_valid_mask.clone().to_device(&device)?;
-
-                slot_mappings_map.insert(location, slot_mappings_device);
-                paged_kv_indptr_map.insert(location, paged_kv_indptr_device.clone());
-                paged_kv_indices_map.insert(location, paged_kv_indices_device.clone());
-                paged_kv_last_page_len_map.insert(location, paged_kv_last_page_len_device.clone());
-                paged_kv_request_indices_map.insert(location, request_indices_device.clone());
-                paged_kv_tile_indices_map.insert(location, kv_tile_indices_device.clone());
-                paged_kv_o_indptr_map.insert(location, o_indptr_device.clone());
-                paged_kv_chunk_size_map.insert(location, kv_chunk_size_device.clone());
-                paged_kv_block_valid_mask_map.insert(location, block_valid_mask_device.clone());
-
-                // Block-diffusion decode windows also need the plain tables for the
-                // per-canvas KV gather, regardless of the attention backend layout.
-                if use_standard_metadata || decode_window > 1 {
-                    let block_tables_device = block_tables.clone().to_device(&device)?;
-                    let context_lens_device = context_lens.clone().to_device(&device)?;
-                    block_tables_map.insert(location, block_tables_device.clone());
-                    context_lens_map.insert(location, context_lens_device.clone());
-                    if full_matches_paged {
-                        full_block_tables_map.insert(location, block_tables_device);
-                        full_context_lens_map.insert(location, context_lens_device);
-                    } else {
-                        full_block_tables_map.insert(
-                            location,
-                            full_block_tables_tensor.clone().to_device(&device)?,
-                        );
-                        full_context_lens_map.insert(
-                            location,
-                            full_context_lens_tensor.clone().to_device(&device)?,
-                        );
-                    }
-                }
-
-                if full_matches_paged {
-                    full_paged_kv_indptr_map.insert(location, paged_kv_indptr_device);
-                    full_paged_kv_indices_map.insert(location, paged_kv_indices_device);
-                    full_paged_kv_last_page_len_map.insert(location, paged_kv_last_page_len_device);
-                    full_paged_kv_request_indices_map.insert(location, request_indices_device);
-                    full_paged_kv_tile_indices_map.insert(location, kv_tile_indices_device);
-                    full_paged_kv_o_indptr_map.insert(location, o_indptr_device);
-                    full_paged_kv_chunk_size_map.insert(location, kv_chunk_size_device);
-                    full_paged_kv_block_valid_mask_map.insert(location, block_valid_mask_device);
-                } else {
-                    full_paged_kv_indptr_map
-                        .insert(location, full_paged_kv_indptr.clone().to_device(&device)?);
-                    full_paged_kv_indices_map
-                        .insert(location, full_paged_kv_indices.clone().to_device(&device)?);
-                    full_paged_kv_last_page_len_map.insert(
-                        location,
-                        full_paged_kv_last_page_len.clone().to_device(&device)?,
+            let paged_kv = requirements
+                .flashinfer_paged_kv
+                .then(|| {
+                    make_paged_kv_tensors(
+                        &block_tables,
+                        paged_attn_context_lens,
+                        block_size,
+                        batch_size * max_block_table_len,
+                    )
+                })
+                .transpose()?;
+            let tile_plan = requirements
+                .flashinfer_tile_plan
+                .then(|| {
+                    let decode_split_pages = flashinfer_decode_split_pages(
+                        block_size,
+                        batch_size,
+                        self.num_kv_heads,
+                        max_context_len,
                     );
-                    full_paged_kv_request_indices_map.insert(
-                        location,
-                        full_paged_kv_request_indices.clone().to_device(&device)?,
-                    );
-                    full_paged_kv_tile_indices_map.insert(
-                        location,
-                        full_paged_kv_tile_indices.clone().to_device(&device)?,
-                    );
-                    full_paged_kv_o_indptr_map
-                        .insert(location, full_paged_kv_o_indptr.clone().to_device(&device)?);
-                    full_paged_kv_chunk_size_map.insert(
-                        location,
-                        full_paged_kv_chunk_size.clone().to_device(&device)?,
-                    );
-                    full_paged_kv_block_valid_mask_map.insert(
-                        location,
-                        full_paged_kv_block_valid_mask.clone().to_device(&device)?,
-                    );
-                }
-            }
-
-            let sliding_flashinfer_view = if full_matches_paged {
+                    let tiles_per_row = max_block_table_len
+                        .max(1)
+                        .div_ceil(flashinfer_decode_split_capacity_pages(block_size));
+                    make_paged_kv_decode_tensors(
+                        &block_tables,
+                        paged_attn_context_lens,
+                        block_size,
+                        Some(decode_split_pages),
+                        batch_size * tiles_per_row,
+                    )
+                })
+                .transpose()?;
+            let block_tables_tensor = if requirements.block_tables {
+                Some(
+                    make_block_table_tensor(&block_tables, max_block_table_len)?
+                        .reshape(((), max_block_table_len))?,
+                )
+            } else {
+                None
+            };
+            let context_lens_tensor = requirements
+                .context_lens
+                .then(|| {
+                    Tensor::from_vec(
+                        paged_attn_context_lens
+                            .iter()
+                            .map(|x| *x as u32)
+                            .collect::<Vec<_>>(),
+                        (paged_attn_context_lens.len(),),
+                        &Device::Cpu,
+                    )
+                })
+                .transpose()?;
+            let paged_tensors = DecodeViewHostTensors {
+                block_tables: block_tables_tensor,
+                context_lens: context_lens_tensor,
+                paged_kv,
+                tile_plan,
+            };
+            let full_matches_paged = self.sliding_window.is_none();
+            let full_tensors = if full_matches_paged {
                 None
             } else {
-                Some(flashinfer_view(
-                    use_standard_metadata.then_some(block_tables_map.clone()),
-                    use_standard_metadata.then_some(context_lens_map.clone()),
-                    use_standard_metadata.then_some(*max_context_len),
+                let full_max_block_table_len = self.graph_block_table_len(
+                    full_max_block_table_len,
+                    full_max_context_len,
+                    graph_capacity,
+                );
+                let block_tables_tensor = if requirements.block_tables {
+                    Some(
+                        make_block_table_tensor(full_block_tables, full_max_block_table_len)?
+                            .reshape(((), full_max_block_table_len))?,
+                    )
+                } else {
+                    None
+                };
+                let context_lens_tensor = requirements
+                    .context_lens
+                    .then(|| {
+                        Tensor::from_vec(
+                            full_paged_attn_context_lens
+                                .iter()
+                                .map(|x| *x as u32)
+                                .collect::<Vec<_>>(),
+                            (full_paged_attn_context_lens.len(),),
+                            &Device::Cpu,
+                        )
+                    })
+                    .transpose()?;
+                let paged_kv = requirements
+                    .flashinfer_paged_kv
+                    .then(|| {
+                        make_paged_kv_tensors(
+                            full_block_tables,
+                            full_paged_attn_context_lens,
+                            block_size,
+                            full_block_tables.len() * full_max_block_table_len,
+                        )
+                    })
+                    .transpose()?;
+                let tile_plan = requirements
+                    .flashinfer_tile_plan
+                    .then(|| {
+                        let split_pages = flashinfer_decode_split_pages(
+                            block_size,
+                            batch_size,
+                            self.num_kv_heads,
+                            full_max_context_len,
+                        );
+                        let tiles_per_row = full_max_block_table_len
+                            .max(1)
+                            .div_ceil(flashinfer_decode_split_capacity_pages(block_size));
+                        make_paged_kv_decode_tensors(
+                            full_block_tables,
+                            full_paged_attn_context_lens,
+                            block_size,
+                            Some(split_pages),
+                            full_block_tables.len() * tiles_per_row,
+                        )
+                    })
+                    .transpose()?;
+                Some(DecodeViewHostTensors {
+                    block_tables: block_tables_tensor,
+                    context_lens: context_lens_tensor,
+                    paged_kv,
+                    tile_plan,
+                })
+            };
+
+            let mut slot_mappings_map = HashMap::new();
+            let mut paged_maps = DecodeViewDeviceMaps::default();
+            let mut full_maps = DecodeViewDeviceMaps::default();
+            for device in &self.devices {
+                slot_mappings_map.insert(
+                    device.location(),
+                    decode_metadata_tensor(&slot_mappings, device, stage_on_host)?,
+                );
+                paged_maps.insert(&paged_tensors, device, stage_on_host)?;
+                if let Some(full_tensors) = full_tensors.as_ref() {
+                    full_maps.insert(full_tensors, device, stage_on_host)?;
+                }
+            }
+            if full_matches_paged {
+                full_maps = DecodeViewDeviceMaps {
+                    block_tables: paged_maps.block_tables.clone(),
+                    context_lens: paged_maps.context_lens.clone(),
+                    paged_kv_indptr: paged_maps.paged_kv_indptr.clone(),
+                    paged_kv_indices: paged_maps.paged_kv_indices.clone(),
+                    paged_kv_last_page_len: paged_maps.paged_kv_last_page_len.clone(),
+                    request_indices: paged_maps.request_indices.clone(),
+                    kv_tile_indices: paged_maps.kv_tile_indices.clone(),
+                    o_indptr: paged_maps.o_indptr.clone(),
+                    kv_chunk_size: paged_maps.kv_chunk_size.clone(),
+                    block_valid_mask: paged_maps.block_valid_mask.clone(),
+                };
+            }
+
+            let flashinfer = requirements.flashinfer_paged_kv.then(|| {
+                let sliding = (!full_matches_paged).then(|| {
+                    flashinfer_view(
+                        requirements
+                            .context_lens
+                            .then_some(paged_maps.block_tables.clone()),
+                        requirements
+                            .context_lens
+                            .then_some(paged_maps.context_lens.clone()),
+                        requirements.context_lens.then_some(max_context_len),
+                        flashinfer_paged_kv(
+                            paged_maps.paged_kv_indptr.clone(),
+                            paged_maps.paged_kv_indices.clone(),
+                            paged_maps.paged_kv_last_page_len.clone(),
+                        ),
+                        flashinfer_tile_plan(
+                            paged_maps.request_indices.clone(),
+                            paged_maps.kv_tile_indices.clone(),
+                            paged_maps.o_indptr.clone(),
+                            paged_maps.kv_chunk_size.clone(),
+                            paged_maps.block_valid_mask.clone(),
+                        ),
+                    )
+                });
+                let logical = flashinfer_view(
+                    requirements
+                        .context_lens
+                        .then_some(full_maps.block_tables.clone()),
+                    requirements
+                        .context_lens
+                        .then_some(full_maps.context_lens.clone()),
+                    requirements.context_lens.then_some(full_max_context_len),
                     flashinfer_paged_kv(
-                        paged_kv_indptr_map.clone(),
-                        paged_kv_indices_map.clone(),
-                        paged_kv_last_page_len_map.clone(),
+                        full_maps.paged_kv_indptr.clone(),
+                        full_maps.paged_kv_indices.clone(),
+                        full_maps.paged_kv_last_page_len.clone(),
                     ),
                     flashinfer_tile_plan(
-                        paged_kv_request_indices_map.clone(),
-                        paged_kv_tile_indices_map.clone(),
-                        paged_kv_o_indptr_map.clone(),
-                        paged_kv_chunk_size_map.clone(),
-                        paged_kv_block_valid_mask_map.clone(),
+                        full_maps.request_indices.clone(),
+                        full_maps.kv_tile_indices.clone(),
+                        full_maps.o_indptr.clone(),
+                        full_maps.kv_chunk_size.clone(),
+                        full_maps.block_valid_mask.clone(),
                     ),
-                ))
-            };
-            let logical_flashinfer_view = flashinfer_view(
-                use_standard_metadata.then_some(full_block_tables_map.clone()),
-                use_standard_metadata.then_some(full_context_lens_map.clone()),
-                use_standard_metadata.then_some(full_max_context_len),
-                flashinfer_paged_kv(
-                    full_paged_kv_indptr_map.clone(),
-                    full_paged_kv_indices_map.clone(),
-                    full_paged_kv_last_page_len_map.clone(),
-                ),
-                flashinfer_tile_plan(
-                    full_paged_kv_request_indices_map.clone(),
-                    full_paged_kv_tile_indices_map.clone(),
-                    full_paged_kv_o_indptr_map.clone(),
-                    full_paged_kv_chunk_size_map.clone(),
-                    full_paged_kv_block_valid_mask_map.clone(),
-                ),
-            );
-            let flashinfer = Some(flashinfer_metadata(
-                logical_flashinfer_view,
-                sliding_flashinfer_view,
-            ));
+                );
+                flashinfer_metadata(logical, sliding)
+            });
 
-            Some(PagedAttentionInputMetadata {
+            Ok(PagedAttentionInputMetadata {
                 slot_mappings: slot_mappings_map,
-                block_tables: (use_standard_metadata || decode_window > 1)
-                    .then_some(block_tables_map),
-                context_lens: use_standard_metadata.then_some(context_lens_map),
+                block_tables: requirements.block_tables.then_some(paged_maps.block_tables),
+                context_lens: requirements.context_lens.then_some(paged_maps.context_lens),
                 block_size: Some(block_size),
                 paged_context_lens_cpu: Some(paged_attn_context_lens.clone()),
                 full_paged_context_lens_cpu: Some(full_paged_attn_context_lens.clone()),
-                max_context_len: use_standard_metadata.then_some(*max_context_len),
-                full_block_tables: (use_standard_metadata || decode_window > 1)
-                    .then_some(full_block_tables_map),
-                full_context_lens: use_standard_metadata.then_some(full_context_lens_map),
-                full_max_context_len: use_standard_metadata.then_some(full_max_context_len),
+                max_context_len: requirements.context_lens.then_some(max_context_len),
+                full_block_tables: requirements.block_tables.then_some(full_maps.block_tables),
+                full_context_lens: requirements.context_lens.then_some(full_maps.context_lens),
+                full_max_context_len: requirements.context_lens.then_some(full_max_context_len),
                 is_first_prompt_chunk: false,
                 is_final_prompt_chunk: true,
+                needs_logits: true,
                 prompt_chunk_attention_policy: MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: false,
+                prefix_gather_workspace_limit: None,
+                attention_memory: None,
+                prefix_masks: Default::default(),
                 mm_prefix_ranges: None,
+                full_mm_prefix_ranges: None,
                 prefill_attention_heads: 1,
                 prefill_key_value_heads: 1,
                 prefill_head_dim: 1,
@@ -1634,19 +2439,9 @@ pub mod text_models_inputs_processor {
                 query_lens: None,
                 cu_seqlens_q: None,
                 cu_seqlens_kv: None,
+                decode_rows: Some(self.clone()),
             })
-        } else {
-            None
-        };
-
-        Ok(InputMetadata {
-            input: Tensor::cat(&seqs_tensors, 0).unwrap(),
-            positions: seqlen_offsets,
-            context_lens,
-            position_ids,
-            paged_attn_meta,
-            flash_meta,
-        })
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1676,6 +2471,7 @@ pub mod text_models_inputs_processor {
             mapper,
             Some(&prefix_cache_lens),
             sliding_window,
+            false,
         )
     }
 
@@ -1710,6 +2506,7 @@ pub mod text_models_inputs_processor {
                 None
             },
             sliding_window,
+            true,
         )
         .map(|inputs| InnerInputProcessorOutput {
             inputs,
@@ -1828,6 +2625,18 @@ pub mod text_models_inputs_processor {
         pub flash_meta: FlashParams,
         pub flash_meta_full: Option<FlashParams>,
         pub recurrent_batch_kind: RecurrentBatchKind,
+        pub adapter_leases: Arc<[Option<AdapterLease>]>,
+    }
+
+    fn adapter_leases(
+        input_seqs: &[&mut Sequence],
+        seq_indices: &[usize],
+    ) -> Arc<[Option<AdapterLease>]> {
+        seq_indices
+            .iter()
+            .map(|&index| input_seqs[index].adapter_lease().cloned())
+            .collect::<Vec<_>>()
+            .into()
     }
 
     pub struct TextInputsProcessor;
@@ -1901,6 +2710,7 @@ pub mod text_models_inputs_processor {
                         },
                     seq_indices: _,
                 } = completion;
+                let adapter_leases = adapter_leases(input_seqs, &seq_indices);
                 let inputs: Box<dyn Any> = Box::new(ModelInputs {
                     input_ids,
                     input_ids_full: Some(input_ids_full),
@@ -1912,6 +2722,7 @@ pub mod text_models_inputs_processor {
                     flash_meta,
                     flash_meta_full: Some(flash_meta_full),
                     recurrent_batch_kind: RecurrentBatchKind::Decode,
+                    adapter_leases,
                 });
                 Ok(InputProcessorOutput {
                     inputs,
@@ -1943,6 +2754,7 @@ pub mod text_models_inputs_processor {
                         },
                     seq_indices,
                 } = metadata;
+                let adapter_leases = adapter_leases(input_seqs, &seq_indices);
                 let inputs: Box<dyn Any> = Box::new(ModelInputs {
                     input_ids: input_ids.clone(),
                     input_ids_full: Some(input_ids),
@@ -1954,6 +2766,7 @@ pub mod text_models_inputs_processor {
                     flash_meta: flash_meta.clone(),
                     flash_meta_full: Some(flash_meta),
                     recurrent_batch_kind: RecurrentBatchKind::Prefill,
+                    adapter_leases,
                 });
                 Ok(InputProcessorOutput {
                     inputs,
@@ -1985,6 +2798,7 @@ pub mod text_models_inputs_processor {
                         },
                     seq_indices,
                 } = metadata;
+                let adapter_leases = adapter_leases(input_seqs, &seq_indices);
                 let inputs: Box<dyn Any> = Box::new(ModelInputs {
                     input_ids,
                     input_ids_full: None,
@@ -1996,12 +2810,17 @@ pub mod text_models_inputs_processor {
                     flash_meta,
                     flash_meta_full: None,
                     recurrent_batch_kind: RecurrentBatchKind::Prefill,
+                    adapter_leases,
                 });
                 Ok(InputProcessorOutput {
                     inputs,
                     seq_indices,
                 })
             } else {
+                let recurrent_batch_kind = recurrent_batch_kind_for_input(
+                    false,
+                    crate::speculative::staging::staged_batch_width(input_seqs).is_some(),
+                );
                 let metadata = get_completion_input(
                     input_seqs
                         .iter()
@@ -2028,6 +2847,7 @@ pub mod text_models_inputs_processor {
                         },
                     seq_indices,
                 } = metadata;
+                let adapter_leases = adapter_leases(input_seqs, &seq_indices);
                 let inputs: Box<dyn Any> = Box::new(ModelInputs {
                     input_ids,
                     input_ids_full: None,
@@ -2038,7 +2858,8 @@ pub mod text_models_inputs_processor {
                     paged_attn_meta,
                     flash_meta,
                     flash_meta_full: None,
-                    recurrent_batch_kind: RecurrentBatchKind::Decode,
+                    recurrent_batch_kind,
+                    adapter_leases,
                 });
                 Ok(InputProcessorOutput {
                     inputs,
@@ -2049,6 +2870,451 @@ pub mod text_models_inputs_processor {
 
         fn get_type(&self) -> InputsProcessorType {
             InputsProcessorType::Text
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        const FIRST_METAL_LIMIT: usize = 1024;
+        const SECOND_METAL_LIMIT: usize = 4096;
+
+        #[test]
+        fn packed_prefill_requires_cold_final_causal_ragged_inputs() {
+            let lengths = [512, 1, 1];
+            assert!(uses_packed_prefill(&lengths, true, true, true, true));
+            assert!(!uses_packed_prefill(&lengths, false, true, true, true));
+            assert!(!uses_packed_prefill(&lengths, true, false, true, true));
+            assert!(!uses_packed_prefill(&lengths, true, true, false, true));
+            assert!(!uses_packed_prefill(&lengths, true, true, true, false));
+            assert!(!uses_packed_prefill(&[512, 512], true, true, true, true));
+            assert!(!uses_packed_prefill(&[], true, true, true, true));
+        }
+
+        #[test]
+        fn attention_memory_limits_follow_each_device() {
+            let first = DeviceLocation::Metal { gpu_id: 0 };
+            let second = DeviceLocation::Metal { gpu_id: 1 };
+            let budget = AttentionMemoryBudget {
+                workspace_bytes: FIRST_METAL_LIMIT,
+                metal_allocation_limits: Some(Arc::new(vec![
+                    (first, FIRST_METAL_LIMIT),
+                    (second, SECOND_METAL_LIMIT),
+                ])),
+            };
+            assert_eq!(
+                budget.metal_allocation_limit(first),
+                Some(FIRST_METAL_LIMIT)
+            );
+            assert_eq!(
+                budget.metal_allocation_limit(second),
+                Some(SECOND_METAL_LIMIT)
+            );
+            assert_eq!(
+                budget.metal_allocation_limit(DeviceLocation::Metal { gpu_id: 2 }),
+                None
+            );
+            assert_eq!(
+                budget.metal_allocation_limit(DeviceLocation::Cuda { gpu_id: 0 }),
+                None
+            );
+        }
+
+        #[test]
+        fn reduced_prefill_keeps_physical_cache_views_separate_from_positions() -> Result<()> {
+            let device = Device::Cpu;
+            let location = device.location();
+            let mut metadata = PagedAttentionInputMetadata::dummy(&device)?;
+            metadata.attention_memory = Some(AttentionMemoryBudget {
+                workspace_bytes: FIRST_METAL_LIMIT,
+                metal_allocation_limits: Some(Arc::new(vec![
+                    (DeviceLocation::Metal { gpu_id: 0 }, FIRST_METAL_LIMIT),
+                    (DeviceLocation::Metal { gpu_id: 1 }, SECOND_METAL_LIMIT),
+                ])),
+            });
+            metadata.block_size = Some(32);
+            metadata.block_tables = Some(HashMap::from([(
+                location,
+                Tensor::zeros((2, 17), DType::U32, &device)?,
+            )]));
+            metadata.full_block_tables = Some(HashMap::from([(
+                location,
+                Tensor::zeros((2, 29), DType::U32, &device)?,
+            )]));
+            metadata.paged_context_lens_cpu = Some(vec![515, 541]);
+            metadata.full_paged_context_lens_cpu = Some(vec![899, 701]);
+            let reduced = metadata.for_reduced_prefill_queries(&[device], &[898, 700], &[1, 1])?;
+            let memory = reduced.attention_memory.as_ref().unwrap();
+            assert_eq!(memory.workspace_bytes, FIRST_METAL_LIMIT);
+            assert_eq!(
+                memory.metal_allocation_limit(DeviceLocation::Metal { gpu_id: 1 }),
+                Some(SECOND_METAL_LIMIT)
+            );
+            assert_eq!(
+                reduced.context_lens.as_ref().unwrap()[&location].to_vec1::<u32>()?,
+                [515, 541],
+            );
+            assert_eq!(
+                reduced.full_context_lens.as_ref().unwrap()[&location].to_vec1::<u32>()?,
+                [899, 701],
+            );
+            assert_eq!(reduced.max_context_len, Some(541));
+            assert_eq!(reduced.full_max_context_len, Some(899));
+            assert_eq!(
+                reduced.rope_positions.as_ref().unwrap()[&location].to_vec1::<u32>()?,
+                [898, 700],
+            );
+            assert_eq!(
+                reduced.cu_seqlens_kv.as_ref().unwrap()[&location].to_vec1::<u32>()?,
+                [0, 899, 1600],
+            );
+            Ok(())
+        }
+
+        fn assert_zero_padded_rows(rows: &[Vec<u32>], prefixes: &[&[u32]]) {
+            assert_eq!(rows.len(), prefixes.len());
+            for (row, prefix) in rows.iter().zip(prefixes) {
+                assert_eq!(&row[..prefix.len()], *prefix);
+                assert!(row[prefix.len()..].iter().all(|&value| value == 0));
+            }
+        }
+
+        #[test]
+        fn completion_input_keeps_staged_rows_device_backed() {
+            let staged = vec![
+                Tensor::from_vec(vec![10u32, 11], 2, &Device::Cpu).unwrap(),
+                Tensor::from_vec(vec![20u32, 21], 2, &Device::Cpu).unwrap(),
+            ];
+            let input =
+                completion_input_tensor(vec![7u32, 8], 2, 1, &staged, &Device::Cpu).unwrap();
+            assert_eq!(
+                input.to_vec2::<u32>().unwrap(),
+                vec![vec![7, 10, 11], vec![8, 20, 21]]
+            );
+        }
+
+        #[test]
+        fn cuda_graph_context_buckets_track_live_rows() {
+            const CACHE_CAPACITY: usize = 1_604_288;
+            assert_eq!(
+                cuda_graph_block_table_len_with_cap(4, 32, true, 128, Some(CACHE_CAPACITY)),
+                16
+            );
+            assert_eq!(
+                cuda_graph_block_table_len_with_cap(16, 32, true, 512, Some(CACHE_CAPACITY)),
+                16
+            );
+            assert_eq!(
+                cuda_graph_block_table_len_with_cap(17, 32, true, 513, Some(CACHE_CAPACITY)),
+                32
+            );
+            assert_eq!(
+                cuda_graph_block_table_len_with_cap(33, 32, true, 1025, Some(CACHE_CAPACITY)),
+                64
+            );
+        }
+
+        #[test]
+        fn flashinfer_decode_metadata_ignores_aggregate_cache_capacity() {
+            const CACHE_CAPACITY: usize = 1_604_288;
+            let table = vec![1, 2, 3, 4];
+            let metadata = Arc::new(DecodePagedRows {
+                slot_mappings: vec![vec![127]],
+                block_tables: BlockTableSnapshot::from_owned_sequence_tables(vec![table], 1),
+                context_lens: vec![128],
+                full_context_lens: vec![128],
+                query_len: 1,
+                block_size: 32,
+                use_standard_metadata: false,
+                max_paged_context_len: CACHE_CAPACITY,
+                sliding_window: None,
+                decode_window: 1,
+                devices: vec![Device::Cpu],
+                num_kv_heads: 4,
+            })
+            .build()
+            .unwrap();
+            let view = &metadata.flashinfer.unwrap().views.logical;
+            assert_eq!(view.paged_kv.indices[&Device::Cpu.location()].dims(), &[64]);
+            assert_eq!(
+                view.tile_plan.request_indices[&Device::Cpu.location()].dims(),
+                &[8]
+            );
+        }
+
+        #[test]
+        fn fa3_graph_update_builds_csr_without_fallback_metadata() {
+            let table = vec![1, 2, 3, 4];
+            let rows = Arc::new(DecodePagedRows {
+                slot_mappings: vec![vec![127]],
+                block_tables: BlockTableSnapshot::from_owned_sequence_tables(vec![table], 1),
+                context_lens: vec![128],
+                full_context_lens: vec![128],
+                query_len: 1,
+                block_size: 32,
+                use_standard_metadata: false,
+                max_paged_context_len: 1_604_288,
+                sliding_window: None,
+                decode_window: 1,
+                devices: vec![Device::Cpu],
+                num_kv_heads: 4,
+            });
+            let metadata = rows
+                .build_graph_update(PagedDecodeMetadataRequirements::graph(
+                    false, false, true, false,
+                ))
+                .unwrap();
+            assert!(metadata.block_tables.is_none());
+            assert!(metadata.context_lens.is_none());
+            let view = &metadata.flashinfer.unwrap().views.logical;
+            assert!(!view.paged_kv.indices.is_empty());
+            assert!(view.tile_plan.request_indices.is_empty());
+            assert!(view.tile_plan.kv_tile_indices.is_empty());
+            assert!(view.tile_plan.o_indptr.is_empty());
+            assert!(view.tile_plan.kv_chunk_size.is_empty());
+            assert!(view.tile_plan.block_valid_mask.is_empty());
+        }
+
+        #[test]
+        fn padded_decode_rows_alias_row_zero_without_kv_writes() {
+            let rows = DecodePagedRows {
+                slot_mappings: vec![vec![40, 41], vec![72, 73]],
+                block_tables: BlockTableSnapshot::from_owned_sequence_tables(
+                    vec![vec![1, 2], vec![3]],
+                    2,
+                ),
+                context_lens: vec![40, 41, 8, 9],
+                full_context_lens: vec![40, 41, 8, 9],
+                query_len: 2,
+                block_size: 32,
+                use_standard_metadata: true,
+                max_paged_context_len: 1024,
+                sliding_window: None,
+                decode_window: 1,
+                devices: vec![Device::Cpu],
+                num_kv_heads: 4,
+            };
+            let padded = rows.padded(4);
+            assert_eq!(padded.batch_size(), 4);
+            assert_eq!(padded.slot_mappings[2], vec![_PAD_SLOT_ID, _PAD_SLOT_ID]);
+            assert_eq!(padded.slot_mappings[3], vec![_PAD_SLOT_ID, _PAD_SLOT_ID]);
+            assert_eq!(padded.block_tables.len(), 8);
+            assert_eq!(padded.block_tables.unique_table_count(), 2);
+            assert_eq!(
+                &padded.materialized_block_tables()[4..],
+                &[vec![1, 2], vec![1, 2], vec![1, 2], vec![1, 2]]
+            );
+            assert_eq!(&padded.context_lens[4..], &[40, 41, 40, 41]);
+            assert_eq!(&padded.full_context_lens[4..], &[40, 41, 40, 41]);
+            let metadata = Arc::new(padded).build().unwrap();
+            assert_eq!(metadata.slot_mappings[&Device::Cpu.location()].dims(), &[8]);
+            assert_eq!(
+                metadata.paged_context_lens_cpu.as_deref(),
+                Some(&[40, 41, 8, 9, 40, 41, 40, 41][..])
+            );
+            assert!(metadata.decode_rows.is_some());
+        }
+
+        #[test]
+        fn unsliding_decode_rows_share_canonical_tables_and_metadata() {
+            let rows = Arc::new(DecodePagedRows {
+                slot_mappings: vec![vec![39, 40], vec![71, 72]],
+                block_tables: BlockTableSnapshot::from_owned_sequence_tables(
+                    vec![vec![10, 11, 12], vec![20, 21, 22]],
+                    2,
+                ),
+                context_lens: vec![9, 10, 7, 8],
+                full_context_lens: vec![9, 10, 7, 8],
+                query_len: 2,
+                block_size: 4,
+                use_standard_metadata: true,
+                max_paged_context_len: 128,
+                sliding_window: None,
+                decode_window: 1,
+                devices: vec![Device::Cpu],
+                num_kv_heads: 1,
+            });
+
+            assert_eq!(rows.block_tables.unique_table_count(), 2);
+            assert_eq!(
+                rows.materialized_block_tables(),
+                vec![
+                    vec![10, 11, 12],
+                    vec![10, 11, 12],
+                    vec![20, 21, 22],
+                    vec![20, 21, 22],
+                ]
+            );
+
+            let metadata = rows.build_materialized().unwrap();
+            let location = Device::Cpu.location();
+            assert_eq!(
+                metadata.block_tables.as_ref().unwrap()[&location].id(),
+                metadata.full_block_tables.as_ref().unwrap()[&location].id()
+            );
+            let flashinfer = metadata.flashinfer.unwrap();
+            assert!(flashinfer.views.sliding.is_none());
+            let block_tables = flashinfer.views.logical.block_tables.unwrap()[&location]
+                .to_vec2::<u32>()
+                .unwrap();
+            assert_zero_padded_rows(
+                &block_tables,
+                &[&[10, 11, 12], &[10, 11, 12], &[20, 21, 22], &[20, 21, 22]],
+            );
+        }
+
+        #[test]
+        fn sliding_decode_rows_materialize_exact_logical_and_windowed_tables() {
+            let rows = Arc::new(DecodePagedRows {
+                slot_mappings: vec![vec![47, 48], vec![91, 92]],
+                block_tables: BlockTableSnapshot::from_owned_sequence_tables(
+                    vec![vec![10, 11, 12, 13], vec![20, 21, 22]],
+                    2,
+                ),
+                context_lens: vec![5, 6, 4, 5],
+                full_context_lens: vec![9, 10, 4, 5],
+                query_len: 2,
+                block_size: 4,
+                use_standard_metadata: true,
+                max_paged_context_len: 128,
+                sliding_window: Some(4),
+                decode_window: 1,
+                devices: vec![Device::Cpu],
+                num_kv_heads: 1,
+            });
+
+            assert_eq!(
+                rows.materialized_block_tables(),
+                vec![vec![11, 12], vec![11, 12], vec![20], vec![20, 21]]
+            );
+            let metadata = rows.build_materialized().unwrap();
+            let location = Device::Cpu.location();
+            assert_eq!(
+                metadata.block_tables.unwrap()[&location]
+                    .to_vec2::<u32>()
+                    .unwrap(),
+                vec![vec![11, 12], vec![11, 12], vec![20, 0], vec![20, 21]]
+            );
+            let full_block_tables = metadata.full_block_tables.unwrap()[&location]
+                .to_vec2::<u32>()
+                .unwrap();
+            assert_zero_padded_rows(
+                &full_block_tables,
+                &[
+                    &[10, 11, 12, 13],
+                    &[10, 11, 12, 13],
+                    &[20, 21, 22],
+                    &[20, 21, 22],
+                ],
+            );
+        }
+
+        #[test]
+        fn ragged_prompt_selects_each_last_real_token() {
+            let short = [1u32, 2];
+            let long = [3u32, 4, 5, 6];
+            let input = make_prompt_chunk(
+                0,
+                vec![short.as_slice(), long.as_slice()],
+                &[0, 1],
+                &Device::Cpu,
+                None,
+                false,
+                None,
+                None,
+                None,
+                None,
+                false,
+            )
+            .unwrap();
+
+            assert_eq!(input.input.dims(), &[2, 4]);
+            assert_eq!(input.context_lens, vec![(1, 1), (3, 1)]);
+        }
+
+        #[test]
+        fn packed_rope_positions_preserve_logical_offsets() {
+            let positions = packed_rope_positions(&[0, 16, 32], &[3, 1, 4]).unwrap();
+
+            assert_eq!(positions, vec![0, 1, 2, 16, 32, 33, 34, 35]);
+        }
+
+        #[test]
+        fn packed_rope_positions_reject_mismatched_metadata() {
+            let error = packed_rope_positions(&[0, 16], &[3]).unwrap_err();
+
+            assert!(error.to_string().contains("2 offsets for 1 queries"));
+        }
+
+        #[test]
+        fn packed_flash_params_preserve_ragged_boundaries() {
+            let params = make_flash_params(
+                &Device::Cpu,
+                None,
+                &[0, 3, 1, 4],
+                &[0, 3, 1, 4],
+                None,
+                true,
+                true,
+            )
+            .unwrap();
+            let cumulative = params.cumulative_seqlens_q[&Device::Cpu.location()]
+                .to_vec1::<u32>()
+                .unwrap();
+
+            assert_eq!(params.max_q, 4);
+            assert_eq!(cumulative, vec![0, 3, 4, 8]);
+        }
+
+        #[test]
+        fn sliding_single_token_uses_the_retained_window() {
+            assert_eq!(
+                sliding_k_lengths(&[0, 1], &[0, 101], 4).unwrap(),
+                vec![0, 4]
+            );
+        }
+
+        #[test]
+        fn sliding_query_longer_than_the_window_keeps_the_full_query() {
+            assert_eq!(sliding_k_lengths(&[0, 8], &[0, 8], 4).unwrap(), vec![0, 8]);
+        }
+
+        #[test]
+        fn sliding_cached_multi_token_append_keeps_retained_and_new_tokens() {
+            assert_eq!(
+                sliding_k_lengths(&[0, 3], &[0, 103], 4).unwrap(),
+                vec![0, 7]
+            );
+        }
+
+        #[test]
+        fn fresh_packed_sliding_metadata_preserves_logical_boundaries() {
+            let params = make_flash_params(
+                &Device::Cpu,
+                None,
+                &[0, 3, 1, 6],
+                &[0, 3, 1, 6],
+                Some(4),
+                true,
+                true,
+            )
+            .unwrap();
+            let sliding = params.sliding_k.unwrap();
+
+            assert_eq!(sliding.max, 6);
+            assert_eq!(
+                sliding.cumulative_seqlens[&Device::Cpu.location()]
+                    .to_vec1::<u32>()
+                    .unwrap(),
+                vec![0, 3, 4, 10]
+            );
+        }
+
+        #[test]
+        fn sliding_metadata_rejects_inconsistent_lengths() {
+            assert!(sliding_k_lengths(&[0, 2], &[0], 4).is_err());
+            assert!(sliding_k_lengths(&[0, 3], &[0, 2], 4).is_err());
         }
     }
 }

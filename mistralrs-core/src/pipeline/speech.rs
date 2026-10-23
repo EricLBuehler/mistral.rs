@@ -224,7 +224,7 @@ impl Loader for SpeechLoader {
             Ok(Box::new(SpeechModelPaths { weights, config }))
         };
         self.load_model_from_path(
-            &paths?,
+            paths?.as_ref(),
             dtype,
             device,
             silent,
@@ -237,17 +237,17 @@ impl Loader for SpeechLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_path(
         &self,
-        paths: &Box<dyn ModelPaths>,
+        paths: &dyn ModelPaths,
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
         mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
-        _paged_attn_config: Option<PagedAttentionConfig>,
+        mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
-        let paths = &paths
-            .as_ref()
+        super::disable_unsupported_paged_attention(&mut paged_attn_config)?;
+        let paths = paths
             .as_any()
             .downcast_ref::<SpeechModelPaths>()
             .expect("Path downcast failed.");
@@ -322,11 +322,15 @@ impl Loader for SpeechLoader {
                 sliding_window: None,
                 cache_config: None,
                 cache_engine: None,
+                memory_plan: None,
+                #[cfg(feature = "cuda")]
+                runtime_memory_reservation: None,
                 model_metadata: None,
                 modalities: Modalities {
                     input: vec![SupportedModality::Text],
                     output: vec![SupportedModality::Audio],
                 },
+                loaded_for_uqff_write: false,
             }),
             dummy_cache: EitherCache::Full(Cache::new(0, false)),
             cfg: self
@@ -363,7 +367,9 @@ impl IsqPipelineMixin for SpeechPipeline {
 }
 
 impl CacheManagerMixin for SpeechPipeline {
-    fn clone_in_cache(&self, _seqs: &mut [&mut Sequence]) {}
+    fn clone_in_cache(&self, _seqs: &mut [&mut Sequence]) -> candle_core::Result<()> {
+        Ok(())
+    }
     fn clone_out_cache(&self, _seqs: &mut [&mut Sequence]) {}
     fn set_none_cache(
         &self,
@@ -371,7 +377,8 @@ impl CacheManagerMixin for SpeechPipeline {
         _reset_non_granular: bool,
         _modify_draft_cache: bool,
         _load_preallocated_cache: bool,
-    ) {
+    ) -> candle_core::Result<()> {
+        Ok(())
     }
     fn cache(&self) -> &EitherCache {
         &self.dummy_cache
@@ -445,3 +452,48 @@ impl Pipeline for SpeechPipeline {
 }
 
 impl AnyMoePipelineMixin for SpeechPipeline {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{AutoDeviceMapParams, MemoryGoal, ModelDType, PagedCacheType};
+
+    const TEST_CACHE_TOKENS: usize = 64;
+    const TEST_CACHE_BYTES: usize = 1024 * 1024;
+
+    #[test]
+    fn explicit_memory_goal_fails_before_speech_weights_are_opened() -> Result<()> {
+        let loader = SpeechLoader {
+            model_id: String::new(),
+            dac_model_id: None,
+            arch: SpeechLoaderType::Dia,
+            cfg: None,
+        };
+        let paths = SpeechModelPaths {
+            weights: Vec::new(),
+            config: PathBuf::new(),
+        };
+        for goal in [
+            MemoryGoal::Utilization(0.5),
+            MemoryGoal::KvTokens(TEST_CACHE_TOKENS),
+            MemoryGoal::KvBytes(TEST_CACHE_BYTES),
+        ] {
+            let result = loader.load_model_from_path(
+                &paths,
+                &ModelDType::F32,
+                &Device::Cpu,
+                true,
+                DeviceMapSetting::Auto(AutoDeviceMapParams::default_text()),
+                None,
+                Some(PagedAttentionConfig::new(None, goal, PagedCacheType::Auto)?),
+            );
+            let error = result
+                .err()
+                .expect("speech accepted an explicit memory goal");
+            assert!(error
+                .to_string()
+                .contains("requested memory goal requires paged attention"));
+        }
+        Ok(())
+    }
+}

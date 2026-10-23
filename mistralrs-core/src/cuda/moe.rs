@@ -138,7 +138,7 @@ pub fn moe_gemm(
                 size_m_i32,
                 size_n_i32,
                 size_k_i32,
-                data_type as i32, // 0=float16, 1=bf16 (for input/output)
+                data_type, // 0=float16, 1=bf16 (for input/output)
                 stream,
             );
         }

@@ -2,7 +2,9 @@ use candle_core::Result;
 use llguidance::api::TopLevelGrammar;
 
 use crate::tools::{
-    strategy::{HarmonyToolCallStrategy, TextToolCallStrategy, ToolCallStrategy},
+    strategy::{
+        AtemToolCallStrategy, HarmonyToolCallStrategy, TextToolCallStrategy, ToolCallStrategy,
+    },
     ToolCallFormat, ToolCallResponse, ToolCallingMatcher, ToolChoice,
 };
 
@@ -91,12 +93,17 @@ impl ToolCallState {
         preferred_format: Option<ToolCallFormat>,
     ) -> anyhow::Result<Self> {
         let matcher = ToolCallingMatcher::new_with_format(tool_choice, tools, preferred_format)?;
-        let strategy: Box<dyn ToolCallStrategy> =
-            if preferred_format == Some(ToolCallFormat::Harmony) {
-                Box::new(HarmonyToolCallStrategy::new()?)
-            } else {
-                Box::new(TextToolCallStrategy::new(preferred_format))
-            };
+        let strategy: Box<dyn ToolCallStrategy> = match preferred_format {
+            Some(ToolCallFormat::Harmony) => Box::new(HarmonyToolCallStrategy::new()?),
+            Some(ToolCallFormat::Atem) => {
+                Box::new(AtemToolCallStrategy::new(if matcher.allows_tool_call() {
+                    matcher.tools()
+                } else {
+                    None
+                }))
+            }
+            _ => Box::new(TextToolCallStrategy::new(preferred_format)),
+        };
         Ok(Self {
             matcher,
             strategy,
@@ -192,14 +199,24 @@ impl ToolCallState {
         }
     }
 
-    pub(crate) fn clear_active_grammar(&mut self) -> bool {
+    pub(crate) fn mark_grammar_accepting(&mut self) {
         if matches!(self.grammar, ToolGrammarState::Active { .. }) {
-            self.grammar = ToolGrammarState::Inactive;
-            self.obligation.clear_forced();
-            true
-        } else {
-            false
+            self.obligation
+                .mark_satisfied(self.matcher.requires_tool_call());
         }
+    }
+
+    pub(crate) fn clear_active_grammar(&mut self) -> bool {
+        let ToolGrammarState::Active { forced } = self.grammar else {
+            return false;
+        };
+        self.grammar = ToolGrammarState::Inactive;
+        if forced || self.strategy.has_tool_calls() {
+            self.obligation
+                .mark_satisfied(self.matcher.requires_tool_call());
+        }
+        self.obligation.clear_forced();
+        true
     }
 
     pub(crate) fn is_stop_token_blocked(
@@ -215,6 +232,10 @@ impl ToolCallState {
 
     pub(crate) fn prefix_status(&self, message_prefix: &str) -> Result<(bool, bool)> {
         self.matcher.prefix_could_be_tool(message_prefix)
+    }
+
+    pub(crate) fn stops_after_complete_tool_call(&self) -> bool {
+        self.strategy.stops_after_complete_tool_call()
     }
 
     pub(crate) fn complete_if_tool_call(
@@ -233,6 +254,7 @@ impl ToolCallState {
         &mut self,
         content_delta: Option<String>,
         raw_delta: &str,
+        parser_text: Option<&str>,
         has_external_reasoning: bool,
         is_done: bool,
     ) -> Result<ToolCallParse> {
@@ -251,17 +273,32 @@ impl ToolCallState {
             return Ok(ToolCallParse::empty(content_delta));
         }
 
-        let raw_text = match content_delta {
+        let visible_text = match content_delta {
             Some(content_delta) => content_delta,
             None if has_external_reasoning => return Ok(ToolCallParse::empty(None)),
             None => raw_delta.to_string(),
         };
+        let parse_text = parser_text.unwrap_or(&visible_text);
         let (tool_use_still_possible, tool_use_is_done) =
-            self.matcher.prefix_could_be_tool(&raw_text)?;
-        let (content, tool_calls) = self
+            self.matcher.prefix_could_be_tool(parse_text)?;
+        if !is_done
+            && self.matcher.requires_tool_call()
+            && !tool_use_still_possible
+            && !tool_use_is_done
+        {
+            return Ok(ToolCallParse::empty(Some(visible_text)));
+        }
+        let (mut content, tool_calls) = self
             .matcher
-            .get_call_with_content(&raw_text)
+            .get_call_with_content(parse_text)
             .map_err(candle_core::Error::msg)?;
+        if parser_text.is_some() && tool_calls.is_empty() {
+            content = self
+                .matcher
+                .get_call_with_content(&visible_text)
+                .map_err(candle_core::Error::msg)?
+                .0;
+        }
         if !tool_calls.is_empty() {
             self.obligation
                 .mark_satisfied(self.matcher.requires_tool_call());
@@ -280,6 +317,7 @@ impl ToolCallState {
         raw_text: &str,
         parsed_content: Option<String>,
         reasoning_content: Option<String>,
+        parser_text: Option<&str>,
     ) -> Result<ToolCallParse> {
         if self.strategy.has_reasoning() {
             let tool_calls = self.strategy.finalize_tool_calls();
@@ -296,11 +334,19 @@ impl ToolCallState {
             });
         }
 
-        let text = parsed_content.unwrap_or_else(|| raw_text.to_string());
-        let (content, tool_calls) = self
+        let visible_text = parsed_content.unwrap_or_else(|| raw_text.to_string());
+        let parse_text = parser_text.unwrap_or(&visible_text);
+        let (mut content, tool_calls) = self
             .matcher
-            .get_call_with_content(&text)
+            .get_call_with_content(parse_text)
             .map_err(candle_core::Error::msg)?;
+        if parser_text.is_some() && tool_calls.is_empty() {
+            content = self
+                .matcher
+                .get_call_with_content(&visible_text)
+                .map_err(candle_core::Error::msg)?
+                .0;
+        }
         if !tool_calls.is_empty() {
             self.obligation
                 .mark_satisfied(self.matcher.requires_tool_call());
@@ -359,6 +405,99 @@ mod tests {
     }
 
     #[test]
+    fn flint_shared_prefix_activates_native_grammar() {
+        let tools = vec![tool("get_weather")];
+        let mut state =
+            ToolCallState::new(ToolChoice::Auto, Some(&tools), Some(ToolCallFormat::Flint))
+                .unwrap();
+        assert!(state
+            .maybe_activate_continuation_grammar(Some("Hello"))
+            .is_none());
+        let grammar = state
+            .maybe_activate_continuation_grammar(Some("<tool_call>"))
+            .unwrap();
+        assert!(lark(&grammar).contains("flint_call"));
+        assert!(!lark(&grammar).contains("json_call"));
+    }
+
+    #[test]
+    fn flint_streaming_retains_all_calls_after_optional_reasoning() {
+        use crate::reasoning_parsers::TagReasoningContext;
+
+        let tools = vec![tool("get_weather")];
+        let mut state =
+            ToolCallState::new(ToolChoice::Auto, Some(&tools), Some(ToolCallFormat::Flint))
+                .unwrap();
+        let mut reasoning = TagReasoningContext::new_think_tags();
+        let text = "<think>Check both cities.</think><tool_call>get_weather<arg_key>city</arg_key><arg_value>Paris</arg_value></tool_call><tool_call>get_weather<arg_key>city</arg_key><arg_value>Tokyo</arg_value></tool_call>";
+        for byte in text.bytes() {
+            reasoning.process_bytes(&[byte]);
+            if let Some(content) = reasoning.content() {
+                if content.contains("<tool_call>") {
+                    assert_eq!(state.prefix_status(&content).unwrap(), (true, false));
+                }
+            }
+        }
+        reasoning.finalize();
+        let parsed = state
+            .parse_streaming(reasoning.get_content_delta(), text, None, true, true)
+            .unwrap();
+        assert_eq!(
+            reasoning.reasoning_content().as_deref(),
+            Some("Check both cities.")
+        );
+        assert!(parsed.content.is_none());
+        assert_eq!(parsed.tool_calls.len(), 2);
+        assert_eq!(
+            parsed.tool_calls[0].function.arguments,
+            r#"{"city":"Paris"}"#
+        );
+        assert_eq!(
+            parsed.tool_calls[1].function.arguments,
+            r#"{"city":"Tokyo"}"#
+        );
+    }
+
+    #[test]
+    fn flint_required_streaming_allows_text_before_a_call() {
+        let tools = vec![tool("get_weather")];
+        for choice in [
+            ToolChoice::Required,
+            ToolChoice::NamedFunction(NamedFunctionToolChoice {
+                tp: ToolType::Function,
+                name: "get_weather".to_string(),
+            }),
+        ] {
+            let mut state =
+                ToolCallState::new(choice, Some(&tools), Some(ToolCallFormat::Flint)).unwrap();
+            assert!(state
+                .maybe_force_required_grammar(32768, 32768, false)
+                .is_none());
+            let text = "I will check the weather.";
+            let parsed = state
+                .parse_streaming(Some(text.to_string()), text, None, true, false)
+                .unwrap();
+            assert_eq!(parsed.content.as_deref(), Some(text));
+            assert!(state.required_tool_call_unsatisfied());
+            let call = "<tool_call>get_weather<arg_key>city</arg_key><arg_value>Paris</arg_value></tool_call>";
+            let parsed = state
+                .parse_streaming(Some(call.to_string()), call, None, true, true)
+                .unwrap();
+            assert_eq!(parsed.tool_calls.len(), 1);
+            assert!(!state.required_tool_call_unsatisfied());
+        }
+        let mut state = ToolCallState::new(
+            ToolChoice::Required,
+            Some(&tools),
+            Some(ToolCallFormat::Flint),
+        )
+        .unwrap();
+        assert!(state
+            .parse_streaming(Some("No call.".to_string()), "No call.", None, true, true)
+            .is_err());
+    }
+
+    #[test]
     fn tool_call_choice_none_does_not_activate_continuation_grammar() {
         let tools = vec![tool("get_weather")];
         let mut state = ToolCallState::new(ToolChoice::None, Some(&tools), None).unwrap();
@@ -366,6 +505,20 @@ mod tests {
         assert!(state
             .maybe_activate_continuation_grammar(Some("<tool_call>"))
             .is_none());
+    }
+
+    #[test]
+    fn atem_tool_call_choice_none_does_not_return_calls() {
+        let tools = vec![tool("get_weather")];
+        let mut state =
+            ToolCallState::new(ToolChoice::None, Some(&tools), Some(ToolCallFormat::Atem)).unwrap();
+        state.observe_token(
+            0,
+            b" to=get_weather<|message|><atem:function_calls><atem:invoke name=\"get_weather\"></atem:invoke></atem:function_calls><|eot|>",
+        );
+
+        let parsed = state.parse_streaming(None, "", None, false, true).unwrap();
+        assert!(parsed.tool_calls.is_empty());
     }
 
     #[test]
@@ -404,12 +557,194 @@ mod tests {
     }
 
     #[test]
+    fn atem_strategy_separates_reasoning_content_and_tools() {
+        let tools = vec![tool("get_weather")];
+        let mut state =
+            ToolCallState::new(ToolChoice::Auto, Some(&tools), Some(ToolCallFormat::Atem)).unwrap();
+        let output = b" to=self<|message|>checking<|eom|><|start|>assistant to=get_weather<|message|><atem:function_calls><atem:invoke name=\"get_weather\"><atem:parameter name=\"city\">Paris</atem:parameter></atem:invoke></atem:function_calls><|eot|>";
+        state.observe_token(0, output);
+
+        assert_eq!(state.reasoning_delta().as_deref(), Some("checking"));
+        let parsed = state.parse_streaming(None, "", None, false, true).unwrap();
+        assert_eq!(parsed.tool_calls.len(), 1);
+        assert_eq!(parsed.tool_calls[0].function.name, "get_weather");
+        assert_eq!(
+            parsed.tool_calls[0].function.arguments,
+            r#"{"city":"Paris"}"#
+        );
+    }
+
+    #[test]
+    fn atem_streaming_buffers_a_split_multibyte_character() {
+        let mut state =
+            ToolCallState::new(ToolChoice::Auto, None, Some(ToolCallFormat::Atem)).unwrap();
+        state.observe_token(0, b" to=user<|message|>abc");
+        assert_eq!(state.content_delta().as_deref(), Some("abc"));
+
+        state.observe_token(0, &[0xc3]);
+        assert_eq!(state.content_delta(), None);
+
+        state.observe_token(0, &[0xa9]);
+        assert_eq!(state.content_delta().as_deref(), Some("\u{e9}"));
+        assert_eq!(state.content().as_deref(), Some("abc\u{e9}"));
+    }
+
+    #[test]
+    fn atem_streaming_replaces_invalid_utf8_without_replacing_an_incomplete_tail() {
+        let mut state =
+            ToolCallState::new(ToolChoice::Auto, None, Some(ToolCallFormat::Atem)).unwrap();
+        state.observe_token(0, b" to=user<|message|>abc\xff\xc3");
+        assert_eq!(state.content_delta().as_deref(), Some("abc\u{fffd}"));
+
+        state.observe_token(0, &[0xa9]);
+        assert_eq!(state.content_delta().as_deref(), Some("\u{e9}"));
+        assert_eq!(state.content().as_deref(), Some("abc\u{fffd}\u{e9}"));
+    }
+
+    #[test]
+    fn atem_waits_for_turn_end_and_returns_parallel_calls() {
+        let tools = vec![tool("get_weather"), tool("search")];
+        let mut state =
+            ToolCallState::new(ToolChoice::Auto, Some(&tools), Some(ToolCallFormat::Atem)).unwrap();
+        let first = " to=get_weather<|message|><atem:function_calls><atem:invoke name=\"get_weather\"></atem:invoke></atem:function_calls>";
+        state.observe_token(0, first.as_bytes());
+
+        assert_eq!(state.prefix_status(first).unwrap(), (false, true));
+        assert!(!state.stops_after_complete_tool_call());
+
+        state.observe_token(
+            0,
+            b"<|eom|><|start|>assistant to=search<|message|><atem:function_calls><atem:invoke name=\"search\"></atem:invoke></atem:function_calls><|eot|>",
+        );
+        let parsed = state.finalize_for_response("", None, None, None).unwrap();
+
+        assert_eq!(parsed.tool_calls.len(), 2);
+        assert_eq!(parsed.tool_calls[0].function.name, "get_weather");
+        assert_eq!(parsed.tool_calls[1].function.name, "search");
+    }
+
+    #[test]
+    fn atem_continuation_grammar_activates_once_per_wrapper() {
+        let tools = vec![tool("get_weather"), tool("search")];
+        let mut state =
+            ToolCallState::new(ToolChoice::Auto, Some(&tools), Some(ToolCallFormat::Atem)).unwrap();
+        state.observe_token(0, b" to=get_weather<|message|><atem:function_calls>");
+        assert!(state.maybe_activate_continuation_grammar(None).is_some());
+        state.mark_grammar_active(false);
+        state.observe_token(
+            0,
+            b"<atem:invoke name=\"get_weather\"></atem:invoke></atem:function_calls>",
+        );
+        assert!(state.clear_active_grammar());
+        assert!(state.maybe_activate_continuation_grammar(None).is_none());
+
+        state.observe_token(
+            0,
+            b"<|eom|><|start|>assistant to=search<|message|><atem:function_calls>",
+        );
+        assert!(state.maybe_activate_continuation_grammar(None).is_some());
+    }
+
+    #[test]
+    fn atem_named_choice_uses_native_required_grammar() {
+        let tools = vec![tool("get_weather"), tool("search")];
+        let choice = ToolChoice::NamedFunction(NamedFunctionToolChoice {
+            tp: ToolType::Function,
+            name: "search".to_string(),
+        });
+        let mut state =
+            ToolCallState::new(choice, Some(&tools), Some(ToolCallFormat::Atem)).unwrap();
+
+        let grammar = state
+            .maybe_force_required_grammar(8192, 8192, true)
+            .unwrap();
+        let lark = grammar.grammars[0].lark_grammar.as_ref().unwrap();
+        assert!(lark.contains("to=search"));
+        assert!(!lark.contains("to=get_weather"));
+    }
+
+    #[test]
+    fn completed_atem_grammar_satisfies_required_choice_before_eos() {
+        let tools = vec![tool("get_weather")];
+        let mut state = ToolCallState::new(
+            ToolChoice::Required,
+            Some(&tools),
+            Some(ToolCallFormat::Atem),
+        )
+        .unwrap();
+        state.mark_grammar_active(true);
+        state.observe_token(
+            0,
+            b" to=get_weather<|message|><atem:function_calls><atem:invoke name=\"get_weather\"></atem:invoke></atem:function_calls",
+        );
+
+        assert!(state.clear_active_grammar());
+        assert!(!state.required_tool_call_unsatisfied());
+
+        state.observe_token(0, b">");
+        assert_eq!(
+            state
+                .finalize_for_response("", None, None, None)
+                .unwrap()
+                .tool_calls
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn forced_atem_call_closes_an_open_reasoning_message() {
+        let tools = vec![tool("get_weather")];
+        let mut state = ToolCallState::new(
+            ToolChoice::Required,
+            Some(&tools),
+            Some(ToolCallFormat::Atem),
+        )
+        .unwrap();
+        state.observe_token(0, b" to=self<|message|>still thinking");
+
+        let grammar = state.maybe_force_required_grammar(0, 8192, true).unwrap();
+        let lark = grammar.grammars[0].lark_grammar.as_ref().unwrap();
+        assert!(lark.contains(r#""<|eom|>" "<|start|>" "assistant to=get_weather""#));
+    }
+
+    #[test]
+    fn forced_atem_call_reuses_an_emitted_assistant_boundary() {
+        let tools = vec![tool("get_weather")];
+        let mut state = ToolCallState::new(
+            ToolChoice::Required,
+            Some(&tools),
+            Some(ToolCallFormat::Atem),
+        )
+        .unwrap();
+        state.observe_token(0, b" to=self<|message|>done<|eom|><|start|>assistant");
+
+        let grammar = state.maybe_force_required_grammar(0, 8192, true).unwrap();
+        let lark = grammar.grammars[0].lark_grammar.as_ref().unwrap();
+        assert!(lark.contains(r#"" to=get_weather""#));
+        assert!(!lark.contains(r#""<|start|>""#));
+    }
+
+    #[test]
     fn stop_token_under_required_tool_call_is_blocked() {
         let tools = vec![tool("get_weather")];
         let state = ToolCallState::new(ToolChoice::Required, Some(&tools), None).unwrap();
 
         assert!(state.is_stop_token_blocked(2, Some(&[2]), &[]));
         assert!(state.is_stop_token_blocked(9, None, &[9]));
+    }
+
+    #[test]
+    fn accepting_non_tool_grammar_does_not_satisfy_required_call() {
+        let tools = vec![tool("get_weather")];
+        let mut state = ToolCallState::new(ToolChoice::Required, Some(&tools), None).unwrap();
+        state.mark_grammar_accepting();
+        assert!(state.required_tool_call_unsatisfied());
+        assert!(state.is_stop_token_blocked(2, Some(&[2]), &[]));
+        state.mark_grammar_active(true);
+        state.mark_grammar_accepting();
+        assert!(!state.required_tool_call_unsatisfied());
+        assert!(!state.is_stop_token_blocked(2, Some(&[2]), &[]));
     }
 
     #[test]
@@ -469,6 +804,7 @@ mod tests {
                 r#"Before <tool_call>{"name":"get_weather","arguments":{"city":"Paris"}}</tool_call>"#,
                 None,
                 None,
+                None,
             )
             .unwrap();
 
@@ -478,6 +814,54 @@ mod tests {
             parsed.tool_calls[0].function.arguments,
             json!({"city":"Paris"}).to_string()
         );
+    }
+
+    #[test]
+    fn text_tool_strategy_parses_a_hidden_stop_delimiter_without_exposing_it() {
+        let tools = vec![tool("get_weather")];
+        let visible = r#"<tool_call>{"name":"get_weather","arguments":{"city":"Paris"}}"#;
+        let parser_text = format!("{visible}</tool_call>");
+
+        let mut final_state =
+            ToolCallState::new(ToolChoice::Auto, Some(&tools), Some(ToolCallFormat::Qwen)).unwrap();
+        let parsed = final_state
+            .finalize_for_response(visible, None, None, Some(&parser_text))
+            .unwrap();
+        assert_eq!(parsed.content, None);
+        assert_eq!(parsed.tool_calls.len(), 1);
+        assert_eq!(parsed.tool_calls[0].function.name, "get_weather");
+
+        let mut streaming_state =
+            ToolCallState::new(ToolChoice::Auto, Some(&tools), Some(ToolCallFormat::Qwen)).unwrap();
+        let parsed = streaming_state
+            .parse_streaming(
+                Some(visible.to_string()),
+                visible,
+                Some(&parser_text),
+                false,
+                true,
+            )
+            .unwrap();
+        assert_eq!(parsed.content, None);
+        assert_eq!(parsed.tool_calls.len(), 1);
+    }
+
+    #[test]
+    fn hidden_parser_text_is_not_returned_when_no_tool_call_matches() {
+        let tools = vec![tool("get_weather")];
+        let mut state = ToolCallState::new(ToolChoice::Auto, Some(&tools), None).unwrap();
+
+        let parsed = state
+            .finalize_for_response(
+                "ordinary response",
+                None,
+                None,
+                Some("ordinary response<STOP_BOUNDARY>"),
+            )
+            .unwrap();
+
+        assert_eq!(parsed.content.as_deref(), Some("ordinary response"));
+        assert!(parsed.tool_calls.is_empty());
     }
 
     #[test]

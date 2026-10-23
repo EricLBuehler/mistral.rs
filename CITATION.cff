@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+message: "If you use mistral.rs in your research, please cite it using the metadata below."
+type: software
+title: "mistral.rs: Fast, flexible LLM inference"
+authors:
+  - family-names: Buehler
+    given-names: Eric
+url: "https://github.com/EricLBuehler/mistral.rs"
+preferred-citation:
+  type: generic
+  title: "mistral.rs: Fast, flexible LLM inference"
+  authors:
+    - family-names: Buehler
+      given-names: Eric
+  year: 2024
+  url: "https://github.com/EricLBuehler/mistral.rs"

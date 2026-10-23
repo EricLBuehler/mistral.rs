@@ -123,8 +123,12 @@ pub fn cutlass_fused_moe(
     let (num_tokens, hidden) = xs.dims2()?;
     let (_, two_inter, k1) = gate_up.dims3()?;
     let inter = two_inter / 2;
-    assert_eq!(k1, hidden, "gate_up K must equal hidden");
-    assert_eq!(xs.dtype(), DType::BF16, "cutlass moe path is bf16-only");
+    if k1 != hidden {
+        candle_core::bail!("gate_up K must equal hidden");
+    }
+    if xs.dtype() != DType::BF16 {
+        candle_core::bail!("cutlass moe path is bf16-only");
+    }
     let topk = topk_ids.dim(1)?;
     let num_valid = num_tokens * topk;
 

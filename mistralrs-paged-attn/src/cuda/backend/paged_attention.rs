@@ -1,4 +1,4 @@
-use crate::cuda::backend::slice_ptr;
+use crate::cuda::backend::{cache_input_layout, slice_ptr};
 use crate::cuda::ffi;
 use crate::cuda::ffi::{
     paged_attention_v1_bf16, paged_attention_v1_f16, paged_attention_v1_f32,
@@ -15,9 +15,12 @@ use std::collections::HashMap;
 use std::ffi::c_int;
 use std::sync::{Mutex, OnceLock};
 
+const FULL_ATTENTION_WINDOW: usize = 0;
+
 struct WorkspaceSlot {
     slice: CudaSlice<u8>,
     cap: usize,
+    retired: Vec<CudaSlice<u8>>,
 }
 
 type WsMap = Mutex<HashMap<candle::cuda_backend::DeviceId, &'static Mutex<WorkspaceSlot>>>;
@@ -28,10 +31,36 @@ fn align_up(value: usize, alignment: usize) -> usize {
     value.div_ceil(alignment) * alignment
 }
 
+fn validate_kv_cache_scales(
+    cache_dtype: DType,
+    k_scale: Option<&Tensor>,
+    v_scale: Option<&Tensor>,
+    op: &str,
+) -> Result<()> {
+    match (cache_dtype, k_scale, v_scale) {
+        (DType::F8E4M3, Some(k_scale), Some(v_scale)) => {
+            if k_scale.dtype() != DType::F32
+                || v_scale.dtype() != DType::F32
+                || k_scale.elem_count() != 1
+                || v_scale.elem_count() != 1
+            {
+                candle::bail!("{op} requires scalar f32 K/V scales for an f8e4m3 cache");
+            }
+        }
+        (DType::F8E4M3, _, _) => {
+            candle::bail!("{op} requires explicit K/V scales for an f8e4m3 cache");
+        }
+        (_, None, None) => {}
+        (_, _, _) => candle::bail!("{op} only accepts K/V scales for an f8e4m3 cache"),
+    }
+    Ok(())
+}
+
 fn workspace_ensure(
     dev: &candle::cuda_backend::CudaDevice,
     bytes: usize,
 ) -> Result<(u64, std::sync::MutexGuard<'static, WorkspaceSlot>)> {
+    let capacity = bytes.max(1).next_power_of_two();
     let map = PAGED_ATTN_V2_WORKSPACE.get_or_init(|| Mutex::new(HashMap::new()));
     let device_key = dev.id();
     let device_mtx: &'static Mutex<WorkspaceSlot> = {
@@ -39,10 +68,11 @@ fn workspace_ensure(
         match guard.get(&device_key).copied() {
             Some(mtx) => mtx,
             None => {
-                let slice = unsafe { dev.alloc::<u8>(bytes.max(1))? };
+                let slice = unsafe { dev.alloc::<u8>(capacity)? };
                 let leaked = Box::leak(Box::new(Mutex::new(WorkspaceSlot {
                     slice,
-                    cap: bytes.max(1),
+                    cap: capacity,
+                    retired: Vec::new(),
                 })));
                 guard.insert(device_key, leaked);
                 leaked
@@ -52,8 +82,11 @@ fn workspace_ensure(
 
     let mut slot = device_mtx.lock().unwrap();
     if slot.cap < bytes {
-        slot.slice = unsafe { dev.alloc::<u8>(bytes)? };
-        slot.cap = bytes;
+        let next = unsafe { dev.alloc::<u8>(capacity)? };
+        let previous = std::mem::replace(&mut slot.slice, next);
+        // Captured graphs keep using earlier scratch allocations after growth.
+        slot.retired.push(previous);
+        slot.cap = capacity;
     }
     let ptr = slot.slice.device_ptr(slot.slice.stream()).0;
     Ok((ptr, slot))
@@ -72,6 +105,7 @@ struct PagedAttention {
     k_scale: Option<Tensor>,
     v_scale: Option<Tensor>,
     sinks: Option<Tensor>,
+    sliding_window: Option<usize>,
 }
 
 impl PagedAttention {
@@ -83,6 +117,12 @@ impl PagedAttention {
         q_l: &Layout,
     ) -> Result<(CudaStorage, Shape)> {
         let dtype = q.dtype();
+        validate_kv_cache_scales(
+            self.key_cache.dtype(),
+            self.k_scale.as_ref(),
+            self.v_scale.as_ref(),
+            "paged_attention",
+        )?;
         let cache_dtype = match self.key_cache.dtype() {
             DType::F16 => 0,
             DType::BF16 => 1,
@@ -269,8 +309,12 @@ impl PagedAttention {
         let kv_head_stride = kc_l.stride()[1];
 
         let partition_size = 512;
-        let effective_max_context_len =
+        let mut effective_max_context_len =
             (max_num_blocks_per_seq * block_size).min(self.max_context_len);
+        if let Some(window) = self.sliding_window {
+            effective_max_context_len =
+                effective_max_context_len.min(window.saturating_add(block_size - 1));
+        }
         let max_num_partitions = effective_max_context_len.div_ceil(partition_size);
         let use_v1 = (max_num_partitions == 1 || num_seqs * num_heads > 512)
             && partition_size % block_size == 0;
@@ -316,6 +360,7 @@ impl PagedAttention {
                     k_scale_ptr,
                     v_scale_ptr,
                     sinks_ptr,
+                    self.sliding_window.unwrap_or(FULL_ATTENTION_WINDOW) as c_int,
                 )
             }
         } else {
@@ -368,6 +413,7 @@ impl PagedAttention {
                     k_scale_ptr,
                     v_scale_ptr,
                     sinks_ptr,
+                    self.sliding_window.unwrap_or(FULL_ATTENTION_WINDOW) as c_int,
                 )
             }
         }
@@ -433,6 +479,43 @@ pub fn paged_attention(
     softcapping: f32,
     sinks: Option<&Tensor>,
 ) -> Result<Tensor> {
+    paged_attention_with_window(
+        q,
+        k_scale,
+        v_scale,
+        key_cache,
+        value_cache,
+        block_tables,
+        context_lens,
+        alibi_slopes,
+        max_context_len,
+        softmax_scale,
+        softcapping,
+        sinks,
+        None,
+    )
+}
+
+/// Decode from a paged cache with an optional exact trailing token window.
+#[allow(clippy::too_many_arguments)]
+pub fn paged_attention_with_window(
+    q: &Tensor,
+    k_scale: Option<&Tensor>,
+    v_scale: Option<&Tensor>,
+    key_cache: &Tensor,
+    value_cache: &Tensor,
+    block_tables: &Tensor,
+    context_lens: &Tensor,
+    alibi_slopes: Option<&Tensor>,
+    max_context_len: usize,
+    softmax_scale: f32,
+    softcapping: f32,
+    sinks: Option<&Tensor>,
+    sliding_window: Option<usize>,
+) -> Result<Tensor> {
+    if sliding_window == Some(0) {
+        candle::bail!("sliding_window must be positive");
+    }
     let op = PagedAttention {
         softmax_scale,
         key_cache: key_cache.clone(),
@@ -447,6 +530,7 @@ pub fn paged_attention(
         sinks: sinks
             .map(|s| s.to_dtype(candle_core::DType::F32))
             .transpose()?,
+        sliding_window,
     };
     q.apply_op1(op)
 }
@@ -478,6 +562,7 @@ fn update_cache<
         DType::F8E4M3 => 3,
         dtype => candle::bail!("cache dtype {dtype:?} is not supported"),
     };
+    validate_kv_cache_scales(key_cache.dtype(), k_scale, v_scale, "reshape_and_cache")?;
 
     let (k, k_l) = key.storage_and_layout();
     let k = match &*k {
@@ -509,14 +594,8 @@ fn update_cache<
         _ => candle::bail!("slot_mapping must be a cuda tensor"),
     };
 
-    let k_rank = k_l.stride().len();
-    let v_rank = v_l.stride().len();
     let kc_rank = kc_l.stride().len();
     let vc_rank = vc_l.stride().len();
-
-    if k_rank != 3 || v_rank != 3 {
-        candle::bail!("paged-attention expects input tensors of rank 3 (k: {k_l:?}, v: {v_l:?})")
-    }
 
     if kc_rank != 5 {
         candle::bail!(
@@ -591,8 +670,11 @@ fn update_cache<
         (std::ptr::null(), std::ptr::null())
     };
 
-    let (num_tokens, num_heads, head_size) = k_l.shape().dims3()?;
-    if (num_tokens, num_heads, head_size) != v_l.shape().dims3()? {
+    let (num_tokens, num_heads, head_size, key_stride) =
+        cache_input_layout(k_l, "key", "paged-attention")?;
+    let (value_tokens, value_heads, value_head_size, value_stride) =
+        cache_input_layout(v_l, "value", "paged-attention")?;
+    if (num_tokens, num_heads, head_size) != (value_tokens, value_heads, value_head_size) {
         candle::bail!("shape mismatch k {:?} and v {:?}", k_l.shape(), v_l.shape())
     }
 
@@ -621,8 +703,8 @@ fn update_cache<
         )
     }
 
-    let key_stride = k_l.stride()[0] as c_int;
-    let value_stride = v_l.stride()[0] as c_int;
+    let key_stride = c_int::try_from(key_stride).map_err(candle::Error::wrap)?;
+    let value_stride = c_int::try_from(value_stride).map_err(candle::Error::wrap)?;
 
     let (k_ptr, _k_guard) = k.device_ptr(k.stream());
     let (v_ptr, _v_guard) = v.device_ptr(v.stream());
@@ -656,8 +738,8 @@ fn update_cache<
 ///
 /// # Arguments
 ///
-/// * `key` - Key tensor of shape `(num_tokens, num_heads, head_size)`.
-/// * `value` - Value tensor of shape `(num_tokens, num_heads, head_size)`.
+/// * `key` - Key tensor shaped `(num_tokens, num_heads, head_size)` or `(batch, seq_len, num_heads, head_size)`.
+/// * `value` - Value tensor with the same logical shape as `key`.
 /// * `key_cache` - Key cache paged tensor of shape `(num_blocks, num_heads, head_size / x, block_size, x)`
 ///   with `x` being the size of an element in bytes.
 /// * `value_cache` - Value cache paged tensor of shape `(num_blocks, num_heads, head_size, block_size)`.

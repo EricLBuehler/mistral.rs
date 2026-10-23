@@ -31,9 +31,9 @@ async fn main() -> Result<()> {
 
 Run with `cargo run --release`. The first run downloads the weights into the Hugging Face cache.
 
-`with_auto_isq(IsqBits::Four)` enables [ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/) to 4 bits; omit it to run the model unquantized.
+`with_auto_isq(IsqBits::Four)` enables [ISQ (in-situ quantization)](/reference/quantization-types/) to 4 bits; omit it to run the model unquantized.
 
-Full example: [text-generation](/mistral.rs/examples/rust/getting-started/text-generation/).
+Full example: [text-generation](/examples/rust/getting-started/text-generation/).
 
 ## Project setup
 
@@ -47,7 +47,7 @@ Add the dependencies to `Cargo.toml`:
 ```toml
 [dependencies]
 anyhow = "1"
-mistralrs = "0.8"
+mistralrs = "0.9.5"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -55,26 +55,34 @@ The default features build for CPU. For GPU acceleration, enable the matching fe
 
 ```toml
 # NVIDIA GPU (CUDA)
-mistralrs = { version = "0.8", features = ["cuda", "flash-attn", "cudnn"] }
+mistralrs = { version = "0.9.5", features = ["cuda", "flash-attn", "cudnn"] }
 
 # Apple Silicon (Metal)
-mistralrs = { version = "0.8", features = ["metal"] }
+mistralrs = { version = "0.9.5", features = ["metal"] }
 
 # Intel CPU with MKL
-mistralrs = { version = "0.8", features = ["mkl"] }
+mistralrs = { version = "0.9.5", features = ["mkl"] }
 ```
 
-Feature names match the CLI build features. The [cargo features reference](/mistral.rs/reference/cargo-features/) lists every option.
+Feature names match the CLI build features. The [cargo features reference](/reference/cargo-features/) lists every option.
 
 ## The pieces
 
 `ModelBuilder` is a fluent configuration object; each method returns `self`. The only required input is the Hugging Face repository id (or local path) passed to `ModelBuilder::new`. Everything else has a default. `build()` loads the weights and returns a `Model`.
 
-`with_auto_isq(IsqBits::Four)` matches `--isq 4` on the CLI: the engine selects an optimal 4-bit format per platform (AFQ4 on Metal, Q4K on CUDA or CPU). To pin a specific format, use `with_isq(IsqType::Q4K)`; see the [quantization reference](/mistral.rs/reference/quantization-types/).
+`with_auto_isq(IsqBits::Four)` matches `--isq 4` on the CLI: the engine selects an optimal 4-bit format per platform (AFQ4 on Metal, Q4K on CUDA or CPU). To pin a specific format, use `with_isq(IsqType::Q4K)`; see the [quantization reference](/reference/quantization-types/).
 
 `TextMessages` assembles a basic chat conversation. For per-message sampling, tool schemas, or logprobs, use `RequestBuilder`.
 
-The [Rust SDK reference](/mistral.rs/reference/rust-sdk/) lists the full `Model` surface; specialized builders (`GgufModelBuilder`, `EmbeddingModelBuilder`, `LoraModelBuilder`, ...) are on [docs.rs](https://docs.rs/mistralrs).
+The [Rust SDK reference](/reference/rust-sdk/) lists the full `Model` surface; specialized builders (`GgufModelBuilder`, `EmbeddingModelBuilder`, `LoraModelBuilder`, ...) are on [docs.rs](https://docs.rs/mistralrs).
+
+## Memory and device placement
+
+For upgrades from 0.9.4, see the [memory and device-mapping migration guide](/guides/perf/paged-attention/#upgrading-from-094) for the `MemoryGoal` and `DeviceMapMetadata` APIs.
+
+The builder automatically chooses device placement and KV cache capacity. PagedAttention is enabled automatically on supported CUDA and Metal devices. Add `.with_max_num_seqs(4)` to allow up to four concurrent sequences; the default is 32.
+
+To choose a shared KV cache capacity, import `mistralrs::MemoryGoal` and add `.with_memory_goal(MemoryGoal::KvTokens(65536))` to the builder. This capacity is shared across requests; `.with_max_model_len(8192)` separately limits each request's prompt plus output. Explicit memory goals require paging. See [memory budgets](/guides/perf/paged-attention/#memory-budget) for sizing options and [layer mapping](/guides/perf/distributed-inference/#layer-mapping-cuda-p2p) for manual placement.
 
 ## Streaming
 
@@ -122,10 +130,10 @@ async fn main() -> Result<()> {
 }
 ```
 
-The stream yields `Response` values. Most are `Response::Chunk` carrying assistant output in `choices[0].delta.content`; other variants cover errors and the final completion event, and production code should match them explicitly. The [streaming guide](/mistral.rs/guides/rust/streaming/) covers the variant taxonomy, error handling, and tool-call progress events.
+The stream yields `Response` values. Most are `Response::Chunk` carrying assistant output in `choices[0].delta.content`; other variants cover errors and the final completion event, and production code should match them explicitly. The [streaming guide](/guides/rust/streaming/) covers the variant taxonomy, error handling, and tool-call progress events.
 
 ## Notes
 
 `ModelBuilder::build()` performs all model loading and is expensive. Call it once at startup. `Model` methods take `&self` and are safe to call concurrently, so you can share one instance by reference. To move it across spawned tasks, wrap it in `Arc<Model>` (`Model` does not implement `Clone`).
 
-Requests through the Rust SDK bypass the HTTP layer; there is no `/v1/chat/completions` endpoint and no OpenAI compatibility shim. To expose a model over HTTP alongside direct in-process access, see the [embed-in-axum guide](/mistral.rs/guides/rust/embed-in-axum/).
+Requests through the Rust SDK bypass the HTTP layer; there is no `/v1/chat/completions` endpoint and no OpenAI compatibility shim. To expose a model over HTTP alongside direct in-process access, see the [embed-in-axum guide](/guides/rust/embed-in-axum/).

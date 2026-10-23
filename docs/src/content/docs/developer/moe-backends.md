@@ -1,54 +1,78 @@
 ---
-title: MoE expert backends
-description: How mistralrs picks the fastest mixture-of-experts kernel for your hardware, and how to override it.
+title: cuTile setup
+description: Install the optional cuTile runtime tool for supported NVIDIA GPUs.
 ---
 
-MoE (Mixture of Experts) models spend most of their prefill time in the expert feed-forward
-layers. mistralrs ships several interchangeable implementations of this computation and picks
-the fastest one your machine can actually run, automatically, at model load. CUTLASS selection
-emits a log line; the other backends are silent unless they fall back.
+Supported CUDA builds can use cuTile acceleration for MoE, quantized linear, and routed LoRA workloads. The installer
+selects a cuTile-capable binary automatically when one matches the GPU and driver. NVIDIA's
+`tileiras` tool is installed separately. mistral.rs checks it automatically and uses other backends
+for workloads with a supported fallback. NVFP4 CUDA inference requires cuTile and reports an error
+when its requirements are not met. Source builds use the workspace-pinned cuTile Rust 0.3.0 release.
 
-## The backends
+## Install tileiras
 
-| Backend | What it is | When it runs |
-|---|---|---|
-| cuTile | JIT-compiled grouped-GEMM kernels specialized for your exact GPU architecture and model shapes at load time. The fastest option where supported. | The `cutile` feature build, a supported CUDA/SM pair, and the `tileiras` JIT assembler available at runtime. |
-| CUTLASS | Ahead-of-time compiled grouped GEMMs. Runs on any GPU from Ampere onward, with any CUDA toolkit, from a plain `cuda` build. | Default for unquantized BF16 MoE models with gated SiLU or tanh-approx GeLU (NewGelu / GeluPytorchTanh) when cuTile is unavailable. |
-| Fused (WMMA) | Hand-written CUDA kernels for small batches, where grouped GEMMs are the wrong tool. | Small-batch decode under CUTLASS (below 64 tokens), and prefill when neither backend above applies (including erf-based GeLU and other activations). |
-| Gather | Generic implementation built on the quantized-layer machinery. | Quantized experts ([ISQ (in-situ quantization)](/mistral.rs/reference/quantization-types/), [UQFF (Universal Quantized File Format)](/mistral.rs/reference/uqff-format/), pre-quantized), Metal, and CPU. |
+For Ampere, Ada, and Blackwell, install NVIDIA's cuTile package:
 
-The ordering matters: cuTile outperforms CUTLASS, which substantially outperforms the fused
-fallback for prefill. A build without the `cutile` feature still gets a strong MoE path through
-CUTLASS - but enabling `cutile` on supported hardware is meaningfully faster, which is why the
-installer adds it automatically for supported CUDA/SM pairs.
+```bash
+python3 -m pip install --upgrade "cuda-tile[tileiras]"
+```
 
-## Selection and graceful degradation
+cuTile on Hopper, and [NVFP4 inference](/reference/quantization-types/#nvfp4) on Blackwell, require
+the CUDA 13.3 or newer toolkit components:
 
-Backend selection happens once per model load and never strands you on a broken
-configuration:
+```bash
+python3 -m pip install --upgrade "cuda-toolkit[tileiras,nvvm,nvcc]>=13.3"
+```
 
-- cuTile requires a supported build CUDA and GPU pair: Ampere/Ada (`sm_8x`) needs CUDA >= 13.2,
-  Hopper (`sm90`) needs CUDA >= 13.3, and Blackwell+ (`sm_10x`/`sm_12x`) needs CUDA >= 13.1.
-  It also needs the `tileiras` JIT assembler at runtime. If either probe fails - for example, a
-  cutile-enabled binary deployed to a machine without the toolkit - selection quietly moves to
-  CUTLASS and logs why.
-- CUTLASS requires a build targeting compute capability 8.0 or newer. Below that, selection
-  moves on.
-- Under CUTLASS, batches below 64 tokens delegate to the fused kernels: the grouped-GEMM setup
-  cost exceeds the work itself at small batch sizes. cuTile runs its grouped-GEMM path at all
-  batch sizes.
+The pip packages do not add `tileiras` to `PATH`. Point mistral.rs at the installed binary, and add
+the same export to the shell profile or service environment that starts the server:
 
-## Overriding the choice
+```bash
+export CUTILE_TILEIRAS_PATH="$(python3 -c 'import nvidia.cu13.bin as b; print(next(iter(b.__path__)))')/tileiras"
+```
 
-Set `MISTRALRS_MOE_BACKEND` to force a specific backend: `cutile`, `cutlass`, `fused` (also
-accepted: `wmma`, `native`, `legacy`), or `fast`. This is intended for debugging and A/B
-comparisons. Forcing a backend the build or hardware cannot support behaves in one of two ways:
+A system CUDA installation containing a compatible `tileiras` works as well. Keep the NVIDIA CUDA
+package components on the same major/minor release. Set `CUDA_TOOLKIT_PATH` to the toolkit root for
+a reproducible source build, or set `CUTILE_TILEIRAS_PATH` to the executable directly. cuTile also
+searches standard CUDA 13.3 and 13.2 installations before falling back to `PATH`. Release archives
+do not redistribute `tileiras`.
 
-- Unsupported by the build (e.g. `cutile` on a non-cutile build): falls back to automatic selection.
-- Unsupported by the hardware (e.g. `cutlass` on a pre-Ampere build): fails at the first forward pass.
+For CUDA 13.4, explicitly select the toolkit with `CUDA_TOOLKIT_PATH` and add its `bin` directory
+to `PATH`; see the [source build instructions](/developer/from-source/#clone-and-build). This
+keeps cuTile from selecting an older standard installation on a machine with multiple toolkits.
+If `CUTILE_TILEIRAS_PATH` is already set, update it to `/usr/local/cuda-13.4/bin/tileiras` as well.
 
-`CUTILE_TILEIRAS_PATH` points the cuTile JIT at a specific `tileiras` binary instead of
-resolving it from `PATH`.
+Run `mistralrs doctor` to check cuTile availability for every detected GPU. See NVIDIA's
+[cuTile installation guide](https://docs.nvidia.com/cuda/cutile-python/quickstart.html).
 
-See also: [environment variables](/mistral.rs/reference/environment-variables/),
-[cargo features](/mistral.rs/reference/cargo-features/).
+## Requirements
+
+- Ampere and Ada require CUDA 13.2 or newer.
+- Hopper requires CUDA 13.3 or newer.
+- Blackwell requires CUDA 13.2 or newer for source builds. cuTile 0.3 can emit CUDA 13.1 Tile IR,
+  but its published CUDA bindings require CUDA 13.2 or newer headers. NVFP4 kernels require CUDA
+  13.3 or newer, including `tileiras`.
+- The `tileiras` installation must support the active GPU.
+- The mistral.rs binary must include the `cutile` feature.
+- Source builds require `libclang` because cuTile generates CUDA bindings during the build.
+
+`CUTILE_TILEIRAS_PATH` selects a specific `tileiras` binary and takes precedence over
+`CUDA_TOOLKIT_PATH` and automatic discovery.
+
+## Autotuning
+
+cuTile kernels are JIT-compiled for the GPU in the machine, so their launch configs are measured
+there too. The first time a model loads, the warmup step times candidate tile shapes and compiler
+knobs for each MoE expert shape and FP8 GEMM shape, about a minute for a large MoE model, and
+records the winners under `cutile_tune` in the mistral.rs cache directory. Later loads reuse a
+record whose provenance matches: the kernel source, the GPU architecture, the `tileiras` build,
+and the candidate set. A record that no longer matches is re-measured, never approximated. Routed
+LoRA tunes each route bucket the first time it is launched and persists the result the same way.
+
+Every candidate is checked against the built-in policy config's output before it is timed, and a
+winner replaces the policy only when it is measurably faster, so tuning can only leave a machine
+where it started or better. `MISTRALRS_CUTILE_TUNE=off` keeps the built-in policies,
+`force` re-measures, and `MISTRALRS_CUTILE_TUNE_CACHE` moves the records directory.
+
+See also: [environment variables](/reference/environment-variables/),
+[cargo features](/reference/cargo-features/).

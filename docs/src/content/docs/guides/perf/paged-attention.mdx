@@ -1,24 +1,29 @@
 ---
 title: Paged attention
-description: Block-based KV caching for higher concurrency, plus the CUDA fast paths built on it.
+description: Block-based KV caching and optimized attention on CUDA and Metal.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Standard attention allocates one contiguous KV cache per sequence, sized for the maximum context length. Paged attention splits the cache into fixed-size blocks and allocates them on demand from a central pool, so many concurrent sequences share a predictable VRAM budget.
+Standard attention keeps a separate contiguous KV cache for each sequence. Paged attention splits the cache into fixed-size blocks and assigns them on demand from a central pool, so concurrent sequences share a predictable cache budget.
+
+Paged attention is enabled by default for supported CUDA and Metal models. Start with automatic memory sizing: the engine plans model placement, execution workspace, and the KV pool together.
 
 <Tabs>
 <TabItem label="CLI">
 
 ```bash
-# Force on, with a specific KV cache memory budget in MB
-mistralrs serve --paged-attn on --pa-memory-mb 8192 -m Qwen/Qwen3-4B
+# Automatic placement and memory sizing
+mistralrs serve -m Qwen/Qwen3-4B
+
+# Set an explicit shared KV cache capacity
+mistralrs serve --kv-cache 8GiB -m Qwen/Qwen3-4B
 
 # Force off
 mistralrs serve --paged-attn off -m Qwen/Qwen3-4B
 ```
 
-`--paged-attn` accepts `auto` (default), `on`, or `off`. `auto` enables paged attention on CUDA and disables it on Metal and CPU.
+`--paged-attn` accepts `auto` (default), `on`, or `off`. `auto` enables paged attention on CUDA and Metal and disables it on CPU.
 
 </TabItem>
 <TabItem label="Python">
@@ -28,59 +33,123 @@ from mistralrs import Runner, Which
 
 runner = Runner(
     which=Which.Plain(model_id="Qwen/Qwen3-4B"),
-    pa_gpu_mem=8192,
-    pa_blk_size=32,
 )
 ```
 
-`paged_attn=True` forces it on, `no_paged_attn=True` forces it off; the `pa_*` arguments mirror the CLI flags. [Full example](/mistral.rs/examples/python/paged-attention/).
+Omit `memory_goal` for automatic sizing. Set `memory_goal="8GiB"` for an explicit shared KV capacity or `memory_goal=0.9` for a utilization target. `paged_attn=True` forces paging on; `no_paged_attn=True` forces it off. [Full example](/examples/python/paged-attention/).
 
 </TabItem>
 <TabItem label="Rust">
 
 ```rust
-use mistralrs::{IsqBits, MemoryGpuConfig, ModelBuilder, PagedAttentionMetaBuilder};
+use mistralrs::{IsqBits, ModelBuilder};
 
 let model = ModelBuilder::new("Qwen/Qwen3-4B")
     .with_auto_isq(IsqBits::Eight)
-    .with_paged_attn(
-        PagedAttentionMetaBuilder::default()
-            .with_block_size(32)
-            .with_gpu_memory(MemoryGpuConfig::ContextSize(1024))
-            .build()?,
-    )
     .build()
     .await?;
 ```
 
-`with_paged_attn` is silently ignored on platforms without paged attention support. [Full example](/mistral.rs/examples/rust/advanced/paged-attn/).
+Paging is automatic on supported CUDA and Metal models. Call `.without_paged_attn()` to use the standard cache. CPU and unsupported model loaders also use the standard cache.
+
+To set a budget, import `mistralrs::MemoryGoal` and use `.with_memory_goal(MemoryGoal::Utilization(0.9))` or `.with_memory_goal(MemoryGoal::KvTokens(65536))`. `PagedAttentionMetaBuilder` also supports block-size and cache-type settings. [Full example](/examples/rust/advanced/paged-attn/).
 
 </TabItem>
 </Tabs>
 
-Use paged attention when:
+## Upgrading from 0.9.4
 
-- Serving more than a handful of concurrent requests.
-- Predictable VRAM usage is required.
-- Running long-context models (32k+) where standard caches would be enormous.
-- Using CUDA decode graphs (see below).
+Version 0.9.5 enables paging by default on supported Metal models and replaces the old memory and automatic-device-mapping hints with a shared memory planner. Omit memory overrides to use automatic sizing. To retain the standard cache on Metal, use `--paged-attn off`, Python's `no_paged_attn=True`, or Rust's `.without_paged_attn()`.
+
+### CLI and TOML
+
+The old flags are removed. Update scripts and the corresponding `[paged_attn]` settings:
+
+| 0.9.4 | 0.9.5 |
+|---|---|
+| `--pa-context-len 65536` / `context_len = 65536` | `--kv-cache 65536tokens` / `kv_cache = "65536tokens"` |
+| `--pa-memory-mb 4096` / `memory_mb = 4096` | `--kv-cache 4GiB` / `kv_cache = "4GiB"` for a single device; choose a total budget across devices for multi-device models |
+| `--pa-memory-fraction 0.9` / `memory_fraction = 0.9` | `--gpu-memory-utilization 0.9` / `gpu_memory_utilization = 0.9` |
+| `--max-seq-len` / device `max_seq_len` | Remove the placement hint; use `--max-model-len` / model `max_model_len` if you want a per-request context limit |
+| `--max-batch-size` / device `max_batch_size` | Remove the placement hint; use `--max-seqs` / runtime `max_seqs` to set serving concurrency |
+
+The old memory amount used MiB despite its name. The new byte budget covers the model's entire KV cache across devices. Utilization budgets cover weights, workspace, and KV cache; they are not a fraction reserved only for KV. Choose either a KV capacity or a utilization target. Explicit budgets require supported paging, including when loaded from TOML.
+
+`run` now defaults to one concurrent sequence; `serve` remains at 32. Explicit `max_seqs` settings take precedence. See [TOML configuration](/reference/cli-toml-config/) for section placement.
+
+### Python
+
+Replace `Runner(pa_ctxt_len=65536)` with `Runner(memory_goal="65536tokens")`, `pa_gpu_mem=4096` with `memory_goal="4GiB"` for a single-device cache, or `pa_gpu_mem_usage=0.9` with `memory_goal=0.9`. Supply the usual `which` argument in each case.
+
+Remove `TextAutoMapParams`, `MultimodalAutoMapParams`, and the `auto_map_params` / `multimodal_auto_map_params` arguments to `Which` variants. Placement now uses the memory goal and serving limits. `Runner.max_seqs` defaults to 32 instead of 16; set `max_seqs=16` explicitly to preserve the old concurrency limit.
+
+### Rust
+
+Replace `PagedAttentionMetaBuilder::with_gpu_memory` with `.with_memory_goal`, and replace `MemoryGpuConfig` values as follows:
+
+| 0.9.4 | 0.9.5 |
+|---|---|
+| `MemoryGpuConfig::ContextSize(n)` | `MemoryGoal::KvTokens(n)` |
+| `MemoryGpuConfig::MbAmount(n)` | `MemoryGoal::KvBytes(n * 1024 * 1024)` for a single device; choose a total byte budget for multi-device models |
+| `MemoryGpuConfig::Utilization(f)` | `MemoryGoal::Utilization(f)` |
+
+`MemoryGpuConfig::BestEffortMbAmount` has no direct replacement. Use `MemoryGoal::Auto` for automatic sizing or `MemoryGoal::KvBytes` for a required capacity; explicit capacities fail if they cannot fit instead of shrinking.
+
+`PagedAttentionMetaBuilder::default()` now uses `MemoryGoal::Auto` instead of a 4,096-token cache. Set `MemoryGoal::KvTokens(4096)` explicitly if that is the capacity you need. `ModelBuilder` also accepts `.with_memory_goal(...)` directly.
+
+Remove `DeviceMapSetting::Auto(...)` overrides to use automatic placement. For manual placement, `.with_device_mapping(...)` now accepts `DeviceMapMetadata` directly, without a `DeviceMapSetting::Map(...)` wrapper. See [layer mapping](/guides/perf/distributed-inference/#layer-mapping-cuda-p2p) for an example.
 
 ## Memory budget
 
-The pool's size is set via one of three mutually exclusive flags:
+Leave memory settings unset to use `Auto`. The engine leaves headroom for the system, reserves space for model weights and temporary computation, and uses the remaining budget for the KV cache. CLI, Python, and Rust use the same policy.
 
-- `--pa-memory-mb <mb>`: KV cache budget in MB.
-- `--pa-memory-fraction <f>`: KV cache budget as a fraction of VRAM.
-- `--pa-context-len <n>`: allocate KV cache sized for this context length.
+To set the engine's budget yourself, use `--gpu-memory-utilization 0.9`. This allows weights, temporary computation, and KV cache together to use up to 90% of physical GPU memory, subject to current availability and device limits.
 
-When none are set, the pool defaults to 90% of available VRAM.
+To set just the KV capacity, use `--kv-cache 4GiB` for a byte budget or `--kv-cache 65536tokens` for a token capacity. The cache is shared across requests, and byte budgets cover all of the model's devices. Choose either `--kv-cache` or `--gpu-memory-utilization`.
+
+Use `--max-model-len` to limit each request's prompt plus output, and `--max-seqs` to limit concurrent requests. A shared cache of 65,536 tokens does not give every request that capacity. See [throughput tuning](/guides/perf/throughput-tuning/) for these controls.
+
+Explicit memory goals require supported paging and fail if the requested allocation cannot fit. Remove the override to return to automatic sizing.
+
+### Automatic sizing
+
+When planning persistent allocations, `Auto` leaves the larger of 5% of physical memory or 1 GiB as headroom on discrete GPUs. On unified-memory devices, it leaves 25%, capped at 16 GiB. Metal also respects its recommended working-set limit and currently available system memory. For example, automatic planning on a 64 GiB Mac targets at most 48 GiB; other applications can reduce the usable capacity further.
+
+Temporary inference work can use this headroom when physical memory and device working-set limits allow it. This accommodates runtime buffers and changes in system memory after startup. KV allocation and retained CUDA graphs continue to use the conservative planning budget. An explicit `--gpu-memory-utilization` remains a hard limit for both planning and inference.
+
+The planner accounts for serving concurrency and prompt-processing limits. Increasing them can require more temporary memory and leave less room for the cache. Long cached prefixes may also need smaller batches to fit. These estimates guide allocation; the engine checks available memory before running each batch.
+
+After allocation, the engine checks that the actual cache footprint still leaves room for runtime reservations. Automatic and utilization-based sizing can reduce the cache before serving requests; explicit capacities fail if they cannot fit. On integrated CUDA devices, planning, graph capture, and inference all count reclaimable system memory as available.
+
+For supported fused attention paths, forward admission estimates workspace from the scheduled tokens and selected attention kernel. Encoder work is reserved for batches with multimodal inputs, and CUDA decode graph capture uses its own query shape. Startup sizing still reserves room for the configured workload. Unknown attention paths retain conservative estimates.
+
+### Explicit capacity and utilization
+
+Byte budgets allocate whole cache blocks within the requested limit. Metal also includes hardware buffer rounding in this budget; CUDA uses logical buffer bytes. Alignment and the reserved cache block can make usable token capacity lower than a simple bytes-per-token estimate. Token budgets round up to whole usable blocks and check the additional reserved block and allocation overhead against the device budget.
+
+### Multiple models
+
+For [multi-model serving](/guides/serve/multiple-models/), each model receives a fixed share of the initial per-device memory budget, weighted by its maximum serving concurrency. Its weights, workspace, and KV pool must fit within that share. A utilization override becomes the shared engine target, including models using `Auto`; conflicting utilization overrides are rejected. Models with paging disabled count toward the share calculation, but their placement and growing dense caches are not bounded by these paged-cache quotas. Explicit KV capacities are preserved in full; a capacity that exceeds the model's share fails instead of being silently reduced.
+
+In Rust, set memory goals before calling `plan_paged_kv`. Changing a goal on a planned configuration requires re-planning the group.
+
+### Cache and scheduler controls
 
 Two more flags tune the cache itself:
 
 - `--pa-block-size <n>`: block size (default 32).
 - `--pa-cache-type`: KV cache quantization (`auto` or `f8e4m3`). This is separate from model-weight quantization (`--quant`/`--isq`); the two are chosen independently.
 
-See the [serve flag reference](/mistral.rs/reference/cli/serve/) for all `--pa-*` flags.
+Scheduler memory and latency are controlled independently:
+
+- `--max-num-batched-tokens <n>`: total scheduler-step token budget (default 4096).
+- `--max-prefill-chunk-tokens <n>`: batch-wide chunkable CUDA or Metal text-prompt quantum (default 512).
+- `--max-decode-steps-before-prefill <n>`: maximum decode turns before a waiting prompt receives service (default 8).
+
+See the [serve flag reference](/reference/cli/serve/) for memory and paging flags.
+
+Raw-logit, adapter, and multimodal prompt paths that cannot be split remain atomic. The prefill
+chunk limit does not change CPU scheduling.
 
 ## How it works
 
@@ -88,19 +157,47 @@ The default block size is 32 tokens. Supported block sizes are 8, 16, and 32; ot
 
 Each sequence holds a list of block pointers. On each decoding step, the scheduler checks whether the sequence has a free slot in its tail block; if not, it allocates a new block from the pool. When a sequence finishes, its blocks return to the pool.
 
-Sequences that begin with identical tokens share the blocks holding those tokens. A shared block is reference-counted rather than duplicated. This is the mechanism behind [prefix caching](/mistral.rs/guides/perf/throughput-tuning/) when paged attention is on.
+Sequences that begin with identical tokens share the blocks holding those tokens. A shared block is reference-counted rather than duplicated. This is the mechanism behind [prefix caching](/guides/perf/throughput-tuning/) when paged attention is on.
 
 MLA (Multi-head Latent Attention)'s latent cache is supported through a dedicated kernel path. Some models opt out of the FlashInfer paged cache layout (FlashInfer is NVIDIA's attention-kernel library; see [Flash attention vs FlashInfer](#flash-attention-vs-flashinfer) below) when their cache shape needs a different backend.
+
+## Metal prefill and decode
+
+Metal defaults to a paged cache with contiguous head dimensions for both K and V. Short-context decode and grouped, partitioned decode use dedicated kernels. Sliding-window decode reads the visible tokens directly from the pages.
+
+Native paged prefill handles fresh prompts, cached prefixes, and prompt chunks through the same interface. It supports uneven sequence lengths, grouped-query attention, shared KV, causal and bidirectional windows, fixed attention chunks, and multimodal bidirectional ranges. FP16, BF16, and FP32 activations can read regular or FP8 KV caches; positional biases, softcap, sinks, and explicit additive masks are applied within attention. Kernel selection follows attention dimensions and features rather than model names.
+
+Structured masks are passed as lengths, positions, windows, and ranges. An explicitly supplied arbitrary mask can still consume substantial memory, but the kernel reads it directly without creating a full attention-score matrix. Dedicated layouts such as MLA retain their separate implementation and memory accounting.
+
+To select the legacy Metal cache layout and decode backend before loading a model:
+
+```bash
+MISTRALRS_METAL_PAGED_LAYOUT=legacy mistralrs serve --paged-attn on -m <model>
+```
+
+The default is `MISTRALRS_METAL_PAGED_LAYOUT=hnd`; `auto` selects the same layout. The legacy option retains paging and prefix sharing. Use `--paged-attn off` to disable paging entirely. The cache layout is fixed for the lifetime of a loaded model.
 
 ## CUDA fast paths
 
 On CUDA, paged attention dispatches to one of three paths:
 
 - Default decode: FlashInfer-backed paged decode kernels, used when the model's KV-cache shape is compatible.
-- Eligible prefill chunks: also use FlashInfer.
+- Eligible prefill chunks: use direct paged FlashAttention, subject to compiled kernel support and request capabilities.
 - Generic fallback: when a request falls outside those constraints, the runtime gathers blocks and then dispatches to the available attention backend.
 
-Long CUDA prompts are chunked internally with a 4096-token default chunk size. This keeps paged prefill throughput stable at long context and lets long prompts use the paged prefill kernels instead of one very large dispatch. Chunking is internal and does not change the visible prompt, logits, or generated text.
+CUDA prompts are chunked from the batch-wide token budget. The per-sequence chunk is the budget
+divided by the admitted prompt batch size, so peak prefill work stays bounded as concurrency grows.
+Chunking is internal and does not change the visible prompt, logits, or generated text.
+
+CUDA engines retain freed scratch allocations for reuse across forward passes. Memory maintenance
+trims excess cached allocations while idle and under memory pressure. Reserved CUDA memory can
+therefore include reusable scratch space as well as live tensors.
+
+`f8e4m3` stores K and V at half the bytes of BF16. CUDA accepts FP16, BF16, or FP32 activations and
+converts at cache-write time; FlashInfer decode applies the K scale to logits and the V scale to
+outputs without gathering a full-precision cache. Scales are immutable for the cache lifetime, so
+previously written entries are never reinterpreted. The default scale is 1.0, matching the common
+vLLM and SGLang serving configuration. FP8 cache is not currently supported for MLA layouts.
 
 To compare with the non-FlashInfer paged decode path, disable the FlashInfer cache layout:
 
@@ -112,8 +209,8 @@ MISTRALRS_FLASHINFER_DECODE=0 mistralrs serve --paged-attn on -m <model>
 
 Paged attention and flash attention compose; both can be on simultaneously. They are not the same backend:
 
-- `flash-attn` (compute capability 8.0+) and `flash-attn-v3` (Hopper) are Cargo features for the standard attention path and fallback varlen paths. See [cargo features](/mistral.rs/reference/cargo-features/).
-- FlashInfer paged decode and prefill kernels are built with the `cuda` feature as part of paged attention. They do not require the `flash-attn` Cargo feature.
+- `flash-attn` (compute capability 8.0+) and `flash-attn-v3` (Hopper) are Cargo features for the standard attention path and fallback varlen paths. See [cargo features](/reference/cargo-features/).
+- FlashInfer paged decode is built with the `cuda` feature as part of paged attention. Regular FP16/BF16 paged FlashAttention prefill requires `flash-attn`; eligible FP8 FA3 paths have their own hardware and shape requirements.
 
 Set `MISTRALRS_FLASHINFER_DECODE=0` only when debugging or comparing against the generic paged path.
 
@@ -146,9 +243,13 @@ If any condition is not met, mistral.rs runs the normal CUDA path.
 
 The first time a decode shape is seen, mistral.rs runs a normal warmup forward, captures a graph for that shape, uploads it, and caches it. Later matching decode steps copy the current input ids and paged-attention metadata into graph-owned buffers and replay the graph.
 
+Supported pipelines also capture common batch sizes during startup. Ordinary single-token FlashInfer decode reserves metadata capacity through 2048 context tokens, bounded by the available cache and sliding window. This lets startup graphs handle changing admission and drain batches within that capacity. It adds a bounded amount of attention scratch memory; longer contexts can still require another capture.
+
 The decode graph cache holds a small number of recent graph entries. New batch sizes, tensor shapes, or metadata layouts can trigger another capture.
 
-If capture or replay fails, CUDA graphs are disabled for that loaded pipeline and a warning is logged. Generation then continues through the normal CUDA path.
+In multi-model groups, retained graphs must leave room for the other models' reserved forward workspace. Capture waits until every paged member has finished loading. Groups containing models with paging disabled skip capture because those models have no complete runtime memory plan. Pressure from another model's reservation defers capture to the memory-admitted normal CUDA path without permanently disabling graphs.
+
+Other capture or replay failures disable CUDA graphs for that loaded pipeline and log a warning. Generation continues through the normal CUDA path only if memory admission succeeds; a request whose own forward workspace cannot fit is rejected.
 
 </details>
 

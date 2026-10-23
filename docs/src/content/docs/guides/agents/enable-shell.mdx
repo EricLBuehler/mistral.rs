@@ -5,7 +5,7 @@ description: Turn on the shell tool, configure sandboxing, and use it from Respo
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-`--enable-shell` registers a shell execution tool with the model. Commands run in a persistent per-session working directory; on Linux and macOS the CLI wraps the subprocess in the [OS-level sandbox](/mistral.rs/reference/sandbox/) by default (`--sandbox auto`).
+`--enable-shell` registers a shell execution tool with the model. Commands run in a persistent per-session working directory; on Linux and macOS the CLI wraps the subprocess in the [OS-level sandbox](/reference/sandbox/) by default (`--sandbox auto`).
 
 ```bash
 mistralrs serve --enable-shell -m <model>
@@ -39,8 +39,8 @@ Native SDK users enable shell on the runner or model builder, then opt in on eac
 | `--shell-timeout <secs>` | 600 | Per-call timeout in seconds. |
 | `--shell-workdir <path>` | per-session temp dir | Working directory for shell commands. |
 | `--skills-dir <path>` | system temp dir | Server-side storage for OpenAI-compatible Skills. |
-| `--agent-permission <mode>` | `auto` | `auto`, `ask`, or `deny`; see [permissions and approvals](/mistral.rs/guides/agents/permissions-and-approvals/). |
-| `--sandbox <mode>` | `auto` | OS-level sandbox: `auto`, `on`, `off`; see the [sandbox reference](/mistral.rs/reference/sandbox/). |
+| `--agent-permission <mode>` | `auto` | `auto`, `ask`, or `deny`; see [permissions and approvals](/guides/agents/permissions-and-approvals/). |
+| `--sandbox <mode>` | `auto` | OS-level sandbox: `auto`, `on`, `off`; see the [sandbox reference](/reference/sandbox/). |
 
 Permissioning is separate from sandboxing. The permission mode decides whether a model-requested command may run at all. The sandbox decides what the command can access after it starts.
 
@@ -99,7 +99,7 @@ resp = runner.send_chat_completion_request(
 print(resp.choices[0].message.content)
 ```
 
-[Full example](/mistral.rs/examples/python/shell/)
+[Full example](/examples/python/shell/)
 
 </TabItem>
 <TabItem label="Rust SDK">
@@ -122,7 +122,7 @@ let resp = model.send_chat_request(req).await?;
 println!("{}", resp.choices[0].message.content.as_ref().unwrap());
 ```
 
-[Full example](/mistral.rs/examples/rust/advanced/shell/)
+[Full example](/examples/rust/advanced/shell/)
 
 </TabItem>
 </Tabs>
@@ -164,7 +164,7 @@ When using `/v1/responses`, shell activity is represented as OpenAI Responses ou
 - `shell_call`: command, status, and call id.
 - `shell_call_output`: stdout/stderr output records, exit code, timeout flag, and status.
 
-Chat Completions streaming emits the same work as mistral.rs `agentic_tool_call_progress` SSE events. The [agentic runtime guide](/mistral.rs/guides/agents/agentic-runtime/) covers the event stream and files contract in depth.
+Chat Completions streaming emits the same work as mistral.rs `agentic_tool_call_progress` SSE events. The [agentic runtime guide](/guides/agents/agentic-runtime/) covers the event stream and files contract in depth.
 
 ## Isolation
 
@@ -172,11 +172,11 @@ Chat Completions streaming emits the same work as mistral.rs `agentic_tool_call_
 
 When sandbox CPU limits are enforced and the configured shell timeout exceeds `max_cpu_secs`, mistral.rs raises `max_cpu_secs` to match and logs a warning. This keeps long-running Skills from being capped by a lower CPU limit.
 
-For deployments where shell commands must leave the mistralrs host entirely, use [`--tool-dispatch-url`](/mistral.rs/guides/agents/tool-calling-basics/#dispatch-url) and expose a custom executor instead of enabling built-in shell.
+For deployments where shell commands must leave the mistralrs host entirely, use [`--tool-dispatch-url`](/guides/agents/tool-calling-basics/#dispatch-url) and expose a custom executor instead of enabling built-in shell.
 
 ## See also
 
-- [OpenAI-compatible Skills](/mistral.rs/guides/agents/skills/): upload and reference Skills from Responses requests.
-- [Permissions and approvals](/mistral.rs/guides/agents/permissions-and-approvals/): gate execution behind app or user approval.
-- [Agentic runtime for apps](/mistral.rs/guides/agents/agentic-runtime/): streaming events, files, and media.
-- Examples: [Python](/mistral.rs/examples/python/shell/), [Rust](/mistral.rs/examples/rust/advanced/shell/).
+- [OpenAI-compatible Skills](/guides/agents/skills/): upload and reference Skills from Responses requests.
+- [Permissions and approvals](/guides/agents/permissions-and-approvals/): gate execution behind app or user approval.
+- [Agentic runtime for apps](/guides/agents/agentic-runtime/): streaming events, files, and media.
+- Examples: [Python](/examples/python/shell/), [Rust](/examples/rust/advanced/shell/).

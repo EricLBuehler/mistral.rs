@@ -1,4 +1,7 @@
-//! Load and run a GGUF-quantized model from Hugging Face.
+//! Load a GGUF model from Hugging Face.
+//!
+//! Configuration and tokenizer assets are discovered automatically. Use `with_tok_model_id`
+//! only to override that choice or when the source cannot be identified.
 //!
 //! Run with: `cargo run --release --example gguf -p mistralrs`
 
@@ -7,14 +10,10 @@ use mistralrs::{GgufModelBuilder, TextMessageRole, TextMessages};
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let model = GgufModelBuilder::new(
-        "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF",
-        vec!["Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf"],
-    )
-    .with_tok_model_id("meta-llama/Meta-Llama-3.1-8B-Instruct")
-    .with_logging()
-    .build()
-    .await?;
+    let model = GgufModelBuilder::new("unsloth/Qwen3-0.6B-GGUF", vec!["Qwen3-0.6B-Q4_K_M.gguf"])
+        .with_logging()
+        .build()
+        .await?;
 
     let messages = TextMessages::new()
         .add_message(

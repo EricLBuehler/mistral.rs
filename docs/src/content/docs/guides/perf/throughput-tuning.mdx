@@ -5,17 +5,15 @@ description: Concurrency, prefix caching, and scheduling knobs for server worklo
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-A handful of flags control how many requests run at once and how much repeated work the engine can skip. The defaults are reasonable for a single-user server; tune them when traffic is concurrent or shares long prompts.
+Start with the defaults, then change one setting at a time for your workload:
 
 ```bash
-mistralrs serve -m Qwen/Qwen3-4B \
-  --max-seqs 64 \
-  --pa-memory-fraction 0.9
+mistralrs serve -m Qwen/Qwen3-4B
 ```
 
-`--pa-memory-fraction` sizes the [paged attention](/mistral.rs/guides/perf/paged-attention/) block pool; see [When paged attention matters](#when-paged-attention-matters) below.
-
-Measure with `mistralrs bench -m <model>` before and after changing anything; flags that help one workload can hurt another.
+For server tuning, replay the same prompt and output lengths through the HTTP API at your expected
+concurrency. Compare throughput and latency before changing another setting. Use
+`mistralrs bench -m <model>` for single-request measurements.
 
 ## Concurrency: max running sequences
 
@@ -50,72 +48,48 @@ let model = mistralrs::ModelBuilder::new("Qwen/Qwen3-4B")
 </TabItem>
 </Tabs>
 
-The default differs by surface:
+CLI `run` defaults to one concurrent sequence. CLI `serve`, Python, and Rust default to 32.
 
-| Surface | Flag / argument | Default |
-|---|---|---|
-| CLI | `--max-seqs` | 32 |
-| Python | `Runner(max_seqs=...)` | 16 |
-| Rust | `.with_max_num_seqs(...)` | 32 |
+More running sequences need more KV cache. If the pool runs out of blocks mid-generation, the scheduler preempts a running sequence, frees its blocks, and requeues it, which costs recomputation. Lower concurrency or adjust the [memory budget](/guides/perf/paged-attention/#memory-budget) if this happens frequently.
 
-More running sequences need more KV cache. With paged attention, size the block pool to match: one of `--pa-context-len`, `--pa-memory-mb`, or `--pa-memory-fraction` (default: 90% of available VRAM). If the pool runs out of blocks mid-generation, the scheduler preempts a running sequence, frees its blocks, and requeues it, which costs recomputation.
+## Mixed prefill and decode
+
+Three limits control how new prompts share the GPU with active decodes:
+
+- `--max-num-batched-tokens` bounds the total token work in a scheduler batch (default 4096).
+- `--max-prefill-chunk-tokens` bounds each chunkable CUDA or Metal text-prompt scheduling quantum (default
+  512). The budget is divided across admitted prompt sequences, limiting how long active decodes
+  wait behind one non-preemptible prefill step. Raw-logit, adapter, and multimodal prompt paths that
+  cannot be split remain atomic; the limit does not change CPU scheduling.
+- `--max-decode-steps-before-prefill` bounds how long a waiting prompt can be deferred while a
+  decode batch is active (default 8). Raise it to favor inter-token latency for active requests;
+  lower it to reduce time to first token under sustained arrivals.
+
+Measure both output throughput and latency percentiles when changing these values. A larger prefill
+chunk can improve prefill throughput while increasing decode latency, especially for long prompts.
 
 ## When paged attention matters
 
-Concurrency beyond a few sequences is the main reason to care about paged attention. It is the difference between per-sequence contiguous caches sized for the maximum context and a shared block pool with a fixed budget:
+Paged attention shares a fixed cache pool across requests and is enabled by default on supported CUDA and Metal models:
 
-- With paged attention (default on CUDA): continuous batching against the block pool, block-level prefix sharing, and the CUDA decode-graph and FlashInfer (NVIDIA's attention-kernel library) fast paths.
-- Without it (Metal, CPU, or `--paged-attn off`): the default scheduler is first-come-first-served and batches running sequences by equal length; sequences at other lengths wait their turn and accumulate priority.
+- With paged attention: continuous batching and block-level prefix sharing.
+- Without it (CPU or `--paged-attn off`): the default scheduler is first-come-first-served and batches running sequences by equal length; sequences at other lengths wait their turn and accumulate priority.
+
+See [paged attention and KV caching](/guides/perf/paged-attention/) for setup and cache controls.
 
 ## Prefix caching
 
-Prefix caching skips prefill for tokens the engine has already processed, which is most valuable for multi-turn chat and shared system prompts.
+Prefix caching is most useful for multi-turn chat and shared system prompts. When measuring it, include repeated prefixes in your test traffic and compare time to first token after the first request.
 
-`--prefix-cache-n` sets how many cached prefixes stay on device (default 16, `0` disables). `--no-kv-cache` disables the KV cache entirely and prefix caching with it.
+`--prefix-cache-n` controls how many prefixes are retained (default 16; `0` disables). Python uses `Runner(prefix_cache_n=...)`, and Rust uses `.with_prefix_cache_n(Some(...))`. Retaining more prefixes can help workloads that cycle through many conversations.
 
-<Tabs>
-<TabItem label="CLI">
+With paged attention, matching prefixes share cache blocks. Without paging, completed sequences' caches are retained whole. `--no-kv-cache` disables both the KV cache and prefix caching; `--paged-attn off` keeps the standard KV cache.
 
-```bash
-mistralrs serve -m Qwen/Qwen3-4B --prefix-cache-n 32
-```
-
-</TabItem>
-<TabItem label="Python">
-
-```python
-from mistralrs import Runner, Which
-
-runner = Runner(
-    which=Which.Plain(model_id="Qwen/Qwen3-4B"),
-    prefix_cache_n=32,
-    no_kv_cache=False,
-)
-```
-
-</TabItem>
-<TabItem label="Rust">
-
-```rust
-let model = mistralrs::ModelBuilder::new("Qwen/Qwen3-4B")
-    .with_prefix_cache_n(Some(32))
-    .build()
-    .await?;
-```
-
-`.with_no_kv_cache()` disables the KV cache (and prefix caching with it).
-
-</TabItem>
-</Tabs>
-
-The mechanism depends on the attention mode:
-
-- Paged attention: sequences sharing a token prefix reuse the same reference-counted cache blocks; matching blocks of a new request are not recomputed.
-- Non-paged: completed sequences' caches are kept whole; a new request whose tokens extend a cached sequence resumes from it. Beyond `--prefix-cache-n` device entries, the oldest caches are evicted (dropped, not offloaded); a later matching request re-prefills.
+Qwen3.5 hybrid models on Metal can report zero prefix-cache hits for repeated identical prompts. Reuse also requires a saved recurrent-state checkpoint, and Metal does not currently create the intermediate checkpoints needed for this case.
 
 ## Memory planning for automatic device mapping
 
-Automatic device mapping reserves activation and KV memory for a worst case you declare: `--max-seq-len` (default 4096) and `--max-batch-size` (default 1). If you expect long prompts or large batches, raise these so layers are not placed too greedily; if memory is tight, the defaults already keep reservations small. See [distributed inference](/mistral.rs/guides/perf/distributed-inference/) for manual placement.
+With paged attention, automatic placement reserves room for weights, temporary computation, and the KV cache together. Raising concurrency or batch limits can leave less space for the cache. See [memory budgets](/guides/perf/paged-attention/#memory-budget) for sizing and [layer mapping](/guides/perf/distributed-inference/#layer-mapping-cuda-p2p) for placement.
 
 ## CPU threads and affinity
 
@@ -134,10 +108,10 @@ CANDLE_CPU_MASK=15-19 mistralrs bench --cpu -m meta-llama/Llama-3.2-3B-Instruct
 CANDLE_CPU_MASK=5-9,15-19 mistralrs serve --cpu -m meta-llama/Llama-3.2-3B-Instruct
 ```
 
-Hard affinity is not enabled by default because it can help one CPU/model pair and hurt another. To try the automatic high-capacity CPU mask without spelling out a list, set `CANDLE_CPU_AFFINITY=1`. The full list is in the [environment variables reference](/mistral.rs/reference/environment-variables/#cpu-runtime).
+Hard affinity is not enabled by default because it can help one CPU/model pair and hurt another. To try the automatic high-capacity CPU mask without spelling out a list, set `CANDLE_CPU_AFFINITY=1`. The full list is in the [environment variables reference](/reference/environment-variables/#cpu-runtime).
 
 ## CUDA defaults worth knowing
 
-On CUDA, two decode fast paths are on by default and need no tuning: FlashInfer paged kernels and CUDA decode graphs. They exist as env-var switches (`MISTRALRS_FLASHINFER_DECODE`, `MISTRALRS_CUDA_GRAPHS`) only for debugging and benchmarking comparisons; details on the [paged attention page](/mistral.rs/guides/perf/paged-attention/).
+On CUDA, two decode fast paths are on by default and need no tuning: FlashInfer paged kernels and CUDA decode graphs. They exist as env-var switches (`MISTRALRS_FLASHINFER_DECODE`, `MISTRALRS_CUDA_GRAPHS`) only for debugging and benchmarking comparisons; details on the [paged attention page](/guides/perf/paged-attention/).
 
-Quantization is the other big throughput lever, traded against quality: see [quantize a model](/mistral.rs/guides/quantization/quantize-a-model/).
+Quantization is the other big throughput lever, traded against quality: see [quantize a model](/guides/quantization/quantize-a-model/).

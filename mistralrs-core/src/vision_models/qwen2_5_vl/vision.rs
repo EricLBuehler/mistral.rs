@@ -8,6 +8,7 @@ use mistralrs_quant::{ColumnParallelLayer, QuantMethod, RowParallelLayer, Sharde
 use crate::{
     layers::{self, Activation, Conv3dConfig, Conv3dNoBias, MatMul, RmsNorm},
     ops::RepeatInterleaveOp,
+    utils::unvarbuilder::UnVarBuilder,
 };
 
 use super::config::VisionConfig;
@@ -53,6 +54,16 @@ impl PatchEmbed {
             self.patch_size,
         ))?;
         xs.apply(&self.proj)?.reshape(((), self.hidden_size))
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+        let weight = self
+            .proj
+            .weight()
+            .expect("Qwen2.5-VL patch embedding weight reconstruction should succeed");
+        uvb.pp("proj").add_tensor("weight", weight);
+        uvb.to_safetensors()
     }
 }
 
@@ -109,6 +120,14 @@ impl VisionMlp {
             .down_proj
             .forward(&crate::ops::mul_and_act(&lhs, &rhs, self.act)?)?;
         res.squeeze(0)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+        uvb.pp("gate_proj").add(&self.gate_proj);
+        uvb.pp("up_proj").add(&self.up_proj);
+        uvb.pp("down_proj").add(&self.down_proj);
+        uvb.to_safetensors()
     }
 }
 
@@ -188,6 +207,13 @@ impl VisionAttention {
 
         self.proj.forward(&att.unsqueeze(0)?)?.squeeze(0)
     }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+        uvb.pp("qkv").add(&self.qkv);
+        uvb.pp("proj").add(&self.proj);
+        uvb.to_safetensors()
+    }
 }
 
 // https://github.com/huggingface/transformers/blob/f2c388e3f946862f657acc1e21b272ec946fc66c/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L418
@@ -236,6 +262,15 @@ impl VisionBlock {
                 .forward(&self.norm1.forward(xs)?, attention_mask, rotary_pos_emb)?)?;
         &xs + self.mlp.forward(&self.norm2.forward(&xs)?)?
     }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+        uvb.pp("norm1").add(&self.norm1);
+        uvb.pp("norm2").add(&self.norm2);
+        uvb.pp("attn").extend(self.attn.residual_tensors());
+        uvb.pp("mlp").extend(self.mlp.residual_tensors());
+        uvb.to_safetensors()
+    }
 }
 
 struct PatchMerger {
@@ -271,6 +306,14 @@ impl PatchMerger {
             .gelu()?
             .apply(&self.mlp2)?
             .squeeze(0)
+    }
+
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+        uvb.pp("ln_q").add(&self.ln_q);
+        uvb.pp("mlp").pp(0).add(&self.mlp0);
+        uvb.pp("mlp").pp(2).add(&self.mlp2);
+        uvb.to_safetensors()
     }
 }
 
@@ -552,5 +595,89 @@ impl Qwen2_5VLVisionModel {
         xs = self.patch_merger.forward(&xs)?;
         let reverse_indices = window_index.arg_sort_last_dim(true)?;
         xs.index_select(&reverse_indices, 0)
+    }
+
+    pub(crate) fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        let uvb = UnVarBuilder::new();
+        uvb.pp("patch_embed")
+            .extend(self.patch_embed.residual_tensors());
+        let uvb_blocks = uvb.pp("blocks");
+        for (layer_idx, block) in self.blocks.iter().enumerate() {
+            uvb_blocks.pp(layer_idx).extend(block.residual_tensors());
+        }
+        uvb.pp("merger")
+            .extend(self.patch_merger.residual_tensors());
+        uvb.to_safetensors()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{HashMap, HashSet};
+
+    use super::*;
+
+    #[test]
+    fn residual_tensors_cover_the_complete_vision_checkpoint() -> Result<()> {
+        let cfg = VisionConfig {
+            depth: 1,
+            hidden_size: 4,
+            out_hidden_size: 4,
+            hidden_act: Activation::QuickGelu,
+            intermediate_size: 8,
+            num_heads: 1,
+            in_chans: 1,
+            patch_size: 1,
+            spatial_merge_size: 1,
+            temporal_patch_size: 2,
+            window_size: 4,
+            fullatt_block_indexes: vec![0],
+        };
+        let shapes = [
+            ("patch_embed.proj.weight", vec![4, 1, 2, 1, 1]),
+            ("blocks.0.norm1.weight", vec![4]),
+            ("blocks.0.norm2.weight", vec![4]),
+            ("blocks.0.mlp.gate_proj.weight", vec![8, 4]),
+            ("blocks.0.mlp.up_proj.weight", vec![8, 4]),
+            ("blocks.0.mlp.down_proj.weight", vec![4, 8]),
+            ("blocks.0.attn.qkv.weight", vec![12, 4]),
+            ("blocks.0.attn.qkv.bias", vec![12]),
+            ("blocks.0.attn.proj.weight", vec![4, 4]),
+            ("blocks.0.attn.proj.bias", vec![4]),
+            ("merger.ln_q.weight", vec![4]),
+            ("merger.mlp.0.weight", vec![4, 4]),
+            ("merger.mlp.0.bias", vec![4]),
+            ("merger.mlp.2.weight", vec![4, 4]),
+            ("merger.mlp.2.bias", vec![4]),
+        ];
+        let expected = shapes
+            .iter()
+            .map(|(name, _)| (*name).to_string())
+            .collect::<HashSet<_>>();
+        let tensors = shapes
+            .into_iter()
+            .map(|(name, shape)| {
+                Ok((
+                    name.to_string(),
+                    Tensor::zeros(shape, DType::F32, &Device::Cpu)?,
+                ))
+            })
+            .collect::<Result<HashMap<_, _>>>()?;
+        let vb = mistralrs_quant::ShardedSafeTensors::wrap(tensors, DType::F32, Device::Cpu);
+        let comm = Arc::new(mistralrs_quant::Comm::from_device(
+            mistralrs_quant::Id::new(),
+            &Device::Cpu,
+            0,
+            1,
+        )?);
+        let model = Qwen2_5VLVisionModel::new(&cfg, vb, &comm)?;
+        let actual = model
+            .residual_tensors()
+            .into_iter()
+            .map(|(name, _)| name)
+            .collect::<HashSet<_>>();
+
+        assert_eq!(actual, expected);
+        Ok(())
     }
 }

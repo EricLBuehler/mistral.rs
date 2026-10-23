@@ -1,8 +1,7 @@
 //! ## General utilities.
 
 use image::DynamicImage;
-use mistralrs_core::AudioInput;
-use mistralrs_core::MistralRs;
+use mistralrs_core::{AudioInput, MistralRs, MistralRsError};
 use std::error::Error;
 use std::sync::Arc;
 
@@ -97,32 +96,16 @@ async fn parse_audio_url_with_policy(
 pub fn validate_model_name(
     requested_model: &str,
     state: Arc<MistralRs>,
-) -> Result<(), anyhow::Error> {
-    // Allow "default" as a special case to bypass validation
+) -> Result<(), MistralRsError> {
     if requested_model == "default" {
         return Ok(());
     }
 
-    if state
-        .model_exists(requested_model)
-        .map_err(|e| anyhow::anyhow!("Failed to resolve model: {}", e))?
-    {
+    if state.model_exists(requested_model)? {
         return Ok(());
     }
 
-    let available_models = state
-        .list_models()
-        .map_err(|e| anyhow::anyhow!("Failed to get available models: {}", e))?;
-
-    if available_models.is_empty() {
-        anyhow::bail!("No models are currently loaded.");
-    }
-
-    anyhow::bail!(
-        "Requested model '{}' is not available. Available models: {}. Use 'default' to use the default model.",
-        requested_model,
-        available_models.join(", ")
-    )
+    Err(MistralRsError::ModelNotFound(requested_model.to_string()))
 }
 
 /// Sanitize error messages to remove internal implementation details like stack traces.

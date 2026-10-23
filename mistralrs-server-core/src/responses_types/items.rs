@@ -109,6 +109,9 @@ pub enum TaggedInputItem {
         call_id: String,
         /// Name of the function to call
         name: String,
+        /// Namespace the function belongs to, if any
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        namespace: Option<String>,
         /// JSON-encoded arguments for the function
         arguments: String,
     },
@@ -119,6 +122,18 @@ pub enum TaggedInputItem {
         call_id: String,
         /// Output from the function
         output: String,
+    },
+    /// A prior reasoning item replayed by the client; not fed back to the model
+    #[serde(rename = "reasoning")]
+    Reasoning {
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        summary: Vec<ReasoningSummaryPart>,
+        #[serde(default)]
+        content: Vec<ReasoningContentPart>,
+        #[serde(default)]
+        encrypted_content: Option<String>,
     },
 }
 
@@ -251,6 +266,14 @@ fn input_item_schema() -> Schema {
                         )),
                     )
                     .property(
+                        "namespace",
+                        RefOr::T(Schema::Object(
+                            ObjectBuilder::new()
+                                .schema_type(SchemaType::Type(Type::String))
+                                .build(),
+                        )),
+                    )
+                    .property(
                         "arguments",
                         RefOr::T(Schema::Object(
                             ObjectBuilder::new()
@@ -299,6 +322,47 @@ fn input_item_schema() -> Schema {
                     .required("output")
                     .build(),
             ))
+            .item(Schema::Object(
+                ObjectBuilder::new()
+                    .schema_type(SchemaType::Type(Type::Object))
+                    .property(
+                        "type",
+                        RefOr::T(Schema::Object(
+                            ObjectBuilder::new()
+                                .schema_type(SchemaType::Type(Type::String))
+                                .enum_values(Some(vec![serde_json::Value::String(
+                                    "reasoning".to_string(),
+                                )]))
+                                .build(),
+                        )),
+                    )
+                    .property(
+                        "id",
+                        RefOr::T(Schema::Object(
+                            ObjectBuilder::new()
+                                .schema_type(SchemaType::Type(Type::String))
+                                .build(),
+                        )),
+                    )
+                    .property(
+                        "summary",
+                        RefOr::T(Schema::Array(
+                            ArrayBuilder::new()
+                                .items(ReasoningSummaryPart::schema())
+                                .build(),
+                        )),
+                    )
+                    .property(
+                        "content",
+                        RefOr::T(Schema::Array(
+                            ArrayBuilder::new()
+                                .items(ReasoningContentPart::schema())
+                                .build(),
+                        )),
+                    )
+                    .required("type")
+                    .build(),
+            ))
             .build(),
     )
 }
@@ -328,6 +392,9 @@ pub enum OutputItem {
         call_id: String,
         /// Name of the function to call
         name: String,
+        /// Namespace the function belongs to, if any
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        namespace: Option<String>,
         /// JSON-encoded arguments for the function
         arguments: String,
         /// Status of the item
@@ -349,6 +416,28 @@ pub enum OutputItem {
         output: Vec<ShellCallOutputPart>,
         status: ItemStatus,
     },
+    /// Model reasoning emitted before the visible answer.
+    #[serde(rename = "reasoning")]
+    Reasoning {
+        id: String,
+        summary: Vec<ReasoningSummaryPart>,
+        content: Vec<ReasoningContentPart>,
+        status: ItemStatus,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "type")]
+pub enum ReasoningSummaryPart {
+    #[serde(rename = "summary_text")]
+    SummaryText { text: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "type")]
+pub enum ReasoningContentPart {
+    #[serde(rename = "reasoning_text")]
+    ReasoningText { text: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -476,6 +565,14 @@ fn output_item_schema() -> Schema {
                     )
                     .property(
                         "name",
+                        RefOr::T(Schema::Object(
+                            ObjectBuilder::new()
+                                .schema_type(SchemaType::Type(Type::String))
+                                .build(),
+                        )),
+                    )
+                    .property(
+                        "namespace",
                         RefOr::T(Schema::Object(
                             ObjectBuilder::new()
                                 .schema_type(SchemaType::Type(Type::String))
@@ -616,6 +713,59 @@ fn output_item_schema() -> Schema {
                     .required("status")
                     .build(),
             ))
+            .item(Schema::Object(
+                ObjectBuilder::new()
+                    .schema_type(SchemaType::Type(Type::Object))
+                    .property(
+                        "type",
+                        RefOr::T(Schema::Object(
+                            ObjectBuilder::new()
+                                .schema_type(SchemaType::Type(Type::String))
+                                .enum_values(Some(vec![serde_json::Value::String(
+                                    "reasoning".to_string(),
+                                )]))
+                                .build(),
+                        )),
+                    )
+                    .property(
+                        "id",
+                        RefOr::T(Schema::Object(
+                            ObjectBuilder::new()
+                                .schema_type(SchemaType::Type(Type::String))
+                                .build(),
+                        )),
+                    )
+                    .property(
+                        "summary",
+                        RefOr::T(Schema::Array(
+                            ArrayBuilder::new()
+                                .items(ReasoningSummaryPart::schema())
+                                .build(),
+                        )),
+                    )
+                    .property(
+                        "content",
+                        RefOr::T(Schema::Array(
+                            ArrayBuilder::new()
+                                .items(ReasoningContentPart::schema())
+                                .build(),
+                        )),
+                    )
+                    .property(
+                        "status",
+                        RefOr::T(Schema::Object(
+                            ObjectBuilder::new()
+                                .schema_type(SchemaType::Type(Type::String))
+                                .build(),
+                        )),
+                    )
+                    .required("type")
+                    .required("id")
+                    .required("summary")
+                    .required("content")
+                    .required("status")
+                    .build(),
+            ))
             .build(),
     )
 }
@@ -628,6 +778,7 @@ impl OutputItem {
             OutputItem::FunctionCall { id, .. } => id,
             OutputItem::ShellCall { id, .. } => id,
             OutputItem::ShellCallOutput { id, .. } => id,
+            OutputItem::Reasoning { id, .. } => id,
         }
     }
 
@@ -638,6 +789,7 @@ impl OutputItem {
             OutputItem::FunctionCall { status, .. } => *status,
             OutputItem::ShellCall { status, .. } => *status,
             OutputItem::ShellCallOutput { status, .. } => *status,
+            OutputItem::Reasoning { status, .. } => *status,
         }
     }
 
@@ -656,6 +808,7 @@ impl OutputItem {
         id: String,
         call_id: String,
         name: String,
+        namespace: Option<String>,
         arguments: String,
         status: ItemStatus,
     ) -> Self {
@@ -663,6 +816,7 @@ impl OutputItem {
             id,
             call_id,
             name,
+            namespace,
             arguments,
             status,
         }
@@ -692,6 +846,20 @@ impl OutputItem {
             id,
             call_id,
             output,
+            status,
+        }
+    }
+
+    pub fn reasoning(id: String, text: String, status: ItemStatus) -> Self {
+        let content = if text.is_empty() {
+            vec![]
+        } else {
+            vec![ReasoningContentPart::ReasoningText { text }]
+        };
+        OutputItem::Reasoning {
+            id,
+            summary: vec![],
+            content,
             status,
         }
     }

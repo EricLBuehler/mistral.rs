@@ -36,7 +36,7 @@ A session holds:
 - multimodal payloads from earlier turns;
 - a handle to the Python code-execution subprocess, if any.
 
-On match, stored history is spliced into the request so that editing a previous turn works while tool-call history is retained; the algorithm is documented in [session memory internals](/mistral.rs/developer/session-memory/).
+On match, stored history is spliced into the request so that editing a previous turn works while tool-call history is retained; the algorithm is documented in [session memory internals](/developer/session-memory/).
 
 ## Export, import, delete
 
@@ -89,7 +89,7 @@ response = runner.send_chat_completion_request(
 )
 ```
 
-Use HTTP when a Python application also needs the live `agentic_tool_call_progress` timeline (streamed tool-call progress events; see [tool calling](/mistral.rs/guides/agents/tool-calling-basics/#response-extensions)).
+Use HTTP when a Python application also needs the live `agentic_tool_call_progress` timeline (streamed tool-call progress events; see [tool calling](/guides/agents/tool-calling-basics/#response-extensions)).
 
 </TabItem>
 <TabItem label="Rust">

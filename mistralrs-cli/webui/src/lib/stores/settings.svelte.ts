@@ -1,4 +1,4 @@
-import type { AgentPermission } from "../types";
+import type { AgentPermission, ReasoningEffort } from "../types";
 
 const STORAGE_KEY = "mistralrs_settings";
 
@@ -13,7 +13,8 @@ interface StoredSettings {
   enableCodeExecution: boolean;
   enableShell: boolean;
   agentPermission: AgentPermission;
-  enableThinking: boolean;
+  reasoningEffort: ReasoningEffort | "";
+  enableThinking?: boolean;
 }
 
 // Stale keys from previous UI versions — clean them up on load
@@ -58,7 +59,9 @@ class SettingsStore {
   enableCodeExecution = $state(stored.enableCodeExecution ?? false);
   enableShell = $state(stored.enableShell ?? false);
   agentPermission = $state<AgentPermission>(stored.agentPermission ?? "auto");
-  enableThinking = $state(stored.enableThinking ?? true);
+  reasoningEffort = $state<ReasoningEffort | "">(
+    stored.reasoningEffort ?? (stored.enableThinking === false ? "off" : ""),
+  );
   sidebarOpen = $state(window.innerWidth >= 768);
   settingsOpen = $state(false);
   toolsOpen = $state(false);
@@ -75,7 +78,7 @@ class SettingsStore {
       enableCodeExecution: this.enableCodeExecution,
       enableShell: this.enableShell,
       agentPermission: this.agentPermission,
-      enableThinking: this.enableThinking,
+      reasoningEffort: this.reasoningEffort,
     });
   }
 

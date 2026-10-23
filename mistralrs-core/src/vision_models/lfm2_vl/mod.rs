@@ -114,16 +114,19 @@ impl Lfm2VlModel {
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
         let device = normal_loading_metadata.real_device.clone();
+        let non_text_vb = vb.clone().without_lora_registry();
         let vision_tower = VisionModel::new(
             &config.vision_config,
-            vb.pp("model")
+            non_text_vb
+                .pp("model")
                 .pp("vision_tower")
                 .pp("vision_model")
                 .set_device(device.clone()),
         )?;
         let multi_modal_projector = MultiModalProjector::new(
             config,
-            vb.pp("model")
+            non_text_vb
+                .pp("model")
                 .pp("multi_modal_projector")
                 .set_device(device.clone()),
         )?;
@@ -298,5 +301,13 @@ impl MultimodalModel for Lfm2VlModel {
             pixel_attention_mask: None,
             spatial_shapes: None,
         })
+    }
+
+    fn supports_packed_prefill(&self) -> bool {
+        self.language_model.supports_packed_prefill()
+    }
+
+    fn supports_mixed_media_batches(&self) -> bool {
+        true
     }
 }

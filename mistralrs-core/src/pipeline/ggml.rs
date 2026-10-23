@@ -1,7 +1,7 @@
 use super::llg::build_llg_factory;
 use super::{
-    get_model_paths, get_xlora_paths, text_models_inputs_processor::ModelInputs, AdapterKind,
-    CacheManager, GeneralMetadata, Loader, ModelKind, ModelPaths, QuantizationKind, TokenSource,
+    get_model_paths, text_models_inputs_processor::ModelInputs, AdapterKind, CacheManager,
+    GeneralMetadata, Loader, ModelKind, ModelPaths, QuantizationKind, TokenSource,
 };
 use super::{
     AnyMoePipelineMixin, CacheManagerMixin, EitherCache, ForwardInputsResult, IsqPipelineMixin,
@@ -72,7 +72,6 @@ pub struct GGMLLoader {
     kind: ModelKind,
     tgt_non_granular_index: Option<usize>,
     jinja_explicit: Option<String>,
-    lora_adapter_ids: Option<Vec<String>>,
 }
 
 #[derive(Clone, Default)]
@@ -189,7 +188,6 @@ impl GGMLLoaderBuilder {
             quantized_filename: Some(self.quantized_filename),
             quantized_model_id: Some(self.quantized_model_id),
             jinja_explicit: self.jinja_explicit,
-            lora_adapter_ids: None,
         })
     }
 }
@@ -232,7 +230,6 @@ impl GGMLLoader {
             kind,
             tgt_non_granular_index,
             jinja_explicit,
-            lora_adapter_ids: None,
         }
     }
 }
@@ -241,7 +238,7 @@ impl Loader for GGMLLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_path(
         &self,
-        paths: &Box<dyn ModelPaths>,
+        paths: &dyn ModelPaths,
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
@@ -263,7 +260,7 @@ impl Loader for GGMLLoader {
         if paged_attn_config.is_some() {
             warn!("PagedAttention is not supported for GGML models, disabling it.");
 
-            paged_attn_config = None;
+            super::disable_unsupported_paged_attention(&mut paged_attn_config)?;
         }
 
         debug!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
@@ -369,6 +366,8 @@ impl Loader for GGMLLoader {
             .as_ref()
             .and_then(GenerationConfig::generation_defaults);
         let eos = calculate_eos_tokens(&chat_template, gen_conf.as_ref(), &tokenizer);
+        #[cfg(feature = "metal")]
+        crate::metal::warmup_common_kernels(device)?;
         Ok(Arc::new(Mutex::new(GGMLPipeline {
             model,
             tokenizer: tokenizer.into(),
@@ -394,11 +393,15 @@ impl Loader for GGMLLoader {
                 sliding_window: None,
                 cache_config: None,
                 cache_engine: None,
+                memory_plan: None,
+                #[cfg(feature = "cuda")]
+                runtime_memory_reservation: None,
                 model_metadata: None,
                 modalities: Modalities {
                     input: vec![SupportedModality::Text],
                     output: vec![SupportedModality::Text],
                 },
+                loaded_for_uqff_write: false,
             }),
             generation_defaults,
         })))
@@ -425,10 +428,16 @@ impl Loader for GGMLLoader {
             self.quantized_model_id,
             Some(vec![self.quantized_filename.as_ref().unwrap().clone()]),
             silent,
-            false // Never loading UQFF
+            false,
+            crate::pipeline::AdapterPathOptions {
+                xlora_model_id: self.xlora_model_id.as_ref(),
+                lora_adapters: None,
+                xlora_order: self.xlora_order.as_ref(),
+                xlora_preload: crate::pipeline::XLoraPreload::Load,
+            }
         );
         self.load_model_from_path(
-            &paths?,
+            paths?.as_ref(),
             dtype,
             device,
             silent,
@@ -468,7 +477,7 @@ impl IsqPipelineMixin for GGMLPipeline {
 }
 
 impl CacheManagerMixin for GGMLPipeline {
-    fn clone_in_cache(&self, seqs: &mut [&mut Sequence]) {
+    fn clone_in_cache(&self, seqs: &mut [&mut Sequence]) -> candle_core::Result<()> {
         FullCacheManager.clone_in_cache(self, seqs, false)
     }
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence]) {
@@ -481,11 +490,12 @@ impl CacheManagerMixin for GGMLPipeline {
         modify_draft_cache: bool,
 
         load_preallocated_cache: bool,
-    ) {
-        FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, load_preallocated_cache);
+    ) -> candle_core::Result<()> {
+        FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, load_preallocated_cache)?;
         if reset_non_granular {
             self.reset_non_granular_state()
         }
+        Ok(())
     }
     fn cache(&self) -> &EitherCache {
         match self.model {
@@ -527,6 +537,14 @@ impl MetadataMixin for GGMLPipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for GGMLPipeline {
+    fn requires_uniform_completion_batch(&self) -> bool {
+        false
+    }
+
+    fn supports_batched_cuda_sampling(&self) -> bool {
+        true
+    }
+
     fn forward_inputs(
         &mut self,
         inputs: Box<dyn Any>,
@@ -543,6 +561,7 @@ impl Pipeline for GGMLPipeline {
             flash_meta,         // NOTE(EricLBuehler): ignore it for ggml dequant into f32
             flash_meta_full,    // NOTE(EricLBuehler): ignore it for ggml dequant into f32
             recurrent_batch_kind: _,
+            adapter_leases: _adapter_leases,
         } = *inputs.downcast().expect("Downcast failed.");
         let logits = match self.model {
             Model::Llama(ref model) => {

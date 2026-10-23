@@ -63,7 +63,7 @@ impl Loader for AnyMoeLoader {
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
-        let paged_attn_config = if paged_attn_config.is_none() {
+        let paged_attn_config = if paged_attn_config.is_some() {
             warn!("AnyMoE does not currently support PagedAttention, running without");
             None
         } else {
@@ -97,7 +97,7 @@ impl Loader for AnyMoeLoader {
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_path(
         &self,
-        paths: &Box<dyn ModelPaths>,
+        paths: &dyn ModelPaths,
         dtype: &dyn TryIntoDType,
         device: &Device,
         silent: bool,
@@ -106,7 +106,7 @@ impl Loader for AnyMoeLoader {
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> anyhow::Result<Arc<tokio::sync::Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
-        let paged_attn_config = if paged_attn_config.is_none() {
+        let paged_attn_config = if paged_attn_config.is_some() {
             warn!("AnyMoE does not currently support PagedAttention, running without");
             None
         } else {
@@ -185,7 +185,7 @@ impl CacheManagerMixin for AnyMoePipeline {
     fn cache(&self) -> &EitherCache {
         unreachable!()
     }
-    fn clone_in_cache(&self, seqs: &mut [&mut Sequence]) {
+    fn clone_in_cache(&self, seqs: &mut [&mut Sequence]) -> candle_core::Result<()> {
         get_mut_arcmutex!(self.target).clone_in_cache(seqs)
     }
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence]) {
@@ -197,7 +197,7 @@ impl CacheManagerMixin for AnyMoePipeline {
         reset_non_granular: bool,
         modify_draft_cache: bool,
         load_preallocated_cache: bool,
-    ) {
+    ) -> candle_core::Result<()> {
         get_mut_arcmutex!(self.target).set_none_cache(
             seqs,
             reset_non_granular,
@@ -210,6 +210,21 @@ impl CacheManagerMixin for AnyMoePipeline {
 impl IsqPipelineMixin for AnyMoePipeline {
     fn re_isq_model(&mut self, dtype: IsqType) -> anyhow::Result<()> {
         get_mut_arcmutex!(self.target).re_isq_model(dtype)
+    }
+
+    fn begin_calibration(&mut self) -> anyhow::Result<()> {
+        get_mut_arcmutex!(self.target).begin_calibration()
+    }
+
+    fn calibration_status(&self) -> anyhow::Result<super::isq_flow::CalibrationStatus> {
+        get_mut_arcmutex!(self.target).calibration_status()
+    }
+
+    fn apply_calibration(
+        &mut self,
+        save_cimatrix: Option<std::path::PathBuf>,
+    ) -> anyhow::Result<super::isq_flow::CalibrationStatus> {
+        get_mut_arcmutex!(self.target).apply_calibration(save_cimatrix)
     }
 }
 
@@ -238,22 +253,168 @@ impl MetadataMixin for AnyMoePipeline {
     fn reset_non_granular_state(&self) {
         get_mut_arcmutex!(self.target).reset_non_granular_state()
     }
+    fn cleanup_cuda_graphs(&self) {
+        get_mut_arcmutex!(self.target).cleanup_cuda_graphs()
+    }
+    fn reclaim_cuda_graph_memory(&self, max_entries: usize) -> usize {
+        get_mut_arcmutex!(self.target).reclaim_cuda_graph_memory(max_entries)
+    }
+    fn generation_defaults(&self) -> Option<crate::ModelGenerationDefaults> {
+        get_mut_arcmutex!(self.target).generation_defaults()
+    }
     fn tokenizer(&self) -> Option<Arc<tokenizers::Tokenizer>> {
         get_mut_arcmutex!(self.target).tokenizer()
     }
     fn device_mapper(&self) -> Option<&dyn DeviceMapper> {
         None
     }
+    fn execution_devices(&self) -> Vec<Device> {
+        get_mut_arcmutex!(self.target).execution_devices()
+    }
 }
 
 #[async_trait::async_trait]
 impl Pipeline for AnyMoePipeline {
+    fn requires_uniform_prompt_batch(&self) -> bool {
+        get_mut_arcmutex!(self.target).requires_uniform_prompt_batch()
+    }
+
+    fn requires_uniform_completion_batch(&self) -> bool {
+        get_mut_arcmutex!(self.target).requires_uniform_completion_batch()
+    }
+
+    fn requires_uniform_media_batch(&self) -> bool {
+        get_mut_arcmutex!(self.target).requires_uniform_media_batch()
+    }
+
+    fn supports_batched_cuda_sampling(&self) -> bool {
+        get_mut_arcmutex!(self.target).supports_batched_cuda_sampling()
+    }
+
+    fn supports_packed_prefill(&self) -> bool {
+        get_mut_arcmutex!(self.target).supports_packed_prefill()
+    }
+
+    fn adapter_runtime(&self) -> Option<Arc<crate::DynamicLoraRuntime>> {
+        get_mut_arcmutex!(self.target).adapter_runtime()
+    }
+
     fn forward_inputs(
         &mut self,
         inputs: Box<dyn Any>,
-        _return_raw_logits: bool,
+        return_raw_logits: bool,
     ) -> Result<ForwardInputsResult, candle_core::Error> {
-        get_mut_arcmutex!(self.target).forward_inputs(inputs, false)
+        get_mut_arcmutex!(self.target).forward_inputs(inputs, return_raw_logits)
+    }
+
+    fn attach_speculative(
+        &mut self,
+        config: crate::SpeculativeConfig,
+    ) -> Result<(), candle_core::Error> {
+        get_mut_arcmutex!(self.target).attach_speculative(config)
+    }
+
+    fn attach_speculative_with_runtime(
+        &mut self,
+        config: crate::SpeculativeConfig,
+        runtime: crate::MtpRuntimeConfig,
+    ) -> Result<(), candle_core::Error> {
+        get_mut_arcmutex!(self.target).attach_speculative_with_runtime(config, runtime)
+    }
+
+    fn release_speculative_sequences(&mut self, seq_ids: &[usize]) -> candle_core::Result<()> {
+        get_mut_arcmutex!(self.target).release_speculative_sequences(seq_ids)
+    }
+
+    fn flush_recurrent_speculative_transitions(
+        &self,
+        seq_ids: &[usize],
+    ) -> candle_core::Result<()> {
+        get_mut_arcmutex!(self.target).flush_recurrent_speculative_transitions(seq_ids)
+    }
+
+    fn supports_speculative_prompt_bootstrap(&self) -> bool {
+        get_mut_arcmutex!(self.target).supports_speculative_prompt_bootstrap()
+    }
+
+    fn speculative_prefix_replay(&self) -> crate::speculative::SpeculativePrefixReplay {
+        get_mut_arcmutex!(self.target).speculative_prefix_replay()
+    }
+
+    fn supports_paged_auxiliary_prefix_state(&self) -> bool {
+        get_mut_arcmutex!(self.target).supports_paged_auxiliary_prefix_state()
+    }
+
+    fn capture_paged_auxiliary_prefix_state(
+        &mut self,
+        sequence_id: usize,
+        cached_tokens: usize,
+    ) -> Result<
+        Option<std::sync::Arc<dyn crate::prefix_cacher::PagedAuxiliaryPrefixState>>,
+        candle_core::Error,
+    > {
+        get_mut_arcmutex!(self.target)
+            .capture_paged_auxiliary_prefix_state(sequence_id, cached_tokens)
+    }
+
+    fn restore_paged_auxiliary_prefix_state(
+        &mut self,
+        sequence_id: usize,
+        cached_tokens: usize,
+        state: &dyn crate::prefix_cacher::PagedAuxiliaryPrefixState,
+    ) -> Result<(), candle_core::Error> {
+        get_mut_arcmutex!(self.target).restore_paged_auxiliary_prefix_state(
+            sequence_id,
+            cached_tokens,
+            state,
+        )
+    }
+
+    fn speculative_prompt_chunk(
+        &mut self,
+        seqs: &[&mut Sequence],
+        chunk: &crate::pipeline::SpeculativePromptChunk,
+        metadata: &crate::pipeline::text_models_inputs_processor::PagedAttentionMeta,
+    ) -> Result<(), candle_core::Error> {
+        get_mut_arcmutex!(self.target).speculative_prompt_chunk(seqs, chunk, metadata)
+    }
+
+    async fn try_sample_speculative_causal_gen(
+        &mut self,
+        input_seqs: &mut [&mut Sequence],
+        logits: &[Tensor],
+        batched_logits: Option<&Tensor>,
+        prefix_cacher: &mut PrefixCacheManagerV2,
+        disable_eos_stop: bool,
+        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+        metadata: Option<crate::pipeline::text_models_inputs_processor::PagedAttentionMeta>,
+        logger: &crate::IntervalLogger,
+    ) -> Result<bool, candle_core::Error> {
+        get_mut_arcmutex!(self.target)
+            .try_sample_speculative_causal_gen(
+                input_seqs,
+                logits,
+                batched_logits,
+                prefix_cacher,
+                disable_eos_stop,
+                rng,
+                metadata,
+                logger,
+            )
+            .await
+    }
+
+    async fn try_sample_causal_gen_batched(
+        &self,
+        seqs: &mut [&mut Sequence],
+        logits: &Tensor,
+        prefix_cacher: &mut PrefixCacheManagerV2,
+        disable_eos_stop: bool,
+        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+    ) -> Result<bool, candle_core::Error> {
+        get_mut_arcmutex!(self.target)
+            .try_sample_causal_gen_batched(seqs, logits, prefix_cacher, disable_eos_stop, rng)
+            .await
     }
 
     async fn sample_causal_gen(
@@ -461,7 +622,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                 let mut input_seqs = seqs.iter_mut().collect::<Vec<_>>();
 
                 // Clear KV cache in prep for training
-                target.set_none_cache(&mut input_seqs, true, true, false);
+                target.set_none_cache(&mut input_seqs, true, true, false)?;
 
                 let inputs = inputs_processor.process_inputs(
                     tokenizer.clone(),
@@ -484,7 +645,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
                 let _ = target.forward_inputs(inputs.unwrap().inputs, false)?;
 
                 // Clear the KV cache
-                target.set_none_cache(&mut input_seqs, true, true, false);
+                target.set_none_cache(&mut input_seqs, true, true, false)?;
 
                 // === BACKWARD STEP ==
                 #[allow(clippy::cast_possible_truncation)]
@@ -531,7 +692,7 @@ impl AnyMoePipelineMixin for AnyMoePipeline {
 
             let mut writer = csv::Writer::from_path(path).map_err(candle_core::Error::msg)?;
 
-            let mut header = vec![format!("Step")];
+            let mut header = vec!["Step".to_string()];
             header.extend((0..all_losses[0].len()).map(|i| format!("Gating layer {i}")));
             writer
                 .write_record(&header)
@@ -595,6 +756,8 @@ fn new_dummy_seq(
         None,
         None,
         false,
+        false,
         eos_toks,
+        None,
     )
 }

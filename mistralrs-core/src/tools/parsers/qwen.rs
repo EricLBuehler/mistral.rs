@@ -14,8 +14,11 @@ use super::ToolFormatParser;
 use crate::Tool;
 
 static QWEN_REGEX: OnceLock<Regex> = OnceLock::new();
-static QWEN_FUNCTION_REGEX: OnceLock<Regex> = OnceLock::new();
-static QWEN_PARAMETER_REGEX: OnceLock<Regex> = OnceLock::new();
+
+const FUNCTION_OPEN: &str = "<function=";
+const FUNCTION_CLOSE: &str = "</function>";
+const PARAMETER_OPEN: &str = "<parameter=";
+const PARAMETER_CLOSE: &str = "</parameter>";
 
 pub struct QwenParser;
 
@@ -59,10 +62,11 @@ impl ToolFormatParser for QwenParser {
 }
 
 fn qwen_tool_call_lark(tools: &[Tool], include_wrapper: bool) -> String {
+    // Parallel calls arrive as consecutive <tool_call> blocks, so the grammar stays open for more
     let start = if include_wrapper {
-        r#"start: "<tool_call>" (json_call | xml_call)"#
+        r#"start: "<tool_call>" (json_call | xml_call) ("\n"? "<tool_call>" (json_call | xml_call))*"#
     } else {
-        "start: json_call | xml_call"
+        r#"start: (json_call | xml_call) ("\n"? <tool_call> (json_call | xml_call))*"#
     };
     let json_call = if include_wrapper {
         r#"json_call: @json_body "</tool_call>""#
@@ -78,15 +82,32 @@ fn qwen_tool_call_lark(tools: &[Tool], include_wrapper: bool) -> String {
     format!(
         r#"{start}
 {json_call}
-xml_call: "\n"? xml_function ("\n"? xml_function)* "\n"? {xml_end}
+xml_call: "\n"? xml_function "\n"? {xml_end}
 {}
 xml_param_value: (xml_param_text | xml_param_lt)*
 xml_param_text: /[^<]+/
-xml_param_lt: "<" /[^\/]/
+xml_param_lt: {}
 {}"#,
         qwen_xml_function_rules(tools),
+        xml_param_lt_rule(),
         qwen_xml_generic_rules(tools),
     )
+}
+
+// Any `<` that does not open the closing `</parameter>` tag may appear inside a value (HTML, XML, code).
+fn xml_param_lt_rule() -> String {
+    const CLOSE: &str = "/parameter>";
+    let mut alternatives = vec![r#""<" /[^\/]/"#.to_string()];
+    for (idx, ch) in CLOSE.chars().enumerate().skip(1) {
+        let prefix = &CLOSE[..idx];
+        let escaped = if ch == '/' {
+            "\\/".to_string()
+        } else {
+            ch.to_string()
+        };
+        alternatives.push(format!(r#""<{prefix}" /[^{escaped}]/"#));
+    }
+    alternatives.join(" | ")
 }
 
 #[derive(serde::Serialize)]
@@ -108,9 +129,11 @@ fn parse_qwen_tool_calls(message: &str) -> Result<Option<String>> {
             continue;
         }
 
-        let parsed_xml = parse_qwen_xml_tool_call(inner)?;
-        if !parsed_xml.is_empty() {
-            xml_calls.extend(parsed_xml);
+        if inner.starts_with(FUNCTION_OPEN) {
+            match parse_qwen_xml_tool_call(inner) {
+                Some(call) => xml_calls.push(call),
+                None => return Ok(None),
+            }
             continue;
         }
 
@@ -137,41 +160,48 @@ fn parse_qwen_tool_calls(message: &str) -> Result<Option<String>> {
     }
 }
 
-fn parse_qwen_xml_tool_call(inner: &str) -> Result<Vec<QwenToolCall>> {
-    let function_re = QWEN_FUNCTION_REGEX.get_or_init(|| {
-        Regex::new(r"(?s)<function=(?P<name>[^>\n]+)>\s*(?P<body>.*?)\s*</function>").unwrap()
-    });
-    let parameter_re = QWEN_PARAMETER_REGEX.get_or_init(|| {
-        Regex::new(r"(?s)<parameter=(?P<key>[^>\n]+)>\s*(?P<value>.*?)\s*</parameter>").unwrap()
-    });
-
-    let mut calls = Vec::new();
-    for caps in function_re.captures_iter(inner) {
-        let name = caps.name("name").unwrap().as_str().trim().to_string();
-        let body = caps.name("body").unwrap().as_str();
-        let mut arguments = Map::new();
-        for param_caps in parameter_re.captures_iter(body) {
-            let key = param_caps.name("key").unwrap().as_str().trim().to_string();
-            let value = param_caps.name("value").unwrap().as_str();
-            arguments.insert(key, qwen_xml_param_value(value));
-        }
-        calls.push(QwenToolCall {
-            name,
-            arguments: Value::Object(arguments),
-        });
+// One function per block: text quoted inside a value must not be able to open a second call.
+fn parse_qwen_xml_tool_call(inner: &str) -> Option<QwenToolCall> {
+    let (name, rest) = inner.strip_prefix(FUNCTION_OPEN)?.split_once('>')?;
+    let body = rest.trim_end().strip_suffix(FUNCTION_CLOSE)?;
+    if name.contains('\n') {
+        return None;
     }
-    Ok(calls)
+
+    let mut arguments = Map::new();
+    let mut rest = body;
+    while let Some(start) = rest.find(PARAMETER_OPEN) {
+        let (key, value_and_rest) = rest[start + PARAMETER_OPEN.len()..].split_once('>')?;
+        let (value, after) = split_parameter_value(value_and_rest)?;
+        if key.contains('\n')
+            || arguments
+                .insert(key.trim().to_string(), qwen_xml_param_value(value))
+                .is_some()
+        {
+            return None;
+        }
+        rest = after;
+    }
+    Some(QwenToolCall {
+        name: name.trim().to_string(),
+        arguments: Value::Object(arguments),
+    })
 }
 
+// A value ends only at a close tag followed by the next parameter or the end of the function body.
+fn split_parameter_value(text: &str) -> Option<(&str, &str)> {
+    text.match_indices(PARAMETER_CLOSE).find_map(|(idx, _)| {
+        let after = &text[idx + PARAMETER_CLOSE.len()..];
+        let next = after.trim_start();
+        (next.is_empty() || next.starts_with(PARAMETER_OPEN)).then_some((&text[..idx], after))
+    })
+}
+
+// Values are kept verbatim minus the template's single framing newlines; types come from the tool schema later
 fn qwen_xml_param_value(raw: &str) -> Value {
-    let trimmed = raw.trim();
-    if trimmed.is_empty() {
-        Value::String(String::new())
-    } else if let Ok(value) = serde_json::from_str(trimmed) {
-        value
-    } else {
-        Value::String(trimmed.to_string())
-    }
+    let value = raw.strip_prefix('\n').unwrap_or(raw);
+    let value = value.strip_suffix('\n').unwrap_or(value);
+    Value::String(value.to_string())
 }
 
 fn qwen_xml_function_rules(tools: &[Tool]) -> String {
@@ -237,13 +267,14 @@ fn qwen_xml_args_rule(tool_idx: usize, tool: &Tool, rules: &mut Vec<String>) -> 
         }
     }
 
+    // Qwen does not always emit parameters in schema order, so accept any order (llama.cpp permutes too)
     let mut parts = required_pairs;
-    parts.extend(optional_pairs.into_iter().map(|pair| format!("{pair}?")));
+    parts.extend(optional_pairs);
 
     if parts.is_empty() {
         rules.push(format!("{args_rule}:"));
     } else {
-        rules.push(format!("{args_rule}: {}", parts.join(" ")));
+        rules.push(format!("{args_rule}: ({})*", parts.join(" | ")));
     }
 
     args_rule
@@ -270,11 +301,40 @@ fn lark_string(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{parse_qwen_tool_calls, QwenParser};
-    use crate::tools::parsers::ToolFormatParser;
+    use crate::tools::parsers::{specialize_required_tool_call_grammar, ToolFormatParser};
     use mistralrs_mcp::{Function, ToolType};
     use serde_json::json;
     use serde_json::Value;
     use std::collections::HashMap;
+    use std::sync::Arc;
+
+    struct GreedyTokenizerEnv {
+        trie: toktrie::TokTrie,
+    }
+
+    impl toktrie::TokenizerEnv for GreedyTokenizerEnv {
+        fn tok_trie(&self) -> &toktrie::TokTrie {
+            &self.trie
+        }
+
+        fn tokenize_bytes(&self, bytes: &[u8]) -> Vec<toktrie::TokenId> {
+            self.trie.greedy_tokenize(bytes)
+        }
+
+        fn tokenize_is_canonical(&self) -> bool {
+            false
+        }
+    }
+
+    fn wrapper_token_trie() -> toktrie::TokTrie {
+        let mut tokens = (0_u8..=127).map(|byte| vec![byte]).collect::<Vec<_>>();
+        let eos = u32::try_from(tokens.len()).expect("test vocabulary fits in u32");
+        tokens.push(b"\xff<eos>".to_vec());
+        tokens.push(b"\xff<tool_call>".to_vec());
+        tokens.push(b"\xff</tool_call>".to_vec());
+        let vocab_size = u32::try_from(tokens.len()).expect("test vocabulary fits in u32");
+        toktrie::TokTrie::from(&toktrie::TokRxInfo::new(vocab_size, eos), &tokens)
+    }
 
     #[test]
     fn parses_qwen_json_tool_call() {
@@ -306,8 +366,23 @@ celsius
 
         let value: Value = serde_json::from_str(&parsed).unwrap();
         assert_eq!(value[0]["name"], "get_weather");
-        assert_eq!(value[0]["arguments"]["locations"][0]["city"], "Paris");
+        // Raw text: the matcher applies the tool schema types afterwards
+        assert_eq!(
+            value[0]["arguments"]["locations"],
+            r#"[{"country":"France","city":"Paris"}]"#
+        );
         assert_eq!(value[0]["arguments"]["temp_units"], "celsius");
+    }
+
+    #[test]
+    fn qwen_xml_values_keep_inner_whitespace() {
+        let parsed = parse_qwen_tool_calls(
+            "<tool_call>\n<function=write_file>\n<parameter=content>\n    indented\n\n</parameter>\n</function>\n</tool_call>",
+        )
+        .unwrap()
+        .unwrap();
+        let value: Value = serde_json::from_str(&parsed).unwrap();
+        assert_eq!(value[0]["arguments"]["content"], "    indented\n");
     }
 
     #[test]
@@ -376,5 +451,91 @@ print(1 < 2)
         let lark = grammar.grammars[0].lark_grammar.as_ref().unwrap();
         assert!(lark.contains("\"<parameter=code>\" \"\\n\"? xml_param_value \"</parameter>\""));
         assert!(!lark.contains("\"\\n</parameter>\""));
+    }
+
+    #[test]
+    fn required_grammar_uses_tokenizer_special_wrappers() {
+        let tool = crate::Tool {
+            tp: ToolType::Function,
+            function: Function {
+                name: "get_weather".to_string(),
+                description: None,
+                parameters: None,
+                strict: None,
+            },
+        };
+        let mut grammar = QwenParser.required_tool_call_grammar(&[tool]);
+        let trie = wrapper_token_trie();
+        let start_token = trie.get_special_token("<tool_call>").unwrap();
+        let env: toktrie::TokEnv = Arc::new(GreedyTokenizerEnv { trie });
+        let factory = llguidance::ParserFactory::new_simple(&env).unwrap();
+        let parser = factory.create_parser(grammar.clone()).unwrap();
+        let mut matcher = llguidance::Matcher::new(Ok(parser));
+
+        assert!(!matcher.compute_mask().unwrap().is_allowed(start_token));
+
+        specialize_required_tool_call_grammar(&mut grammar, factory.tok_env().tok_trie());
+
+        let lark = grammar.grammars[0].lark_grammar.as_ref().unwrap();
+        assert!(lark.contains("start: <tool_call> (json_call | xml_call)"));
+        assert!(lark.contains("json_call: @json_body </tool_call>"));
+
+        let parser = factory.create_parser(grammar).unwrap();
+        let mut matcher = llguidance::Matcher::new(Ok(parser));
+        let mask = matcher.compute_mask().unwrap();
+
+        assert!(mask.is_allowed(start_token));
+        matcher.consume_token(start_token).unwrap();
+    }
+
+    #[test]
+    fn continuation_grammar_allows_eos_or_another_call_after_a_block() {
+        let parameters: HashMap<String, Value> = serde_json::from_value(json!({
+            "type": "object",
+            "properties": { "city": { "type": "string" }, "days": { "type": "integer" } },
+            "required": ["city"]
+        }))
+        .unwrap();
+        let tool = crate::Tool {
+            tp: ToolType::Function,
+            function: Function {
+                name: "get_weather".to_string(),
+                description: None,
+                parameters: Some(parameters),
+                strict: None,
+            },
+        };
+        let grammar = QwenParser.tool_call_grammar(&[tool], "<tool_call>");
+        let trie = wrapper_token_trie();
+        let start_token = trie.get_special_token("<tool_call>").unwrap();
+        let end_token = trie.get_special_token("</tool_call>").unwrap();
+        let eos = trie.eos_token();
+        let env: toktrie::TokEnv = Arc::new(GreedyTokenizerEnv { trie: trie.clone() });
+        let factory = llguidance::ParserFactory::new_simple(&env).unwrap();
+        let parser = factory.create_parser(grammar).unwrap();
+        let mut matcher = llguidance::Matcher::new(Ok(parser));
+
+        // Parameters in non-schema order, a `</` inside a value
+        let body = "\n<function=get_weather>\n<parameter=days>\n3\n</parameter>\n<parameter=city>\nParis </b>\n</parameter>\n</function>\n";
+        for token in trie.greedy_tokenize(body.as_bytes()) {
+            assert!(
+                matcher.compute_mask().unwrap().is_allowed(token),
+                "rejected byte {token}"
+            );
+            matcher.consume_token(token).unwrap();
+        }
+        assert!(matcher.compute_mask().unwrap().is_allowed(end_token));
+        matcher.consume_token(end_token).unwrap();
+
+        let mask = matcher.compute_mask().unwrap();
+        assert!(
+            mask.is_allowed(eos),
+            "EOS must close the turn after a complete call"
+        );
+        let newline = trie.greedy_tokenize(b"\n")[0];
+        assert!(mask.is_allowed(newline));
+        matcher.consume_token(newline).unwrap();
+        assert!(matcher.compute_mask().unwrap().is_allowed(start_token));
+        matcher.consume_token(start_token).unwrap();
     }
 }

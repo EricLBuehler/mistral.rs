@@ -15,6 +15,8 @@ use crate::utils::{ffi, slice_ptr, slice_ptr_mut_on_stream, slice_ptr_on_stream}
 #[cfg(feature = "cuda")]
 use candle_core::cuda::{cudarc::driver::DevicePtr, CudaStorage};
 #[cfg(feature = "cuda")]
+use float8::F8E4M3;
+#[cfg(feature = "cuda")]
 use std::ffi::c_void;
 
 #[cfg(feature = "metal")]
@@ -167,7 +169,7 @@ impl CustomOp1 for Leftshift {
         crate::metal_kernels::call_bitwise_leftshift(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             s1.dtype(),
             s1.buffer(),
             l1.start_offset(),
@@ -614,7 +616,7 @@ impl CustomOp2 for BitWise {
             BitWiseBinaryOpEnum::Or => crate::metal_kernels::call_bitwise_or(
                 device.device(),
                 &encoder,
-                &crate::metal_kernels::Kernels::new(),
+                crate::metal_kernels::Kernels::global(),
                 s1.dtype(),
                 s1.buffer(),
                 s2.buffer(),
@@ -627,7 +629,7 @@ impl CustomOp2 for BitWise {
             BitWiseBinaryOpEnum::And => crate::metal_kernels::call_bitwise_and(
                 device.device(),
                 &encoder,
-                &crate::metal_kernels::Kernels::new(),
+                crate::metal_kernels::Kernels::global(),
                 s1.dtype(),
                 s1.buffer(),
                 s2.buffer(),
@@ -640,7 +642,7 @@ impl CustomOp2 for BitWise {
             BitWiseBinaryOpEnum::Xor => crate::metal_kernels::call_bitwise_xor(
                 device.device(),
                 &encoder,
-                &crate::metal_kernels::Kernels::new(),
+                crate::metal_kernels::Kernels::global(),
                 s1.dtype(),
                 s1.buffer(),
                 s2.buffer(),
@@ -742,7 +744,7 @@ impl CustomOp1 for BitWiseUnary {
 
     #[cfg(feature = "cuda")]
     fn cuda_fwd(&self, _s1: &CudaStorage, _l1: &Layout) -> Result<(CudaStorage, Shape)> {
-        todo!()
+        candle_core::bail!("bitwise unary operations are not supported on CUDA")
     }
 
     #[cfg(feature = "metal")]
@@ -768,7 +770,7 @@ impl CustomOp1 for BitWiseUnary {
             BitWiseUnaryOpEnum::Not => crate::metal_kernels::call_bitwise_not(
                 device.device(),
                 &encoder,
-                &crate::metal_kernels::Kernels::new(),
+                crate::metal_kernels::Kernels::global(),
                 s1.dtype(),
                 s1.buffer(),
                 l1.start_offset() * s1.dtype().size_in_bytes(),
@@ -918,7 +920,7 @@ impl CustomOp1 for ArgSort {
         crate::metal_kernels::call_argsort(
             device.device(),
             &encoder, // impl EncoderProvider
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             &sort_args,
             &scratch,
         )
@@ -1025,7 +1027,7 @@ impl CustomOp1 for Sort {
         crate::metal_kernels::call_sort(
             device.device(),
             &encoder, // impl EncoderProvider
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             &sort_args,
             &scratch,
         )
@@ -1507,7 +1509,7 @@ impl CustomOp1 for CumSum {
 
     #[cfg(feature = "cuda")]
     fn cuda_fwd(&self, _s1: &CudaStorage, _l1: &Layout) -> Result<(CudaStorage, Shape)> {
-        todo!()
+        candle_core::bail!("cumulative sum is not supported on CUDA")
     }
 
     #[cfg(feature = "metal")]
@@ -1530,7 +1532,7 @@ impl CustomOp1 for CumSum {
         crate::metal_kernels::call_scan(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             s1.dtype(),
             ScanType::Sum,
             s1.buffer(),
@@ -2135,7 +2137,7 @@ impl CustomOp1 for SoftmaxWithSinks {
         crate::metal_kernels::call_softmax_with_sinks(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             dtype,
             storage.buffer(),
             layout.start_offset() * dtype.size_in_bytes(),
@@ -2259,7 +2261,7 @@ impl CustomOp1 for FlashAttnSinksMetal {
         let encoder = device.command_encoder()?;
         encoder.set_label("flash-attn-sinks");
 
-        let kernels = crate::metal_kernels::Kernels::new();
+        let kernels = crate::metal_kernels::Kernels::global();
 
         let q_offset = q_layout.start_offset() * dtype.size_in_bytes();
         let k_offset = k_l.start_offset() * dtype.size_in_bytes();
@@ -2290,7 +2292,7 @@ impl CustomOp1 for FlashAttnSinksMetal {
                 crate::metal_kernels::call_sdpa_vector_with_sinks_2pass(
                     device.device(),
                     &encoder,
-                    &kernels,
+                    kernels,
                     dtype,
                     q_storage.buffer(),
                     q_offset,
@@ -2318,7 +2320,7 @@ impl CustomOp1 for FlashAttnSinksMetal {
                 crate::metal_kernels::call_sdpa_vector_with_sinks(
                     device.device(),
                     &encoder,
-                    &kernels,
+                    kernels,
                     dtype,
                     q_storage.buffer(),
                     q_offset,
@@ -2344,7 +2346,7 @@ impl CustomOp1 for FlashAttnSinksMetal {
             crate::metal_kernels::call_flash_attn_sinks_prefill(
                 device.device(),
                 &encoder,
-                &kernels,
+                kernels,
                 dtype,
                 q_storage.buffer(),
                 q_offset,
@@ -2503,7 +2505,7 @@ impl CustomOp1 for FlashAttnSinksVarlenMetal {
         let encoder = device.command_encoder()?;
         encoder.set_label("flash-attn-sinks-varlen");
 
-        let kernels = crate::metal_kernels::Kernels::new();
+        let kernels = crate::metal_kernels::Kernels::global();
 
         let q_offset = q_layout.start_offset() * dtype.size_in_bytes();
         let k_offset = k_l.start_offset() * dtype.size_in_bytes();
@@ -2512,7 +2514,7 @@ impl CustomOp1 for FlashAttnSinksVarlenMetal {
         crate::metal_kernels::call_flash_attn_sinks_varlen_prefill(
             device.device(),
             &encoder,
-            &kernels,
+            kernels,
             dtype,
             q_storage.buffer(),
             q_offset,
@@ -2603,6 +2605,7 @@ pub enum GluActivationType {
     Gelu = 1,
     Relu = 2,
     GeluErf = 3,
+    Sigmoid = 4,
 }
 
 // CPU activation functions for fused GLU
@@ -2628,16 +2631,68 @@ fn cpu_gelu_erf(x: f32) -> f32 {
     x * (1.0 + candle_core::cpu::erf::erf_f32(x * std::f32::consts::FRAC_1_SQRT_2)) / 2.0
 }
 
+fn cpu_sigmoid(x: f32) -> f32 {
+    1.0 / (1.0 + (-x).exp())
+}
+
 fn apply_cpu_activation(x: f32, activation: GluActivationType) -> f32 {
     match activation {
         GluActivationType::Silu => cpu_silu(x),
         GluActivationType::Gelu => cpu_gelu(x),
         GluActivationType::Relu => cpu_relu(x),
         GluActivationType::GeluErf => cpu_gelu_erf(x),
+        GluActivationType::Sigmoid => cpu_sigmoid(x),
     }
 }
 
 struct FusedGlu(GluActivationType);
+
+#[cfg(feature = "cuda")]
+#[derive(Clone, Copy)]
+struct DenseLastDimLayout {
+    rows: usize,
+    cols: usize,
+    row_stride: usize,
+}
+
+// size-1 dims can carry any stride (candle's `is_contiguous` ignores them), so skip them here too
+#[cfg(feature = "cuda")]
+fn dense_last_dim_layout(layout: &Layout) -> Option<DenseLastDimLayout> {
+    let dims = layout.dims();
+    let strides = layout.stride();
+    let Some((&cols, leading)) = dims.split_last() else {
+        return Some(DenseLastDimLayout {
+            rows: 1,
+            cols: 1,
+            row_stride: 1,
+        });
+    };
+    if cols > 1 && strides[leading.len()] != 1 {
+        return None;
+    }
+    let rows = leading
+        .iter()
+        .try_fold(1usize, |rows, &dim| rows.checked_mul(dim))?;
+    let mut row_stride = None;
+    let mut expected_stride = None;
+    for (&dim, &stride) in leading.iter().zip(&strides[..leading.len()]).rev() {
+        if dim == 1 {
+            continue;
+        }
+        match expected_stride {
+            None if stride < cols => return None,
+            None => row_stride = Some(stride),
+            Some(expected) if stride != expected => return None,
+            Some(_) => {}
+        }
+        expected_stride = Some(dim.checked_mul(stride)?);
+    }
+    Some(DenseLastDimLayout {
+        rows,
+        cols,
+        row_stride: row_stride.unwrap_or(cols),
+    })
+}
 
 impl CustomOp2 for FusedGlu {
     fn name(&self) -> &'static str {
@@ -2653,6 +2708,10 @@ impl CustomOp2 for FusedGlu {
     ) -> Result<(CpuStorage, Shape)> {
         use half::{bf16, f16};
 
+        if !l1.is_contiguous() || !l2.is_contiguous() {
+            candle_core::bail!("fused_glu CPU inputs must be contiguous");
+        }
+
         let activation = self.0;
         let out_shape = l1.shape().clone();
         let len = out_shape.elem_count();
@@ -2664,14 +2723,19 @@ impl CustomOp2 for FusedGlu {
                 let a_offset = l1.start_offset();
                 let b_offset = l2.start_offset();
 
-                let result: Vec<f32> = (0..len)
-                    .into_par_iter()
-                    .map(|i| {
-                        let a_val = a_slice[a_offset + i];
-                        let b_val = b_slice[b_offset + i];
-                        apply_cpu_activation(a_val, activation) * b_val
-                    })
-                    .collect();
+                // barrier pool instead of rayon: its workers already own these cores and
+                // would otherwise spin against the rayon threads between matmuls
+                let mut result = vec![0f32; len];
+                let a = &a_slice[a_offset..a_offset + len];
+                let b = &b_slice[b_offset..b_offset + len];
+                let out_ptr = result.as_mut_ptr() as usize;
+                candle_core::utils::barrier_pool().execute_chunked(len, |range| {
+                    let out = out_ptr as *mut f32;
+                    for i in range {
+                        let v = apply_cpu_activation(a[i], activation) * b[i];
+                        unsafe { *out.add(i) = v };
+                    }
+                });
                 CpuStorage::F32(result)
             }
             DType::F16 => {
@@ -2680,16 +2744,20 @@ impl CustomOp2 for FusedGlu {
                 let a_offset = l1.start_offset();
                 let b_offset = l2.start_offset();
 
-                let result: Vec<f16> = (0..len)
-                    .into_par_iter()
-                    .map(|i| {
-                        let a_val = a_slice[a_offset + i].to_f32();
-                        // Cast activation back to f16 before multiplying, matching candle's
-                        // two-step behavior: unary op in f32 -> cast to f16 -> binary mul
-                        let activated = f16::from_f32(apply_cpu_activation(a_val, activation));
-                        f16::from_f32(activated.to_f32() * b_slice[b_offset + i].to_f32())
-                    })
-                    .collect();
+                let mut result = vec![f16::ZERO; len];
+                let a = &a_slice[a_offset..a_offset + len];
+                let b = &b_slice[b_offset..b_offset + len];
+                let out_ptr = result.as_mut_ptr() as usize;
+                candle_core::utils::barrier_pool().execute_chunked(len, |range| {
+                    let out = out_ptr as *mut f16;
+                    for i in range {
+                        // unary in f32 -> cast to f16 -> mul, matching candle's two-step behavior
+                        let activated =
+                            f16::from_f32(apply_cpu_activation(a[i].to_f32(), activation));
+                        let v = f16::from_f32(activated.to_f32() * b[i].to_f32());
+                        unsafe { *out.add(i) = v };
+                    }
+                });
                 CpuStorage::F16(result)
             }
             DType::BF16 => {
@@ -2698,16 +2766,20 @@ impl CustomOp2 for FusedGlu {
                 let a_offset = l1.start_offset();
                 let b_offset = l2.start_offset();
 
-                let result: Vec<bf16> = (0..len)
-                    .into_par_iter()
-                    .map(|i| {
-                        let a_val = a_slice[a_offset + i].to_f32();
-                        // Cast activation back to bf16 before multiplying, matching candle's
-                        // two-step behavior: unary op in f32 -> cast to bf16 -> binary mul
-                        let activated = bf16::from_f32(apply_cpu_activation(a_val, activation));
-                        bf16::from_f32(activated.to_f32() * b_slice[b_offset + i].to_f32())
-                    })
-                    .collect();
+                let mut result = vec![bf16::ZERO; len];
+                let a = &a_slice[a_offset..a_offset + len];
+                let b = &b_slice[b_offset..b_offset + len];
+                let out_ptr = result.as_mut_ptr() as usize;
+                candle_core::utils::barrier_pool().execute_chunked(len, |range| {
+                    let out = out_ptr as *mut bf16;
+                    for i in range {
+                        // unary in f32 -> cast to bf16 -> mul, matching candle's two-step behavior
+                        let activated =
+                            bf16::from_f32(apply_cpu_activation(a[i].to_f32(), activation));
+                        let v = bf16::from_f32(activated.to_f32() * b[i].to_f32());
+                        unsafe { *out.add(i) = v };
+                    }
+                });
                 CpuStorage::BF16(result)
             }
             other => candle_core::bail!("fused_glu: unsupported dtype {:?}", other),
@@ -2728,7 +2800,21 @@ impl CustomOp2 for FusedGlu {
 
         let activation = self.0;
         let device = s1.device();
-        let n_elements = l1.shape().elem_count();
+        let a_layout = dense_last_dim_layout(l1)
+            .ok_or_else(|| candle_core::Error::msg("fused_glu CUDA input a is not row-dense"))?;
+        let b_layout = dense_last_dim_layout(l2)
+            .ok_or_else(|| candle_core::Error::msg("fused_glu CUDA input b is not row-dense"))?;
+        if (a_layout.rows, a_layout.cols) != (b_layout.rows, b_layout.cols) {
+            candle_core::bail!("fused_glu CUDA input layouts have different logical shapes");
+        }
+        let n_elements = a_layout
+            .rows
+            .checked_mul(a_layout.cols)
+            .ok_or_else(|| candle_core::Error::msg("fused_glu output size overflow"))?;
+        let rows = u32::try_from(a_layout.rows)?;
+        let cols = u32::try_from(a_layout.cols)?;
+        let a_row_stride = u32::try_from(a_layout.row_stride)?;
+        let b_row_stride = u32::try_from(b_layout.row_stride)?;
         let dtype = s1.dtype();
         let out_shape = l1.shape().clone();
         let stream = device.cuda_stream();
@@ -2751,7 +2837,10 @@ impl CustomOp2 for FusedGlu {
                         a_ptr as *const c_void,
                         b_ptr as *const c_void,
                         out_ptr as *mut c_void,
-                        n_elements as u32,
+                        rows,
+                        cols,
+                        a_row_stride,
+                        b_row_stride,
                         activation as i32,
                         stream_raw,
                     );
@@ -2775,7 +2864,10 @@ impl CustomOp2 for FusedGlu {
                         a_ptr as *const c_void,
                         b_ptr as *const c_void,
                         out_ptr as *mut c_void,
-                        n_elements as u32,
+                        rows,
+                        cols,
+                        a_row_stride,
+                        b_row_stride,
                         activation as i32,
                         stream_raw,
                     );
@@ -2799,7 +2891,10 @@ impl CustomOp2 for FusedGlu {
                         a_ptr as *const c_void,
                         b_ptr as *const c_void,
                         out_ptr as *mut c_void,
-                        n_elements as u32,
+                        rows,
+                        cols,
+                        a_row_stride,
+                        b_row_stride,
                         activation as i32,
                         stream_raw,
                     );
@@ -2835,7 +2930,7 @@ impl CustomOp2 for FusedGlu {
         crate::metal_kernels::call_fused_glu(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             dtype,
             s1.buffer(),
             s2.buffer(),
@@ -2857,10 +2952,8 @@ impl CustomOp2 for FusedGlu {
 /// This fuses the activation function application and element-wise multiplication
 /// into a single pass, reducing memory bandwidth and eliminating
 /// intermediate tensor allocation.
+/// CUDA inputs may have padding between rows as long as their last dimension is dense.
 pub fn fused_glu(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Result<Tensor> {
-    let a = a.contiguous()?;
-    let b = b.contiguous()?;
-
     if a.shape() != b.shape() {
         candle_core::bail!(
             "fused_glu: a and b must have same shape, got {:?} vs {:?}",
@@ -2869,7 +2962,366 @@ pub fn fused_glu(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Resul
         );
     }
 
+    #[cfg(feature = "cuda")]
+    if a.device().is_cuda()
+        && matches!(a.dtype(), DType::F16 | DType::BF16 | DType::F32)
+        && dense_last_dim_layout(a.layout()).is_some()
+        && dense_last_dim_layout(b.layout()).is_some()
+    {
+        return a.apply_op2_no_bwd(b, &FusedGlu(activation));
+    }
+
+    let a = a.contiguous()?;
+    let b = b.contiguous()?;
+
     a.apply_op2_no_bwd(&b, &FusedGlu(activation))
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn fused_glu_quantized_bf16(
+    gate: &Tensor,
+    value: &Tensor,
+    scale_group_size: usize,
+    scale_stride_m: usize,
+    activation: GluActivationType,
+) -> Result<Option<(Tensor, Tensor)>> {
+    use candle_core::{Storage, Storage::Cuda};
+    use half::bf16;
+
+    const KERNEL_SCALE_GROUP_SIZE: usize = 128;
+
+    if gate.dtype() != DType::BF16 || value.dtype() != DType::BF16 {
+        return Ok(None);
+    }
+    if gate.shape() != value.shape() {
+        return Ok(None);
+    }
+    if !gate.device().same_device(value.device()) || !gate.device().is_cuda() {
+        return Ok(None);
+    }
+    if scale_group_size != KERNEL_SCALE_GROUP_SIZE {
+        return Ok(None);
+    }
+    let Some(gate_layout) = dense_last_dim_layout(gate.layout()) else {
+        return Ok(None);
+    };
+    let Some(value_layout) = dense_last_dim_layout(value.layout()) else {
+        return Ok(None);
+    };
+    if !gate.layout().start_offset().is_multiple_of(2)
+        || !value.layout().start_offset().is_multiple_of(2)
+        || !gate_layout.row_stride.is_multiple_of(2)
+        || !value_layout.row_stride.is_multiple_of(2)
+    {
+        return Ok(None);
+    }
+    if (gate_layout.rows, gate_layout.cols) != (value_layout.rows, value_layout.cols) {
+        return Ok(None);
+    }
+    let rows = gate_layout.rows;
+    let columns = gate_layout.cols;
+    if rows == 0 || columns == 0 || columns % scale_group_size != 0 {
+        return Ok(None);
+    }
+    if scale_stride_m < rows {
+        return Ok(None);
+    }
+    // padded to the scale stride so group-major GEMMs can read whole aligned row blocks
+    let output_elements = scale_stride_m
+        .checked_mul(columns)
+        .ok_or_else(|| candle_core::Error::msg("fused GLU FP8 output size overflows usize"))?;
+    let scale_groups = columns / scale_group_size;
+    let scale_elements = scale_groups
+        .checked_mul(scale_stride_m)
+        .ok_or_else(|| candle_core::Error::msg("fused GLU FP8 scale size overflows usize"))?;
+    let rows_u32 = u32::try_from(rows)?;
+    let columns_u32 = u32::try_from(columns)?;
+    let gate_row_stride_u32 = u32::try_from(gate_layout.row_stride)?;
+    let value_row_stride_u32 = u32::try_from(value_layout.row_stride)?;
+    let scale_stride_u32 = u32::try_from(scale_stride_m)?;
+    let candle_core::Device::Cuda(device) = gate.device() else {
+        unreachable!()
+    };
+    let stream = device.cuda_stream();
+    let mut output = unsafe { device.alloc::<F8E4M3>(output_elements)? };
+    let mut scales = unsafe { device.alloc::<f32>(scale_elements)? };
+    let (gate_storage, gate_tensor_layout) = gate.storage_and_layout();
+    let Cuda(gate_storage) = &*gate_storage else {
+        unreachable!()
+    };
+    let (value_storage, value_tensor_layout) = value.storage_and_layout();
+    let Cuda(value_storage) = &*value_storage else {
+        unreachable!()
+    };
+    let gate_slice = gate_storage.as_cuda_slice::<bf16>()?;
+    let value_slice = value_storage.as_cuda_slice::<bf16>()?;
+    let (gate_ptr, gate_guard) =
+        slice_ptr_on_stream(gate_slice, gate_tensor_layout.start_offset(), &stream);
+    let (value_ptr, value_guard) =
+        slice_ptr_on_stream(value_slice, value_tensor_layout.start_offset(), &stream);
+    let (output_ptr, output_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
+    let (scales_ptr, scales_guard) = slice_ptr_mut_on_stream(&mut scales, 0, &stream);
+    unsafe {
+        ffi::fused_glu_quantize_bf16(
+            gate_ptr as *const c_void,
+            value_ptr as *const c_void,
+            output_ptr as *mut c_void,
+            scales_ptr as *mut f32,
+            rows_u32,
+            columns_u32,
+            gate_row_stride_u32,
+            value_row_stride_u32,
+            scale_stride_u32,
+            activation as i32,
+            stream.cu_stream(),
+        );
+    }
+    drop((gate_guard, value_guard, output_guard, scales_guard));
+
+    let output = Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(output, device.clone())),
+        Shape::from_dims(&[scale_stride_m, columns]),
+    ))
+    .narrow(0, 0, rows)?;
+    let scales = Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(scales, device.clone())),
+        Shape::from_dims(&[scale_groups, scale_stride_m]),
+    ));
+    Ok(Some((output, scales)))
+}
+
+#[cfg(feature = "cuda")]
+struct FusedSplitGlu {
+    split_size: usize,
+    activation: GluActivationType,
+}
+
+#[cfg(feature = "cuda")]
+impl CustomOp1 for FusedSplitGlu {
+    fn name(&self) -> &'static str {
+        "fused-split-glu"
+    }
+
+    fn cpu_fwd(&self, _storage: &CpuStorage, _layout: &Layout) -> Result<(CpuStorage, Shape)> {
+        candle_core::bail!("fused split GLU CUDA op received CPU storage")
+    }
+
+    fn cuda_fwd(&self, storage: &CudaStorage, layout: &Layout) -> Result<(CudaStorage, Shape)> {
+        use half::{bf16, f16};
+
+        if !layout.is_contiguous() {
+            candle_core::bail!("fused split GLU input must be contiguous");
+        }
+        let mut output_dims = layout.dims().to_vec();
+        let last = output_dims
+            .last_mut()
+            .ok_or_else(|| candle_core::Error::msg("fused split GLU input must have a rank"))?;
+        *last = self.split_size;
+        let output_shape = Shape::from(output_dims);
+        let output_elements = output_shape.elem_count();
+        let rows = output_elements / self.split_size;
+        let rows = u32::try_from(rows)?;
+        let split_size = u32::try_from(self.split_size)?;
+        let device = storage.device();
+        let stream = device.cuda_stream();
+        let stream_raw = stream.cu_stream();
+
+        let output = match storage.dtype() {
+            DType::F16 => {
+                let input = storage.as_cuda_slice::<f16>()?;
+                let mut output = unsafe { device.alloc::<f16>(output_elements)? };
+                let (input_ptr, _input_guard) =
+                    slice_ptr_on_stream(input, layout.start_offset(), &stream);
+                let (output_ptr, output_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
+                unsafe {
+                    ffi::fused_split_glu_f16(
+                        input_ptr as *const c_void,
+                        output_ptr as *mut c_void,
+                        rows,
+                        split_size,
+                        self.activation as i32,
+                        stream_raw,
+                    );
+                }
+                drop(output_guard);
+                CudaStorage::wrap_cuda_slice(output, device.clone())
+            }
+            DType::BF16 => {
+                let input = storage.as_cuda_slice::<bf16>()?;
+                let mut output = unsafe { device.alloc::<bf16>(output_elements)? };
+                let (input_ptr, _input_guard) =
+                    slice_ptr_on_stream(input, layout.start_offset(), &stream);
+                let (output_ptr, output_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
+                unsafe {
+                    ffi::fused_split_glu_bf16(
+                        input_ptr as *const c_void,
+                        output_ptr as *mut c_void,
+                        rows,
+                        split_size,
+                        self.activation as i32,
+                        stream_raw,
+                    );
+                }
+                drop(output_guard);
+                CudaStorage::wrap_cuda_slice(output, device.clone())
+            }
+            DType::F32 => {
+                let input = storage.as_cuda_slice::<f32>()?;
+                let mut output = unsafe { device.alloc::<f32>(output_elements)? };
+                let (input_ptr, _input_guard) =
+                    slice_ptr_on_stream(input, layout.start_offset(), &stream);
+                let (output_ptr, output_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
+                unsafe {
+                    ffi::fused_split_glu_f32(
+                        input_ptr as *const c_void,
+                        output_ptr as *mut c_void,
+                        rows,
+                        split_size,
+                        self.activation as i32,
+                        stream_raw,
+                    );
+                }
+                drop(output_guard);
+                CudaStorage::wrap_cuda_slice(output, device.clone())
+            }
+            dtype => candle_core::bail!("fused split GLU does not support {dtype:?}"),
+        };
+        Ok((output, output_shape))
+    }
+}
+
+pub fn fused_split_glu(
+    input: &Tensor,
+    split_size: usize,
+    activation: GluActivationType,
+) -> Result<Tensor> {
+    if split_size == 0 {
+        candle_core::bail!("fused split GLU split size must be nonzero");
+    }
+    let expected = split_size
+        .checked_mul(2)
+        .ok_or_else(|| candle_core::Error::msg("fused split GLU split size overflow"))?;
+    if input.dim(candle_core::D::Minus1)? != expected {
+        candle_core::bail!("fused split GLU expected last dimension {expected}");
+    }
+
+    #[cfg(feature = "cuda")]
+    if input.device().is_cuda() && matches!(input.dtype(), DType::F16 | DType::BF16 | DType::F32) {
+        return input.contiguous()?.apply_op1_no_bwd(&FusedSplitGlu {
+            split_size,
+            activation,
+        });
+    }
+
+    let gate = input.narrow(candle_core::D::Minus1, 0, split_size)?;
+    let up = input.narrow(candle_core::D::Minus1, split_size, split_size)?;
+    fused_glu(&gate, &up, activation)
+}
+
+#[cfg(all(
+    feature = "cuda",
+    any(
+        test,
+        all(has_cutlass_fp8_sm90_kernels, has_deepgemm_fp8_sm90_provider),
+        all(has_blockwise_fp8_kernels, feature = "cutile")
+    )
+))]
+pub(crate) fn fused_split_glu_quantized_bf16(
+    input: &Tensor,
+    split_size: usize,
+    scale_group_size: usize,
+    scale_stride_m: usize,
+    activation: GluActivationType,
+) -> Result<(Tensor, Tensor)> {
+    use candle_core::{Storage, Storage::Cuda};
+    use half::bf16;
+
+    const KERNEL_SCALE_GROUP_SIZE: usize = 128;
+
+    if input.dtype() != DType::BF16 || !input.device().is_cuda() {
+        candle_core::bail!("fused split GLU FP8 quantization requires a CUDA BF16 input");
+    }
+    if scale_group_size != KERNEL_SCALE_GROUP_SIZE {
+        candle_core::bail!(
+            "fused split GLU FP8 quantization requires group size {KERNEL_SCALE_GROUP_SIZE}"
+        );
+    }
+    if split_size == 0 || !split_size.is_multiple_of(scale_group_size) {
+        candle_core::bail!(
+            "fused split GLU FP8 quantization requires a nonzero split size divisible by {scale_group_size}"
+        );
+    }
+    let expected = split_size
+        .checked_mul(2)
+        .ok_or_else(|| candle_core::Error::msg("fused split GLU split size overflow"))?;
+    if input.dim(candle_core::D::Minus1)? != expected {
+        candle_core::bail!("fused split GLU FP8 quantization expected last dimension {expected}");
+    }
+    const BF16_ELEMENTS_PER_VECTOR: usize = 2;
+
+    let input = input.contiguous()?;
+    let input = if input.layout().start_offset() % BF16_ELEMENTS_PER_VECTOR == 0 {
+        input
+    } else {
+        input.force_contiguous()?
+    };
+    let rows = input.elem_count() / expected;
+    if rows == 0 || scale_stride_m < rows {
+        candle_core::bail!("fused split GLU FP8 quantization scale stride is too small");
+    }
+    let scale_groups = split_size / scale_group_size;
+    // padded to the scale stride so group-major GEMMs can read whole aligned row blocks
+    let output_elements = scale_stride_m
+        .checked_mul(split_size)
+        .ok_or_else(|| candle_core::Error::msg("fused split GLU FP8 output size overflow"))?;
+    let scale_elements = scale_groups
+        .checked_mul(scale_stride_m)
+        .ok_or_else(|| candle_core::Error::msg("fused split GLU FP8 scale size overflow"))?;
+    let rows_u32 = u32::try_from(rows)?;
+    let split_size_u32 = u32::try_from(split_size)?;
+    let scale_stride_u32 = u32::try_from(scale_stride_m)?;
+    let candle_core::Device::Cuda(device) = input.device() else {
+        unreachable!()
+    };
+    let stream = device.cuda_stream();
+    let mut output = unsafe { device.alloc::<F8E4M3>(output_elements)? };
+    let mut scales = unsafe { device.alloc::<f32>(scale_elements)? };
+    let (input_storage, input_layout) = input.storage_and_layout();
+    let Cuda(input_storage) = &*input_storage else {
+        unreachable!()
+    };
+    let input_slice = input_storage.as_cuda_slice::<bf16>()?;
+    let (input_ptr, input_guard) =
+        slice_ptr_on_stream(input_slice, input_layout.start_offset(), &stream);
+    let (output_ptr, output_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
+    let (scales_ptr, scales_guard) = slice_ptr_mut_on_stream(&mut scales, 0, &stream);
+    unsafe {
+        ffi::fused_split_glu_quantize_bf16(
+            input_ptr as *const c_void,
+            output_ptr as *mut c_void,
+            scales_ptr as *mut f32,
+            rows_u32,
+            split_size_u32,
+            scale_stride_u32,
+            activation as i32,
+            stream.cu_stream(),
+        );
+    }
+    drop((input_guard, output_guard, scales_guard));
+
+    let mut output_shape = input.dims()[..input.rank() - 1].to_vec();
+    output_shape.push(split_size);
+    let output = Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(output, device.clone())),
+        Shape::from_dims(&[scale_stride_m, split_size]),
+    ))
+    .narrow(0, 0, rows)?
+    .reshape(output_shape)?;
+    let scales = Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(scales, device.clone())),
+        Shape::from_dims(&[scale_groups, scale_stride_m]),
+    ));
+    Ok((output, scales))
 }
 
 struct Softcap(f32);
@@ -2959,7 +3411,7 @@ impl CustomOp1 for Softcap {
         crate::metal_kernels::call_softcap(
             device.device(),
             &encoder,
-            &crate::metal_kernels::Kernels::new(),
+            crate::metal_kernels::Kernels::global(),
             dtype,
             s1.buffer(),
             l1.start_offset() * dtype.size_in_bytes(),
@@ -2990,6 +3442,7 @@ pub fn softcap(input: &Tensor, cap: f32) -> Result<Tensor> {
 }
 
 #[cfg(test)]
+#[allow(clippy::needless_range_loop)]
 mod tests {
     fn assert_close(actual: &[f32], expected: &[f32], tolerance: f32) {
         for (i, (a, e)) in actual.iter().zip(expected.iter()).enumerate() {
@@ -2998,6 +3451,407 @@ mod tests {
                 diff <= tolerance,
                 "mismatch at {i}: actual={a}, expected={e}, diff={diff}"
             );
+        }
+    }
+
+    #[test]
+    fn test_fused_split_glu_cpu_matches_pair() {
+        use super::{fused_glu, fused_split_glu, GluActivationType};
+        use candle_core::{Device, Tensor};
+
+        const ROWS: usize = 3;
+        const SPLIT: usize = 7;
+
+        let device = Device::Cpu;
+        let gate_data = (0..ROWS * SPLIT)
+            .map(|index| (index as f32 - 9.0) / 7.0)
+            .collect::<Vec<_>>();
+        let up_data = (0..ROWS * SPLIT)
+            .map(|index| (13.0 - index as f32) / 11.0)
+            .collect::<Vec<_>>();
+        let gate = Tensor::from_vec(gate_data, (ROWS, SPLIT), &device).unwrap();
+        let up = Tensor::from_vec(up_data, (ROWS, SPLIT), &device).unwrap();
+        let packed = Tensor::cat(&[&gate, &up], 1).unwrap();
+
+        for activation in [
+            GluActivationType::Silu,
+            GluActivationType::Gelu,
+            GluActivationType::Relu,
+            GluActivationType::GeluErf,
+            GluActivationType::Sigmoid,
+        ] {
+            let expected = fused_glu(&gate, &up, activation)
+                .unwrap()
+                .flatten_all()
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap();
+            let actual = fused_split_glu(&packed, SPLIT, activation)
+                .unwrap()
+                .flatten_all()
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap();
+            assert_close(&actual, &expected, 1e-6);
+        }
+    }
+
+    #[test]
+    fn test_fused_sigmoid_glu_matches_candle_extremes() {
+        use super::{fused_glu, GluActivationType};
+        use candle_core::{Device, Tensor};
+
+        let gate = Tensor::new(
+            &[
+                [f32::NEG_INFINITY, -100.0, -20.0],
+                [-2.0, 0.0, 2.0],
+                [20.0, 100.0, f32::INFINITY],
+            ],
+            &Device::Cpu,
+        )
+        .unwrap();
+        let up = Tensor::new(
+            &[[1.5f32, -2.0, 0.25], [3.0, -4.0, 5.0], [-0.5, 2.5, -3.0]],
+            &Device::Cpu,
+        )
+        .unwrap();
+        let expected = candle_nn::ops::sigmoid(&gate)
+            .unwrap()
+            .broadcast_mul(&up)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        let actual = fused_glu(&gate, &up, GluActivationType::Sigmoid)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        assert_close(&actual, &expected, 1e-6);
+        assert!(actual.iter().all(|value| value.is_finite()));
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_fused_split_glu_cuda_scalar_and_vector_paths() {
+        use super::{fused_glu, fused_split_glu, GluActivationType};
+        use candle_core::{DType, Device, Tensor};
+
+        const ROWS: usize = 3;
+
+        let cpu = Device::Cpu;
+        let cuda = Device::new_cuda(0).unwrap();
+        for dtype in [DType::F32, DType::F16, DType::BF16] {
+            for split in [7, 8] {
+                let gate_data = (0..ROWS * split)
+                    .map(|index| (index as f32 - 10.0) / 8.0)
+                    .collect::<Vec<_>>();
+                let up_data = (0..ROWS * split)
+                    .map(|index| (15.0 - index as f32) / 12.0)
+                    .collect::<Vec<_>>();
+                let gate = Tensor::from_vec(gate_data, (ROWS, split), &cuda)
+                    .unwrap()
+                    .to_dtype(dtype)
+                    .unwrap();
+                let up = Tensor::from_vec(up_data, (ROWS, split), &cuda)
+                    .unwrap()
+                    .to_dtype(dtype)
+                    .unwrap();
+                let packed = Tensor::cat(&[&gate, &up], 1).unwrap();
+                let tolerance = if dtype == DType::F32 { 1e-6 } else { 2e-2 };
+
+                for activation in [
+                    GluActivationType::Silu,
+                    GluActivationType::Gelu,
+                    GluActivationType::Relu,
+                    GluActivationType::GeluErf,
+                    GluActivationType::Sigmoid,
+                ] {
+                    let expected = fused_glu(&gate, &up, activation)
+                        .unwrap()
+                        .to_dtype(DType::F32)
+                        .unwrap()
+                        .to_device(&cpu)
+                        .unwrap()
+                        .flatten_all()
+                        .unwrap()
+                        .to_vec1::<f32>()
+                        .unwrap();
+                    let actual = fused_split_glu(&packed, split, activation)
+                        .unwrap()
+                        .to_dtype(DType::F32)
+                        .unwrap()
+                        .to_device(&cpu)
+                        .unwrap()
+                        .flatten_all()
+                        .unwrap()
+                        .to_vec1::<f32>()
+                        .unwrap();
+                    assert_close(&actual, &expected, tolerance);
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_fused_split_glu_fp8_quantization_cuda() {
+        use super::{fused_split_glu, fused_split_glu_quantized_bf16, GluActivationType};
+        use candle_core::{DType, Device, Tensor};
+        use float8::F8E4M3;
+
+        const ROWS: usize = 5;
+        const SPLIT: usize = 256;
+        const GROUP_SIZE: usize = 128;
+        const SCALE_STRIDE: usize = 8;
+        const PACKED: usize = SPLIT * 2;
+        const SCALE_TOLERANCE: f32 = 1.0e-6;
+        const QUANTIZATION_TOLERANCE: f32 = 0.08;
+
+        let cuda = Device::new_cuda(0).unwrap();
+        let values = (0..ROWS * PACKED + 1)
+            .map(|index| {
+                let value = ((index * 17 + 11) % 97) as f32 - 48.0;
+                value / 13.0
+            })
+            .collect::<Vec<_>>();
+        let storage = Tensor::from_vec(values, ROWS * PACKED + 1, &cuda)
+            .unwrap()
+            .to_dtype(DType::BF16)
+            .unwrap();
+        let input = storage
+            .narrow(0, 1, ROWS * PACKED)
+            .unwrap()
+            .reshape((ROWS, PACKED))
+            .unwrap();
+        assert!(input.is_contiguous());
+        assert_eq!(input.layout().start_offset(), 1);
+
+        for activation in [
+            GluActivationType::Silu,
+            GluActivationType::Gelu,
+            GluActivationType::Relu,
+            GluActivationType::GeluErf,
+            GluActivationType::Sigmoid,
+        ] {
+            let expected = fused_split_glu(&input, SPLIT, activation)
+                .unwrap()
+                .to_dtype(DType::F32)
+                .unwrap()
+                .flatten_all()
+                .unwrap()
+                .to_vec1::<f32>()
+                .unwrap();
+            let (quantized, scales) =
+                fused_split_glu_quantized_bf16(&input, SPLIT, GROUP_SIZE, SCALE_STRIDE, activation)
+                    .unwrap();
+            let quantized = quantized
+                .to_device(&Device::Cpu)
+                .unwrap()
+                .flatten_all()
+                .unwrap()
+                .to_vec1::<F8E4M3>()
+                .unwrap();
+            let scales = scales
+                .to_device(&Device::Cpu)
+                .unwrap()
+                .to_vec2::<f32>()
+                .unwrap();
+
+            for row in 0..ROWS {
+                for group in 0..SPLIT / GROUP_SIZE {
+                    let start = row * SPLIT + group * GROUP_SIZE;
+                    let end = start + GROUP_SIZE;
+                    let maximum = expected[start..end]
+                        .iter()
+                        .copied()
+                        .map(f32::abs)
+                        .fold(0.0f32, f32::max);
+                    let expected_scale = if maximum == 0.0 { 1.0 } else { maximum / 448.0 };
+                    assert!(
+                        (scales[group][row] - expected_scale).abs() <= SCALE_TOLERANCE,
+                        "scale mismatch at row {row}, group {group}"
+                    );
+                    for column in group * GROUP_SIZE..(group + 1) * GROUP_SIZE {
+                        let index = row * SPLIT + column;
+                        let actual = quantized[index].to_f32() * scales[group][row];
+                        let tolerance =
+                            QUANTIZATION_TOLERANCE * expected[index].abs().max(maximum / 64.0);
+                        assert!(
+                            (actual - expected[index]).abs() <= tolerance,
+                            "value mismatch at row {row}, column {column}: actual={actual}, expected={}",
+                            expected[index]
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_fused_glu_fp8_quantization_preserves_bf16_rounding_and_row_strides() {
+        use super::{fused_glu, fused_glu_quantized_bf16, GluActivationType};
+        use candle_core::{DType, Device, Tensor};
+        use float8::F8E4M3;
+
+        const ROWS: usize = 5;
+        const COLUMNS: usize = 256;
+        const GROUP_SIZE: usize = 128;
+        const SCALE_STRIDE: usize = 8;
+        const GATE_WIDTH: usize = 280;
+        const VALUE_WIDTH: usize = 296;
+        const GATE_START: usize = 8;
+        const VALUE_START: usize = 16;
+        const QUANTIZATION_TOLERANCE: f32 = 0.08;
+
+        let cuda = Device::new_cuda(0).unwrap();
+        let gate_values = (0..ROWS * GATE_WIDTH)
+            .map(|index| (((index * 17 + 5) % 101) as f32 - 50.0) / 19.0)
+            .collect::<Vec<_>>();
+        let value_values = (0..ROWS * VALUE_WIDTH)
+            .map(|index| (((index * 13 + 7) % 89) as f32 - 44.0) / 17.0)
+            .collect::<Vec<_>>();
+        let gate = Tensor::from_vec(gate_values, (ROWS, 1, GATE_WIDTH), &cuda)
+            .unwrap()
+            .to_dtype(DType::BF16)
+            .unwrap()
+            .narrow(2, GATE_START, COLUMNS)
+            .unwrap();
+        let value = Tensor::from_vec(value_values, (ROWS, 1, VALUE_WIDTH), &cuda)
+            .unwrap()
+            .to_dtype(DType::BF16)
+            .unwrap()
+            .narrow(2, VALUE_START, COLUMNS)
+            .unwrap();
+        assert!(!gate.is_contiguous());
+        assert!(!value.is_contiguous());
+        assert_eq!(gate.layout().stride()[1], GATE_WIDTH);
+        assert_eq!(value.layout().stride()[1], VALUE_WIDTH);
+
+        let expected = fused_glu(&gate, &value, GluActivationType::Sigmoid)
+            .unwrap()
+            .to_dtype(DType::F32)
+            .unwrap()
+            .to_device(&Device::Cpu)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<f32>()
+            .unwrap();
+        let (quantized, scales) = fused_glu_quantized_bf16(
+            &gate,
+            &value,
+            GROUP_SIZE,
+            SCALE_STRIDE,
+            GluActivationType::Sigmoid,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(quantized.dims(), &[ROWS, COLUMNS]);
+        assert_eq!(scales.dims(), &[COLUMNS / GROUP_SIZE, SCALE_STRIDE]);
+        let quantized = quantized
+            .to_device(&Device::Cpu)
+            .unwrap()
+            .flatten_all()
+            .unwrap()
+            .to_vec1::<F8E4M3>()
+            .unwrap();
+        let scales = scales
+            .to_device(&Device::Cpu)
+            .unwrap()
+            .to_vec2::<f32>()
+            .unwrap();
+
+        for row in 0..ROWS {
+            for group in 0..COLUMNS / GROUP_SIZE {
+                let start = row * COLUMNS + group * GROUP_SIZE;
+                let end = start + GROUP_SIZE;
+                let maximum = expected[start..end]
+                    .iter()
+                    .copied()
+                    .map(f32::abs)
+                    .fold(0.0f32, f32::max);
+                let expected_scale = if maximum == 0.0 { 1.0 } else { maximum / 448.0 };
+                assert!((scales[group][row] - expected_scale).abs() <= 1.0e-6);
+                for column in group * GROUP_SIZE..(group + 1) * GROUP_SIZE {
+                    let index = row * COLUMNS + column;
+                    let actual = quantized[index].to_f32() * scales[group][row];
+                    let tolerance =
+                        QUANTIZATION_TOLERANCE * expected[index].abs().max(maximum / 64.0);
+                    assert!(
+                        (actual - expected[index]).abs() <= tolerance,
+                        "value mismatch at row {row}, column {column}: actual={actual}, expected={}",
+                        expected[index]
+                    );
+                }
+            }
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn test_fused_sigmoid_glu_cuda_row_strides_and_offsets() {
+        use super::{fused_glu, GluActivationType};
+        use candle_core::{DType, Device, Tensor};
+
+        const ROWS: usize = 3;
+        const COLS: usize = 8;
+
+        let cpu = Device::Cpu;
+        let cuda = Device::new_cuda(0).unwrap();
+        for dtype in [DType::F32, DType::F16, DType::BF16] {
+            for (a_width, a_start, b_width, b_start) in [(13, 1, 15, 2), (16, 4, 16, 4)] {
+                let a_data = (0..ROWS * a_width)
+                    .map(|index| (index as f32 - 17.0) / 9.0)
+                    .collect::<Vec<_>>();
+                let b_data = (0..ROWS * b_width)
+                    .map(|index| (23.0 - index as f32) / 13.0)
+                    .collect::<Vec<_>>();
+                let a = Tensor::from_vec(a_data, (ROWS, 1, a_width), &cuda)
+                    .unwrap()
+                    .to_dtype(dtype)
+                    .unwrap()
+                    .narrow(2, a_start, COLS)
+                    .unwrap();
+                let b = Tensor::from_vec(b_data, (ROWS, 1, b_width), &cuda)
+                    .unwrap()
+                    .to_dtype(dtype)
+                    .unwrap()
+                    .narrow(2, b_start, COLS)
+                    .unwrap();
+                assert!(!a.is_contiguous());
+                assert!(!b.is_contiguous());
+                assert_ne!(a.layout().start_offset(), 0);
+                assert_ne!(b.layout().start_offset(), 0);
+
+                let expected = candle_nn::ops::sigmoid(&a)
+                    .unwrap()
+                    .broadcast_mul(&b)
+                    .unwrap()
+                    .to_dtype(DType::F32)
+                    .unwrap()
+                    .to_device(&cpu)
+                    .unwrap()
+                    .flatten_all()
+                    .unwrap()
+                    .to_vec1::<f32>()
+                    .unwrap();
+                let actual = fused_glu(&a, &b, GluActivationType::Sigmoid)
+                    .unwrap()
+                    .to_dtype(DType::F32)
+                    .unwrap()
+                    .to_device(&cpu)
+                    .unwrap()
+                    .flatten_all()
+                    .unwrap()
+                    .to_vec1::<f32>()
+                    .unwrap();
+                let tolerance = if dtype == DType::F32 { 1e-6 } else { 2e-2 };
+                assert_close(&actual, &expected, tolerance);
+            }
         }
     }
 
@@ -3297,6 +4151,77 @@ mod tests {
         let b = Tensor::from_vec(vec![-1i64, 0, 0, 0, 0, 0, 0, 0, 0, 8], (5, 2), &device).unwrap();
         let c = a.bitwise_xor(&b).unwrap().to_vec2::<i64>().unwrap();
         assert_eq!(c, [[-2, 2], [3, -1], [-1, -1], [-1, 4], [5, 15]]);
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn test_bitwise_metal_unaligned_length() -> candle_core::Result<()> {
+        use super::{BitWiseOp, LeftshiftOp};
+        use candle_core::{Device, Tensor};
+
+        const TEST_LENGTH: usize = 2049;
+        const TEST_SHIFT: usize = 3;
+
+        let device = Device::new_metal(0)?;
+        let lhs = (0..TEST_LENGTH)
+            .map(|index| (index.wrapping_mul(37).wrapping_add(11) & 0xff) as u8)
+            .collect::<Vec<_>>();
+        let rhs = (0..TEST_LENGTH)
+            .map(|index| (index.wrapping_mul(19).wrapping_add(7) & 0xff) as u8)
+            .collect::<Vec<_>>();
+        let lhs_tensor = Tensor::from_vec(lhs.clone(), TEST_LENGTH, &device)?;
+        let rhs_tensor = Tensor::from_vec(rhs.clone(), TEST_LENGTH, &device)?;
+
+        let and = lhs_tensor
+            .bitwise_and(&rhs_tensor)?
+            .to_device(&Device::Cpu)?
+            .to_vec1::<u8>()?;
+        let or = lhs_tensor
+            .bitwise_or(&rhs_tensor)?
+            .to_device(&Device::Cpu)?
+            .to_vec1::<u8>()?;
+        let xor = lhs_tensor
+            .bitwise_xor(&rhs_tensor)?
+            .to_device(&Device::Cpu)?
+            .to_vec1::<u8>()?;
+        let not = lhs_tensor
+            .bitwise_not()?
+            .to_device(&Device::Cpu)?
+            .to_vec1::<u8>()?;
+        let shifted = lhs_tensor
+            .leftshift(TEST_SHIFT)?
+            .to_device(&Device::Cpu)?
+            .to_vec1::<u8>()?;
+
+        assert_eq!(
+            and,
+            lhs.iter()
+                .zip(&rhs)
+                .map(|(lhs, rhs)| lhs & rhs)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            or,
+            lhs.iter()
+                .zip(&rhs)
+                .map(|(lhs, rhs)| lhs | rhs)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            xor,
+            lhs.iter()
+                .zip(&rhs)
+                .map(|(lhs, rhs)| lhs ^ rhs)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(not, lhs.iter().map(|value| !value).collect::<Vec<_>>());
+        assert_eq!(
+            shifted,
+            lhs.iter()
+                .map(|value| value.wrapping_shl(TEST_SHIFT as u32))
+                .collect::<Vec<_>>()
+        );
+        Ok(())
     }
 
     #[test]
@@ -3647,6 +4572,7 @@ mod tests {
             GluActivationType::Gelu,
             GluActivationType::Relu,
             GluActivationType::GeluErf,
+            GluActivationType::Sigmoid,
         ] {
             let a_cpu = Tensor::from_vec(a_data.clone(), &[128], &cpu).unwrap();
             let b_cpu = Tensor::from_vec(b_data.clone(), &[128], &cpu).unwrap();
@@ -3851,6 +4777,7 @@ mod tests {
             GluActivationType::Gelu,
             GluActivationType::Relu,
             GluActivationType::GeluErf,
+            GluActivationType::Sigmoid,
         ] {
             let a_cpu = Tensor::from_vec(a_data.clone(), &[128], &cpu).unwrap();
             let b_cpu = Tensor::from_vec(b_data.clone(), &[128], &cpu).unwrap();
@@ -3940,5 +4867,39 @@ mod tests {
             max_diff <= 0.015625,
             "CUDA BF16 Gelu fused vs candle fallback max_diff {max_diff} exceeds 1 BF16 ULP"
         );
+    }
+}
+
+#[cfg(all(test, feature = "cuda"))]
+mod dense_last_dim_layout_tests {
+    use super::dense_last_dim_layout;
+    use candle_core::{Layout, Shape};
+
+    fn layout(dims: &[usize], stride: &[usize]) -> Option<(usize, usize, usize)> {
+        dense_last_dim_layout(&Layout::new(Shape::from(dims), stride.to_vec(), 0))
+            .map(|l| (l.rows, l.cols, l.row_stride))
+    }
+
+    #[test]
+    fn size_one_dims_ignore_their_strides() {
+        assert_eq!(layout(&[1, 1, 8], &[8, 8, 1]), Some((1, 8, 8)));
+        assert_eq!(layout(&[1, 1, 8], &[1, 1, 1]), Some((1, 8, 8)));
+        assert_eq!(layout(&[2, 1, 8], &[8, 1, 1]), Some((2, 8, 8)));
+        assert_eq!(layout(&[1, 3, 8], &[0, 16, 1]), Some((3, 8, 16)));
+    }
+
+    #[test]
+    fn strided_and_dense_rows() {
+        assert_eq!(layout(&[4, 8], &[8, 1]), Some((4, 8, 8)));
+        assert_eq!(layout(&[4, 8], &[16, 1]), Some((4, 8, 16)));
+        assert_eq!(layout(&[2, 3, 8], &[48, 16, 1]), Some((6, 8, 16)));
+        assert_eq!(layout(&[8], &[1]), Some((1, 8, 8)));
+    }
+
+    #[test]
+    fn rejects_non_row_dense() {
+        assert_eq!(layout(&[4, 8], &[1, 4]), None);
+        assert_eq!(layout(&[4, 8], &[4, 1]), None);
+        assert_eq!(layout(&[2, 3, 8], &[64, 16, 1]), None);
     }
 }

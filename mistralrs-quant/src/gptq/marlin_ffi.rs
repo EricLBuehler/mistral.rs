@@ -16,7 +16,7 @@ extern "C" {
         workspace: *const c_void, //tensor with at least `n / 128 * max_par` entries that are all zero
         groupsize: i32,
         stream: i64,
-    );
+    ) -> i32;
 
     pub(crate) fn marlin_gptq_4bit_bf16(
         inputs: *const c_void,
@@ -30,7 +30,7 @@ extern "C" {
         workspace: *const c_void, //tensor with at least `n / 128 * max_par` entries that are all zero
         groupsize: i32,
         stream: i64,
-    );
+    ) -> i32;
 
     pub(crate) fn marlin_awq_4bit_f16(
         inputs: *const c_void,
@@ -44,7 +44,7 @@ extern "C" {
         workspace: *const c_void,
         groupsize: i32,
         stream: i64,
-    );
+    ) -> i32;
 
     pub(crate) fn marlin_awq_4bit_bf16(
         inputs: *const c_void,
@@ -58,7 +58,7 @@ extern "C" {
         workspace: *const c_void,
         groupsize: i32,
         stream: i64,
-    );
+    ) -> i32;
 
     pub(crate) fn gptq_marlin_repack(
         weight: *const c_void,

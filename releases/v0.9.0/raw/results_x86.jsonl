@@ -1,0 +1,44 @@
+{"engine": "mistralrs", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q4k", "mode": "prefill", "length": 128, "tps": 161.6}
+{"engine": "mistralrs", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q4k", "mode": "prefill", "length": 512, "tps": 274.5}
+{"engine": "mistralrs", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q4k", "mode": "prefill", "length": 2048, "tps": 239.2}
+{"engine": "mistralrs", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q4k", "mode": "prefill", "length": 8192, "tps": 140.6}
+{"engine": "mistralrs", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q8_0", "mode": "prefill", "length": 128, "tps": 260.0}
+{"engine": "mistralrs", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q8_0", "mode": "prefill", "length": 512, "tps": 280.2}
+{"engine": "mistralrs", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q8_0", "mode": "prefill", "length": 2048, "tps": 233.8}
+{"engine": "mistralrs", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q8_0", "mode": "prefill", "length": 8192, "tps": 136.7}
+{"engine": "mistralrs", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q4k", "mode": "decode", "length": 128, "tps": 33.6}
+{"engine": "mistralrs", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q4k", "mode": "decode", "length": 512, "tps": 32.4}
+{"engine": "mistralrs", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q4k", "mode": "decode", "length": 2048, "tps": 29.2}
+{"engine": "mistralrs", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q4k", "mode": "decode", "length": 8192, "tps": 21.5}
+{"engine": "mistralrs", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q8_0", "mode": "decode", "length": 128, "tps": 25.7}
+{"engine": "mistralrs", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q8_0", "mode": "decode", "length": 512, "tps": 24.9}
+{"engine": "mistralrs", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q8_0", "mode": "decode", "length": 2048, "tps": 23.3}
+{"engine": "mistralrs", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q8_0", "mode": "decode", "length": 8192, "tps": 18.2}
+{"engine": "llamacpp", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q4k", "mode": "prefill", "length": 128, "tps": 381.49, "note": "fa=1"}
+{"engine": "llamacpp", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q4k", "mode": "prefill", "length": 512, "tps": 396.92, "note": "fa=1"}
+{"engine": "llamacpp", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q4k", "mode": "prefill", "length": 2048, "tps": 302.99, "note": "fa=1"}
+{"engine": "llamacpp", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q4k", "mode": "prefill", "length": 8192, "tps": 163.96, "note": "fa=1"}
+{"engine": "llamacpp", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q8_0", "mode": "prefill", "length": 128, "tps": 329.94, "note": "fa=1"}
+{"engine": "llamacpp", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q8_0", "mode": "prefill", "length": 512, "tps": 425.63, "note": "fa=1"}
+{"engine": "llamacpp", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q8_0", "mode": "prefill", "length": 2048, "tps": 325.25, "note": "fa=1"}
+{"engine": "llamacpp", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q8_0", "mode": "prefill", "length": 8192, "tps": 168.2, "note": "fa=1"}
+{"engine": "llamacpp", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q4k", "mode": "decode", "length": 128, "tps": 31.84, "note": "fa=1"}
+{"engine": "llamacpp", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q4k", "mode": "decode", "length": 512, "tps": 30.33, "note": "fa=1"}
+{"engine": "llamacpp", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q4k", "mode": "decode", "length": 2048, "tps": 26.02, "note": "fa=1"}
+{"engine": "llamacpp", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q4k", "mode": "decode", "length": 8192, "tps": 12.71, "note": "fa=1"}
+{"engine": "llamacpp", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q8_0", "mode": "decode", "length": 128, "tps": 30.7, "note": "fa=1"}
+{"engine": "llamacpp", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q8_0", "mode": "decode", "length": 512, "tps": 29.54, "note": "fa=1"}
+{"engine": "llamacpp", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q8_0", "mode": "decode", "length": 2048, "tps": 25.2, "note": "fa=1"}
+{"engine": "llamacpp", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q8_0", "mode": "decode", "length": 8192, "tps": 12.27, "note": "fa=1"}
+{"engine": "llamacpp", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q4k", "mode": "decode", "length": 128, "tps": 31.63, "note": "fa=0"}
+{"engine": "llamacpp", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q4k", "mode": "decode", "length": 512, "tps": 29.3, "note": "fa=0"}
+{"engine": "llamacpp", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q4k", "mode": "decode", "length": 2048, "tps": 24.21, "note": "fa=0"}
+{"engine": "llamacpp", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q4k", "mode": "decode", "length": 8192, "tps": 14.07, "note": "fa=0"}
+{"engine": "llamacpp", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q4k", "mode": "decode", "length": 16384, "tps": 8.76, "note": "fa=0"}
+{"engine": "llamacpp", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q4k", "mode": "decode", "length": 16384, "tps": 6.3, "note": "fa=1"}
+{"engine": "llamacpp", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q8_0", "mode": "decode", "length": 512, "tps": 28.45, "note": "fa=0"}
+{"engine": "llamacpp", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q8_0", "mode": "decode", "length": 2048, "tps": 23.58, "note": "fa=0"}
+{"engine": "llamacpp", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q8_0", "mode": "decode", "length": 8192, "tps": 13.73, "note": "fa=0"}
+{"engine": "mistralrs", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q4k", "mode": "decode", "length": 16384, "tps": 15.9}
+{"engine": "mistralrs", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q8_0", "mode": "decode", "length": 128, "tps": 26.7, "note": "after q8_0 kernel fixes"}
+{"engine": "mistralrs", "arch": "x86-spr", "model": "qwen3-4b", "quant": "q8_0", "mode": "decode", "length": 512, "tps": 26.1, "note": "after q8_0 kernel fixes"}

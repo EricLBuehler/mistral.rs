@@ -174,6 +174,7 @@ pub async fn build_ui_router(
     fs::create_dir_all(&speech_dir).await?;
     let uploads_dir = base_cache.join("uploads");
     fs::create_dir_all(&uploads_dir).await?;
+    mistralrs_server_core::configure_ui_upload_dir(&uploads_dir).await?;
 
     let mut next_id = 1u32;
     if let Ok(mut dir) = fs::read_dir(&chats_dir).await {

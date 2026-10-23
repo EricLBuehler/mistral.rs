@@ -10,7 +10,7 @@
 - 🌐 **Universal protocol** - Works with any MCP-compatible server
 - 🔒 **Secure** - Built-in authentication and timeout controls
 
-[📚 Full Documentation](https://ericlbuehler.github.io/mistral.rs/guides/agents/connect-mcp-server/) | [⚙️ Configuration Reference](https://ericlbuehler.github.io/mistral.rs/reference/mcp-config-schema/)
+[📚 Full Documentation](https://docs.mistralrs.dev/guides/agents/connect-mcp-server/) | [⚙️ Configuration Reference](https://docs.mistralrs.dev/reference/mcp-config-schema/)
 
 ## Quick Start
 
@@ -263,11 +263,11 @@ The system gracefully handles failures:
 
 **Ready for more?**
 - 🔧 [Configuration Reference](mcp-config-reference.json) - All available options
-- 📖 [Full MCP Documentation](https://ericlbuehler.github.io/mistral.rs/guides/agents/connect-mcp-server/) - Complete guide
+- 📖 [Full MCP Documentation](https://docs.mistralrs.dev/guides/agents/connect-mcp-server/) - Complete guide
 - 🛠️ [Server Examples](mcp-server-config.json) - Real-world configurations
-- 🚀 [Advanced Usage](https://ericlbuehler.github.io/mistral.rs/guides/agents/connect-mcp-server/) - Multi-server setups
+- 🚀 [Advanced Usage](https://docs.mistralrs.dev/guides/agents/connect-mcp-server/) - Multi-server setups
 
 **Need help?**
 - [MCP Server Registry](https://github.com/modelcontextprotocol/servers) - Find more servers
-- [Troubleshooting](https://ericlbuehler.github.io/mistral.rs/reference/troubleshooting/) - Common issues
+- [Troubleshooting](https://docs.mistralrs.dev/reference/troubleshooting/) - Common issues
 - [Discord Community](https://discord.gg/SZrecqK8qw) - Get support

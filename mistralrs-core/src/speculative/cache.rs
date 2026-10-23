@@ -273,10 +273,15 @@ impl<'a> SpeculativeCacheAccess for PagedSpeculativeCacheAccess<'a> {
                 full_max_context_len: Some(base_len + verify_len),
                 is_first_prompt_chunk: false,
                 is_final_prompt_chunk: true,
+                needs_logits: true,
                 prompt_chunk_attention_policy:
                     crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
                 has_noncausal_mm_context: false,
+                prefix_gather_workspace_limit: None,
+                attention_memory: None,
+                prefix_masks: Default::default(),
                 mm_prefix_ranges: None,
+                full_mm_prefix_ranges: None,
                 prefill_attention_heads: 1,
                 prefill_key_value_heads: 1,
                 prefill_head_dim: 1,
@@ -286,6 +291,7 @@ impl<'a> SpeculativeCacheAccess for PagedSpeculativeCacheAccess<'a> {
                 query_lens: None,
                 cu_seqlens_q: None,
                 cu_seqlens_kv: None,
+                decode_rows: None,
             }),
             flash_meta: FlashParams::empty(true),
         };

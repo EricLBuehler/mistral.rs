@@ -36,7 +36,7 @@ pub(crate) struct MLlamaVisionConfig {
     pub(crate) hidden_act: VisionActivation,
     pub(crate) num_hidden_layers: usize,
     pub(crate) num_global_layers: usize,
-    #[serde(default = "d_attn_heads")]
+    #[serde(default = "d_attn_heads", alias = "attention_heads")]
     pub(crate) num_attention_heads: usize,
     pub(crate) num_channels: usize,
     pub(crate) intermediate_size: usize,
@@ -114,4 +114,32 @@ impl MLlamaTextConfig {
 pub(crate) struct MLlamaConfig {
     pub(crate) vision_config: MLlamaVisionConfig,
     pub(crate) text_config: MLlamaTextConfig,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::MLlamaVisionConfig;
+
+    #[test]
+    fn vision_attention_heads_alias_is_supported() {
+        let config: MLlamaVisionConfig = serde_json::from_value(serde_json::json!({
+            "hidden_size": 1280,
+            "hidden_act": "gelu",
+            "num_hidden_layers": 32,
+            "num_global_layers": 8,
+            "attention_heads": 20,
+            "num_channels": 3,
+            "intermediate_size": 5120,
+            "vision_output_dim": 7680,
+            "image_size": 560,
+            "patch_size": 14,
+            "norm_eps": 0.00001,
+            "max_num_tiles": 4,
+            "intermediate_layers_indices": [3, 7, 15, 23, 30],
+            "supported_aspect_ratios": [[1, 1], [1, 2]]
+        }))
+        .unwrap();
+
+        assert_eq!(config.num_attention_heads, 20);
+    }
 }

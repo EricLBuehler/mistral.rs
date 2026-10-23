@@ -2,30 +2,51 @@
 
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
 };
 
 use candle_core::{DType, Device, Module, Result, Tensor, D};
-use candle_nn::Embedding;
 use mistralrs_quant::{
-    ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
+    ActivationQuantizationScheme, ActivationScaleLayout, ColumnParallelLayer, PackedOutputLayout,
+    QuantMethod, QuantizedActivation, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
 };
 
-use super::config::{LayerType, TextConfig};
+use super::{
+    config::{LayerType, TextConfig},
+    mtp::Qwen3_5MtpHead,
+    packed_gdn::{forward_packed_gdn, packed_gdn_layout},
+};
 use crate::{
+    amoe::AnyMoeBaseModelMixin,
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
-    gdn::{GatedDeltaNet, GdnConfig, GdnInputProjectionKind, GdnLayerCache},
+    gdn::{
+        GatedDeltaNet, GdnConfig, GdnForwardContext, GdnInputProjectionKind, GdnLayerCache,
+        GdnSpeculativeStash, GdnVHeadLayout, PackedGdnLayout,
+    },
     kv_cache::{
         HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
     },
-    layers::{self, GemmaRmsNorm, Qwen3VLRotaryEmbedding, Sdpa},
-    paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
+    layers::{self, CausalMasker, GemmaRmsNorm, Mlp, Qwen3VLRotaryEmbedding, Sdpa, YarnRopeConfig},
+    layers_masker::{CausalMaskConfig, PastKvLenCache},
+    paged_attention::{
+        load_fp8_attention_scales, AttentionImplementation, ModelConfigMetadata, PagedAttention,
+    },
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, ModelForwardContext, NormalLoadingMetadata,
-        RecurrentBatchKind,
+        EitherCache, ForwardMaskCache, IsqModel, KvCache, ModelForwardContext,
+        NormalLoadingMetadata, NormalModel, RecurrentBatchKind,
+    },
+    speculative::{
+        gdn_transitions::{recurrent_checkpoint_devices_supported, GdnTransitionLayers},
+        hybrid_state::{
+            refresh_gdn_stash_slots, replay_gdn_prefixes, should_stash_gdn_replay,
+            GdnLayerRollback, GdnLayerStash, GdnReplayStash, SpecCapture, SpecGraphState,
+        },
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
 };
@@ -55,24 +76,34 @@ impl GdnConfig for TextConfig {
     fn quantization_config(&self) -> &Option<QuantizedConfig> {
         &self.quantization_config
     }
+    fn v_head_layout(&self) -> GdnVHeadLayout {
+        self.gdn_v_head_layout
+    }
 }
 
 // ====================== Full Attention layer with MRoPE ======================
 
 #[allow(dead_code)]
-struct FullAttention {
+pub(super) struct FullAttention {
     q_proj: Arc<dyn QuantMethod>,
     k_proj: Arc<dyn QuantMethod>,
     v_proj: Arc<dyn QuantMethod>,
+    merged_qkv: Option<crate::ops::MergedDenseProjection>,
     o_proj: Arc<dyn QuantMethod>,
-    q_norm: GemmaRmsNorm,
-    k_norm: GemmaRmsNorm,
+    pub(super) q_norm: GemmaRmsNorm,
+    pub(super) k_norm: GemmaRmsNorm,
     num_heads: usize,
     num_kv_heads: usize,
     head_dim: usize,
-    rotary_emb: Arc<Qwen3VLRotaryEmbedding>,
+    q_gate_grouped: bool,
+    pub(super) rotary_emb: Arc<Qwen3VLRotaryEmbedding>,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
+}
+
+enum AttentionInput<'a> {
+    Dense(&'a Tensor),
+    Quantized(&'a QuantizedActivation),
 }
 
 impl FullAttention {
@@ -84,42 +115,103 @@ impl FullAttention {
         layer_idx: usize,
         loading_isq: bool,
         rotary_emb: Arc<Qwen3VLRotaryEmbedding>,
-        paged_attn: Option<PagedAttention>,
+        use_paged_attention: bool,
         comm: &Arc<mistralrs_quant::Comm>,
     ) -> Result<Self> {
         let vb_sa = mapper.set_device(layer_idx, vb.pp("self_attn"), loading_isq);
+        let vb_sa_norms = mapper.set_device(layer_idx, vb.pp("self_attn"), false);
+        let paged_attn = if use_paged_attention {
+            Some(PagedAttention::new_with_fp8_attention_scales(
+                cfg.head_dim,
+                vb_sa_norms.device(),
+                None,
+                load_fp8_attention_scales(&vb_sa_norms)?,
+            )?)
+        } else {
+            None
+        };
+        Self::load_with(vb_sa, vb_sa_norms, cfg, rotary_emb, paged_attn, comm)
+    }
+
+    /// `vb_sa` and `vb_sa_norms` are already placed on the layer's device.
+    pub(super) fn load_with(
+        vb_sa: ShardedVarBuilder,
+        vb_sa_norms: ShardedVarBuilder,
+        cfg: &TextConfig,
+        rotary_emb: Arc<Qwen3VLRotaryEmbedding>,
+        paged_attn: Option<PagedAttention>,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
         let num_heads = cfg.num_attention_heads;
         let num_kv_heads = cfg.num_key_value_heads;
         let head_dim = cfg.head_dim;
 
-        // q_proj outputs num_heads * head_dim * 2 (doubled for gate)
-        let q_proj = ColumnParallelLayer::new(
-            cfg.hidden_size,
-            num_heads * head_dim * 2,
-            &cfg.quantization_config,
-            false,
-            comm,
-            vb_sa.pp("q_proj"),
-        )?;
         let kv_shard = mistralrs_quant::compute_kv_shard(num_kv_heads, head_dim, comm)?;
-        let k_proj = ColumnParallelLayer::new_with_shard(
+        let q_shard = mistralrs_quant::Shard::Simple {
+            dim: 0,
+            rank: comm.rank(),
+            world_size: comm.world_size(),
+        };
+        let q_dim = num_heads * head_dim * 2;
+        let kv_dim = num_kv_heads * head_dim;
+        let q_layout = PackedOutputLayout::rank_local_interleaved_to_grouped(
+            num_heads,
+            &[head_dim, head_dim],
+            comm.world_size(),
+        )?;
+        let output_layouts = [
+            q_layout,
+            PackedOutputLayout::identity(kv_dim),
+            PackedOutputLayout::identity(kv_dim),
+        ];
+        let packed = ColumnParallelLayer::new_packed_with_output_layouts(
             cfg.hidden_size,
-            num_kv_heads * head_dim,
+            &[q_dim, kv_dim, kv_dim],
+            &["q_proj", "k_proj", "v_proj"],
+            &output_layouts,
             &cfg.quantization_config,
             false,
             comm,
-            kv_shard,
-            vb_sa.pp("k_proj"),
+            Some(&[q_shard, kv_shard, kv_shard]),
+            vb_sa.clone(),
         )?;
-        let v_proj = ColumnParallelLayer::new_with_shard(
-            cfg.hidden_size,
-            num_kv_heads * head_dim,
-            &cfg.quantization_config,
-            false,
-            comm,
-            kv_shard,
-            vb_sa.pp("v_proj"),
-        )?;
+        let (q_proj, k_proj, v_proj, merged_qkv) = match &packed {
+            Some(group) => (
+                group.constituents[0].clone(),
+                group.constituents[1].clone(),
+                group.constituents[2].clone(),
+                Some(crate::ops::MergedDenseProjection::from_packed(group)),
+            ),
+            None => (
+                ColumnParallelLayer::new(
+                    cfg.hidden_size,
+                    q_dim,
+                    &cfg.quantization_config,
+                    false,
+                    comm,
+                    vb_sa.pp("q_proj"),
+                )?,
+                ColumnParallelLayer::new_with_shard(
+                    cfg.hidden_size,
+                    kv_dim,
+                    &cfg.quantization_config,
+                    false,
+                    comm,
+                    kv_shard,
+                    vb_sa.pp("k_proj"),
+                )?,
+                ColumnParallelLayer::new_with_shard(
+                    cfg.hidden_size,
+                    kv_dim,
+                    &cfg.quantization_config,
+                    false,
+                    comm,
+                    kv_shard,
+                    vb_sa.pp("v_proj"),
+                )?,
+                None,
+            ),
+        };
         let o_proj = RowParallelLayer::new(
             num_heads * head_dim,
             cfg.hidden_size,
@@ -129,20 +221,23 @@ impl FullAttention {
             vb_sa.pp("o_proj"),
         )?;
 
-        let vb_sa_norms = mapper.set_device(layer_idx, vb.pp("self_attn"), false);
-        let q_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("q_norm"))?;
-        let k_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("k_norm"))?;
+        let q_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("q_norm"))?
+            .with_storage(cfg.norm_storage)?;
+        let k_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("k_norm"))?
+            .with_storage(cfg.norm_storage)?;
 
         Ok(Self {
             q_proj,
             k_proj,
             v_proj,
+            merged_qkv,
             o_proj,
             q_norm,
             k_norm,
             num_heads: num_heads / comm.world_size(),
             num_kv_heads: (num_kv_heads / comm.world_size()).max(1),
             head_dim,
+            q_gate_grouped: packed.is_some(),
             rotary_emb,
             paged_attn,
             sdpa_params: SdpaParams {
@@ -155,43 +250,105 @@ impl FullAttention {
         })
     }
 
+    fn input_activation_quantization_scheme_for(
+        &self,
+        input: &Tensor,
+    ) -> Option<ActivationQuantizationScheme> {
+        self.merged_qkv
+            .as_ref()?
+            .activation_quantization_scheme_for(input)
+    }
+
+    fn preferred_input_activation_scale_layout_for(
+        &self,
+        input: &Tensor,
+    ) -> Option<ActivationScaleLayout> {
+        self.merged_qkv
+            .as_ref()?
+            .preferred_activation_scale_layout_for(input)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn forward(
         &self,
-        x: &Tensor,
+        input: AttentionInput<'_>,
         attention_mask: &AttentionMask,
         cos_sin: &(Tensor, Tensor),
-        kv_cache: &mut KvCache,
+        kv_cache: Option<&mut KvCache>,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let (b_sz, seq_len, _) = x.dims3()?;
-        let (q_gate, k, v) =
-            crate::ops::qkv_projections(x, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
-        // Split q_gate into q and gate
-        let q_gate = q_gate.reshape((b_sz, seq_len, self.num_heads, self.head_dim * 2))?;
-        let q = q_gate.narrow(D::Minus1, 0, self.head_dim)?;
-        let gate = q_gate.narrow(D::Minus1, self.head_dim, self.head_dim)?;
-        let gate = gate.reshape((b_sz, seq_len, self.num_heads * self.head_dim))?;
-
-        // Reshape to (batch, heads, seq, head_dim)
-        let (mut q, mut k, v) = if seq_len != 1 {
-            let q = q.transpose(1, 2)?;
-            let k = k
-                .reshape((b_sz, seq_len, self.num_kv_heads, self.head_dim))?
-                .transpose(1, 2)?;
-            let v = v
-                .reshape((b_sz, seq_len, self.num_kv_heads, self.head_dim))?
-                .transpose(1, 2)?;
-            (q, k, v)
+        let (b_sz, seq_len, _) = match input {
+            AttentionInput::Dense(x) => x.dims3()?,
+            AttentionInput::Quantized(activation) => {
+                let [batch, seq_len, width]: [usize; 3] = activation
+                    .source_shape()
+                    .try_into()
+                    .map_err(|_| candle_core::Error::msg("quantized QKV input must have rank 3"))?;
+                (batch, seq_len, width)
+            }
+        };
+        let (q_gate, k, v) = match input {
+            AttentionInput::Dense(x) => {
+                if let Some(merged_qkv) = &self.merged_qkv {
+                    let [q_gate, k, v]: [Tensor; 3] =
+                        merged_qkv.forward(x)?.try_into().map_err(|_| {
+                            candle_core::Error::msg("packed QKV returned the wrong output count")
+                        })?;
+                    (q_gate, k, v)
+                } else {
+                    crate::ops::qkv_projections(x, &*self.q_proj, &*self.k_proj, &*self.v_proj)?
+                }
+            }
+            AttentionInput::Quantized(activation) => {
+                let merged_qkv = self
+                    .merged_qkv
+                    .as_ref()
+                    .expect("quantized QKV input requires a packed projection");
+                let [q_gate, k, v]: [Tensor; 3] = merged_qkv
+                    .forward_quantized(activation)?
+                    .try_into()
+                    .map_err(|_| {
+                        candle_core::Error::msg("packed QKV returned the wrong output count")
+                    })?;
+                (q_gate, k, v)
+            }
+        };
+        let q_width = self.num_heads * self.head_dim;
+        let (q, gate) = if self.q_gate_grouped {
+            (
+                q_gate.narrow(D::Minus1, 0, q_width)?.unfold(
+                    D::Minus1,
+                    self.head_dim,
+                    self.head_dim,
+                )?,
+                q_gate.narrow(D::Minus1, q_width, q_width)?,
+            )
         } else {
-            let q = q.reshape((b_sz, self.num_heads, seq_len, self.head_dim))?;
-            let k = k.reshape((b_sz, self.num_kv_heads, seq_len, self.head_dim))?;
-            let v = v.reshape((b_sz, self.num_kv_heads, seq_len, self.head_dim))?;
-            (q, k, v)
+            let q_gate = q_gate.reshape((b_sz, seq_len, self.num_heads, self.head_dim * 2))?;
+            let q = q_gate.narrow(D::Minus1, 0, self.head_dim)?;
+            let gate = q_gate
+                .narrow(D::Minus1, self.head_dim, self.head_dim)?
+                .reshape((b_sz, seq_len, q_width))?;
+            (q, gate)
         };
 
-        (q, k) = self.rotary_emb.forward_qk_norm(
+        let mut q = q.transpose(1, 2)?;
+        let mut k = k
+            .unfold(D::Minus1, self.head_dim, self.head_dim)?
+            .transpose(1, 2)?;
+        let v = v
+            .unfold(D::Minus1, self.head_dim, self.head_dim)?
+            .transpose(1, 2)?;
+
+        let cos_sin = &(
+            cos_sin.0.to_device(q.device())?,
+            cos_sin.1.to_device(q.device())?,
+        );
+        let tokens_first = metadata
+            .as_ref()
+            .is_some_and(|(_, input_metadata)| input_metadata.is_decode_step());
+        (q, k) = self.rotary_emb.forward_qk_norm_layout(
             cos_sin,
             &q,
             &k,
@@ -199,6 +356,7 @@ impl FullAttention {
             self.k_norm.weight(),
             self.q_norm.eps(),
             self.k_norm.eps(),
+            tokens_first,
         )?;
 
         // Standard attention
@@ -232,6 +390,9 @@ impl FullAttention {
                 }
             },
             None => {
+                let kv_cache = kv_cache.ok_or_else(|| {
+                    candle_core::Error::msg("full attention without paged cache needs a KV cache")
+                })?;
                 let (cache_k, cache_v) = kv_cache.append(&k, &v)?;
                 Sdpa.run_attention(
                     &q,
@@ -251,148 +412,374 @@ impl FullAttention {
         };
 
         // Apply output gate: y = y * sigmoid(gate)
-        let gate = candle_nn::ops::sigmoid(&gate.to_dtype(y.dtype())?)?;
-        y = y.broadcast_mul(&gate)?;
+        if let Some(res) = crate::ops::try_fused_gated_projection(
+            &gate,
+            &y,
+            layers::Activation::Sigmoid,
+            &*self.o_proj,
+        )? {
+            return Ok(res);
+        }
+        y = crate::ops::mul_and_act(&gate.to_dtype(y.dtype())?, &y, layers::Activation::Sigmoid)?;
 
         let res = self.o_proj.forward(&y)?;
         Ok(res)
     }
 }
 
-// ====================== Dense MLP ======================
-
-#[derive(Clone)]
-struct Mlp {
-    gate_proj: Arc<dyn QuantMethod>,
-    up_proj: Arc<dyn QuantMethod>,
-    down_proj: Arc<dyn QuantMethod>,
-    act_fn: crate::layers::Activation,
-}
-
-impl Mlp {
-    fn new(
-        vb: ShardedVarBuilder,
-        hidden_size: usize,
-        intermediate_size: usize,
-        quant_config: &Option<mistralrs_quant::QuantizedConfig>,
-        act_fn: crate::layers::Activation,
-        comm: &Arc<mistralrs_quant::Comm>,
-    ) -> Result<Self> {
-        let gate_proj = ColumnParallelLayer::new(
-            hidden_size,
-            intermediate_size,
-            quant_config,
-            false,
-            comm,
-            vb.pp("gate_proj"),
-        )?;
-        let up_proj = ColumnParallelLayer::new(
-            hidden_size,
-            intermediate_size,
-            quant_config,
-            false,
-            comm,
-            vb.pp("up_proj"),
-        )?;
-        let down_proj = RowParallelLayer::new(
-            intermediate_size,
-            hidden_size,
-            quant_config,
-            false,
-            comm,
-            vb.pp("down_proj"),
-        )?;
-        Ok(Self {
-            gate_proj,
-            up_proj,
-            down_proj,
-            act_fn,
-        })
-    }
-
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        let gate = self.gate_proj.forward(xs)?;
-        let up = self.up_proj.forward(xs)?;
-        let activated = crate::ops::mul_and_act(&gate, &up, self.act_fn)?;
-        let res = self.down_proj.forward(&activated)?;
-        Ok(res)
-    }
-}
-
 // ====================== Decoder Layer ======================
 
-enum LayerImpl {
+pub(super) enum LayerImpl {
     FullAttention(FullAttention),
     LinearAttention(GatedDeltaNet),
 }
 
-struct DecoderLayer {
-    layer_impl: LayerImpl,
-    input_layernorm: GemmaRmsNorm,
-    post_attention_layernorm: GemmaRmsNorm,
+pub(super) struct DecoderLayer {
+    pub(super) layer_impl: LayerImpl,
+    pub(super) input_layernorm: GemmaRmsNorm,
+    pub(super) post_attention_layernorm: GemmaRmsNorm,
     mlp: Mlp,
 }
 
+struct DecoderLayerOutput {
+    branch: Tensor,
+    residual: Tensor,
+}
+
+struct LayerInputQuantizationPlan {
+    scheme: ActivationQuantizationScheme,
+    scale_layout: ActivationScaleLayout,
+    needs_dense: bool,
+}
+
+enum PreparedLayerInput {
+    Dense(Tensor),
+    Quantized {
+        normalized: Option<Tensor>,
+        activation: QuantizedActivation,
+    },
+}
+
+impl PreparedLayerInput {
+    fn device(&self) -> &Device {
+        match self {
+            Self::Dense(tensor) => tensor.device(),
+            Self::Quantized { activation, .. } => activation.quantized().device(),
+        }
+    }
+
+    fn dense(&self) -> Option<&Tensor> {
+        match self {
+            Self::Dense(tensor) => Some(tensor),
+            Self::Quantized { normalized, .. } => normalized.as_ref(),
+        }
+    }
+}
+
+struct LinearForwardContext<'a> {
+    x: &'a Tensor,
+    normalized_x: Option<&'a PreparedLayerInput>,
+    cache: &'a mut GdnLayerCache,
+    batch_kind: RecurrentBatchKind,
+    checkpoint_lanes: usize,
+    transition_checkpoints: bool,
+    packed_layout: Option<&'a PackedGdnLayout>,
+    stash_out: Option<&'a mut Option<GdnSpeculativeStash>>,
+}
+
+impl DecoderLayerOutput {
+    fn add(self) -> Result<Tensor> {
+        self.branch + self.residual
+    }
+
+    fn add_and_norm(self, norm: &GemmaRmsNorm) -> Result<(Tensor, Tensor)> {
+        norm.forward_add_rms_norm(&self.branch, &self.residual)
+    }
+
+    fn add_and_prepare(
+        self,
+        norm: &GemmaRmsNorm,
+        plan: Option<LayerInputQuantizationPlan>,
+    ) -> Result<(Tensor, PreparedLayerInput)> {
+        let Some(plan) = plan else {
+            let (residual, normalized) = self.add_and_norm(norm)?;
+            return Ok((residual, PreparedLayerInput::Dense(normalized)));
+        };
+        if plan.needs_dense {
+            let (fused, normalized) =
+                mistralrs_quant::fused_add_rms_norm_quantized_with_normalized(
+                    &self.branch,
+                    &self.residual,
+                    norm.weight(),
+                    norm.eps() as f32,
+                    plan.scheme,
+                    plan.scale_layout,
+                )?;
+            let (residual, activation) = fused.into_parts();
+            Ok((
+                residual,
+                PreparedLayerInput::Quantized {
+                    normalized: Some(normalized),
+                    activation,
+                },
+            ))
+        } else {
+            let fused = mistralrs_quant::fused_add_rms_norm_quantized(
+                &self.branch,
+                &self.residual,
+                norm.weight(),
+                norm.eps() as f32,
+                plan.scheme,
+                plan.scale_layout,
+            )?;
+            let (residual, activation) = fused.into_parts();
+            Ok((
+                residual,
+                PreparedLayerInput::Quantized {
+                    normalized: None,
+                    activation,
+                },
+            ))
+        }
+    }
+}
+
 impl DecoderLayer {
+    fn input_quantization_plan(&self, input: &Tensor) -> Option<LayerInputQuantizationPlan> {
+        if input.dtype() != DType::BF16 || !input.device().is_cuda() {
+            return None;
+        }
+        let (scheme, scale_layout, needs_dense) = match &self.layer_impl {
+            LayerImpl::FullAttention(attention) => (
+                attention.input_activation_quantization_scheme_for(input)?,
+                attention.preferred_input_activation_scale_layout_for(input)?,
+                false,
+            ),
+            LayerImpl::LinearAttention(gdn) => (
+                gdn.input_activation_quantization_scheme_for(input)?,
+                gdn.preferred_input_activation_scale_layout_for(input)?,
+                true,
+            ),
+        };
+        matches!(scale_layout, ActivationScaleLayout::GroupMajor { .. }).then_some(
+            LayerInputQuantizationPlan {
+                scheme,
+                scale_layout,
+                needs_dense,
+            },
+        )
+    }
+
+    /// A full-attention block; `vb_quant` places quantizable projections (ISQ-aware) and `vb_plain`
+    /// places norms, both already on the layer's device.
+    pub(super) fn load_full_attention(
+        vb_quant: ShardedVarBuilder,
+        vb_plain: ShardedVarBuilder,
+        cfg: &TextConfig,
+        rotary_emb: Arc<Qwen3VLRotaryEmbedding>,
+        paged_attn: Option<PagedAttention>,
+        comm: &Arc<mistralrs_quant::Comm>,
+    ) -> Result<Self> {
+        let attn = FullAttention::load_with(
+            vb_quant.pp("self_attn"),
+            vb_plain.pp("self_attn"),
+            cfg,
+            rotary_emb,
+            paged_attn,
+            comm,
+        )?;
+        let input_layernorm = GemmaRmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            vb_plain.pp("input_layernorm"),
+        )?
+        .with_storage(cfg.norm_storage)?;
+        let post_attention_layernorm = GemmaRmsNorm::new(
+            cfg.hidden_size,
+            cfg.rms_norm_eps,
+            vb_plain.pp("post_attention_layernorm"),
+        )?
+        .with_storage(cfg.norm_storage)?;
+        let mlp = Mlp::new(
+            vb_quant.pp("mlp"),
+            cfg.hidden_size,
+            cfg.intermediate_size,
+            &cfg.quantization_config,
+            cfg.hidden_act,
+            comm,
+        )?;
+        Ok(Self {
+            layer_impl: LayerImpl::FullAttention(attn),
+            input_layernorm,
+            post_attention_layernorm,
+            mlp,
+        })
+    }
+
+    pub(super) fn rotary_emb(&self) -> Option<&Arc<Qwen3VLRotaryEmbedding>> {
+        match &self.layer_impl {
+            LayerImpl::FullAttention(attn) => Some(&attn.rotary_emb),
+            LayerImpl::LinearAttention(_) => None,
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
-    fn forward_attention(
+    pub(super) fn forward_attention(
         &self,
         x: &Tensor,
         attention_mask: &AttentionMask,
         cos_sin: &(Tensor, Tensor),
-        kv_cache: &mut KvCache,
+        kv_cache: Option<&mut KvCache>,
         metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
+        self.forward_attention_output(
+            x,
+            None,
+            attention_mask,
+            cos_sin,
+            kv_cache,
+            metadata,
+            flash_params,
+        )?
+        .add()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn forward_attention_output(
+        &self,
+        x: &Tensor,
+        normalized_x: Option<&PreparedLayerInput>,
+        attention_mask: &AttentionMask,
+        cos_sin: &(Tensor, Tensor),
+        kv_cache: Option<&mut KvCache>,
+        metadata: Option<((Tensor, Tensor), &PagedAttentionInputMetadata)>,
+        flash_params: &FlashParams,
+    ) -> Result<DecoderLayerOutput> {
         let attn = match &self.layer_impl {
             LayerImpl::FullAttention(attn) => attn,
             _ => candle_core::bail!("Expected full attention layer"),
         };
         let residual = x;
-        let x = self.input_layernorm.forward(x)?;
+        let normalized_storage;
+        let input = match normalized_x {
+            Some(PreparedLayerInput::Dense(normalized)) => AttentionInput::Dense(normalized),
+            Some(PreparedLayerInput::Quantized { activation, .. }) => {
+                AttentionInput::Quantized(activation)
+            }
+            None => {
+                normalized_storage = self.input_layernorm.forward(x)?;
+                AttentionInput::Dense(&normalized_storage)
+            }
+        };
         let attn_out = attn.forward(
-            &x,
+            input,
             attention_mask,
             cos_sin,
             kv_cache,
             metadata,
             flash_params,
         )?;
-        let x = (attn_out + residual)?;
-        let residual = &x;
-        let normed = self.post_attention_layernorm.forward(&x)?;
-        let ffn_out = self.mlp.forward(&normed)?;
-        ffn_out + residual
+        let (x, ffn_out) = self.mlp.forward_with_add_rms_norm(
+            &attn_out,
+            residual,
+            &self.post_attention_layernorm,
+        )?;
+        Ok(DecoderLayerOutput {
+            branch: ffn_out,
+            residual: x,
+        })
     }
 
-    fn forward_linear(
+    fn forward_linear_with_stash(
         &self,
-        x: &Tensor,
-        cache: &mut GdnLayerCache,
-        batch_kind: RecurrentBatchKind,
-    ) -> Result<Tensor> {
+        context: LinearForwardContext<'_>,
+    ) -> Result<DecoderLayerOutput> {
+        let LinearForwardContext {
+            x,
+            normalized_x,
+            cache,
+            batch_kind,
+            checkpoint_lanes,
+            transition_checkpoints,
+            packed_layout,
+            stash_out,
+        } = context;
         let gdn = match &self.layer_impl {
             LayerImpl::LinearAttention(gdn) => gdn,
             _ => candle_core::bail!("Expected linear attention layer"),
         };
         let residual = x;
-        let x = self.input_layernorm.forward(x)?;
-        let gdn_out = gdn.forward(&x, cache, batch_kind)?;
-        let x = (gdn_out + residual)?;
-        let residual = &x;
-        let normed = self.post_attention_layernorm.forward(&x)?;
-        let ffn_out = self.mlp.forward(&normed)?;
-        ffn_out + residual
+        let normalized_storage;
+        let (normalized_x, quantized_x) = match normalized_x {
+            Some(PreparedLayerInput::Dense(normalized)) => (normalized, None),
+            Some(PreparedLayerInput::Quantized {
+                normalized,
+                activation,
+            }) => (
+                normalized
+                    .as_ref()
+                    .expect("quantized GDN input requires dense normalized values"),
+                Some(activation),
+            ),
+            None => {
+                normalized_storage = self.input_layernorm.forward(x)?;
+                (&normalized_storage, None)
+            }
+        };
+        let gdn_out = if let Some(layout) = packed_layout {
+            forward_packed_gdn(gdn, normalized_x, cache, batch_kind, layout)?
+        } else if let Some(quantized_x) = quantized_x {
+            gdn.forward_quantized_with_context(
+                normalized_x,
+                quantized_x,
+                cache,
+                GdnForwardContext {
+                    batch_kind,
+                    checkpoint_lanes,
+                    transition_checkpoints,
+                    stash_out,
+                },
+            )?
+            .expect("prepared quantized GDN input must match its projection")
+        } else {
+            gdn.forward_with_context(
+                normalized_x,
+                cache,
+                GdnForwardContext {
+                    batch_kind,
+                    checkpoint_lanes,
+                    transition_checkpoints,
+                    stash_out,
+                },
+            )?
+        };
+        let (x, ffn_out) = self.mlp.forward_with_add_rms_norm(
+            &gdn_out,
+            residual,
+            &self.post_attention_layernorm,
+        )?;
+        Ok(DecoderLayerOutput {
+            branch: ffn_out,
+            residual: x,
+        })
     }
 }
 
 // ====================== Text Model ======================
 
+#[derive(Clone, Copy)]
+enum TextWeightPrefix {
+    LanguageModelModel,
+    ModelLanguageModel,
+    Model,
+}
+
 pub struct Qwen3_5TextModel {
-    embed_tokens: Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
     pub(super) norm: GemmaRmsNorm,
     layers: Vec<DecoderLayer>,
-    layer_types: Vec<LayerType>,
+    pub(super) layer_types: Vec<LayerType>,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     lm_head: Arc<dyn QuantMethod>,
     pub(super) cache: EitherCache,
@@ -400,6 +787,17 @@ pub struct Qwen3_5TextModel {
     pub(super) device: Device,
     pub(super) dtype: DType,
     pub(super) max_seq_len: usize,
+    weight_prefix: TextWeightPrefix,
+    pub(super) mtp: Option<Qwen3_5MtpHead>,
+    store_spec_hidden: AtomicBool,
+    // Rows the logits were reduced to (decode: all rows, prompt: the last one)
+    last_spec_capture: Mutex<Option<SpecCapture>>,
+    // Every row of the last forward, so a proposer can catch up over a prompt chunk
+    last_full_capture: Mutex<Option<SpecCapture>>,
+    gdn_replay_stash: Mutex<Option<GdnReplayStash>>,
+    // Target layers whose outputs a DFlash drafter consumes; empty when none is attached
+    dflash_tap_layers: Mutex<Vec<usize>>,
+    pub(super) yarn_rope_config: Option<YarnRopeConfig>,
 }
 
 impl Qwen3_5TextModel {
@@ -407,20 +805,75 @@ impl Qwen3_5TextModel {
         cfg: &TextConfig,
         vb: ShardedVarBuilder,
         tie: bool,
+        mtp: bool,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        cfg.validate()?;
+        let yarn_rope_config = cfg.yarn_rope_config()?;
+        if let Some(yarn) = &yarn_rope_config {
+            tracing::info!(
+                factor = yarn.factor,
+                original_max_position_embeddings = yarn.original_max_position_embeddings,
+                max_position_embeddings = yarn.max_position_embeddings,
+                "Using Qwen3.5 YaRN rotary embeddings"
+            );
+        }
+        let mtp = mtp
+            .then(|| {
+                Qwen3_5MtpHead::load(
+                    vb.clone(),
+                    cfg,
+                    &*normal_loading_metadata.mapper,
+                    &normal_loading_metadata,
+                    &attention_mechanism,
+                )
+            })
+            .transpose()?;
         let mapper = normal_loading_metadata.mapper;
-        let vb_m = if vb.contains_tensor("language_model.model.embed_tokens.weight") {
-            vb.pp("language_model").pp("model")
+        let (vb_m, weight_prefix) =
+            if layers::contains_tensor_or_uqff(&vb, "language_model.model.embed_tokens.weight") {
+                (
+                    vb.pp("language_model").pp("model"),
+                    TextWeightPrefix::LanguageModelModel,
+                )
+            } else if layers::contains_tensor_or_uqff(
+                &vb,
+                "model.language_model.embed_tokens.weight",
+            ) {
+                (
+                    vb.pp("model").pp("language_model"),
+                    TextWeightPrefix::ModelLanguageModel,
+                )
+            } else {
+                (vb.pp("model"), TextWeightPrefix::Model)
+            };
+
+        let mut cfg = cfg.clone();
+        if let Some(linear) = cfg
+            .layer_types()
+            .iter()
+            .position(|t| *t == LayerType::LinearAttention)
+        {
+            cfg.norm_storage = crate::gdn::checkpoint_norm_storage(
+                &vb_m.pp("layers").pp(linear).pp("linear_attn"),
+            );
+        }
+        let cfg = &cfg;
+        // MLX conversions nest the head under the language model like the rest of the text weights
+        let vb_head = if layers::contains_tensor_or_uqff(&vb, "language_model.lm_head.weight") {
+            vb.pp("language_model")
         } else {
-            vb.pp("model").pp("language_model")
+            vb.clone()
         };
 
-        let embed_tokens = layers::embedding(
+        let embed_tokens = layers::embedding_with_legacy_tied_uqff(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            tie.then(|| {
+                mapper.set_nm_device(vb_head.pp("lm_head"), normal_loading_metadata.loading_isq)
+            }),
             &cfg.quantization_config,
         )?;
 
@@ -438,12 +891,19 @@ impl Qwen3_5TextModel {
                 .unwrap_or(&normal_loading_metadata.real_device);
             ropes.entry(device.location()).or_insert_with(|| {
                 Arc::new(
-                    Qwen3VLRotaryEmbedding::new(
-                        cfg.rope_theta() as f32,
-                        rot_dim,
-                        device,
-                        cfg.mrope_section().to_vec(),
-                    )
+                    match yarn_rope_config.as_ref() {
+                        Some(yarn) => Qwen3VLRotaryEmbedding::new_yarn(
+                            yarn,
+                            device,
+                            cfg.mrope_section().to_vec(),
+                        ),
+                        None => Qwen3VLRotaryEmbedding::new(
+                            cfg.rope_theta() as f32,
+                            rot_dim,
+                            device,
+                            cfg.mrope_section().to_vec(),
+                        ),
+                    }
                     .expect("Failed to create rotary embedding"),
                 )
             });
@@ -467,12 +927,6 @@ impl Qwen3_5TextModel {
                         .get(&device.location())
                         .expect("No RoPE for device location!")
                         .clone();
-                    let paged_attn = match &attention_mechanism {
-                        AttentionImplementation::Eager => None,
-                        AttentionImplementation::PagedAttention => {
-                            Some(PagedAttention::new(cfg.head_dim, device, None)?)
-                        }
-                    };
                     LayerImpl::FullAttention(FullAttention::load(
                         vb_l.pp(layer_idx),
                         cfg,
@@ -480,7 +934,7 @@ impl Qwen3_5TextModel {
                         layer_idx,
                         normal_loading_metadata.loading_isq,
                         rotary_emb,
-                        paged_attn,
+                        matches!(attention_mechanism, AttentionImplementation::PagedAttention),
                         &comm,
                     )?)
                 }
@@ -499,7 +953,8 @@ impl Qwen3_5TextModel {
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
                 mapper.set_device(layer_idx, vb_l.pp(layer_idx).pp("input_layernorm"), false),
-            )?;
+            )?
+            .with_storage(cfg.norm_storage)?;
             let post_attention_layernorm = GemmaRmsNorm::new(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
@@ -508,7 +963,8 @@ impl Qwen3_5TextModel {
                     vb_l.pp(layer_idx).pp("post_attention_layernorm"),
                     false,
                 ),
-            )?;
+            )?
+            .with_storage(cfg.norm_storage)?;
 
             let mlp = Mlp::new(
                 mapper.set_device(
@@ -535,26 +991,18 @@ impl Qwen3_5TextModel {
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
-        )?;
+        )?
+        .with_storage(cfg.norm_storage)?;
         let lm_head = if !tie {
             ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
                 &cfg.quantization_config,
                 false,
-                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+                mapper.set_nm_device(vb_head.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(
-                        embed_tokens.embeddings(),
-                        normal_loading_metadata.loading_isq,
-                    )?,
-                    None,
-                ),
-                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
-            )?
+            embed_tokens.clone()
         };
 
         // Create pipeline hybrid cache
@@ -572,22 +1020,25 @@ impl Qwen3_5TextModel {
             recurrent: RecurrentLayerConfig {
                 conv_dim: cfg.linear_conv_dim(),
                 conv_width: cfg.linear_conv_kernel_dim,
-                state_dims: vec![
-                    cfg.linear_num_value_heads,
-                    cfg.linear_key_head_dim,
-                    cfg.linear_value_head_dim,
-                ],
-                recurrent_dtype: Some(DType::F32),
+                state: crate::kv_cache::RecurrentStateSpec::Gdn {
+                    heads: cfg.linear_num_value_heads,
+                    key_dim: cfg.linear_key_head_dim,
+                    value_dim: cfg.linear_value_head_dim,
+                },
+                recurrent_dtype: Some(cfg.mamba_ssm_dtype.dtype()),
             },
         };
+        let layer_devices = (0..hybrid_cache_config.layer_types.len())
+            .map(|layer_idx| {
+                mapper
+                    .device_for(layer_idx, false)
+                    .unwrap_or(&normal_loading_metadata.real_device)
+                    .clone()
+            })
+            .collect::<Vec<_>>();
 
         let pipeline_cache = Arc::new(Mutex::new(
-            HybridCache::new(
-                hybrid_cache_config,
-                vb_m.dtype(),
-                &normal_loading_metadata.real_device,
-            )
-            .map_err(|e| {
+            HybridCache::new(hybrid_cache_config, vb_m.dtype(), &layer_devices).map_err(|e| {
                 candle_core::Error::Msg(format!("Failed to create hybrid cache: {}", e))
             })?,
         ));
@@ -602,7 +1053,7 @@ impl Qwen3_5TextModel {
             max_seq_len: cfg.max_position_embeddings,
             cfg: ModelConfigMetadata {
                 max_seq_len: cfg.max_position_embeddings,
-                num_layers: cfg.num_hidden_layers,
+                num_layers: cfg.num_hidden_layers + cfg.mtp_layers(mtp.is_some()),
                 hidden_size: cfg.hidden_size,
                 num_attn_heads: cfg.num_attention_heads / mapper.get_comm_for(0)?.world_size(),
                 num_kv_heads: (cfg.num_key_value_heads / mapper.get_comm_for(0)?.world_size())
@@ -615,11 +1066,368 @@ impl Qwen3_5TextModel {
             device: normal_loading_metadata.real_device.clone(),
             dtype: vb.dtype(),
             mapper,
+            weight_prefix,
+            mtp,
+            store_spec_hidden: AtomicBool::new(false),
+            last_spec_capture: Mutex::new(None),
+            last_full_capture: Mutex::new(None),
+            gdn_replay_stash: Mutex::new(None),
+            dflash_tap_layers: Mutex::new(Vec::new()),
+            yarn_rope_config,
         })
     }
 
+    pub(super) fn set_store_spec_hidden(&self, store: bool) {
+        self.store_spec_hidden.store(store, Ordering::Relaxed);
+        if !store {
+            *self
+                .last_spec_capture
+                .lock()
+                .expect("spec capture poisoned") = None;
+            *self
+                .last_full_capture
+                .lock()
+                .expect("spec capture poisoned") = None;
+            *self.gdn_replay_stash.lock().expect("gdn stash poisoned") = None;
+        }
+    }
+
+    fn gdn_transition_layers(&self) -> GdnTransitionLayers<'_> {
+        GdnTransitionLayers {
+            layers: self
+                .layers
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, layer)| match &layer.layer_impl {
+                    LayerImpl::LinearAttention(gdn) => Some((idx, gdn)),
+                    LayerImpl::FullAttention(_) => None,
+                })
+                .collect(),
+            dtype: self.dtype,
+            device: &self.device,
+        }
+    }
+
+    pub(super) fn reserve_recurrent_transition_storage(&self) -> Result<bool> {
+        self.gdn_transition_layers()
+            .reserve(&mut self.cache.hybrid())
+    }
+
+    pub(super) fn reserve_recurrent_decode_deferred_storage(&self) -> Result<bool> {
+        let mut cache = self.cache.hybrid();
+        let mut spec = None;
+        for (layer_idx, layer_type) in self.layer_types.iter().enumerate() {
+            if *layer_type != LayerType::LinearAttention {
+                continue;
+            }
+            let (LayerImpl::LinearAttention(gdn), Some(HybridLayerCache::Recurrent(pool))) =
+                (&self.layers[layer_idx].layer_impl, cache.get(layer_idx))
+            else {
+                candle_core::bail!("Qwen3.5 GDN layer has no recurrent state pool");
+            };
+            if !gdn.deferred_decode_supported(pool, self.dtype) {
+                return Ok(false);
+            }
+            let layer_spec = gdn.deferred_state_spec();
+            if spec
+                .replace(layer_spec)
+                .is_some_and(|spec| spec != layer_spec)
+            {
+                candle_core::bail!("Qwen3.5 GDN deferred-state dimensions diverge across layers");
+            }
+        }
+        let Some(spec) = spec else {
+            return Ok(false);
+        };
+        cache.reserve_gdn_deferred_state(spec)
+    }
+
+    pub(super) fn disable_recurrent_decode_deferred_storage(&self) -> Result<bool> {
+        self.cache.hybrid().disable_gdn_deferred_state()
+    }
+
+    fn apply_pending_recurrent_transitions_with_cache(
+        &self,
+        cache: &HybridCache,
+        slots: &[u32],
+    ) -> Result<bool> {
+        self.gdn_transition_layers()
+            .apply_pending_for_slots(cache, slots)
+    }
+
+    fn apply_pending_recurrent_transitions_for_current_batch(
+        &self,
+        cache: &HybridCache,
+    ) -> Result<bool> {
+        self.gdn_transition_layers()
+            .apply_pending_for_current_batch(cache)
+    }
+
+    pub(super) fn apply_current_recurrent_transitions(&self) -> Result<bool> {
+        let cache = self.cache.hybrid();
+        self.apply_pending_recurrent_transitions_for_current_batch(&cache)
+    }
+
+    fn flush_deferred_recurrent_state(
+        &self,
+        cache: &HybridCache,
+        slots: Option<&[u32]>,
+    ) -> Result<bool> {
+        if !cache.uses_gdn_deferred_state() {
+            return Ok(false);
+        }
+        let host_slots = slots.map(|slots| {
+            let mut slots = slots
+                .iter()
+                .copied()
+                .filter(|slot| *slot != crate::cuda::gdn::GDN_PAD_SLOT)
+                .collect::<Vec<_>>();
+            slots.sort_unstable();
+            slots.dedup();
+            slots
+        });
+        if host_slots.as_ref().is_some_and(Vec::is_empty) {
+            return Ok(true);
+        }
+        let mut flushed = false;
+        for (layer_idx, layer_type) in self.layer_types.iter().enumerate() {
+            if *layer_type != LayerType::LinearAttention {
+                continue;
+            }
+            let (LayerImpl::LinearAttention(gdn), Some(HybridLayerCache::Recurrent(pool))) =
+                (&self.layers[layer_idx].layer_impl, cache.get(layer_idx))
+            else {
+                return Ok(false);
+            };
+            let active_slots = match &host_slots {
+                Some(slots) => Tensor::from_vec(slots.clone(), (slots.len(),), pool.device())?,
+                None => cache
+                    .state_indices_for_device(pool.device())
+                    .ok_or_else(|| {
+                        candle_core::Error::msg(
+                            "GDN deferred-state flush has no device-local state slots",
+                        )
+                    })?,
+            };
+            if !gdn.flush_deferred_state(pool, &active_slots, self.dtype)? {
+                return Ok(false);
+            }
+            flushed = true;
+        }
+        Ok(flushed)
+    }
+
+    pub(super) fn flush_current_recurrent_state(&self) -> Result<()> {
+        let cache = self.cache.hybrid();
+        let has_slots = cache
+            .state_indices()
+            .is_some_and(|slots| slots.elem_count() != 0);
+        if !has_slots {
+            return Ok(());
+        }
+        if cache.uses_recurrent_transition_log()
+            && !self.apply_pending_recurrent_transitions_for_current_batch(&cache)?
+        {
+            candle_core::bail!("Qwen3.5 pending recurrent transitions cannot be applied");
+        }
+        if cache.uses_gdn_deferred_state() && !self.flush_deferred_recurrent_state(&cache, None)? {
+            candle_core::bail!("Qwen3.5 deferred recurrent state cannot be materialized");
+        }
+        Ok(())
+    }
+
+    pub(super) fn flush_recurrent_transitions_for_sequences(
+        &self,
+        sequence_ids: &[usize],
+    ) -> Result<()> {
+        let cache = self.cache.hybrid();
+        let slots = cache.recurrent_slots_for_sequences(sequence_ids);
+        if cache.uses_recurrent_transition_log()
+            && !self.apply_pending_recurrent_transitions_with_cache(&cache, &slots)?
+            && !slots.is_empty()
+        {
+            candle_core::bail!("Qwen3.5 pending recurrent transitions cannot be applied");
+        }
+        if cache.uses_gdn_deferred_state()
+            && !self.flush_deferred_recurrent_state(&cache, Some(&slots))?
+            && !slots.is_empty()
+        {
+            candle_core::bail!("Qwen3.5 deferred recurrent state cannot be materialized");
+        }
+        Ok(())
+    }
+
+    pub(super) fn stage_recurrent_prefixes(
+        &self,
+        rows: &[crate::speculative::SpeculativeCommitRow],
+    ) -> Result<bool> {
+        if rows.is_empty() {
+            return Ok(true);
+        }
+        let Some(stash) = self
+            .gdn_replay_stash
+            .lock()
+            .expect("gdn stash poisoned")
+            .clone()
+        else {
+            candle_core::bail!("no GDN transition stash for speculative commit");
+        };
+        self.gdn_transition_layers()
+            .stage_prefixes(&self.cache.hybrid(), &stash, rows)
+    }
+
+    pub(super) fn replay_recurrent_prefixes(&self, rows: &[(usize, usize)]) -> Result<()> {
+        if rows.is_empty() {
+            return Ok(());
+        }
+        let Some(stash) = self
+            .gdn_replay_stash
+            .lock()
+            .expect("gdn stash poisoned")
+            .clone()
+        else {
+            candle_core::bail!("no GDN replay stash for speculative rollback");
+        };
+        replay_gdn_prefixes(&stash, rows, &mut self.cache.hybrid(), |idx| {
+            match &self.layers.get(idx)?.layer_impl {
+                LayerImpl::LinearAttention(gdn) => Some(gdn),
+                LayerImpl::FullAttention(_) => None,
+            }
+        })
+    }
+
+    pub(super) fn clear_gdn_replay_stash(&self) {
+        *self.gdn_replay_stash.lock().expect("gdn stash poisoned") = None;
+    }
+
+    pub(super) fn set_dflash_tap_layers(&self, layers: Vec<usize>) {
+        *self.dflash_tap_layers.lock().expect("dflash taps poisoned") = layers;
+    }
+
+    pub(super) fn supports_recurrent_speculative_checkpoints(&self) -> bool {
+        self.supports_recurrent_speculative_checkpoints_with_cache(&self.cache.hybrid())
+    }
+
+    pub(super) fn supports_recurrent_speculative_transitions(&self) -> bool {
+        self.supports_recurrent_speculative_transitions_with_cache(&self.cache.hybrid())
+    }
+
+    pub(super) fn supports_recurrent_speculative_transitions_with_cache(
+        &self,
+        cache: &HybridCache,
+    ) -> bool {
+        self.gdn_transition_layers().supported(cache)
+    }
+
+    pub(super) fn supports_recurrent_speculative_checkpoints_with_cache(
+        &self,
+        cache: &HybridCache,
+    ) -> bool {
+        let recurrent_devices = cache.recurrent_devices();
+        if !recurrent_checkpoint_devices_supported(&recurrent_devices) {
+            return false;
+        }
+        let mut found_gdn = false;
+        for (layer_idx, layer_type) in self.layer_types.iter().enumerate() {
+            if *layer_type != LayerType::LinearAttention {
+                continue;
+            }
+            found_gdn = true;
+            let (LayerImpl::LinearAttention(gdn), Some(HybridLayerCache::Recurrent(pool))) =
+                (&self.layers[layer_idx].layer_impl, cache.get(layer_idx))
+            else {
+                return false;
+            };
+            if !gdn.speculative_checkpoints_supported(pool, self.dtype) {
+                return false;
+            }
+        }
+        found_gdn
+    }
+
+    pub(super) fn take_spec_graph_state(&self) -> Option<SpecGraphState> {
+        if !self.store_spec_hidden.load(Ordering::Relaxed) {
+            return None;
+        }
+        Some(SpecGraphState {
+            spec_capture: self
+                .last_spec_capture
+                .lock()
+                .expect("spec capture poisoned")
+                .take(),
+            full_capture: self
+                .last_full_capture
+                .lock()
+                .expect("spec capture poisoned")
+                .take(),
+            gdn_stash: self
+                .gdn_replay_stash
+                .lock()
+                .expect("gdn stash poisoned")
+                .take(),
+            aux: Vec::new(),
+        })
+    }
+
+    pub(super) fn install_spec_graph_state(&self, state: &SpecGraphState) -> Result<()> {
+        let spec_capture = state.spec_capture.clone();
+        let full_capture = state.full_capture.clone();
+        let mut gdn_stash = state.gdn_stash.clone();
+        let slots = self
+            .cache
+            .hybrid()
+            .state_indices_host()
+            .map(ToOwned::to_owned);
+        if let (Some(stash), Some(slots)) = (gdn_stash.as_mut(), slots.as_deref()) {
+            refresh_gdn_stash_slots(stash, slots)?;
+        }
+        *self
+            .last_spec_capture
+            .lock()
+            .expect("spec capture poisoned") = spec_capture;
+        *self
+            .last_full_capture
+            .lock()
+            .expect("spec capture poisoned") = full_capture;
+        *self.gdn_replay_stash.lock().expect("gdn stash poisoned") = gdn_stash;
+        Ok(())
+    }
+
+    pub(super) fn last_spec_capture(&self) -> Option<SpecCapture> {
+        self.last_spec_capture
+            .lock()
+            .expect("spec capture poisoned")
+            .clone()
+    }
+
+    pub(super) fn last_full_capture(&self) -> Option<SpecCapture> {
+        self.last_full_capture
+            .lock()
+            .expect("spec capture poisoned")
+            .clone()
+    }
+
+    pub(super) fn lm_head(&self) -> &Arc<dyn QuantMethod> {
+        &self.lm_head
+    }
+
+    pub(super) fn token_embedding(&self) -> &Arc<dyn QuantMethod> {
+        &self.embed_tokens
+    }
+
+    /// Paged KV of the MTP head's own attention layer.
+    pub(super) fn paged_kv_layers(&self) -> Vec<bool> {
+        let mut layers = self
+            .layer_types
+            .iter()
+            .map(|ty| *ty == LayerType::FullAttention)
+            .collect::<Vec<_>>();
+        layers.extend(std::iter::repeat_n(true, usize::from(self.mtp.is_some())));
+        layers
+    }
+
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.forward(input_ids)
+        self.embed_tokens.embedding_forward(input_ids, self.dtype)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -634,17 +1442,24 @@ impl Qwen3_5TextModel {
         deepstack_visual_embeds: Option<&[Tensor]>,
     ) -> Result<Tensor> {
         let mut hybrid_cache = self.cache.hybrid();
+        let checkpoint_lanes = hybrid_cache.checkpoint_lanes();
+        let batch_size = xs.dim(0)?;
+        let query_len = xs.dim(1)?;
         let recurrent_metadata = ctx.recurrent_metadata().cloned();
-        if self
+        let has_linear_attention = self
             .layer_types
             .iter()
-            .any(|lt| matches!(lt, LayerType::LinearAttention))
-            && recurrent_metadata.is_none()
-        {
+            .any(|lt| matches!(lt, LayerType::LinearAttention));
+        if has_linear_attention && recurrent_metadata.is_none() {
             candle_core::bail!(
                 "Hybrid recurrent metadata is required for linear-attention layers."
             );
         }
+        let packed_layout = if has_linear_attention {
+            packed_gdn_layout(&xs, ctx)?
+        } else {
+            None
+        };
 
         // Compute MRoPE cos/sin using first full-attention layer's rotary embedding
         let cos_sin = {
@@ -654,14 +1469,88 @@ impl Qwen3_5TextModel {
                 .position(|lt| *lt == LayerType::FullAttention)
                 .expect("No full attention layer found");
             match &self.layers[first_attn_idx].layer_impl {
-                LayerImpl::FullAttention(attn) => {
-                    attn.rotary_emb.compute_cos_sin(position_ids, xs.dtype())?
-                }
+                LayerImpl::FullAttention(attn) => match position_ids.rank() {
+                    2 => attn
+                        .rotary_emb
+                        .compute_text_cos_sin(position_ids, xs.dtype())?,
+                    3 => attn.rotary_emb.compute_cos_sin(position_ids, xs.dtype())?,
+                    rank => {
+                        candle_core::bail!("unexpected Qwen3.5 position rank {rank}")
+                    }
+                },
                 _ => unreachable!(),
             }
         };
 
         let attention_mask = DeviceMappedMask::new(attention_mask.clone(), &*self.mapper)?;
+
+        let speculative_gdn = checkpoint_lanes > 1
+            && (1..=checkpoint_lanes).contains(&query_len)
+            && recurrent_metadata.as_ref().is_some_and(|metadata| {
+                metadata.batch_kind() == RecurrentBatchKind::SpeculativeDecode
+            });
+        let transition_gdn = speculative_gdn
+            && hybrid_cache.uses_recurrent_transition_log()
+            && query_len <= crate::cuda::gdn::GDN_SPEC_FUSED_MAX_TOKENS
+            && self.supports_recurrent_speculative_transitions_with_cache(&hybrid_cache);
+        if !transition_gdn && hybrid_cache.uses_recurrent_transition_log() {
+            let has_slots = hybrid_cache
+                .state_indices()
+                .is_some_and(|slots| slots.elem_count() != 0);
+            if !self.apply_pending_recurrent_transitions_for_current_batch(&hybrid_cache)?
+                && has_slots
+            {
+                candle_core::bail!("Qwen3.5 pending recurrent transitions cannot be applied");
+            }
+        }
+        let deferred_gdn = query_len == 1
+            && crate::cuda::gdn::deferred_decode_batch_supported(batch_size)
+            && packed_layout.is_none()
+            && recurrent_metadata
+                .as_ref()
+                .is_some_and(|metadata| metadata.batch_kind() == RecurrentBatchKind::Decode)
+            && hybrid_cache.uses_gdn_deferred_state();
+        if !deferred_gdn && hybrid_cache.uses_gdn_deferred_state() {
+            let has_slots = hybrid_cache
+                .state_indices()
+                .is_some_and(|slots| slots.elem_count() != 0);
+            if has_slots && !self.flush_deferred_recurrent_state(&hybrid_cache, None)? {
+                candle_core::bail!("Qwen3.5 deferred recurrent state cannot be materialized");
+            }
+        }
+        let checkpoint_gdn = speculative_gdn
+            && !transition_gdn
+            && self.supports_recurrent_speculative_checkpoints_with_cache(&hybrid_cache);
+        let gdn_checkpoint_lanes = if checkpoint_gdn { checkpoint_lanes } else { 1 };
+        let store_spec_hidden = self.store_spec_hidden.load(Ordering::Relaxed);
+        let stash_replay = should_stash_gdn_replay(
+            checkpoint_gdn || transition_gdn,
+            store_spec_hidden,
+            query_len,
+            recurrent_metadata
+                .as_ref()
+                .map(|metadata| metadata.batch_kind()),
+            ctx.paged_input_metadata().is_some_and(|meta| {
+                !meta.is_first_prompt_chunk && meta.num_cached_tokens.is_none()
+            }),
+        );
+        let stash_gdn = stash_replay || (transition_gdn && store_spec_hidden);
+        let mut gdn_stash = stash_gdn.then(|| GdnReplayStash {
+            slots: recurrent_metadata
+                .as_ref()
+                .and_then(|meta| meta.state_indices_host())
+                .map(|slots| slots.to_vec())
+                .unwrap_or_default(),
+            layers: Vec::new(),
+        });
+
+        let tap_layers = self
+            .dflash_tap_layers
+            .lock()
+            .expect("dflash taps poisoned")
+            .clone();
+        let capture_taps = self.store_spec_hidden.load(Ordering::Relaxed) && !tap_layers.is_empty();
+        let mut taps_all: Vec<Tensor> = Vec::with_capacity(tap_layers.len());
 
         // Precompute deepstack index tensors once to avoid repeated CPU-GPU syncs
         let deepstack_indices = if let Some(visual_pos_masks) = visual_pos_masks {
@@ -674,8 +1563,12 @@ impl Qwen3_5TextModel {
                 .iter()
                 .enumerate()
                 .filter(|(_, &v)| v > 0.0)
-                .map(|(i, _)| i as u32)
-                .collect();
+                .map(|(i, _)| {
+                    u32::try_from(i).map_err(|_| {
+                        candle_core::Error::msg(format!("visual position index {i} exceeds u32"))
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
             if indices.is_empty() {
                 None
             } else {
@@ -689,74 +1582,223 @@ impl Qwen3_5TextModel {
             None
         };
 
-        for (i, layer) in self.layers.iter().enumerate() {
-            xs = self.mapper.map(xs, i)?;
+        let forward_result = (|| -> Result<Tensor> {
+            let mut normalized_x = None;
+            for (i, layer) in self.layers.iter().enumerate() {
+                xs = self.mapper.map(xs, i)?;
+                if normalized_x
+                    .as_ref()
+                    .is_some_and(|prepared: &PreparedLayerInput| {
+                        !prepared.device().same_device(xs.device())
+                    })
+                {
+                    normalized_x = None;
+                }
 
-            match &self.layer_types[i] {
-                LayerType::FullAttention => {
-                    if let Some(HybridLayerCache::Attention(kv_cache)) = hybrid_cache.get_mut(i) {
-                        xs = layer.forward_attention(
+                let layer_output = match &self.layer_types[i] {
+                    LayerType::FullAttention => {
+                        let Some(HybridLayerCache::Attention(kv_cache)) = hybrid_cache.get_mut(i)
+                        else {
+                            candle_core::bail!(
+                            "Hybrid cache layer {i} is not attention for a full-attention layer."
+                        );
+                        };
+                        layer.forward_attention_output(
                             &xs,
+                            normalized_x.as_ref(),
                             &attention_mask.get(xs.device()),
                             &cos_sin,
-                            kv_cache,
+                            Some(kv_cache),
                             ctx.paged_layer(i),
                             ctx.flash_params(),
-                        )?;
+                        )?
                     }
-                }
-                LayerType::LinearAttention => {
-                    if let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(i) {
+                    LayerType::LinearAttention => {
                         let recurrent_metadata = recurrent_metadata.as_ref().expect(
                             "checked above: linear-attention layers require recurrent metadata",
                         );
-                        let indices = recurrent_metadata.state_indices();
-
-                        let conv_state = pool.gather_conv_state(indices)?;
-                        let recurrent_state = pool.gather_recurrent_state(indices)?;
-
-                        let mut gdn_cache = GdnLayerCache {
-                            conv_state,
-                            recurrent_state,
-                        };
-
-                        xs = layer.forward_linear(
-                            &xs,
-                            &mut gdn_cache,
-                            recurrent_metadata.batch_kind(),
-                        )?;
-
-                        pool.scatter_conv_state_with_host_indices(
-                            indices,
-                            recurrent_metadata.state_indices_host(),
-                            &gdn_cache.conv_state,
-                        )?;
-                        pool.scatter_recurrent_state_with_host_indices(
-                            indices,
-                            recurrent_metadata.state_indices_host(),
-                            &gdn_cache.recurrent_state,
-                        )?;
-                    } else {
-                        candle_core::bail!(
+                        let indices =
+                            hybrid_cache.state_indices_for_layer(i)?.ok_or_else(|| {
+                                candle_core::Error::msg(format!(
+                                    "Hybrid cache layer {i} is missing recurrent state indices"
+                                ))
+                            })?;
+                        let Some(HybridLayerCache::Recurrent(pool)) = hybrid_cache.get_mut(i)
+                        else {
+                            candle_core::bail!(
                             "Hybrid cache layer {i} is not recurrent for a linear-attention layer."
                         );
+                        };
+                        let stash_states = stash_replay
+                            .then_some(())
+                            .as_ref()
+                            .map(|_| {
+                                candle_core::Result::Ok((
+                                    pool.gather_conv_state(&indices)?,
+                                    pool.gather_recurrent_state(&indices)?,
+                                ))
+                            })
+                            .transpose()?;
+
+                        let mut gdn_cache = if packed_layout.is_some() {
+                            GdnLayerCache::gathered(
+                                pool.gather_conv_state(&indices)?,
+                                pool.gather_recurrent_state(&indices)?,
+                                pool.state_layout(),
+                            )
+                        } else {
+                            GdnLayerCache::checkout(
+                                pool,
+                                &indices,
+                                recurrent_metadata.batch_kind(),
+                            )?
+                        };
+
+                        let mut projected_stash = None;
+                        let output = layer.forward_linear_with_stash(LinearForwardContext {
+                            x: &xs,
+                            normalized_x: normalized_x.as_ref(),
+                            cache: &mut gdn_cache,
+                            batch_kind: recurrent_metadata.batch_kind(),
+                            checkpoint_lanes: if transition_gdn {
+                                checkpoint_lanes
+                            } else {
+                                gdn_checkpoint_lanes
+                            },
+                            transition_checkpoints: transition_gdn,
+                            packed_layout: packed_layout.as_ref(),
+                            stash_out: gdn_stash.as_ref().map(|_| &mut projected_stash),
+                        })?;
+                        if let Some(stash) = gdn_stash.as_mut() {
+                            let captured = projected_stash.ok_or_else(|| {
+                                candle_core::Error::msg("GDN forward returned no stash")
+                            })?;
+                            let rollback = match (captured, stash_states) {
+                                (
+                                    GdnSpeculativeStash::Replay(projected),
+                                    Some((conv_state, recurrent_state)),
+                                ) => GdnLayerRollback::Replay {
+                                    projected,
+                                    conv_state,
+                                    recurrent_state,
+                                },
+                                (GdnSpeculativeStash::Transition(transition), None) => {
+                                    GdnLayerRollback::Transition(transition)
+                                }
+                                _ => candle_core::bail!(
+                                    "GDN speculative capture mode does not match cache storage"
+                                ),
+                            };
+                            stash.layers.push(GdnLayerStash {
+                                layer_idx: i,
+                                state_layout: pool.state_layout(),
+                                rollback,
+                            });
+                        }
+
+                        gdn_cache.commit(
+                            pool,
+                            &indices,
+                            recurrent_metadata.state_indices_host(),
+                        )?;
+                        output
+                    }
+                };
+
+                let deepstack = deepstack_indices
+                    .as_ref()
+                    .zip(deepstack_visual_embeds)
+                    .filter(|(_, embeds)| i < embeds.len());
+                if let Some(((idx, idx_expanded), embeds)) = deepstack {
+                    xs =
+                        self.deepstack_process(layer_output.add()?, idx, idx_expanded, &embeds[i])?;
+                    normalized_x = None;
+                } else {
+                    let next_layer = self.layers.get(i + 1);
+                    let next_norm = next_layer
+                        .map(|next| &next.input_layernorm)
+                        .unwrap_or(&self.norm);
+                    if next_norm
+                        .weight()
+                        .device()
+                        .same_device(layer_output.residual.device())
+                    {
+                        let plan = next_layer
+                            .filter(|_| packed_layout.is_none())
+                            .and_then(|next| next.input_quantization_plan(&layer_output.residual));
+                        let (hidden, prepared) = layer_output.add_and_prepare(next_norm, plan)?;
+                        xs = hidden;
+                        normalized_x = Some(prepared);
+                    } else {
+                        xs = layer_output.add()?;
+                        normalized_x = None;
                     }
                 }
-            }
-
-            // Integrate DeepStack visual features when provided
-            if let (Some((idx, idx_expanded)), Some(deepstack)) =
-                (&deepstack_indices, deepstack_visual_embeds)
-            {
-                if i < deepstack.len() {
-                    xs = self.deepstack_process(xs, idx, idx_expanded, &deepstack[i])?;
+                if capture_taps && tap_layers.contains(&i) {
+                    taps_all.push(xs.to_device(&self.device)?);
                 }
             }
-        }
-        let xs = xs.to_device(&self.device)?;
-        let xs = xs.apply(&self.norm)?;
-        let xs = ctx.logits(&xs)?;
-        self.lm_head.forward(&xs)
+            if self.store_spec_hidden.load(Ordering::Relaxed) {
+                *self.gdn_replay_stash.lock().expect("gdn stash poisoned") = gdn_stash;
+            }
+            let xs = match normalized_x {
+                Some(prepared) if prepared.device().same_device(&self.device) => prepared
+                    .dense()
+                    .expect("final normalized model input must remain dense")
+                    .clone(),
+                _ => xs.to_device(&self.device)?.apply(&self.norm)?,
+            };
+            let store_spec = self.store_spec_hidden.load(Ordering::Relaxed);
+            if store_spec {
+                let full_capture = if recurrent_metadata
+                    .as_ref()
+                    .is_some_and(|metadata| metadata.batch_kind() == RecurrentBatchKind::Prefill)
+                {
+                    let positions = position_ids.to_device(&self.device)?;
+                    let positions = match positions.rank() {
+                        2 | 3 => positions,
+                        rank => candle_core::bail!("unexpected Qwen3.5 position rank {rank}"),
+                    };
+                    Some(SpecCapture {
+                        hidden: xs.clone(),
+                        positions,
+                        taps: taps_all.clone(),
+                    })
+                } else {
+                    None
+                };
+                *self
+                    .last_full_capture
+                    .lock()
+                    .expect("spec capture poisoned") = full_capture;
+            }
+            let xs = ctx.logits(&xs)?;
+            if store_spec {
+                let positions = position_ids.to_device(&self.device)?;
+                let positions = match positions.rank() {
+                    2 => ctx.logits(&positions.unsqueeze(D::Minus1)?)?.squeeze(2)?,
+                    3 => {
+                        let positions = positions.permute((1, 2, 0))?.contiguous()?;
+                        ctx.logits(&positions)?.permute((2, 0, 1))?.contiguous()?
+                    }
+                    rank => candle_core::bail!("unexpected Qwen3.5 position rank {rank}"),
+                };
+                let taps = taps_all
+                    .iter()
+                    .map(|t| ctx.logits(t))
+                    .collect::<Result<Vec<_>>>()?;
+                *self
+                    .last_spec_capture
+                    .lock()
+                    .expect("spec capture poisoned") = Some(SpecCapture {
+                    hidden: xs.clone(),
+                    positions,
+                    taps,
+                });
+            }
+            ctx.lm_head(&*self.lm_head, &xs)
+        })();
+        forward_result
     }
 
     fn deepstack_process(
@@ -790,7 +1832,11 @@ impl Qwen3_5TextModel {
 impl IsqModel for Qwen3_5TextModel {
     fn residual_tensors(&self) -> Vec<(String, Tensor)> {
         let uvb = UnVarBuilder::new();
-        let uvb_lm = uvb.pp("model").pp("language_model");
+        let uvb_lm = match self.weight_prefix {
+            TextWeightPrefix::LanguageModelModel => uvb.pp("language_model").pp("model"),
+            TextWeightPrefix::ModelLanguageModel => uvb.pp("model").pp("language_model"),
+            TextWeightPrefix::Model => uvb.pp("model"),
+        };
         uvb_lm.pp("embed_tokens").add(&self.embed_tokens);
         uvb_lm.pp("norm").add(&self.norm);
 
@@ -823,7 +1869,148 @@ impl IsqModel for Qwen3_5TextModel {
                 }
             }
         }
+        if let Some(mtp) = &self.mtp {
+            mtp.residual_tensors(&uvb);
+        }
 
         uvb.to_safetensors()
+    }
+}
+
+impl crate::speculative::SpeculativeTargetMixin for Qwen3_5TextModel {
+    fn supports_recurrent_speculative_checkpoints(&self) -> bool {
+        Qwen3_5TextModel::supports_recurrent_speculative_checkpoints(self)
+    }
+
+    fn supports_recurrent_speculative_transitions(&self) -> bool {
+        Qwen3_5TextModel::supports_recurrent_speculative_transitions(self)
+    }
+
+    fn reserve_recurrent_speculative_transition_storage(&self) -> Result<bool> {
+        self.reserve_recurrent_transition_storage()
+    }
+
+    fn reserve_recurrent_decode_deferred_storage(&self) -> Result<bool> {
+        Qwen3_5TextModel::reserve_recurrent_decode_deferred_storage(self)
+    }
+
+    fn disable_recurrent_decode_deferred_storage(&self) -> Result<bool> {
+        Qwen3_5TextModel::disable_recurrent_decode_deferred_storage(self)
+    }
+
+    fn apply_recurrent_speculative_transitions_for_current_batch(&self) -> Result<bool> {
+        self.apply_current_recurrent_transitions()
+    }
+
+    fn flush_recurrent_state_for_current_batch(&self) -> Result<()> {
+        self.flush_current_recurrent_state()
+    }
+
+    fn flush_recurrent_speculative_transitions(&self, seq_ids: &[usize]) -> Result<()> {
+        self.flush_recurrent_transitions_for_sequences(seq_ids)
+    }
+}
+
+#[cfg(feature = "cuda")]
+const SUPPORTS_CUDA_DECODE_GRAPHS: bool = true;
+
+impl NormalModel for Qwen3_5TextModel {
+    fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
+        let input_embeds = self.embed_tokens(input_ids)?;
+        let attention_mask = if ctx.is_paged() {
+            CausalMasker.make_causal_mask(
+                input_ids,
+                &ForwardMaskCache::Paged(ctx.seqlen_offsets()),
+                self.dtype,
+                &CausalMaskConfig::default(),
+            )?
+        } else {
+            let hybrid_cache = self.cache.hybrid();
+            CausalMasker.make_causal_mask(
+                input_ids,
+                &*hybrid_cache as &dyn PastKvLenCache,
+                self.dtype,
+                &CausalMaskConfig::default(),
+            )?
+        };
+        let attention_mask = if ctx.is_first_prompt_chunk() {
+            attention_mask
+        } else {
+            AttentionMask::None
+        };
+        let (batch_size, seq_len) = input_ids.dims2()?;
+        let text_positions = ctx
+            .text_positions(input_ids.device(), seq_len)?
+            .ok_or_else(|| candle_core::Error::msg("Qwen3.5 is missing text positions"))?
+            .clone();
+        let position_ids = text_positions.reshape((batch_size, seq_len))?;
+        self.forward_embeds(
+            input_embeds,
+            &attention_mask,
+            &position_ids,
+            ctx.seqlen_offsets(),
+            ctx,
+            None,
+            None,
+        )
+    }
+
+    fn xlora_forward(
+        &self,
+        _input_ids: &Tensor,
+        _input_ids_full: &Tensor,
+        _seqlen_offsets: &[usize],
+        _seqlen_offsets_full: &[usize],
+        _no_kv_cache: bool,
+        _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
+        _context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
+        _flash_params: &FlashParams,
+        _flash_params_full: &FlashParams,
+    ) -> Result<Tensor> {
+        candle_core::bail!("Qwen3.5 does not support X-LoRA forward")
+    }
+
+    fn is_xlora(&self) -> bool {
+        false
+    }
+
+    fn device(&self) -> &Device {
+        &self.device
+    }
+
+    fn cache(&self) -> &EitherCache {
+        &self.cache
+    }
+
+    fn max_seq_len(&self) -> usize {
+        self.max_seq_len
+    }
+
+    fn config(&self) -> &ModelConfigMetadata {
+        &self.cfg
+    }
+
+    fn supports_packed_prefill(&self) -> bool {
+        true
+    }
+
+    #[cfg(feature = "cuda")]
+    fn supports_cuda_decode_graphs(&self) -> bool {
+        SUPPORTS_CUDA_DECODE_GRAPHS
+    }
+}
+
+impl AnyMoeBaseModelMixin for Qwen3_5TextModel {}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(feature = "cuda")]
+    use super::SUPPORTS_CUDA_DECODE_GRAPHS;
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn text_architecture_supports_cuda_decode_graphs() {
+        const _: () = assert!(SUPPORTS_CUDA_DECODE_GRAPHS);
     }
 }

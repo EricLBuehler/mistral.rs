@@ -4,14 +4,12 @@ use std::{
     str::FromStr,
 };
 
-use mistralrs_quant::MULTI_LORA_DELIMITER;
-
 use crate::{
     get_toml_selected_model_dtype,
     pipeline::{
         AutoLoaderBuilder, DiffusionLoaderBuilder, GGMLLoaderBuilder, GGMLSpecificConfig,
-        GGUFLoaderBuilder, GGUFSpecificConfig, MultimodalLoaderBuilder, MultimodalSpecificConfig,
-        NormalLoaderBuilder, NormalSpecificConfig,
+        GGUFLoaderBuilder, GGUFSpecificConfig, HfConfigOverrides, MultimodalLoaderBuilder,
+        MultimodalSpecificConfig, NormalLoaderBuilder, NormalSpecificConfig,
     },
     toml_selector::get_toml_selected_model_device_map_params,
     AutoDeviceMapParams, EmbeddingLoaderBuilder, EmbeddingSpecificConfig, Loader, ModelDType,
@@ -25,6 +23,10 @@ pub struct LoaderBuilder {
     no_kv_cache: bool,
     chat_template: Option<String>,
     jinja_explicit: Option<String>,
+    max_model_len: Option<usize>,
+    hf_config_overrides: Option<HfConfigOverrides>,
+    mtp: bool,
+    encoder_cache_memory_bytes: Option<usize>,
 }
 
 impl LoaderBuilder {
@@ -34,7 +36,25 @@ impl LoaderBuilder {
             no_kv_cache: false,
             chat_template: None,
             jinja_explicit: None,
+            max_model_len: None,
+            hf_config_overrides: None,
+            mtp: false,
+            encoder_cache_memory_bytes: None,
         }
+    }
+
+    /// Load the MTP head built into the checkpoint so it can drive speculative decoding.
+    pub fn with_mtp(mut self, mtp: bool) -> Self {
+        self.mtp = mtp;
+        self
+    }
+
+    pub fn with_encoder_cache_memory_bytes(mut self, max_bytes: Option<usize>) -> Self {
+        if let Some(max_bytes) = max_bytes {
+            assert!(max_bytes > 0, "encoder cache memory must be nonzero");
+        }
+        self.encoder_cache_memory_bytes = max_bytes;
+        self
     }
 
     pub fn with_no_kv_cache(mut self, no_kv_cache: bool) -> Self {
@@ -47,6 +67,17 @@ impl LoaderBuilder {
     }
     pub fn with_jinja_explicit(mut self, jinja_explicit: Option<String>) -> Self {
         self.jinja_explicit = jinja_explicit;
+        self
+    }
+    pub fn with_max_model_len(mut self, max_model_len: Option<usize>) -> Self {
+        self.max_model_len = max_model_len;
+        self
+    }
+    pub fn with_hf_config_overrides(
+        mut self,
+        hf_config_overrides: Option<HfConfigOverrides>,
+    ) -> Self {
+        self.hf_config_overrides = hf_config_overrides;
         self
     }
 
@@ -123,22 +154,12 @@ pub fn get_auto_device_map_params(model: &ModelSelected) -> anyhow::Result<AutoD
             max_batch_size,
             ..
         }
-        | ModelSelected::Lora {
-            max_seq_len,
-            max_batch_size,
-            ..
-        }
         | ModelSelected::XLora {
             max_seq_len,
             max_batch_size,
             ..
         }
         | ModelSelected::GGML {
-            max_seq_len,
-            max_batch_size,
-            ..
-        }
-        | ModelSelected::GGUF {
             max_seq_len,
             max_batch_size,
             ..
@@ -166,6 +187,56 @@ pub fn get_auto_device_map_params(model: &ModelSelected) -> anyhow::Result<AutoD
             max_seq_len: *max_seq_len,
             max_batch_size: *max_batch_size,
         }),
+        ModelSelected::GGUF {
+            mmproj_filename,
+            max_seq_len,
+            max_batch_size,
+            max_image_length,
+            max_num_images,
+            ..
+        } => {
+            if mmproj_filename.is_some() {
+                let max_image_length =
+                    max_image_length.unwrap_or(AutoDeviceMapParams::DEFAULT_MAX_IMAGE_LENGTH);
+                Ok(AutoDeviceMapParams::Multimodal {
+                    max_seq_len: *max_seq_len,
+                    max_batch_size: *max_batch_size,
+                    max_image_shape: (max_image_length, max_image_length),
+                    max_num_images: max_num_images
+                        .unwrap_or(AutoDeviceMapParams::DEFAULT_MAX_NUM_IMAGES),
+                })
+            } else {
+                Ok(AutoDeviceMapParams::Text {
+                    max_seq_len: *max_seq_len,
+                    max_batch_size: *max_batch_size,
+                })
+            }
+        }
+        ModelSelected::Lora {
+            arch,
+            max_seq_len,
+            max_batch_size,
+            max_image_length,
+            max_num_images,
+            ..
+        } => {
+            if arch.is_none() && (max_num_images.is_some() || max_image_length.is_some()) {
+                let max_image_length =
+                    max_image_length.unwrap_or(AutoDeviceMapParams::DEFAULT_MAX_IMAGE_LENGTH);
+                Ok(AutoDeviceMapParams::Multimodal {
+                    max_seq_len: *max_seq_len,
+                    max_batch_size: *max_batch_size,
+                    max_image_shape: (max_image_length, max_image_length),
+                    max_num_images: max_num_images
+                        .unwrap_or(AutoDeviceMapParams::DEFAULT_MAX_NUM_IMAGES),
+                })
+            } else {
+                Ok(AutoDeviceMapParams::Text {
+                    max_seq_len: *max_seq_len,
+                    max_batch_size: *max_batch_size,
+                })
+            }
+        }
         ModelSelected::Run {
             max_seq_len,
             max_batch_size,
@@ -219,6 +290,45 @@ pub fn get_auto_device_map_params(model: &ModelSelected) -> anyhow::Result<AutoD
 }
 
 fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loader>> {
+    if args.mtp
+        && matches!(
+            &args.model,
+            ModelSelected::GGUF { .. }
+                | ModelSelected::LoraGGUF { .. }
+                | ModelSelected::XLoraGGUF { .. }
+                | ModelSelected::GGML { .. }
+                | ModelSelected::LoraGGML { .. }
+                | ModelSelected::XLoraGGML { .. }
+        )
+    {
+        anyhow::bail!("Built-in MTP is not supported for GGUF or GGML models. Use a safetensors checkpoint with --isq and --mtp, or omit --mtp.");
+    }
+    if args.max_model_len == Some(0) {
+        anyhow::bail!("max_model_len must be greater than zero");
+    }
+    let supports_hf_config_overrides = matches!(
+        &args.model,
+        ModelSelected::Plain { .. }
+            | ModelSelected::Run { .. }
+            | ModelSelected::Lora { .. }
+            | ModelSelected::XLora { .. }
+            | ModelSelected::MultimodalPlain { .. }
+            | ModelSelected::Toml { .. }
+    );
+    if args.hf_config_overrides.is_some() && !supports_hf_config_overrides {
+        anyhow::bail!("HF config overrides are supported only for text and multimodal models");
+    }
+    let supports_max_model_len = supports_hf_config_overrides
+        || matches!(
+            &args.model,
+            ModelSelected::GGUF { .. }
+                | ModelSelected::LoraGGUF { .. }
+                | ModelSelected::XLoraGGUF { .. }
+        );
+    if args.max_model_len.is_some() && !supports_max_model_len {
+        anyhow::bail!("max_model_len is not supported by this model format");
+    }
+
     let loader: Box<dyn Loader> = match args.model {
         ModelSelected::Toml { file } => {
             let selector: TomlSelector = toml::from_str(
@@ -229,6 +339,9 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 chat_template: args.chat_template,
                 no_kv_cache: args.no_kv_cache,
                 jinja_explicit: args.jinja_explicit,
+                encoder_cache_memory_bytes: args.encoder_cache_memory_bytes,
+                max_model_len: args.max_model_len,
+                hf_config_overrides: args.hf_config_overrides,
             };
             (selector, args).try_into()?
         }
@@ -262,6 +375,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 imatrix,
                 calibration_file,
                 hf_cache_path,
+                hf_config_overrides: args.hf_config_overrides.clone(),
+                max_model_len: args.max_model_len,
                 matformer_config_path,
                 matformer_slice_name,
             },
@@ -271,6 +386,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             args.no_kv_cache,
             args.jinja_explicit,
         )
+        .with_mtp(args.mtp)
         .build(arch)?,
         ModelSelected::Run {
             model_id,
@@ -305,6 +421,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                     imatrix: imatrix.clone(),
                     calibration_file: calibration_file.clone(),
                     hf_cache_path: hf_cache_path.clone(),
+                    hf_config_overrides: args.hf_config_overrides.clone(),
+                    max_model_len: args.max_model_len,
                     matformer_config_path: matformer_config_path.clone(),
                     matformer_slice_name: matformer_slice_name.clone(),
                 },
@@ -318,6 +436,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                             .collect::<Vec<_>>()
                     }),
                     max_edge,
+                    max_model_len: args.max_model_len,
+                    hf_config_overrides: args.hf_config_overrides.clone(),
                     calibration_file: calibration_file.clone(),
                     imatrix: imatrix.clone(),
                     hf_cache_path: hf_cache_path.clone(),
@@ -349,7 +469,10 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             } else {
                 builder
             };
-            builder.build()
+            builder
+                .with_mtp(args.mtp)
+                .with_encoder_cache_memory_bytes(args.encoder_cache_memory_bytes)
+                .build()
         }
         ModelSelected::MultimodalPlain {
             model_id,
@@ -381,6 +504,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                         .collect::<Vec<_>>()
                 }),
                 max_edge,
+                max_model_len: args.max_model_len,
+                hf_config_overrides: args.hf_config_overrides.clone(),
                 calibration_file,
                 imatrix,
                 hf_cache_path,
@@ -393,6 +518,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             Some(model_id),
             args.jinja_explicit,
         )
+        .with_mtp(args.mtp)
+        .with_encoder_cache_memory_bytes(args.encoder_cache_memory_bytes)
         .build(arch),
         ModelSelected::DiffusionPlain {
             model_id,
@@ -438,6 +565,8 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 imatrix: None,
                 calibration_file: None,
                 hf_cache_path,
+                hf_config_overrides: args.hf_config_overrides.clone(),
+                max_model_len: args.max_model_len,
                 matformer_config_path: None,
                 matformer_slice_name: None,
             },
@@ -460,66 +589,157 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
         ModelSelected::Lora {
             model_id,
             tokenizer_json,
-            adapter_model_id,
+            adapters,
+            runtime_config,
             arch,
             dtype: _,
             topology,
+            organization,
             write_uqff,
             from_uqff,
+            imatrix,
+            calibration_file,
+            max_edge,
             max_seq_len: _,
             max_batch_size: _,
+            max_num_images: _,
+            max_image_length: _,
             hf_cache_path,
-        } => NormalLoaderBuilder::new(
-            NormalSpecificConfig {
-                topology: Topology::from_option_path(topology)?,
-                organization: Default::default(),
-                write_uqff,
-                from_uqff: from_uqff.map(|x| {
-                    x.split(UQFF_MULTI_FILE_DELIMITER)
-                        .map(PathBuf::from_str)
-                        .map(|x| x.unwrap())
-                        .collect::<Vec<_>>()
-                }),
-                imatrix: None,
-                calibration_file: None,
-                hf_cache_path,
-                matformer_config_path: None,
-                matformer_slice_name: None,
-            },
-            args.chat_template,
-            tokenizer_json,
-            model_id,
-            args.no_kv_cache,
-            args.jinja_explicit,
-        )
-        .with_lora(
-            adapter_model_id
-                .split(MULTI_LORA_DELIMITER)
-                .map(ToString::to_string)
-                .collect(),
-        )
-        .build(arch)?,
+            matformer_config_path,
+            matformer_slice_name,
+        } => {
+            let topology = Topology::from_option_path(topology)?;
+            let from_uqff = from_uqff.map(|x| {
+                x.split(UQFF_MULTI_FILE_DELIMITER)
+                    .map(PathBuf::from_str)
+                    .map(|x| x.unwrap())
+                    .collect::<Vec<_>>()
+            });
+            let normal_config = NormalSpecificConfig {
+                topology: topology.clone(),
+                organization: organization.unwrap_or_default(),
+                write_uqff: write_uqff.clone(),
+                from_uqff: from_uqff.clone(),
+                imatrix: imatrix.clone(),
+                calibration_file: calibration_file.clone(),
+                hf_cache_path: hf_cache_path.clone(),
+                hf_config_overrides: args.hf_config_overrides.clone(),
+                max_model_len: args.max_model_len,
+                matformer_config_path: matformer_config_path.clone(),
+                matformer_slice_name: matformer_slice_name.clone(),
+            };
+            if let Some(arch) = arch {
+                NormalLoaderBuilder::new(
+                    normal_config,
+                    args.chat_template,
+                    tokenizer_json,
+                    Some(model_id),
+                    args.no_kv_cache,
+                    args.jinja_explicit,
+                )
+                .with_lora(adapters, runtime_config)
+                .build(Some(arch))?
+            } else {
+                let builder = AutoLoaderBuilder::new(
+                    normal_config,
+                    MultimodalSpecificConfig {
+                        topology: topology.clone(),
+                        write_uqff: write_uqff.clone(),
+                        from_uqff: from_uqff.clone(),
+                        max_edge,
+                        max_model_len: args.max_model_len,
+                        hf_config_overrides: args.hf_config_overrides.clone(),
+                        imatrix: imatrix.clone(),
+                        calibration_file: calibration_file.clone(),
+                        hf_cache_path: hf_cache_path.clone(),
+                        matformer_config_path: matformer_config_path.clone(),
+                        matformer_slice_name,
+                        organization: organization.unwrap_or_default(),
+                    },
+                    EmbeddingSpecificConfig {
+                        topology,
+                        write_uqff,
+                        from_uqff,
+                        imatrix,
+                        calibration_file,
+                        hf_cache_path: hf_cache_path.clone(),
+                    },
+                    args.chat_template,
+                    tokenizer_json,
+                    model_id,
+                    args.no_kv_cache,
+                    args.jinja_explicit,
+                )
+                .with_lora(adapters, runtime_config);
+                if let Some(path) = hf_cache_path {
+                    builder.hf_cache_path(path).build()
+                } else {
+                    builder.build()
+                }
+            }
+        }
         ModelSelected::GGUF {
             tok_model_id,
             quantized_model_id,
             quantized_filename,
+            tokenizer_json,
+            mmproj_filename,
+            lora_adapters,
+            lora_runtime_config,
             topology,
+            organization,
+            write_uqff,
+            imatrix,
+            calibration_file,
+            max_edge,
+            hf_cache_path,
+            matformer_config_path,
+            matformer_slice_name,
             ..
-        } => GGUFLoaderBuilder::new(
-            args.chat_template,
-            tok_model_id,
-            quantized_model_id,
-            quantized_filename
-                .split(GGUF_MULTI_FILE_DELIMITER)
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>(),
-            GGUFSpecificConfig {
-                topology: Topology::from_option_path(topology)?,
-            },
-            args.no_kv_cache,
-            args.jinja_explicit,
-        )
-        .build(),
+        } => {
+            if lora_runtime_config.is_none() && !lora_adapters.is_empty() {
+                anyhow::bail!("GGUF LoRA adapters require a dynamic LoRA runtime configuration");
+            }
+            let mut builder = GGUFLoaderBuilder::new(
+                args.chat_template,
+                tok_model_id,
+                quantized_model_id,
+                quantized_filename
+                    .split(GGUF_MULTI_FILE_DELIMITER)
+                    .map(ToOwned::to_owned)
+                    .collect::<Vec<_>>(),
+                GGUFSpecificConfig {
+                    topology: Topology::from_option_path(topology)?,
+                    organization: organization.unwrap_or_default(),
+                    write_uqff,
+                    imatrix,
+                    calibration_file,
+                    max_edge,
+                    max_model_len: args.max_model_len,
+                    hf_cache_path,
+                    matformer_config_path,
+                    matformer_slice_name,
+                },
+                args.no_kv_cache,
+                args.jinja_explicit,
+            )
+            .with_encoder_cache_memory_bytes(args.encoder_cache_memory_bytes);
+            if let Some(mmproj_filename) = mmproj_filename {
+                builder = builder.with_mmproj_files(
+                    mmproj_filename
+                        .split(GGUF_MULTI_FILE_DELIMITER)
+                        .map(ToOwned::to_owned)
+                        .collect(),
+                );
+            }
+            if let Some(tokenizer_json) = tokenizer_json {
+                builder = builder.with_tokenizer_json(tokenizer_json);
+            }
+            if let Some(runtime_config) = lora_runtime_config {
+                builder = builder.with_dynamic_lora(lora_adapters, runtime_config);
+            }
+            builder.build()
+        }
         ModelSelected::XLoraGGUF {
             tok_model_id,
             quantized_model_id,
@@ -539,10 +759,12 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 .collect::<Vec<_>>(),
             GGUFSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
+                ..Default::default()
             },
             args.no_kv_cache,
             args.jinja_explicit,
         )
+        .with_encoder_cache_memory_bytes(args.encoder_cache_memory_bytes)
         .with_xlora(
             xlora_model_id,
             serde_json::from_reader(
@@ -571,10 +793,12 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 .collect::<Vec<_>>(),
             GGUFSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
+                ..Default::default()
             },
             args.no_kv_cache,
             args.jinja_explicit,
         )
+        .with_encoder_cache_memory_bytes(args.encoder_cache_memory_bytes)
         .with_lora(
             adapters_model_id,
             serde_json::from_reader(
@@ -704,4 +928,29 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
         }
     };
     Ok(loader)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gguf_builtin_mtp_fails_before_loading_weights() -> anyhow::Result<()> {
+        let selected: ModelSelected = serde_json::from_value(serde_json::json!({
+            "GGUF": {
+                "quantized_model_id": "missing-model",
+                "quantized_filename": "missing.gguf",
+                "dtype": "auto",
+                "max_seq_len": 4096,
+                "max_batch_size": 1
+            }
+        }))?;
+        let error = LoaderBuilder::new(selected)
+            .with_mtp(true)
+            .build()
+            .err()
+            .expect("GGUF cannot load a built-in MTP head");
+        assert!(error.to_string().contains("Built-in MTP is not supported"));
+        Ok(())
+    }
 }

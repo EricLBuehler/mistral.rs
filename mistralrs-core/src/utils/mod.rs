@@ -45,6 +45,27 @@ macro_rules! handle_seq_error {
 
 #[doc(hidden)]
 #[macro_export]
+macro_rules! handle_request_error {
+    ($fallible:expr, $response:expr) => {
+        match $fallible {
+            Ok(v) => v,
+            Err(e) => {
+                use $crate::response::Response;
+                if $response
+                    .send(Response::ValidationError(e.into()))
+                    .await
+                    .is_err()
+                {
+                    tracing::warn!("Receiver disconnected");
+                }
+                return;
+            }
+        }
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
 macro_rules! handle_seq_error_ok {
     ($fallible:expr, $response:expr) => {
         match $fallible {
@@ -106,7 +127,11 @@ macro_rules! handle_pipeline_forward_error {
                         );
                         {
                             let p = get_mut_arcmutex!($pipeline);
-                            p.set_none_cache($seq_slice, true, true, false);
+                            if let Err(reset_err) =
+                                p.set_none_cache($seq_slice, true, true, false)
+                            {
+                                tracing::error!("Failed to reset model cache: {reset_err}");
+                            }
                         }
                         get_mut_arcmutex!($prefix_cacher).evict_all_caches().unwrap();
                         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -139,6 +164,7 @@ macro_rules! handle_pipeline_forward_error {
                     if seq.get_mut_group().is_chat {
                         let choice = Choice {
                             finish_reason: "error".to_string(),
+                            stop_sequence: None,
                             index: seq.get_response_index(),
                             message: ResponseMessage {
                                 content: Some(res),
@@ -172,6 +198,9 @@ macro_rules! handle_pipeline_forward_error {
                             system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                             object: "chat.completion".to_string(),
                             usage: group.get_usage(),
+                            adapter_generation: seq
+                                .adapter_generation()
+                                .map(|generation| generation.to_string()),
                             agentic_tool_calls: None,
                             files: None,
                             session_id: None,
@@ -199,6 +228,9 @@ macro_rules! handle_pipeline_forward_error {
                             system_fingerprint: SYSTEM_FINGERPRINT.to_string(),
                             object: "text_completion".to_string(),
                             usage: group.get_usage(),
+                            adapter_generation: seq
+                                .adapter_generation()
+                                .map(|generation| generation.to_string()),
                         };
 
                         if let Err(send_err) = seq.responder()
@@ -225,7 +257,9 @@ macro_rules! handle_pipeline_forward_error {
                 // Also reset non granular state because:
                 // - The sequence is gone
                 // - We should reset the state then, including draft.
-                p.set_none_cache($seq_slice, true, true, false);
+                if let Err(reset_err) = p.set_none_cache($seq_slice, true, true, false) {
+                    tracing::error!("Failed to reset model cache: {reset_err}");
+                }
                 get_mut_arcmutex!($prefix_cacher).evict_all_caches().unwrap();
 
                 continue $label;

@@ -13,8 +13,8 @@ use std::{
 
 use anyhow::Result;
 use axum::{
-    extract::{Json, Path, State},
-    http::{self, StatusCode},
+    extract::{rejection::JsonRejection, Json, Path, State},
+    http::StatusCode,
     response::{
         sse::{Event, KeepAlive, KeepAliveStream},
         IntoResponse, Sse,
@@ -38,25 +38,28 @@ use crate::{
     background_tasks::get_background_task_manager,
     cached_responses::get_response_cache,
     chat_completion::{parse_request as parse_chat_request, ChatCompletionParseContext},
-    completion_core::{handle_completion_error, BaseCompletionResponder},
-    handler_core::{
-        create_response_channel, send_request_with_model, BaseJsonModelError, ErrorToResponse,
-        JsonError, ModelErrorMessage,
+    completion_core::{
+        handle_completion_error, handle_completion_validation_error, BaseCompletionResponder,
     },
+    handler_core::{
+        create_response_channel, openai_error_from_error, openai_error_response,
+        send_request_with_model, ApiError, ApiErrorKind, ModelErrorMessage,
+    },
+    lora_adapters::resolve_lora_adapter_model,
     openai::{
-        ChatCompletionRequest, Message, MessageContent, OpenAiTool, OpenAiToolSurface, ToolCall,
+        AdapterSelection, ChatCompletionRequest, Message, MessageContent, OpenAiNamespaceEntry,
+        OpenAiTool, OpenAiToolSurface, ToolCall,
     },
     responses_types::{
         content::{Annotation, OutputContent},
         enums::{ItemStatus, ResponseStatus},
         events::StreamingState,
         items::{InputItem, MessageContentParam, OutputItem, ShellCallOutputPart},
-        resource::{ResponseError, ResponseResource, ResponseUsage},
+        resource::{InputTokensDetails, ResponseError, ResponseResource, ResponseUsage},
     },
     skills::SkillStore,
-    streaming::{get_keep_alive_interval, DoneState},
+    streaming::{get_keep_alive_interval, observe_response, DoneState, StreamOutcomeHandle},
     types::{ExtractedMistralRsState, OnDoneCallback, SharedMistralRsState},
-    util::sanitize_error_message,
 };
 
 /// Input type for OpenResponses API requests
@@ -116,6 +119,9 @@ impl OpenResponsesInput {
         }
     }
 }
+
+const TEXT_PART_JOINER: &str = "\n\n";
+const SYSTEM_ROLE: &str = "system";
 
 /// Convert InputItem types to legacy Message format.
 ///
@@ -232,19 +238,17 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
 
                         if content_parts.is_empty() {
                             None
-                        } else if !has_non_text_content && content_parts.len() == 1 {
-                            // Optimization: if only one text part, use simple text format
-                            // Extract text from the first part
-                            let first = &content_parts[0];
-                            if let Some(text_value) = first.get("text") {
-                                if let Either::Left(text) = &**text_value {
-                                    Some(MessageContent::from_text(text.clone()))
-                                } else {
-                                    Some(MessageContent::from_parts(content_parts))
-                                }
-                            } else {
-                                Some(MessageContent::from_parts(content_parts))
-                            }
+                        } else if !has_non_text_content {
+                            // Text-only parts collapse to plain text so any role can carry them
+                            let text = content_parts
+                                .iter()
+                                .filter_map(|part| match part.get("text").map(|v| &**v) {
+                                    Some(Either::Left(text)) => Some(text.as_str()),
+                                    _ => None,
+                                })
+                                .collect::<Vec<_>>()
+                                .join(TEXT_PART_JOINER);
+                            Some(MessageContent::from_text(text))
                         } else {
                             Some(MessageContent::from_parts(content_parts))
                         }
@@ -257,6 +261,7 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
                     name: msg_param.name,
                     tool_calls: None,
                     tool_call_id: None,
+                    reasoning_content: None,
                 });
             }
             TaggedInputItem::ItemReference { id: _ } => {
@@ -266,9 +271,14 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
             TaggedInputItem::FunctionCall {
                 call_id,
                 name,
+                namespace,
                 arguments,
             } => {
-                // Convert to assistant message with tool_calls
+                // Rejoin so history matches the flattened name the model emitted
+                let name = match namespace {
+                    Some(ns) => format!("{ns}.{name}"),
+                    None => name,
+                };
                 messages.push(Message {
                     content: None,
                     role: "assistant".to_string(),
@@ -279,8 +289,10 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
                         function: crate::openai::FunctionCalled { name, arguments },
                     }]),
                     tool_call_id: None,
+                    reasoning_content: None,
                 });
             }
+            TaggedInputItem::Reasoning { .. } => {}
             TaggedInputItem::FunctionCallOutput { call_id, output } => {
                 // Convert to tool message
                 messages.push(Message {
@@ -289,6 +301,7 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
                     name: None,
                     tool_calls: None,
                     tool_call_id: Some(call_id),
+                    reasoning_content: None,
                 });
             }
         }
@@ -300,10 +313,10 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
 /// Reasoning configuration for models that support extended thinking
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct ReasoningConfig {
-    /// Effort level for reasoning (low, medium, high)
+    /// Effort level for reasoning (off, low, medium, high, xhigh). "none" aliases "off".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub effort: Option<crate::responses_types::enums::ReasoningEffort>,
-    /// Whether to generate a summary of reasoning
+    /// Accepted for compatibility; currently does not change the response.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<ReasoningSummary>,
 }
@@ -394,6 +407,25 @@ pub struct RequestContext {
     pub background: Option<bool>,
 }
 
+impl RequestContext {
+    /// Split a flattened `<namespace>.<name>` back into the fields Codex-style clients route on.
+    fn split_tool_name(&self, called: &str) -> (String, Option<String>) {
+        for tool in self.tools.iter().flatten() {
+            let OpenAiTool::Namespace(namespace) = tool else {
+                continue;
+            };
+            for entry in &namespace.tools {
+                if let OpenAiNamespaceEntry::Function(f) = entry {
+                    if namespace.qualified_name(&f.name) == called {
+                        return (f.name.clone(), Some(namespace.name.clone()));
+                    }
+                }
+            }
+        }
+        (called.to_string(), None)
+    }
+}
+
 /// Include options for response content.
 ///
 /// This enum specifies additional content to include in the response.
@@ -452,6 +484,10 @@ pub struct OpenResponsesCreateRequest {
     #[serde(default = "default_model")]
     pub model: String,
 
+    /// Adapter alias or exact generation to activate for this request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adapter: Option<AdapterSelection>,
+
     /// The input for the response - can be a string or array of input items
     pub input: OpenResponsesInput,
 
@@ -503,6 +539,14 @@ pub struct OpenResponsesCreateRequest {
     /// Top-p (nucleus) sampling parameter (0-1)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub top_p: Option<f64>,
+
+    /// Continue generation past EOS until another stop condition is met
+    #[serde(default)]
+    pub ignore_eos: bool,
+
+    /// Seed for deterministic request-scoped sampling
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub seed: Option<u64>,
 
     /// Presence penalty (-2.0 to 2.0)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -625,7 +669,7 @@ fn default_1usize() -> usize {
 }
 
 /// OpenResponses streaming event format
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 #[serde(tag = "type")]
 pub enum OpenResponsesStreamEvent {
     /// Response created event
@@ -694,6 +738,24 @@ pub enum OpenResponsesStreamEvent {
         call_id: String,
         arguments: String,
     },
+    /// Reasoning text delta
+    #[serde(rename = "response.reasoning_text.delta")]
+    ReasoningTextDelta {
+        sequence_number: u64,
+        item_id: String,
+        output_index: usize,
+        content_index: usize,
+        delta: String,
+    },
+    /// Reasoning text done
+    #[serde(rename = "response.reasoning_text.done")]
+    ReasoningTextDone {
+        sequence_number: u64,
+        item_id: String,
+        output_index: usize,
+        content_index: usize,
+        text: String,
+    },
     /// Response completed event
     #[serde(rename = "response.completed")]
     ResponseCompleted {
@@ -716,8 +778,61 @@ pub enum OpenResponsesStreamEvent {
     #[serde(rename = "error")]
     Error {
         sequence_number: u64,
-        error: ResponseError,
+        code: String,
+        message: String,
+        param: Option<String>,
     },
+}
+
+fn api_error_code(error: &ApiError) -> String {
+    error.code.clone().unwrap_or_else(|| match error.kind {
+        ApiErrorKind::InvalidRequest => "invalid_request".to_string(),
+        ApiErrorKind::NotFound => "not_found".to_string(),
+        ApiErrorKind::Conflict => "conflict".to_string(),
+        ApiErrorKind::PayloadTooLarge => "request_body_too_large".to_string(),
+        ApiErrorKind::UnsupportedMediaType => "invalid_content_type".to_string(),
+        ApiErrorKind::RateLimited => "rate_limit_exceeded".to_string(),
+        ApiErrorKind::Unavailable | ApiErrorKind::Overloaded => "service_unavailable".to_string(),
+        ApiErrorKind::Internal => "internal_error".to_string(),
+    })
+}
+
+fn response_error_from_api_error(error: ApiError) -> ResponseError {
+    let code = api_error_code(&error);
+    ResponseError::new(code, error.message)
+}
+
+fn unsupported_background_stream_error() -> ApiError {
+    ApiError::new(
+        ApiErrorKind::InvalidRequest,
+        "`background: true` with `stream: true` is not supported by this server.",
+        Some("unsupported_parameter_combination"),
+        Some("background,stream"),
+    )
+}
+
+fn stream_error_from_api_error(sequence_number: u64, error: ApiError) -> OpenResponsesStreamEvent {
+    OpenResponsesStreamEvent::Error {
+        sequence_number,
+        code: api_error_code(&error),
+        message: error.message,
+        param: error.param,
+    }
+}
+
+fn classify_api_error(
+    state: &SharedMistralRsState,
+    error: &(dyn std::error::Error + 'static),
+    fallback: ApiErrorKind,
+) -> ApiError {
+    let api_error = ApiError::from_error(error, fallback);
+    if matches!(
+        api_error.kind,
+        ApiErrorKind::Internal | ApiErrorKind::Unavailable | ApiErrorKind::Overloaded
+    ) {
+        MistralRs::maybe_log_error(state.clone(), error);
+    }
+    api_error
 }
 
 #[derive(Clone)]
@@ -727,6 +842,37 @@ struct PendingShellCall {
 }
 
 type PendingShellCalls = HashMap<(usize, String), PendingShellCall>;
+
+#[derive(Clone)]
+struct MessageOutputItemState {
+    id: String,
+}
+
+impl MessageOutputItemState {
+    fn new() -> Self {
+        Self {
+            id: format!("msg_{}", Uuid::new_v4()),
+        }
+    }
+
+    fn added_item(&self) -> OutputItem {
+        OutputItem::message(self.id.clone(), vec![], ItemStatus::InProgress)
+    }
+
+    fn item_with_text(
+        &self,
+        text: String,
+        response_id: &str,
+        files: &[mistralrs_core::File],
+        status: ItemStatus,
+    ) -> OutputItem {
+        OutputItem::message(
+            self.id.clone(),
+            vec![output_text_with_file_annotations(text, response_id, files)],
+            status,
+        )
+    }
+}
 
 fn shell_output_parts(data: &AgenticToolCallData) -> Option<Vec<ShellCallOutputPart>> {
     let AgenticToolCallData::Shell {
@@ -842,6 +988,9 @@ pub struct OpenResponsesStreamer {
     content_part_added: bool,
     /// Whether output item has been added
     output_item_added: bool,
+    reasoning_item_id: String,
+    reasoning_item_added: bool,
+    reasoning_item_done: bool,
     /// Store flag
     store: bool,
     /// Conversation history for storage
@@ -852,9 +1001,12 @@ pub struct OpenResponsesStreamer {
     events: Vec<OpenResponsesStreamEvent>,
     /// Request context for echoing back request parameters
     request_context: RequestContext,
+    message_output_item: MessageOutputItemState,
     shell_output_items: Vec<OutputItem>,
+    function_call_items: Vec<OutputItem>,
     pending_shell_calls: PendingShellCalls,
     files: Vec<mistralrs_core::File>,
+    outcome: Option<StreamOutcomeHandle>,
 }
 
 impl OpenResponsesStreamer {
@@ -869,6 +1021,7 @@ impl OpenResponsesStreamer {
         store: bool,
         conversation_history: Option<Vec<Message>>,
         request_context: RequestContext,
+        outcome: Option<StreamOutcomeHandle>,
     ) -> Self {
         let created_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -886,15 +1039,55 @@ impl OpenResponsesStreamer {
             accumulated_reasoning: String::new(),
             content_part_added: false,
             output_item_added: false,
+            reasoning_item_id: format!("rs_{}", Uuid::new_v4()),
+            reasoning_item_added: false,
+            reasoning_item_done: false,
             store,
             conversation_history,
             on_done: None,
             events: Vec::new(),
             request_context,
+            message_output_item: MessageOutputItemState::new(),
             shell_output_items: Vec::new(),
+            function_call_items: Vec::new(),
             pending_shell_calls: HashMap::new(),
             files: Vec::new(),
+            outcome,
         }
+    }
+
+    fn reasoning_output_index(&self) -> usize {
+        self.shell_output_items.len()
+    }
+
+    fn message_output_index(&self) -> usize {
+        self.shell_output_items.len() + usize::from(self.reasoning_item_added)
+    }
+
+    fn finish_reasoning_item(&mut self, events: &mut Vec<OpenResponsesStreamEvent>) {
+        if !self.reasoning_item_added || self.reasoning_item_done {
+            return;
+        }
+        self.reasoning_item_done = true;
+        let output_index = self.reasoning_output_index();
+        let seq = self.streaming_state.next_sequence_number();
+        events.push(OpenResponsesStreamEvent::ReasoningTextDone {
+            sequence_number: seq,
+            item_id: self.reasoning_item_id.clone(),
+            output_index,
+            content_index: 0,
+            text: self.accumulated_reasoning.clone(),
+        });
+        let seq = self.streaming_state.next_sequence_number();
+        events.push(OpenResponsesStreamEvent::OutputItemDone {
+            sequence_number: seq,
+            output_index,
+            item: OutputItem::reasoning(
+                self.reasoning_item_id.clone(),
+                self.accumulated_reasoning.clone(),
+                ItemStatus::Completed,
+            ),
+        });
     }
 
     /// Build initial response resource
@@ -929,17 +1122,25 @@ impl OpenResponsesStreamer {
     fn build_current_response(&self, status: ResponseStatus) -> ResponseResource {
         let mut resource = self.build_response_resource(status);
         resource.output.extend(self.shell_output_items.clone());
+        if self.reasoning_item_added {
+            resource.output.push(OutputItem::reasoning(
+                self.reasoning_item_id.clone(),
+                self.accumulated_reasoning.clone(),
+                if self.reasoning_item_done {
+                    ItemStatus::Completed
+                } else {
+                    ItemStatus::InProgress
+                },
+            ));
+        }
+        resource.output.extend(self.function_call_items.clone());
 
         // Build output items from accumulated state
         if !self.accumulated_text.is_empty() {
-            let content = vec![output_text_with_file_annotations(
+            let item = self.message_output_item.item_with_text(
                 self.accumulated_text.clone(),
                 &self.streaming_state.response_id,
                 &self.files,
-            )];
-            let item = OutputItem::message(
-                format!("msg_{}", Uuid::new_v4()),
-                content,
                 if status == ResponseStatus::Completed {
                     ItemStatus::Completed
                 } else {
@@ -999,6 +1200,8 @@ impl futures::Stream for OpenResponsesStreamer {
                                 name: None,
                                 tool_calls: None,
                                 tool_call_id: None,
+                                reasoning_content: (!self.accumulated_reasoning.is_empty())
+                                    .then(|| self.accumulated_reasoning.clone()),
                             });
                         }
 
@@ -1033,103 +1236,214 @@ impl futures::Stream for OpenResponsesStreamer {
         }
 
         match self.rx.poll_recv(cx) {
-            Poll::Ready(Some(resp)) => match resp {
-                Response::ModelError(msg, _) => {
-                    MistralRs::maybe_log_error(
-                        self.state.clone(),
-                        &ModelErrorMessage(msg.to_string()),
-                    );
+            Poll::Ready(Some(resp)) => {
+                observe_response(&self.outcome, &resp);
+                match resp {
+                    Response::ModelError(msg, _) => {
+                        MistralRs::maybe_log_error(
+                            self.state.clone(),
+                            &ModelErrorMessage(msg.to_string()),
+                        );
 
-                    let seq = self.streaming_state.next_sequence_number();
-                    let mut response = self.build_current_response(ResponseStatus::Failed);
-                    response.error = Some(ResponseError::new("model_error", msg.to_string()));
-
-                    let event = OpenResponsesStreamEvent::ResponseFailed {
-                        sequence_number: seq,
-                        response,
-                    };
-
-                    self.done_state = DoneState::SendingDone;
-                    self.events.push(event.clone());
-                    Poll::Ready(Some(
-                        Event::default().event("response.failed").json_data(event),
-                    ))
-                }
-                Response::ValidationError(e) => {
-                    let seq = self.streaming_state.next_sequence_number();
-                    let event = OpenResponsesStreamEvent::Error {
-                        sequence_number: seq,
-                        error: ResponseError::new(
-                            "validation_error",
-                            sanitize_error_message(e.as_ref()),
-                        ),
-                    };
-                    self.done_state = DoneState::SendingDone;
-                    self.events.push(event.clone());
-                    Poll::Ready(Some(Event::default().event("error").json_data(event)))
-                }
-                Response::InternalError(e) => {
-                    MistralRs::maybe_log_error(self.state.clone(), &*e);
-                    let seq = self.streaming_state.next_sequence_number();
-                    let event = OpenResponsesStreamEvent::Error {
-                        sequence_number: seq,
-                        error: ResponseError::new(
-                            "internal_error",
-                            sanitize_error_message(e.as_ref()),
-                        ),
-                    };
-                    self.done_state = DoneState::SendingDone;
-                    self.events.push(event.clone());
-                    Poll::Ready(Some(Event::default().event("error").json_data(event)))
-                }
-                Response::Chunk(chat_chunk) => {
-                    let mut events_to_emit = Vec::new();
-
-                    // Emit response.in_progress if not sent
-                    if !self.streaming_state.in_progress_sent {
-                        self.streaming_state.in_progress_sent = true;
                         let seq = self.streaming_state.next_sequence_number();
-                        let response = self.build_response_resource(ResponseStatus::InProgress);
-                        events_to_emit.push(OpenResponsesStreamEvent::ResponseInProgress {
+                        let mut response = self.build_current_response(ResponseStatus::Failed);
+                        response.error =
+                            Some(response_error_from_api_error(ApiError::model_error()));
+
+                        let event = OpenResponsesStreamEvent::ResponseFailed {
                             sequence_number: seq,
                             response,
-                        });
+                        };
+
+                        self.done_state = DoneState::SendingDone;
+                        self.events.push(event.clone());
+                        Poll::Ready(Some(
+                            Event::default().event("response.failed").json_data(event),
+                        ))
                     }
+                    Response::ValidationError(e) => {
+                        let seq = self.streaming_state.next_sequence_number();
+                        let error = classify_api_error(
+                            &self.state,
+                            e.as_ref(),
+                            ApiErrorKind::InvalidRequest,
+                        );
+                        let event = stream_error_from_api_error(seq, error);
+                        self.done_state = DoneState::SendingDone;
+                        self.events.push(event.clone());
+                        Poll::Ready(Some(Event::default().event("error").json_data(event)))
+                    }
+                    Response::InternalError(e) => {
+                        let seq = self.streaming_state.next_sequence_number();
+                        let error =
+                            classify_api_error(&self.state, e.as_ref(), ApiErrorKind::Internal);
+                        let event = stream_error_from_api_error(seq, error);
+                        self.done_state = DoneState::SendingDone;
+                        self.events.push(event.clone());
+                        Poll::Ready(Some(Event::default().event("error").json_data(event)))
+                    }
+                    Response::Chunk(chat_chunk) => {
+                        let mut events_to_emit = Vec::new();
 
-                    // Check if all choices are finished
-                    let all_finished = chat_chunk.choices.iter().all(|c| c.finish_reason.is_some());
-                    let message_output_index = self.shell_output_items.len();
-
-                    for choice in &chat_chunk.choices {
-                        // Handle reasoning content
-                        if let Some(reasoning) = &choice.delta.reasoning_content {
-                            self.accumulated_reasoning.push_str(reasoning);
+                        // Emit response.in_progress if not sent
+                        if !self.streaming_state.in_progress_sent {
+                            self.streaming_state.in_progress_sent = true;
+                            let seq = self.streaming_state.next_sequence_number();
+                            let response = self.build_response_resource(ResponseStatus::InProgress);
+                            events_to_emit.push(OpenResponsesStreamEvent::ResponseInProgress {
+                                sequence_number: seq,
+                                response,
+                            });
                         }
 
-                        // Handle text content
-                        if let Some(content) = &choice.delta.content {
-                            // Emit output_item.added if not done
-                            if !self.output_item_added {
-                                self.output_item_added = true;
+                        // Check if all choices are finished
+                        let all_finished =
+                            chat_chunk.choices.iter().all(|c| c.finish_reason.is_some());
+
+                        for choice in &chat_chunk.choices {
+                            if let Some(reasoning) = &choice.delta.reasoning_content {
+                                let output_index = self.reasoning_output_index();
+                                if !self.reasoning_item_added {
+                                    self.reasoning_item_added = true;
+                                    let seq = self.streaming_state.next_sequence_number();
+                                    events_to_emit.push(
+                                        OpenResponsesStreamEvent::OutputItemAdded {
+                                            sequence_number: seq,
+                                            output_index,
+                                            item: OutputItem::reasoning(
+                                                self.reasoning_item_id.clone(),
+                                                String::new(),
+                                                ItemStatus::InProgress,
+                                            ),
+                                        },
+                                    );
+                                }
+                                self.accumulated_reasoning.push_str(reasoning);
                                 let seq = self.streaming_state.next_sequence_number();
-                                let item = OutputItem::message(
-                                    format!("msg_{}", Uuid::new_v4()),
-                                    vec![],
-                                    ItemStatus::InProgress,
-                                );
-                                events_to_emit.push(OpenResponsesStreamEvent::OutputItemAdded {
+                                events_to_emit.push(OpenResponsesStreamEvent::ReasoningTextDelta {
                                     sequence_number: seq,
-                                    output_index: message_output_index,
-                                    item,
+                                    item_id: self.reasoning_item_id.clone(),
+                                    output_index,
+                                    content_index: 0,
+                                    delta: reasoning.clone(),
                                 });
                             }
 
-                            // Emit content_part.added if not done
-                            if !self.content_part_added {
-                                self.content_part_added = true;
+                            if choice.delta.content.is_some() || choice.delta.tool_calls.is_some() {
+                                self.finish_reasoning_item(&mut events_to_emit);
+                            }
+                            let message_output_index = self.message_output_index();
+
+                            // Handle text content
+                            if let Some(content) = &choice.delta.content {
+                                // Emit output_item.added if not done
+                                if !self.output_item_added {
+                                    self.output_item_added = true;
+                                    let seq = self.streaming_state.next_sequence_number();
+                                    let item = self.message_output_item.added_item();
+                                    events_to_emit.push(
+                                        OpenResponsesStreamEvent::OutputItemAdded {
+                                            sequence_number: seq,
+                                            output_index: message_output_index,
+                                            item,
+                                        },
+                                    );
+                                }
+
+                                // Emit content_part.added if not done
+                                if !self.content_part_added {
+                                    self.content_part_added = true;
+                                    let seq = self.streaming_state.next_sequence_number();
+                                    let part = OutputContent::text(String::new());
+                                    events_to_emit.push(
+                                        OpenResponsesStreamEvent::ContentPartAdded {
+                                            sequence_number: seq,
+                                            output_index: message_output_index,
+                                            content_index: 0,
+                                            part,
+                                        },
+                                    );
+                                }
+
+                                // Accumulate text
+                                self.accumulated_text.push_str(content);
+
+                                // Emit text delta
                                 let seq = self.streaming_state.next_sequence_number();
-                                let part = OutputContent::text(String::new());
-                                events_to_emit.push(OpenResponsesStreamEvent::ContentPartAdded {
+                                events_to_emit.push(OpenResponsesStreamEvent::OutputTextDelta {
+                                    sequence_number: seq,
+                                    output_index: message_output_index,
+                                    content_index: 0,
+                                    delta: content.clone(),
+                                });
+                            }
+
+                            // Tool calls arrive fully parsed, so each one is a complete output item
+                            if let Some(tool_calls) = &choice.delta.tool_calls {
+                                for tool_call in tool_calls {
+                                    let output_index =
+                                        message_output_index + 1 + self.function_call_items.len();
+                                    let (name, namespace) = self
+                                        .request_context
+                                        .split_tool_name(&tool_call.function.name);
+                                    let item = OutputItem::function_call(
+                                        format!("fc_{}", Uuid::new_v4()),
+                                        tool_call.id.clone(),
+                                        name,
+                                        namespace,
+                                        tool_call.function.arguments.clone(),
+                                        ItemStatus::Completed,
+                                    );
+                                    let seq = self.streaming_state.next_sequence_number();
+                                    events_to_emit.push(
+                                        OpenResponsesStreamEvent::OutputItemAdded {
+                                            sequence_number: seq,
+                                            output_index,
+                                            item: item.clone(),
+                                        },
+                                    );
+                                    let seq = self.streaming_state.next_sequence_number();
+                                    events_to_emit.push(
+                                        OpenResponsesStreamEvent::FunctionCallArgumentsDelta {
+                                            sequence_number: seq,
+                                            output_index,
+                                            call_id: tool_call.id.clone(),
+                                            delta: tool_call.function.arguments.clone(),
+                                        },
+                                    );
+                                    let seq = self.streaming_state.next_sequence_number();
+                                    events_to_emit.push(
+                                        OpenResponsesStreamEvent::FunctionCallArgumentsDone {
+                                            sequence_number: seq,
+                                            output_index,
+                                            call_id: tool_call.id.clone(),
+                                            arguments: tool_call.function.arguments.clone(),
+                                        },
+                                    );
+                                    let seq = self.streaming_state.next_sequence_number();
+                                    events_to_emit.push(OpenResponsesStreamEvent::OutputItemDone {
+                                        sequence_number: seq,
+                                        output_index,
+                                        item: item.clone(),
+                                    });
+                                    self.function_call_items.push(item);
+                                }
+                            }
+                        }
+
+                        // If all finished, emit completion events
+                        if all_finished {
+                            self.finish_reasoning_item(&mut events_to_emit);
+                            let message_output_index = self.message_output_index();
+                            // Emit content_part.done
+                            if self.content_part_added {
+                                let seq = self.streaming_state.next_sequence_number();
+                                let part = output_text_with_file_annotations(
+                                    self.accumulated_text.clone(),
+                                    &self.streaming_state.response_id,
+                                    &self.files,
+                                );
+                                events_to_emit.push(OpenResponsesStreamEvent::ContentPartDone {
                                     sequence_number: seq,
                                     output_index: message_output_index,
                                     content_index: 0,
@@ -1137,204 +1451,175 @@ impl futures::Stream for OpenResponsesStreamer {
                                 });
                             }
 
-                            // Accumulate text
-                            self.accumulated_text.push_str(content);
+                            // Emit output_item.done
+                            if self.output_item_added {
+                                let seq = self.streaming_state.next_sequence_number();
+                                let item = self.message_output_item.item_with_text(
+                                    self.accumulated_text.clone(),
+                                    &self.streaming_state.response_id,
+                                    &self.files,
+                                    ItemStatus::Completed,
+                                );
+                                events_to_emit.push(OpenResponsesStreamEvent::OutputItemDone {
+                                    sequence_number: seq,
+                                    output_index: message_output_index,
+                                    item,
+                                });
+                            }
 
-                            // Emit text delta
+                            // Emit response.completed
                             let seq = self.streaming_state.next_sequence_number();
-                            events_to_emit.push(OpenResponsesStreamEvent::OutputTextDelta {
+                            let mut response =
+                                self.build_current_response(ResponseStatus::Completed);
+                            response.adapter_generation = chat_chunk.adapter_generation.clone();
+                            response.completed_at = Some(
+                                SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_secs(),
+                            );
+
+                            // Add usage from chunk if available
+                            if let Some(usage) = &chat_chunk.usage {
+                                let mut resp_usage = ResponseUsage::new(
+                                    usage.prompt_tokens,
+                                    usage.completion_tokens,
+                                );
+                                if let Some(details) = &usage.prompt_tokens_details {
+                                    resp_usage.input_tokens_details = Some(InputTokensDetails {
+                                        cached_tokens: Some(details.cached_tokens),
+                                        ..Default::default()
+                                    });
+                                }
+                                response.usage = Some(resp_usage);
+                            }
+
+                            events_to_emit.push(OpenResponsesStreamEvent::ResponseCompleted {
                                 sequence_number: seq,
-                                output_index: message_output_index,
-                                content_index: 0,
-                                delta: content.clone(),
+                                response,
                             });
+
+                            self.done_state = DoneState::SendingDone;
                         }
 
-                        // Handle tool calls
-                        if let Some(tool_calls) = &choice.delta.tool_calls {
-                            for tool_call in tool_calls {
-                                // Emit function call arguments delta
-                                let seq = self.streaming_state.next_sequence_number();
-                                events_to_emit.push(
-                                    OpenResponsesStreamEvent::FunctionCallArgumentsDelta {
-                                        sequence_number: seq,
-                                        output_index: message_output_index,
-                                        call_id: tool_call.id.clone(),
-                                        delta: tool_call.function.arguments.clone(),
-                                    },
-                                );
-                            }
+                        MistralRs::maybe_log_response(self.state.clone(), &chat_chunk);
+
+                        // Return first event, queue the rest
+                        if !events_to_emit.is_empty() {
+                            let first_event = events_to_emit.remove(0);
+                            self.pending_events.extend(events_to_emit);
+                            self.events.push(first_event.clone());
+                            Poll::Ready(Some(
+                                Event::default()
+                                    .event(get_event_type(&first_event))
+                                    .json_data(first_event),
+                            ))
+                        } else {
+                            // Chunk consumed without producing an event; re-poll immediately
+                            cx.waker().wake_by_ref();
+                            Poll::Pending
                         }
                     }
-
-                    // If all finished, emit completion events
-                    if all_finished {
-                        // Emit content_part.done
-                        if self.content_part_added {
-                            let seq = self.streaming_state.next_sequence_number();
-                            let part = output_text_with_file_annotations(
-                                self.accumulated_text.clone(),
-                                &self.streaming_state.response_id,
-                                &self.files,
-                            );
-                            events_to_emit.push(OpenResponsesStreamEvent::ContentPartDone {
-                                sequence_number: seq,
-                                output_index: message_output_index,
-                                content_index: 0,
-                                part,
-                            });
-                        }
-
-                        // Emit output_item.done
-                        if self.output_item_added {
-                            let seq = self.streaming_state.next_sequence_number();
-                            let content = vec![output_text_with_file_annotations(
-                                self.accumulated_text.clone(),
-                                &self.streaming_state.response_id,
-                                &self.files,
-                            )];
-                            let item = OutputItem::message(
-                                format!("msg_{}", Uuid::new_v4()),
-                                content,
-                                ItemStatus::Completed,
-                            );
-                            events_to_emit.push(OpenResponsesStreamEvent::OutputItemDone {
-                                sequence_number: seq,
-                                output_index: message_output_index,
-                                item,
-                            });
-                        }
-
-                        // Emit response.completed
+                    Response::Done(chat_resp) => {
+                        // Handle non-streaming completion through chunk path
+                        // This shouldn't normally happen in streaming mode
                         let seq = self.streaming_state.next_sequence_number();
-                        let mut response = self.build_current_response(ResponseStatus::Completed);
-                        response.completed_at = Some(
-                            SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .unwrap()
-                                .as_secs(),
+                        let response = chat_response_to_response_resource(
+                            &chat_resp,
+                            self.streaming_state.response_id.clone(),
+                            self.streaming_state.model.clone(),
+                            self.metadata.clone(),
+                            &self.request_context,
+                            &self.shell_output_items,
+                            &self.files,
                         );
-
-                        // Add usage from chunk if available
-                        if let Some(usage) = &chat_chunk.usage {
-                            response.usage = Some(ResponseUsage::new(
-                                usage.prompt_tokens,
-                                usage.completion_tokens,
-                            ));
-                        }
-
-                        events_to_emit.push(OpenResponsesStreamEvent::ResponseCompleted {
+                        let event = OpenResponsesStreamEvent::ResponseCompleted {
                             sequence_number: seq,
                             response,
-                        });
-
+                        };
                         self.done_state = DoneState::SendingDone;
-                    }
-
-                    MistralRs::maybe_log_response(self.state.clone(), &chat_chunk);
-
-                    // Return first event, queue the rest
-                    if !events_to_emit.is_empty() {
-                        let first_event = events_to_emit.remove(0);
-                        self.pending_events.extend(events_to_emit);
-                        self.events.push(first_event.clone());
+                        self.events.push(event.clone());
                         Poll::Ready(Some(
                             Event::default()
-                                .event(get_event_type(&first_event))
-                                .json_data(first_event),
+                                .event("response.completed")
+                                .json_data(event),
                         ))
-                    } else {
+                    }
+                    Response::AgenticToolCallProgress {
+                        round,
+                        tool_name,
+                        phase,
+                    } => {
+                        let mut pending_shell_calls = std::mem::take(&mut self.pending_shell_calls);
+                        let mut shell_output_items = std::mem::take(&mut self.shell_output_items);
+                        let shell_items = record_shell_progress_items(
+                            &mut pending_shell_calls,
+                            &mut shell_output_items,
+                            round,
+                            &tool_name,
+                            &phase,
+                        );
+                        self.pending_shell_calls = pending_shell_calls;
+                        self.shell_output_items = shell_output_items;
+                        if let Some(items) = shell_items {
+                            let base_index =
+                                self.shell_output_items.len().saturating_sub(items.len());
+                            let mut events = Vec::new();
+                            for (idx, item) in items.into_iter().enumerate() {
+                                let output_index = base_index + idx;
+                                let seq = self.streaming_state.next_sequence_number();
+                                events.push(OpenResponsesStreamEvent::OutputItemAdded {
+                                    sequence_number: seq,
+                                    output_index,
+                                    item: item.clone(),
+                                });
+                                let seq = self.streaming_state.next_sequence_number();
+                                events.push(OpenResponsesStreamEvent::OutputItemDone {
+                                    sequence_number: seq,
+                                    output_index,
+                                    item,
+                                });
+                            }
+                            let first = events.remove(0);
+                            self.pending_events.extend(events);
+                            self.events.push(first.clone());
+                            Poll::Ready(Some(
+                                Event::default()
+                                    .event(get_event_type(&first))
+                                    .json_data(first),
+                            ))
+                        } else {
+                            Poll::Ready(Some(
+                                Event::default()
+                                    .event("agentic_tool_call_progress")
+                                    .json_data(crate::chat_completion::serialize_agentic_progress(
+                                        round, &tool_name, &phase,
+                                    )),
+                            ))
+                        }
+                    }
+                    Response::File(file) => {
+                        self.files.push(file.clone());
+                        Poll::Ready(Some(
+                            Event::default().event("file_produced").json_data(file),
+                        ))
+                    }
+                    _ => {
+                        cx.waker().wake_by_ref();
                         Poll::Pending
                     }
                 }
-                Response::Done(chat_resp) => {
-                    // Handle non-streaming completion through chunk path
-                    // This shouldn't normally happen in streaming mode
-                    let seq = self.streaming_state.next_sequence_number();
-                    let response = chat_response_to_response_resource(
-                        &chat_resp,
-                        self.streaming_state.response_id.clone(),
-                        self.metadata.clone(),
-                        &self.request_context,
-                        &self.shell_output_items,
-                        &self.files,
-                    );
-                    let event = OpenResponsesStreamEvent::ResponseCompleted {
-                        sequence_number: seq,
-                        response,
-                    };
-                    self.done_state = DoneState::SendingDone;
-                    self.events.push(event.clone());
-                    Poll::Ready(Some(
-                        Event::default()
-                            .event("response.completed")
-                            .json_data(event),
-                    ))
-                }
-                Response::AgenticToolCallProgress {
-                    round,
-                    tool_name,
-                    phase,
-                } => {
-                    let mut pending_shell_calls = std::mem::take(&mut self.pending_shell_calls);
-                    let mut shell_output_items = std::mem::take(&mut self.shell_output_items);
-                    let shell_items = record_shell_progress_items(
-                        &mut pending_shell_calls,
-                        &mut shell_output_items,
-                        round,
-                        &tool_name,
-                        &phase,
-                    );
-                    self.pending_shell_calls = pending_shell_calls;
-                    self.shell_output_items = shell_output_items;
-                    if let Some(items) = shell_items {
-                        let base_index = self.shell_output_items.len().saturating_sub(items.len());
-                        let mut events = Vec::new();
-                        for (idx, item) in items.into_iter().enumerate() {
-                            let output_index = base_index + idx;
-                            let seq = self.streaming_state.next_sequence_number();
-                            events.push(OpenResponsesStreamEvent::OutputItemAdded {
-                                sequence_number: seq,
-                                output_index,
-                                item: item.clone(),
-                            });
-                            let seq = self.streaming_state.next_sequence_number();
-                            events.push(OpenResponsesStreamEvent::OutputItemDone {
-                                sequence_number: seq,
-                                output_index,
-                                item,
-                            });
-                        }
-                        let first = events.remove(0);
-                        self.pending_events.extend(events);
-                        self.events.push(first.clone());
-                        Poll::Ready(Some(
-                            Event::default()
-                                .event(get_event_type(&first))
-                                .json_data(first),
-                        ))
-                    } else {
-                        Poll::Ready(Some(
-                            Event::default()
-                                .event("agentic_tool_call_progress")
-                                .json_data(crate::chat_completion::serialize_agentic_progress(
-                                    round, &tool_name, &phase,
-                                )),
-                        ))
-                    }
-                }
-                Response::File(file) => {
-                    self.files.push(file.clone());
-                    Poll::Ready(Some(
-                        Event::default().event("file_produced").json_data(file),
-                    ))
-                }
-                _ => {
-                    cx.waker().wake_by_ref();
-                    Poll::Pending
-                }
-            },
-            Poll::Ready(None) => Poll::Ready(None),
+            }
+            Poll::Ready(None) => {
+                let channel_error = anyhow::anyhow!("Response channel closed before completion.");
+                let api_error =
+                    classify_api_error(&self.state, channel_error.as_ref(), ApiErrorKind::Internal);
+                let seq = self.streaming_state.next_sequence_number();
+                let event = stream_error_from_api_error(seq, api_error);
+                self.done_state = DoneState::SendingDone;
+                self.events.push(event.clone());
+                Poll::Ready(Some(Event::default().event("error").json_data(event)))
+            }
             Poll::Pending => Poll::Pending,
         }
     }
@@ -1356,6 +1641,8 @@ fn get_event_type(event: &OpenResponsesStreamEvent) -> &'static str {
         OpenResponsesStreamEvent::FunctionCallArgumentsDone { .. } => {
             "response.function_call_arguments.done"
         }
+        OpenResponsesStreamEvent::ReasoningTextDelta { .. } => "response.reasoning_text.delta",
+        OpenResponsesStreamEvent::ReasoningTextDone { .. } => "response.reasoning_text.done",
         OpenResponsesStreamEvent::ResponseCompleted { .. } => "response.completed",
         OpenResponsesStreamEvent::ResponseFailed { .. } => "response.failed",
         OpenResponsesStreamEvent::ResponseIncomplete { .. } => "response.incomplete",
@@ -1367,24 +1654,20 @@ fn get_event_type(event: &OpenResponsesStreamEvent) -> &'static str {
 pub type OpenResponsesResponder =
     BaseCompletionResponder<ResponseResource, KeepAliveStream<OpenResponsesStreamer>>;
 
-type JsonModelError = BaseJsonModelError<ResponseResource>;
-impl ErrorToResponse for JsonModelError {}
-
 impl IntoResponse for OpenResponsesResponder {
     fn into_response(self) -> axum::response::Response {
         match self {
             OpenResponsesResponder::Sse(s) => s.into_response(),
             OpenResponsesResponder::Json(s) => Json(s).into_response(),
             OpenResponsesResponder::InternalError(e) => {
-                JsonError::new(sanitize_error_message(e.as_ref()))
-                    .to_response(http::StatusCode::INTERNAL_SERVER_ERROR)
+                openai_error_from_error(e.as_ref(), ApiErrorKind::Internal)
             }
             OpenResponsesResponder::ValidationError(e) => {
-                JsonError::new(sanitize_error_message(e.as_ref()))
-                    .to_response(http::StatusCode::UNPROCESSABLE_ENTITY)
+                openai_error_from_error(e.as_ref(), ApiErrorKind::InvalidRequest)
             }
-            OpenResponsesResponder::ModelError(msg, response) => JsonModelError::new(msg, response)
-                .to_response(http::StatusCode::INTERNAL_SERVER_ERROR),
+            OpenResponsesResponder::ModelError(_, _) => {
+                openai_error_response(ApiError::model_error())
+            }
         }
     }
 }
@@ -1439,14 +1722,15 @@ fn output_text_with_file_annotations(
 fn chat_response_to_response_resource(
     chat_resp: &ChatCompletionResponse,
     request_id: String,
+    model: String,
     metadata: Option<Value>,
     request_ctx: &RequestContext,
     shell_output_items: &[OutputItem],
     files: &[mistralrs_core::File],
 ) -> ResponseResource {
     let created_at = chat_resp.created;
-    let mut resource =
-        ResponseResource::new(request_id.clone(), chat_resp.model.clone(), created_at);
+    let mut resource = ResponseResource::new(request_id.clone(), model, created_at);
+    resource.adapter_generation = chat_resp.adapter_generation.clone();
 
     let mut output_items = shell_output_items.to_vec();
     let mut output_text_parts = Vec::new();
@@ -1468,15 +1752,22 @@ fn chat_response_to_response_resource(
         // Handle reasoning content
         if let Some(reasoning) = &choice.message.reasoning_content {
             reasoning_parts.push(reasoning.clone());
+            output_items.push(OutputItem::reasoning(
+                format!("rs_{}", Uuid::new_v4()),
+                reasoning.clone(),
+                ItemStatus::Completed,
+            ));
         }
 
         // Handle tool calls - convert to function_call output items
         if let Some(tool_calls) = &choice.message.tool_calls {
             for tool_call in tool_calls {
+                let (name, namespace) = request_ctx.split_tool_name(&tool_call.function.name);
                 let item = OutputItem::function_call(
                     format!("fc_{}", Uuid::new_v4()),
                     tool_call.id.clone(),
-                    tool_call.function.name.clone(),
+                    name,
+                    namespace,
                     tool_call.function.arguments.clone(),
                     ItemStatus::Completed,
                 );
@@ -1507,10 +1798,17 @@ fn chat_response_to_response_resource(
     } else {
         Some(reasoning_parts.join(""))
     };
-    resource.usage = Some(ResponseUsage::new(
+    let mut resp_usage = ResponseUsage::new(
         chat_resp.usage.prompt_tokens,
         chat_resp.usage.completion_tokens,
-    ));
+    );
+    if let Some(details) = &chat_resp.usage.prompt_tokens_details {
+        resp_usage.input_tokens_details = Some(InputTokensDetails {
+            cached_tokens: Some(details.cached_tokens),
+            ..Default::default()
+        });
+    }
+    resource.usage = Some(resp_usage);
     resource.metadata = metadata;
     resource.completed_at = Some(
         SystemTime::now()
@@ -1550,16 +1848,7 @@ async fn parse_openresponses_request(
     IncludeConfig,
     RequestContext,
 )> {
-    // Validate unsupported parameters
-    // parallel_tool_calls: only `true` (default) or `None` is supported
-    if let Some(false) = oairequest.parallel_tool_calls {
-        anyhow::bail!(
-            "parallel_tool_calls=false is not supported. \
-             mistral.rs does not currently support disabling parallel tool calls."
-        );
-    }
-
-    // max_tool_calls: only `None` (unlimited) is supported
+    // parallel_tool_calls=false is accepted best-effort; max_tool_calls has no engine support
     if oairequest.max_tool_calls.is_some() {
         anyhow::bail!(
             "max_tool_calls is not supported. \
@@ -1595,7 +1884,22 @@ async fn parse_openresponses_request(
     // If previous_response_id is provided, get the full conversation history from cache
     let previous_messages = if let Some(prev_id) = &oairequest.previous_response_id {
         let cache = get_response_cache();
-        cache.get_conversation_history(prev_id)?
+        match cache.get_conversation_history(prev_id) {
+            Ok(Some(messages)) => Some(messages),
+            Ok(None) => {
+                return Err(ApiError::new(
+                    ApiErrorKind::NotFound,
+                    format!("Previous response with ID '{prev_id}' was not found."),
+                    Some("previous_response_not_found"),
+                    Some("previous_response_id"),
+                )
+                .into());
+            }
+            Err(error) => {
+                MistralRs::maybe_log_error(state.clone(), error.as_ref());
+                return Err(ApiError::internal().into());
+            }
+        }
     } else {
         None
     };
@@ -1603,24 +1907,10 @@ async fn parse_openresponses_request(
     // Get messages from input field
     let messages = oairequest.input.into_either();
 
-    // Build system message from instructions if provided
     let mut final_messages = Vec::new();
-    if let Some(instructions) = &oairequest.instructions {
-        final_messages.push(Message {
-            content: Some(MessageContent::from_text(instructions.clone())),
-            role: "system".to_string(),
-            name: None,
-            tool_calls: None,
-            tool_call_id: None,
-        });
-    }
-
-    // Add previous messages if available
     if let Some(prev_msgs) = previous_messages {
         final_messages.extend(prev_msgs);
     }
-
-    // Add current messages
     match messages {
         Either::Left(msgs) => final_messages.extend(msgs),
         Either::Right(prompt) => {
@@ -1630,26 +1920,32 @@ async fn parse_openresponses_request(
                 name: None,
                 tool_calls: None,
                 tool_call_id: None,
+                reasoning_content: None,
             });
         }
     }
 
-    // Extract reasoning configuration
-    let (enable_thinking, reasoning_effort) = if let Some(ref reasoning) = oairequest.reasoning {
-        let effort = reasoning.effort.map(|e| match e {
-            crate::responses_types::enums::ReasoningEffort::None => "none".to_string(),
-            crate::responses_types::enums::ReasoningEffort::Low => "low".to_string(),
-            crate::responses_types::enums::ReasoningEffort::Medium => "medium".to_string(),
-            crate::responses_types::enums::ReasoningEffort::High => "high".to_string(),
-        });
-        // Enable thinking if reasoning is configured with any effort level
-        let thinking = reasoning
-            .effort
-            .map(|e| !matches!(e, crate::responses_types::enums::ReasoningEffort::None));
-        (thinking, effort)
-    } else {
-        (None, None)
-    };
+    if let Some(instructions) = oairequest.instructions.clone() {
+        final_messages.insert(
+            0,
+            Message {
+                content: Some(MessageContent::from_text(instructions)),
+                role: SYSTEM_ROLE.to_string(),
+                name: None,
+                tool_calls: None,
+                tool_call_id: None,
+                reasoning_content: None,
+            },
+        );
+    }
+
+    let reasoning_effort = oairequest
+        .reasoning
+        .as_ref()
+        .and_then(|reasoning| reasoning.effort);
+    mistralrs_core::resolve_reasoning_controls(None, reasoning_effort)?;
+    let reasoning_effort = reasoning_effort.map(|effort| effort.as_str().to_string());
+    let enable_thinking = None;
 
     // Convert truncation enum to truncate_sequence bool
     let truncate_sequence = oairequest
@@ -1680,6 +1976,7 @@ async fn parse_openresponses_request(
     let chat_request = ChatCompletionRequest {
         messages: Either::Left(final_messages.clone()),
         model: oairequest.model,
+        adapter: oairequest.adapter,
         logit_bias: oairequest.logit_bias,
         logprobs: oairequest.logprobs,
         top_logprobs: oairequest.top_logprobs,
@@ -1689,6 +1986,8 @@ async fn parse_openresponses_request(
         frequency_penalty: oairequest.frequency_penalty,
         repetition_penalty: oairequest.repetition_penalty,
         stop_seqs: oairequest.stop_seqs,
+        ignore_eos: oairequest.ignore_eos,
+        seed: oairequest.seed,
         temperature: oairequest.temperature,
         top_p: oairequest.top_p,
         stream: oairequest.stream,
@@ -1712,6 +2011,7 @@ async fn parse_openresponses_request(
         enable_thinking,
         truncate_sequence,
         reasoning_effort,
+        chat_template_kwargs: None,
         files: oairequest.files,
     };
 
@@ -1743,14 +2043,42 @@ async fn parse_openresponses_request(
     tag = "Mistral.rs",
     path = "/v1/responses",
     request_body = OpenResponsesCreateRequest,
-    responses((status = 200, description = "Response created"))
+    responses((
+        status = 200,
+        description = "Response resource or server-sent response events",
+        content(
+            (ResponseResource = "application/json"),
+            (OpenResponsesStreamEvent = "text/event-stream")
+        )
+    ))
 )]
 pub async fn create_response(
     State(state): ExtractedMistralRsState,
     Extension(skill_store): Extension<Arc<SkillStore>>,
-    Json(oairequest): Json<OpenResponsesCreateRequest>,
+    stream_outcome: Option<Extension<StreamOutcomeHandle>>,
+    payload: std::result::Result<Json<OpenResponsesCreateRequest>, JsonRejection>,
 ) -> OpenResponsesResponder {
+    let Json(mut oairequest) = match payload {
+        Ok(request) => request,
+        Err(error) => {
+            return OpenResponsesResponder::ValidationError(Box::new(
+                ApiError::from_json_rejection(error),
+            ));
+        }
+    };
+    if oairequest.background == Some(true) && oairequest.stream == Some(true) {
+        return OpenResponsesResponder::ValidationError(Box::new(
+            unsupported_background_stream_error(),
+        ));
+    }
+
     let (tx, rx) = create_response_channel(None);
+    let requested_model = oairequest.model.clone();
+    if let Err(error) =
+        resolve_lora_adapter_model(&state, &mut oairequest.model, &mut oairequest.adapter)
+    {
+        return OpenResponsesResponder::ValidationError(Box::new(error));
+    }
     let request_id = format!("resp_{}", Uuid::new_v4());
     let metadata = oairequest.metadata.clone();
     let store = oairequest.store.unwrap_or(true);
@@ -1763,7 +2091,15 @@ pub async fn create_response(
         Some(oairequest.model.clone())
     };
 
-    let model_name = oairequest.model.clone();
+    let model_name = requested_model;
+
+    let (request, is_streaming, conversation_history, _include_config, request_context) =
+        match parse_openresponses_request(oairequest, state.clone(), tx, skill_store).await {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                return handle_completion_validation_error(state, error.into());
+            }
+        };
 
     // Handle background processing
     if background {
@@ -1773,7 +2109,7 @@ pub async fn create_response(
         // Return immediately with queued response
         let response = ResponseResource::new(
             task_id.clone(),
-            model_name,
+            model_name.clone(),
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
@@ -1784,36 +2120,17 @@ pub async fn create_response(
 
         // Spawn background task
         let state_clone = state.clone();
-        let skill_store_clone = Arc::clone(&skill_store);
         let metadata_clone = metadata.clone();
         tokio::spawn(async move {
-            let (bg_tx, mut bg_rx) = create_response_channel(None);
-
-            let (request, _, conversation_history, _include_config, request_context) =
-                match parse_openresponses_request(
-                    oairequest,
-                    state_clone.clone(),
-                    bg_tx,
-                    skill_store_clone,
-                )
-                .await
-                {
-                    Ok(x) => x,
-                    Err(e) => {
-                        task_manager.mark_failed(
-                            &task_id,
-                            ResponseError::new("parse_error", e.to_string()),
-                        );
-                        return;
-                    }
-                };
+            let mut rx = rx;
 
             task_manager.mark_in_progress(&task_id);
 
             if let Err(e) =
                 send_request_with_model(&state_clone, request, model_id.as_deref()).await
             {
-                task_manager.mark_failed(&task_id, ResponseError::new("send_error", e.to_string()));
+                let error = classify_api_error(&state_clone, &e, ApiErrorKind::Internal);
+                task_manager.mark_failed(&task_id, response_error_from_api_error(error));
                 return;
             }
 
@@ -1822,7 +2139,7 @@ pub async fn create_response(
             let mut pending_shell_calls = HashMap::new();
             let mut files = Vec::new();
             let response = loop {
-                match bg_rx.recv().await {
+                match rx.recv().await {
                     Some(Response::AgenticToolCallProgress {
                         round,
                         tool_name,
@@ -1851,6 +2168,7 @@ pub async fn create_response(
                     let response = chat_response_to_response_resource(
                         &chat_resp,
                         task_id.clone(),
+                        model_name.clone(),
                         metadata_clone,
                         &request_context,
                         &shell_output_items,
@@ -1871,6 +2189,7 @@ pub async fn create_response(
                                         name: None,
                                         tool_calls: None,
                                         tool_call_id: None,
+                                        reasoning_content: choice.message.reasoning_content.clone(),
                                     });
                                 }
                             }
@@ -1881,25 +2200,26 @@ pub async fn create_response(
                     task_manager.mark_completed(&task_id, response);
                 }
                 Some(Response::ModelError(msg, _partial_resp)) => {
-                    task_manager
-                        .mark_failed(&task_id, ResponseError::new("model_error", msg.to_string()));
+                    MistralRs::maybe_log_error(state_clone, &ModelErrorMessage(msg.to_string()));
+                    task_manager.mark_failed(
+                        &task_id,
+                        response_error_from_api_error(ApiError::model_error()),
+                    );
                 }
                 Some(Response::ValidationError(e)) => {
-                    task_manager.mark_failed(
-                        &task_id,
-                        ResponseError::new("validation_error", e.to_string()),
-                    );
+                    let error =
+                        classify_api_error(&state_clone, e.as_ref(), ApiErrorKind::InvalidRequest);
+                    task_manager.mark_failed(&task_id, response_error_from_api_error(error));
                 }
                 Some(Response::InternalError(e)) => {
-                    task_manager.mark_failed(
-                        &task_id,
-                        ResponseError::new("internal_error", e.to_string()),
-                    );
+                    let error =
+                        classify_api_error(&state_clone, e.as_ref(), ApiErrorKind::Internal);
+                    task_manager.mark_failed(&task_id, response_error_from_api_error(error));
                 }
                 _ => {
                     task_manager.mark_failed(
                         &task_id,
-                        ResponseError::new("unknown_error", "Unexpected response type"),
+                        response_error_from_api_error(ApiError::internal()),
                     );
                 }
             }
@@ -1908,14 +2228,8 @@ pub async fn create_response(
         return OpenResponsesResponder::Json(response);
     }
 
-    let (request, is_streaming, conversation_history, _include_config, request_context) =
-        match parse_openresponses_request(oairequest, state.clone(), tx, skill_store).await {
-            Ok(x) => x,
-            Err(e) => return handle_error(state, e.into()),
-        };
-
     if let Err(e) = send_request_with_model(&state, request, model_id.as_deref()).await {
-        return handle_error(state, e.into());
+        return handle_completion_validation_error(state, Box::new(e));
     }
 
     if is_streaming {
@@ -1928,6 +2242,7 @@ pub async fn create_response(
             store,
             conversation_history,
             request_context,
+            stream_outcome.map(|Extension(handle)| handle),
         );
 
         let keep_alive_interval = get_keep_alive_interval();
@@ -1971,6 +2286,7 @@ pub async fn create_response(
                 let response = chat_response_to_response_resource(
                     &chat_resp,
                     request_id.clone(),
+                    model_name.clone(),
                     metadata,
                     &request_context,
                     &shell_output_items,
@@ -1991,6 +2307,7 @@ pub async fn create_response(
                                     name: None,
                                     tool_calls: None,
                                     tool_call_id: None,
+                                    reasoning_content: choice.message.reasoning_content.clone(),
                                 });
                             }
                         }
@@ -2001,15 +2318,17 @@ pub async fn create_response(
                 OpenResponsesResponder::Json(response)
             }
             Some(Response::ModelError(msg, partial_resp)) => {
+                MistralRs::maybe_log_error(state.clone(), &ModelErrorMessage(msg.to_string()));
                 let mut response = chat_response_to_response_resource(
                     &partial_resp,
                     request_id.clone(),
+                    model_name,
                     metadata,
                     &request_context,
                     &shell_output_items,
                     &files,
                 );
-                response.error = Some(ResponseError::new("model_error", msg.to_string()));
+                response.error = Some(response_error_from_api_error(ApiError::model_error()));
                 response.status = ResponseStatus::Failed;
 
                 if store {
@@ -2019,13 +2338,20 @@ pub async fn create_response(
 
                 OpenResponsesResponder::ModelError(msg.to_string(), response)
             }
-            Some(Response::ValidationError(e)) => OpenResponsesResponder::ValidationError(e),
-            Some(Response::InternalError(e)) => OpenResponsesResponder::InternalError(e),
-            _ => OpenResponsesResponder::InternalError(
-                anyhow::anyhow!("Unexpected response type").into(),
-            ),
+            Some(Response::ValidationError(e)) => handle_completion_validation_error(state, e),
+            Some(Response::InternalError(e)) => handle_completion_error(state, e),
+            _ => handle_completion_error(state, anyhow::anyhow!("Unexpected response type").into()),
         }
     }
+}
+
+fn response_not_found_error(response_id: &str) -> ApiError {
+    ApiError::new(
+        ApiErrorKind::NotFound,
+        format!("Response with ID '{response_id}' was not found."),
+        Some("response_not_found"),
+        Some("response_id"),
+    )
 }
 
 /// Get response by ID endpoint
@@ -2034,10 +2360,10 @@ pub async fn create_response(
     tag = "Mistral.rs",
     path = "/v1/responses/{response_id}",
     params(("response_id" = String, Path, description = "The ID of the response to retrieve")),
-    responses((status = 200, description = "Response object"))
+    responses((status = 200, description = "Response object", body = ResponseResource))
 )]
 pub async fn get_response(
-    State(_state): ExtractedMistralRsState,
+    State(state): ExtractedMistralRsState,
     Path(response_id): Path<String>,
 ) -> impl IntoResponse {
     // First check background tasks
@@ -2050,13 +2376,12 @@ pub async fn get_response(
     let cache = get_response_cache();
     match cache.get_response(&response_id) {
         Ok(Some(response)) => (StatusCode::OK, Json(response)).into_response(),
-        Ok(None) => JsonError::new(format!("Response with ID '{response_id}' not found"))
-            .to_response(StatusCode::NOT_FOUND),
-        Err(e) => JsonError::new(format!(
-            "Error retrieving response: {}",
-            sanitize_error_message(&*e)
-        ))
-        .to_response(StatusCode::INTERNAL_SERVER_ERROR),
+        Ok(None) => openai_error_response(response_not_found_error(&response_id)),
+        Err(error) => openai_error_response(classify_api_error(
+            &state,
+            error.as_ref(),
+            ApiErrorKind::Internal,
+        )),
     }
 }
 
@@ -2069,7 +2394,7 @@ pub async fn get_response(
     responses((status = 200, description = "Response deleted"))
 )]
 pub async fn delete_response(
-    State(_state): ExtractedMistralRsState,
+    State(state): ExtractedMistralRsState,
     Path(response_id): Path<String>,
 ) -> impl IntoResponse {
     // Delete from background tasks
@@ -2091,15 +2416,14 @@ pub async fn delete_response(
                 )
                     .into_response()
             } else {
-                JsonError::new(format!("Response with ID '{response_id}' not found"))
-                    .to_response(StatusCode::NOT_FOUND)
+                openai_error_response(response_not_found_error(&response_id))
             }
         }
-        Err(e) => JsonError::new(format!(
-            "Error deleting response: {}",
-            sanitize_error_message(&*e)
-        ))
-        .to_response(StatusCode::INTERNAL_SERVER_ERROR),
+        Err(error) => openai_error_response(classify_api_error(
+            &state,
+            error.as_ref(),
+            ApiErrorKind::Internal,
+        )),
     }
 }
 
@@ -2109,32 +2433,293 @@ pub async fn delete_response(
     tag = "Mistral.rs",
     path = "/v1/responses/{response_id}/cancel",
     params(("response_id" = String, Path, description = "The ID of the response to cancel")),
-    responses((status = 200, description = "Response cancelled"))
+    responses((status = 200, description = "Response cancelled", body = ResponseResource))
 )]
 pub async fn cancel_response(
-    State(_state): ExtractedMistralRsState,
+    State(state): ExtractedMistralRsState,
     Path(response_id): Path<String>,
 ) -> impl IntoResponse {
     let task_manager = get_background_task_manager();
 
     if task_manager.request_cancel(&response_id) {
         task_manager.mark_cancelled(&response_id);
-
-        if let Some(response) = task_manager.get_response(&response_id) {
-            return (StatusCode::OK, Json(response)).into_response();
-        }
+    }
+    if let Some(response) = task_manager.get_response(&response_id) {
+        return (StatusCode::OK, Json(response)).into_response();
     }
 
-    JsonError::new(format!(
-        "Response with ID '{response_id}' not found or cannot be cancelled"
-    ))
-    .to_response(StatusCode::NOT_FOUND)
+    let cache = get_response_cache();
+    match cache.get_response(&response_id) {
+        Ok(Some(response)) => (StatusCode::OK, Json(response)).into_response(),
+        Ok(None) => openai_error_response(response_not_found_error(&response_id)),
+        Err(error) => openai_error_response(classify_api_error(
+            &state,
+            error.as_ref(),
+            ApiErrorKind::Internal,
+        )),
+    }
 }
 
-/// Handle errors
-fn handle_error(
-    state: SharedMistralRsState,
-    e: Box<dyn std::error::Error + Send + Sync + 'static>,
-) -> OpenResponsesResponder {
-    handle_completion_error(state, e)
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn stream_error_matches_openai_shape() {
+        let event = OpenResponsesStreamEvent::Error {
+            sequence_number: 7,
+            code: "invalid_request".to_string(),
+            message: "Invalid model.".to_string(),
+            param: Some("model".to_string()),
+        };
+
+        assert_eq!(
+            serde_json::to_value(event).unwrap(),
+            json!({
+                "type": "error",
+                "sequence_number": 7,
+                "code": "invalid_request",
+                "message": "Invalid model.",
+                "param": "model"
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn unsupported_background_stream_is_a_typed_bad_request() {
+        let responder = OpenResponsesResponder::ValidationError(Box::new(
+            unsupported_background_stream_error(),
+        ));
+
+        let response = responder.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap(),
+            json!({
+                "error": {
+                    "message": "`background: true` with `stream: true` is not supported by this server.",
+                    "type": "invalid_request_error",
+                    "param": "background,stream",
+                    "code": "unsupported_parameter_combination"
+                }
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn validation_responder_preserves_typed_not_found_error() {
+        let responder = OpenResponsesResponder::ValidationError(Box::new(ApiError::new(
+            ApiErrorKind::NotFound,
+            "The requested model does not exist.",
+            Some("model_not_found"),
+            Some("model"),
+        )));
+
+        let response = responder.into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap(),
+            json!({
+                "error": {
+                    "message": "The requested model does not exist.",
+                    "type": "invalid_request_error",
+                    "param": "model",
+                    "code": "model_not_found"
+                }
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn model_responder_hides_internal_message_and_partial_response() {
+        let partial = ResponseResource::new("resp_test".to_string(), "model".to_string(), 0);
+        let responder =
+            OpenResponsesResponder::ModelError("private backend failure".to_string(), partial);
+
+        let response = responder.into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap(),
+            json!({
+                "error": {
+                    "message": "The model failed to process the request.",
+                    "type": "server_error",
+                    "param": null,
+                    "code": "model_error"
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn ignore_eos_defaults_false_and_accepts_true() {
+        let default: OpenResponsesCreateRequest =
+            serde_json::from_value(json!({"input": "hello"})).unwrap();
+        let enabled: OpenResponsesCreateRequest =
+            serde_json::from_value(json!({"input": "hello", "ignore_eos": true})).unwrap();
+
+        assert!(!default.ignore_eos);
+        assert!(enabled.ignore_eos);
+    }
+
+    #[test]
+    fn request_accepts_sampling_seed() {
+        let request: OpenResponsesCreateRequest =
+            serde_json::from_value(json!({"input": "hello", "seed": 42})).unwrap();
+
+        assert_eq!(request.seed, Some(42));
+    }
+
+    #[test]
+    fn namespace_tools_round_trip_through_request_and_output() {
+        let request: OpenResponsesCreateRequest = serde_json::from_value(json!({
+            "input": [
+                { "type": "message", "role": "user", "content": [{ "type": "input_text", "text": "hi" }] },
+                { "type": "message", "role": "assistant", "content": [{ "type": "output_text", "text": "ok" }] },
+                { "type": "reasoning", "id": "rs_1", "summary": [],
+                  "content": [{ "type": "reasoning_text", "text": "thinking" }] },
+                { "type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "close_agent",
+                  "namespace": "multi_agent_v1", "arguments": "{}" },
+                { "type": "function_call_output", "id": "fco_1", "call_id": "call_1", "output": "done" }
+            ],
+            "tools": [
+                { "type": "function", "name": "exec_command" },
+                { "type": "namespace", "name": "multi_agent_v1", "tools": [
+                    { "type": "function", "name": "close_agent" }
+                ] },
+                { "type": "web_search", "external_web_access": false }
+            ]
+        }))
+        .unwrap();
+
+        let OpenResponsesInput::Items(items) = request.input else {
+            panic!("expected item input");
+        };
+        let messages = convert_input_items_to_messages(items);
+        let call = messages[2].tool_calls.as_ref().unwrap();
+        assert_eq!(call[0].function.name, "multi_agent_v1.close_agent");
+
+        let ctx = RequestContext {
+            tools: request.tools,
+            ..Default::default()
+        };
+        assert_eq!(
+            ctx.split_tool_name("multi_agent_v1.close_agent"),
+            (
+                "close_agent".to_string(),
+                Some("multi_agent_v1".to_string())
+            )
+        );
+        assert_eq!(
+            ctx.split_tool_name("exec_command"),
+            ("exec_command".to_string(), None)
+        );
+
+        let item = OutputItem::function_call(
+            "fc_x".to_string(),
+            "call_x".to_string(),
+            "exec_command".to_string(),
+            None,
+            "{}".to_string(),
+            ItemStatus::Completed,
+        );
+        assert!(!serde_json::to_string(&item).unwrap().contains("namespace"));
+    }
+
+    #[test]
+    fn roles_pass_through_and_text_parts_collapse() {
+        let items: Vec<InputItem> = serde_json::from_value(json!([
+            { "type": "message", "role": "developer", "content": [
+                { "type": "input_text", "text": "a" }, { "type": "input_text", "text": "b" } ] },
+            { "type": "message", "role": "user", "content": [
+                { "type": "input_text", "text": "hi" },
+                { "type": "input_image", "image_url": "http://x/y.png" } ] }
+        ]))
+        .unwrap();
+        let messages = convert_input_items_to_messages(items);
+        assert_eq!(messages[0].role, "developer");
+        assert_eq!(
+            messages[0].content.as_ref().unwrap().as_text().as_deref(),
+            Some("a\n\nb")
+        );
+        assert!(messages[1].content.as_ref().unwrap().as_text().is_none());
+    }
+
+    #[test]
+    fn message_output_item_reuses_id_across_stream_lifecycle() {
+        let message_item = MessageOutputItemState::new();
+        let added = message_item.added_item();
+        let done = message_item.item_with_text(
+            "hello".to_string(),
+            "resp_test",
+            &[],
+            ItemStatus::Completed,
+        );
+        let mut response = ResponseResource::new("resp_test".to_string(), "model".to_string(), 0);
+        response.output.push(done.clone());
+
+        assert_eq!(added.id(), done.id());
+        assert_eq!(done.id(), response.output[0].id());
+        assert_eq!(added.status(), ItemStatus::InProgress);
+        assert_eq!(done.status(), ItemStatus::Completed);
+
+        let OutputItem::Message { content, .. } = done else {
+            panic!("expected message output item");
+        };
+        let [OutputContent::OutputText { text, .. }] = content.as_slice() else {
+            panic!("expected one output text content part");
+        };
+        assert_eq!(text, "hello");
+    }
+
+    #[test]
+    fn response_resource_preserves_the_request_facing_model() {
+        let chat_response = ChatCompletionResponse {
+            id: "chatcmpl_test".to_string(),
+            choices: Vec::new(),
+            created: 1,
+            model: "base-model".to_string(),
+            system_fingerprint: "local".to_string(),
+            object: "chat.completion".to_string(),
+            usage: mistralrs_core::Usage {
+                completion_tokens: 0,
+                prompt_tokens: 0,
+                total_tokens: 0,
+                prompt_tokens_details: None,
+                avg_tok_per_sec: 0.0,
+                avg_prompt_tok_per_sec: 0.0,
+                avg_compl_tok_per_sec: 0.0,
+                total_time_sec: 0.0,
+                total_prompt_time_sec: 0.0,
+                total_completion_time_sec: 0.0,
+            },
+            adapter_generation: Some("generation".to_string()),
+            agentic_tool_calls: None,
+            files: None,
+            session_id: None,
+        };
+
+        let response = chat_response_to_response_resource(
+            &chat_response,
+            "resp_test".to_string(),
+            "base-model::production".to_string(),
+            None,
+            &RequestContext::default(),
+            &[],
+            &[],
+        );
+
+        assert_eq!(response.model, "base-model::production");
+        assert_eq!(response.adapter_generation.as_deref(), Some("generation"));
+    }
 }

@@ -1,5 +1,6 @@
 /target
 .ruff_cache
+__pycache__/
 .vscode
 *.a
 .DS_Store

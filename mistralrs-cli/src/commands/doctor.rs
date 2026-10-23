@@ -141,6 +141,9 @@ pub fn run_doctor(json: bool) -> Result<()> {
     if system.build.flash_attn_v3 {
         features.push("flash-attn-v3");
     }
+    if system.build.cutile {
+        features.push("cutile");
+    }
     if system.build.accelerate {
         features.push("accelerate");
     }

@@ -1,0 +1,198 @@
+date: 2026-07-04T21:33:01Z
+host: spark-4ec2
+kernel: 6.17.0-1021-nvidia
+mistralrs_commit: 4f6042b41ef56dd9d22360b39a8d381ac070700d
+mistralrs_version: mistralrs 0.8.23
+llamacpp_commit: 2d973636e292ee6f75fadcf08d29cb33511f509f
+llamacpp_build: build-cpu (GGML_CUDA=OFF GGML_NATIVE=ON Release)
+rustc: rustc 1.96.1 (31fca3adb 2026-06-26)
+
+== cpu topology ==
+CPU(s):                                  20
+Model name:                              Cortex-X925
+Core(s) per socket:                      10
+Socket(s):                               1
+CPU(s) scaling MHz:                      100%
+Model name:                              Cortex-A725
+Core(s) per socket:                      10
+Socket(s):                               1
+CPU(s) scaling MHz:                      100%
+NUMA node0 CPU(s):                       0-19
+cpu0 capacity=718 max_khz=2808000
+cpu1 capacity=718 max_khz=2808000
+cpu2 capacity=718 max_khz=2808000
+cpu3 capacity=718 max_khz=2808000
+cpu4 capacity=718 max_khz=2808000
+cpu5 capacity=997 max_khz=3900000
+cpu6 capacity=997 max_khz=3900000
+cpu7 capacity=997 max_khz=3900000
+cpu8 capacity=997 max_khz=3900000
+cpu9 capacity=997 max_khz=3900000
+cpu10 capacity=731 max_khz=2808000
+cpu11 capacity=731 max_khz=2808000
+cpu12 capacity=731 max_khz=2808000
+cpu13 capacity=731 max_khz=2808000
+cpu14 capacity=731 max_khz=2808000
+cpu15 capacity=1017 max_khz=3900000
+cpu16 capacity=1017 max_khz=3900000
+cpu17 capacity=1017 max_khz=3900000
+cpu18 capacity=1017 max_khz=3900000
+cpu19 capacity=1024 max_khz=3900000
+
+== memory ==
+               total        used        free      shared  buff/cache   available
+Mem:           121Gi       7.4Gi        29Gi        18Mi        85Gi       114Gi
+
+== model files ==
+/home/ericbuehler/hf_models/bench_v090/gemma4-e4b-gguf/:
+total 19770588
+drwxrwxr-x  3 ericbuehler ericbuehler       4096 Jul  4 00:19 .
+drwxrwxr-x 14 ericbuehler ericbuehler       4096 Jul  4 08:24 ..
+drwxrwxr-x  3 ericbuehler ericbuehler       4096 Jul  4 00:16 .cache
+-rw-rw-r--  1 ericbuehler ericbuehler 4977169568 Jul  4 00:19 gemma-4-E4B-it-Q4_K_M.gguf
+-rw-rw-r--  1 ericbuehler ericbuehler 7074927776 Jul  4 00:19 gemma-4-E4B-it-Q6_K.gguf
+-rw-rw-r--  1 ericbuehler ericbuehler 8192951456 Jul  4 00:19 gemma-4-E4B-it-Q8_0.gguf
+
+/home/ericbuehler/hf_models/bench_v090/gemma4-uqff-q4k/:
+total 18338172
+drwxrwxr-x  2 ericbuehler ericbuehler        4096 Jul  4 08:22 .
+drwxrwxr-x 14 ericbuehler ericbuehler        4096 Jul  4 08:24 ..
+-rw-rw-r--  1 ericbuehler ericbuehler       17336 Jul  4 08:22 chat_template.jinja
+-rw-rw-r--  1 ericbuehler ericbuehler        5145 Jul  4 08:22 config.json
+-rw-rw-r--  1 ericbuehler ericbuehler         208 Jul  4 08:22 generation_config.json
+-rw-rw-r--  1 ericbuehler ericbuehler        1689 Jul  4 08:22 processor_config.json
+-rw-------  1 ericbuehler ericbuehler  2872424873 Jul  4 08:21 q4k-0.uqff
+-rw-rw-r--  1 ericbuehler ericbuehler        1257 Jul  4 08:22 README.md
+-rw-------  1 ericbuehler ericbuehler 15873474464 Jul  4 08:22 residual.safetensors
+-rw-rw-r--  1 ericbuehler ericbuehler        2095 Jul  4 08:22 tokenizer_config.json
+-rw-rw-r--  1 ericbuehler ericbuehler    32169626 Jul  4 08:22 tokenizer.json
+-rw-rw-r--  1 ericbuehler ericbuehler      155170 Jul  4 08:22 uqff_report.json
+
+/home/ericbuehler/hf_models/bench_v090/gemma4-uqff-q6k/:
+total 19623704
+drwxrwxr-x  2 ericbuehler ericbuehler        4096 Jul  4 08:23 .
+drwxrwxr-x 14 ericbuehler ericbuehler        4096 Jul  4 08:24 ..
+-rw-rw-r--  1 ericbuehler ericbuehler       17336 Jul  4 08:23 chat_template.jinja
+-rw-rw-r--  1 ericbuehler ericbuehler        5145 Jul  4 08:23 config.json
+-rw-rw-r--  1 ericbuehler ericbuehler         208 Jul  4 08:23 generation_config.json
+-rw-rw-r--  1 ericbuehler ericbuehler        1689 Jul  4 08:23 processor_config.json
+-rw-------  1 ericbuehler ericbuehler  4188809497 Jul  4 08:22 q6k-0.uqff
+-rw-rw-r--  1 ericbuehler ericbuehler        1257 Jul  4 08:23 README.md
+-rw-------  1 ericbuehler ericbuehler 15873474464 Jul  4 08:23 residual.safetensors
+-rw-rw-r--  1 ericbuehler ericbuehler        2095 Jul  4 08:23 tokenizer_config.json
+-rw-rw-r--  1 ericbuehler ericbuehler    32169626 Jul  4 08:23 tokenizer.json
+-rw-rw-r--  1 ericbuehler ericbuehler      155170 Jul  4 08:23 uqff_report.json
+
+/home/ericbuehler/hf_models/bench_v090/gemma4-uqff-q8_0/:
+total 20831332
+drwxrwxr-x  2 ericbuehler ericbuehler        4096 Jul  4 08:24 .
+drwxrwxr-x 14 ericbuehler ericbuehler        4096 Jul  4 08:24 ..
+-rw-rw-r--  1 ericbuehler ericbuehler       17336 Jul  4 08:23 chat_template.jinja
+-rw-rw-r--  1 ericbuehler ericbuehler        5145 Jul  4 08:23 config.json
+-rw-rw-r--  1 ericbuehler ericbuehler         208 Jul  4 08:23 generation_config.json
+-rw-rw-r--  1 ericbuehler ericbuehler        1689 Jul  4 08:23 processor_config.json
+-rw-------  1 ericbuehler ericbuehler  5425413137 Jul  4 08:23 q8_0-0.uqff
+-rw-rw-r--  1 ericbuehler ericbuehler        1259 Jul  4 08:24 README.md
+-rw-------  1 ericbuehler ericbuehler 15873474464 Jul  4 08:23 residual.safetensors
+-rw-rw-r--  1 ericbuehler ericbuehler        2095 Jul  4 08:23 tokenizer_config.json
+-rw-rw-r--  1 ericbuehler ericbuehler    32169626 Jul  4 08:23 tokenizer.json
+-rw-rw-r--  1 ericbuehler ericbuehler      156952 Jul  4 08:23 uqff_report.json
+
+/home/ericbuehler/hf_models/bench_v090/lfm2.5-230m-gguf/:
+total 577156
+drwxrwxr-x  3 ericbuehler ericbuehler      4096 Jul  4 00:19 .
+drwxrwxr-x 14 ericbuehler ericbuehler      4096 Jul  4 08:24 ..
+drwxrwxr-x  3 ericbuehler ericbuehler      4096 Jul  4 00:19 .cache
+-rw-rw-r--  1 ericbuehler ericbuehler 153406304 Jul  4 00:19 LFM2.5-230M-Q4_K_M.gguf
+-rw-rw-r--  1 ericbuehler ericbuehler 190983008 Jul  4 00:19 LFM2.5-230M-Q6_K.gguf
+-rw-rw-r--  1 ericbuehler ericbuehler 246598496 Jul  4 00:19 LFM2.5-230M-Q8_0.gguf
+
+/home/ericbuehler/hf_models/bench_v090/lfm25-uqff-q4k/:
+total 393232
+drwxrwxr-x  2 ericbuehler ericbuehler      4096 Jul  4 07:28 .
+drwxrwxr-x 14 ericbuehler ericbuehler      4096 Jul  4 08:24 ..
+-rw-rw-r--  1 ericbuehler ericbuehler      4621 Jul  4 07:28 chat_template.jinja
+-rw-rw-r--  1 ericbuehler ericbuehler      1568 Jul  4 07:28 config.json
+-rw-rw-r--  1 ericbuehler ericbuehler       303 Jul  4 07:28 generation_config.json
+-rw-------  1 ericbuehler ericbuehler 129207283 Jul  4 07:28 q4k-0.uqff
+-rw-rw-r--  1 ericbuehler ericbuehler      1255 Jul  4 07:28 README.md
+-rw-------  1 ericbuehler ericbuehler 268661120 Jul  4 07:28 residual.safetensors
+-rw-r--r--  1 ericbuehler ericbuehler       489 Jul  4 07:28 tokenizer_config.json
+-rw-rw-r--  1 ericbuehler ericbuehler   4733438 Jul  4 07:28 tokenizer.json
+-rw-rw-r--  1 ericbuehler ericbuehler     20463 Jul  4 07:28 uqff_report.json
+
+/home/ericbuehler/hf_models/bench_v090/lfm25-uqff-q6k/:
+total 451048
+drwxrwxr-x  2 ericbuehler ericbuehler      4096 Jul  4 08:24 .
+drwxrwxr-x 14 ericbuehler ericbuehler      4096 Jul  4 08:24 ..
+-rw-rw-r--  1 ericbuehler ericbuehler      4621 Jul  4 08:24 chat_template.jinja
+-rw-rw-r--  1 ericbuehler ericbuehler      1568 Jul  4 08:24 config.json
+-rw-rw-r--  1 ericbuehler ericbuehler       303 Jul  4 08:24 generation_config.json
+-rw-------  1 ericbuehler ericbuehler 188410987 Jul  4 08:24 q6k-0.uqff
+-rw-rw-r--  1 ericbuehler ericbuehler      1255 Jul  4 08:24 README.md
+-rw-------  1 ericbuehler ericbuehler 268661120 Jul  4 08:24 residual.safetensors
+-rw-r--r--  1 ericbuehler ericbuehler       489 Jul  4 08:24 tokenizer_config.json
+-rw-rw-r--  1 ericbuehler ericbuehler   4733438 Jul  4 08:24 tokenizer.json
+-rw-rw-r--  1 ericbuehler ericbuehler     20463 Jul  4 08:24 uqff_report.json
+
+/home/ericbuehler/hf_models/bench_v090/lfm25-uqff-q8_0/:
+total 505364
+drwxrwxr-x  2 ericbuehler ericbuehler      4096 Jul  4 08:24 .
+drwxrwxr-x 14 ericbuehler ericbuehler      4096 Jul  4 08:24 ..
+-rw-rw-r--  1 ericbuehler ericbuehler      4621 Jul  4 08:24 chat_template.jinja
+-rw-rw-r--  1 ericbuehler ericbuehler      1568 Jul  4 08:24 config.json
+-rw-rw-r--  1 ericbuehler ericbuehler       303 Jul  4 08:24 generation_config.json
+-rw-------  1 ericbuehler ericbuehler 244026547 Jul  4 08:24 q8_0-0.uqff
+-rw-rw-r--  1 ericbuehler ericbuehler      1257 Jul  4 08:24 README.md
+-rw-------  1 ericbuehler ericbuehler 268661120 Jul  4 08:24 residual.safetensors
+-rw-r--r--  1 ericbuehler ericbuehler       489 Jul  4 08:24 tokenizer_config.json
+-rw-rw-r--  1 ericbuehler ericbuehler   4733438 Jul  4 08:24 tokenizer.json
+-rw-rw-r--  1 ericbuehler ericbuehler     20715 Jul  4 08:24 uqff_report.json
+
+/home/ericbuehler/hf_models/bench_v090/qwen3-4b-gguf/:
+total 9847632
+drwxrwxr-x  3 ericbuehler ericbuehler       4096 Jul  4 00:16 .
+drwxrwxr-x 14 ericbuehler ericbuehler       4096 Jul  4 08:24 ..
+drwxrwxr-x  3 ericbuehler ericbuehler       4096 Jul  4 00:14 .cache
+-rw-rw-r--  1 ericbuehler ericbuehler 2497280256 Jul  4 00:15 Qwen3-4B-Q4_K_M.gguf
+-rw-rw-r--  1 ericbuehler ericbuehler 3306260704 Jul  4 00:16 Qwen3-4B-Q6_K.gguf
+-rw-rw-r--  1 ericbuehler ericbuehler 4280404704 Jul  4 00:16 Qwen3-4B-Q8_0.gguf
+
+/home/ericbuehler/hf_models/bench_v090/qwen3-4b-uqff-q4k/:
+total 3741016
+drwxrwxr-x  2 ericbuehler ericbuehler       4096 Jul  4 07:25 .
+drwxrwxr-x 14 ericbuehler ericbuehler       4096 Jul  4 08:24 ..
+-rw-rw-r--  1 ericbuehler ericbuehler        726 Jul  4 07:25 config.json
+-rw-rw-r--  1 ericbuehler ericbuehler        239 Jul  4 07:25 generation_config.json
+-rw-------  1 ericbuehler ericbuehler 2262638669 Jul  4 07:25 q4k-0.uqff
+-rw-rw-r--  1 ericbuehler ericbuehler       1241 Jul  4 07:25 README.md
+-rw-------  1 ericbuehler ericbuehler 1556625688 Jul  4 07:25 residual.safetensors
+-rw-rw-r--  1 ericbuehler ericbuehler       9732 Jul  4 07:25 tokenizer_config.json
+-rw-rw-r--  1 ericbuehler ericbuehler   11423462 Jul  4 07:25 tokenizer.json
+-rw-rw-r--  1 ericbuehler ericbuehler      61459 Jul  4 07:25 uqff_report.json
+
+/home/ericbuehler/hf_models/bench_v090/qwen3-4b-uqff-q6k/:
+total 4753700
+drwxrwxr-x  2 ericbuehler ericbuehler       4096 Jul  4 08:21 .
+drwxrwxr-x 14 ericbuehler ericbuehler       4096 Jul  4 08:24 ..
+-rw-rw-r--  1 ericbuehler ericbuehler        726 Jul  4 08:20 config.json
+-rw-rw-r--  1 ericbuehler ericbuehler        239 Jul  4 08:21 generation_config.json
+-rw-------  1 ericbuehler ericbuehler 3299630821 Jul  4 08:20 q6k-0.uqff
+-rw-rw-r--  1 ericbuehler ericbuehler       1241 Jul  4 08:21 README.md
+-rw-------  1 ericbuehler ericbuehler 1556625688 Jul  4 08:20 residual.safetensors
+-rw-rw-r--  1 ericbuehler ericbuehler       9732 Jul  4 08:21 tokenizer_config.json
+-rw-rw-r--  1 ericbuehler ericbuehler   11423462 Jul  4 08:21 tokenizer.json
+-rw-rw-r--  1 ericbuehler ericbuehler      61459 Jul  4 08:21 uqff_report.json
+
+/home/ericbuehler/hf_models/bench_v090/qwen3-4b-uqff-q8_0/:
+total 5705016
+drwxrwxr-x  2 ericbuehler ericbuehler       4096 Jul  4 08:21 .
+drwxrwxr-x 14 ericbuehler ericbuehler       4096 Jul  4 08:24 ..
+-rw-rw-r--  1 ericbuehler ericbuehler        726 Jul  4 08:21 config.json
+-rw-rw-r--  1 ericbuehler ericbuehler        239 Jul  4 08:21 generation_config.json
+-rw-------  1 ericbuehler ericbuehler 4273774973 Jul  4 08:21 q8_0-0.uqff
+-rw-rw-r--  1 ericbuehler ericbuehler       1243 Jul  4 08:21 README.md
+-rw-------  1 ericbuehler ericbuehler 1556625688 Jul  4 08:21 residual.safetensors
+-rw-rw-r--  1 ericbuehler ericbuehler       9732 Jul  4 08:21 tokenizer_config.json
+-rw-rw-r--  1 ericbuehler ericbuehler   11423462 Jul  4 08:21 tokenizer.json
+-rw-rw-r--  1 ericbuehler ericbuehler      62221 Jul  4 08:21 uqff_report.json

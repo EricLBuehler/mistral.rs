@@ -14,12 +14,12 @@
 //! - **macOS**: `brew install ffmpeg`
 //! - **Windows**: <https://ffmpeg.org/download.html>
 //!
-//! See <https://ericlbuehler.github.io/mistral.rs/guides/models/video-setup/> for full details.
+//! See <https://docs.mistralrs.dev/guides/models/video-setup/> for full details.
 
 use anyhow::{bail, Context, Result};
 use image::codecs::gif::GifDecoder;
-use image::{AnimationDecoder, DynamicImage};
-use mistralrs_core::{sample_frame_indices, VideoInput};
+use image::{AnimationDecoder, DynamicImage, ImageDecoder, Limits};
+use mistralrs_core::{sample_frame_indices, VideoFrameSampling, VideoInput};
 use std::io::Cursor;
 use std::path::Path;
 use tokio::fs;
@@ -31,12 +31,18 @@ use crate::media_source::{
 /// Default frames-per-second assumed when metadata is unavailable (e.g. GIF).
 const DEFAULT_FPS: f64 = 24.0;
 
+// every GIF frame is materialized as a full RGBA canvas before sampling
+const MAX_GIF_DIMENSION: u32 = 8192;
+const MAX_GIF_FRAMES: usize = 4096;
+const MAX_DECODED_GIF_BYTES: u64 = 1 << 30;
+const RGBA_BYTES_PER_PIXEL: u64 = 4;
+
 const FFMPEG_INSTALL_HELP: &str = "\
 FFmpeg is required for video input (non-GIF formats). Install it:
   - Linux:   apt install ffmpeg  /  dnf install ffmpeg
   - macOS:   brew install ffmpeg
   - Windows: https://ffmpeg.org/download.html
-See https://ericlbuehler.github.io/mistral.rs/guides/models/video-setup/ for details.";
+See https://docs.mistralrs.dev/guides/models/video-setup/ for details.";
 
 /// Fetch video bytes from a URL, file path, or data URL, then decode into
 /// a [`VideoInput`] (sampled frames + metadata).
@@ -49,17 +55,20 @@ See https://ericlbuehler.github.io/mistral.rs/guides/models/video-setup/ for det
 ///
 /// GIF files are decoded with the `image` crate. All other formats require
 /// FFmpeg.
-pub async fn parse_video_url(url_unparsed: &str, num_frames: Option<usize>) -> Result<VideoInput> {
-    parse_video_url_with_policy(url_unparsed, num_frames, MediaSourcePolicy::Local).await
+pub async fn parse_video_url(
+    url_unparsed: &str,
+    sampling: Option<VideoFrameSampling>,
+) -> Result<VideoInput> {
+    parse_video_url_with_policy(url_unparsed, sampling, MediaSourcePolicy::Local).await
 }
 
 pub(crate) async fn parse_video_url_for_server(
     url_unparsed: &str,
-    num_frames: Option<usize>,
+    sampling: Option<VideoFrameSampling>,
 ) -> Result<VideoInput> {
     parse_video_url_with_policy(
         url_unparsed,
-        num_frames.or(Some(SERVER_VIDEO_FRAME_LIMIT)),
+        Some(sampling.unwrap_or_default()),
         MediaSourcePolicy::ServerRequest,
     )
     .await
@@ -67,15 +76,15 @@ pub(crate) async fn parse_video_url_for_server(
 
 async fn parse_video_url_with_policy(
     url_unparsed: &str,
-    num_frames: Option<usize>,
+    sampling: Option<VideoFrameSampling>,
     policy: MediaSourcePolicy,
 ) -> Result<VideoInput> {
     let media = load_media_source(url_unparsed, policy, "video").await?;
 
     if is_gif_source(url_unparsed, &media) {
-        decode_gif_frames(&media.bytes, num_frames)
+        decode_gif_frames(&media.bytes, sampling)
     } else {
-        decode_video_ffmpeg(&media.bytes, num_frames, url_unparsed).await
+        decode_video_ffmpeg(&media.bytes, sampling, url_unparsed).await
     }
 }
 
@@ -91,10 +100,30 @@ fn is_gif_source(source: &str, media: &LoadedMedia) -> bool {
 }
 
 /// Decode a GIF into frames using the `image` crate.
-fn decode_gif_frames(bytes: &[u8], num_frames: Option<usize>) -> Result<VideoInput> {
-    let decoder = GifDecoder::new(Cursor::new(bytes)).context("Failed to decode GIF")?;
+fn decode_gif_frames(bytes: &[u8], sampling: Option<VideoFrameSampling>) -> Result<VideoInput> {
+    let mut decoder = GifDecoder::new(Cursor::new(bytes)).context("Failed to decode GIF")?;
+    let mut limits = Limits::default();
+    limits.max_image_width = Some(MAX_GIF_DIMENSION);
+    limits.max_image_height = Some(MAX_GIF_DIMENSION);
+    limits.max_alloc = Some(MAX_DECODED_GIF_BYTES);
+    decoder
+        .set_limits(limits)
+        .context("GIF exceeds decode limits")?;
 
-    let raw_frames: Vec<_> = decoder.into_frames().collect::<Result<Vec<_>, _>>()?;
+    let (width, height) = decoder.dimensions();
+    let frame_bytes = u64::from(width) * u64::from(height) * RGBA_BYTES_PER_PIXEL;
+    let max_frames = usize::try_from(MAX_DECODED_GIF_BYTES / frame_bytes.max(1))
+        .unwrap_or(usize::MAX)
+        .min(MAX_GIF_FRAMES);
+    let mut raw_frames = Vec::new();
+    for frame in decoder.into_frames() {
+        if raw_frames.len() == max_frames {
+            bail!(
+                "GIF exceeds the {max_frames} frame decode limit for its {width}x{height} canvas"
+            );
+        }
+        raw_frames.push(frame?);
+    }
     let total = raw_frames.len();
     if total == 0 {
         bail!("GIF contains no frames");
@@ -114,8 +143,8 @@ fn decode_gif_frames(bytes: &[u8], num_frames: Option<usize>) -> Result<VideoInp
         DEFAULT_FPS
     };
 
-    let indices = num_frames
-        .map(|n| sample_frame_indices(total, n))
+    let indices = sampling
+        .map(|sampling| sample_frame_indices(total, sampling.target_frames(total, fps)))
         .unwrap_or_else(|| (0..total).collect());
     let frames: Vec<DynamicImage> = indices
         .iter()
@@ -137,7 +166,7 @@ fn decode_gif_frames(bytes: &[u8], num_frames: Option<usize>) -> Result<VideoInp
 /// 3. Load frames as images.
 async fn decode_video_ffmpeg(
     bytes: &[u8],
-    num_frames: Option<usize>,
+    sampling: Option<VideoFrameSampling>,
     source_hint: &str,
 ) -> Result<VideoInput> {
     // Check ffmpeg availability
@@ -173,7 +202,16 @@ async fn decode_video_ffmpeg(
     let output_pattern = format!("{}/frame_%010d.png", out_dir.display());
 
     let mut requested_indices = None;
-    let effective_total = if let Some(num_frames) = num_frames {
+    let effective_total = if let Some(sampling) = sampling {
+        // Without a probed frame count, fps-based sampling cannot size itself; fall back to a fixed cap.
+        let num_frames = if total_frames > 0 {
+            sampling.target_frames(total_frames, fps)
+        } else {
+            match sampling {
+                VideoFrameSampling::Uniform(count) => count,
+                VideoFrameSampling::Fps { .. } => SERVER_VIDEO_FRAME_LIMIT,
+            }
+        };
         let effective_total = if total_frames > 0 {
             total_frames
         } else {
@@ -359,6 +397,39 @@ fn parse_fps_fraction(s: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const GIF_HEADER: &[u8] = b"GIF89a";
+    const GIF_SCREEN_TAIL: &[u8] = &[0x80, 0, 0, 0, 0, 0, 0xff, 0xff, 0xff];
+    const GIF_1X1_FRAME: &[u8] = &[0x2c, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0x02, 0x02, 0x44, 0x01, 0];
+    const GIF_TRAILER: u8 = 0x3b;
+
+    fn gif(width: u16, height: u16, frames: usize) -> Vec<u8> {
+        let mut bytes = GIF_HEADER.to_vec();
+        bytes.extend(width.to_le_bytes());
+        bytes.extend(height.to_le_bytes());
+        bytes.extend(GIF_SCREEN_TAIL);
+        for _ in 0..frames {
+            bytes.extend(GIF_1X1_FRAME);
+        }
+        bytes.push(GIF_TRAILER);
+        bytes
+    }
+
+    #[test]
+    fn gif_decodes_within_limits() {
+        let video = decode_gif_frames(&gif(1, 1, 3), None).unwrap();
+        assert_eq!(video.total_num_frames, 3);
+    }
+
+    #[test]
+    fn gif_rejects_oversized_canvas() {
+        assert!(decode_gif_frames(&gif(u16::MAX, u16::MAX, 1), None).is_err());
+    }
+
+    #[test]
+    fn gif_rejects_too_many_frames() {
+        assert!(decode_gif_frames(&gif(1, 1, MAX_GIF_FRAMES + 1), None).is_err());
+    }
 
     #[test]
     fn test_parse_fps_fraction() {

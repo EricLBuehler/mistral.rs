@@ -1,8 +1,8 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use crate::layers_masker::CausalMaskConfig;
-use candle_core::{Device, Result, Tensor};
-use candle_nn::{Embedding, Module};
+use candle_core::{DType, Device, Result, Tensor};
+use candle_nn::Module;
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
@@ -16,8 +16,8 @@ use crate::{
     device_map::{DeviceMappedMask, DeviceMapper},
     get_delta_from_lora_ab,
     layers::{
-        embedding, Activation, CausalMasker, MatMul, Mlp, RmsNorm, Sdpa, SmolLm3RopeConfig,
-        SmolLm3RotaryEmbedding,
+        embedding_with_legacy_tied_uqff, Activation, CausalMasker, MatMul, Mlp, RmsNorm, Sdpa,
+        SmolLm3RopeConfig, SmolLm3RotaryEmbedding,
     },
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
@@ -266,12 +266,11 @@ impl Block {
     ) -> Result<Tensor> {
         let residual = x;
         let x = self.rms_1.forward(x)?;
-        let x = (self
+        let x = self
             .attn
-            .forward(&x, attention_mask, kv_cache, ctx, layer_idx)?
-            + residual)?;
-        let residual = &x;
-        let x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + residual)?;
+            .forward(&x, attention_mask, kv_cache, ctx, layer_idx)?;
+        let (residual, x) = self.rms_2.forward_add_rms_norm(&x, residual)?;
+        let x = (self.mlp.forward(&x)? + residual)?;
         Ok(x)
     }
 
@@ -321,10 +320,11 @@ impl Block {
 }
 
 pub struct SmolLm3 {
-    wte: Embedding,
+    wte: Arc<dyn QuantMethod>,
     blocks: Vec<Block>,
     ln_f: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
+    dtype: DType,
     kv_cache: crate::pipeline::EitherCache,
     device: Device,
     mapper: Box<dyn DeviceMapper + Send + Sync>,
@@ -367,11 +367,15 @@ impl SmolLm3 {
             );
         }
         let mapper = normal_loading_metadata.mapper;
+        let dtype = vb_m.dtype();
 
-        let wte = embedding(
+        let wte = embedding_with_legacy_tied_uqff(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            cfg.tie_word_embeddings.then(|| {
+                mapper.set_nm_device(vb_lm_head.clone(), normal_loading_metadata.loading_isq)
+            }),
             &cfg.quantization_config,
         )?;
         let lm_head = if !cfg.tie_word_embeddings {
@@ -383,13 +387,7 @@ impl SmolLm3 {
                 mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(wte.embeddings(), normal_loading_metadata.loading_isq)?,
-                    None,
-                ),
-                mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
-            )?
+            wte.clone()
         };
         let ln_f = RmsNorm::new(
             cfg.hidden_size,
@@ -402,13 +400,27 @@ impl SmolLm3 {
             let device = mapper
                 .device_for(i, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
+            let location = device.location();
+            if ropes.contains_key(&location) {
+                continue;
+            }
+            let freq_factors = if vb_m.contains_tensor("rope_freqs.weight") {
+                Some(
+                    vb_m.clone()
+                        .set_device(device.clone())
+                        .get_unchecked_dtype("rope_freqs.weight", DType::F32)?,
+                )
+            } else {
+                None
+            };
             ropes.insert(
-                device.location(),
-                Arc::new(SmolLm3RotaryEmbedding::new_llama3(
+                location,
+                Arc::new(SmolLm3RotaryEmbedding::new_llama3_with_factors(
                     vb_m.dtype(),
                     cfg,
                     device,
                     is_gptx,
+                    freq_factors.as_ref(),
                 )?),
             );
         }
@@ -456,6 +468,7 @@ impl SmolLm3 {
             blocks,
             ln_f,
             lm_head,
+            dtype,
             kv_cache: EitherCache::Normal(NormalCache::new(
                 cfg.num_hidden_layers,
                 cfg.max_position_embeddings,
@@ -482,7 +495,11 @@ impl SmolLm3 {
         input_ids: &Tensor,
         ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        self.forward_embeds(input_ids, self.wte.forward(input_ids)?, ctx)
+        self.forward_embeds(
+            input_ids,
+            self.wte.embedding_forward(input_ids, self.dtype)?,
+            ctx,
+        )
     }
 
     pub fn forward_embeds(
@@ -515,7 +532,7 @@ impl SmolLm3 {
         let x = x.to_device(&self.device)?;
         let x = self.ln_f.forward(&x)?;
         let x = ctx.logits(&x)?;
-        self.lm_head.forward(&x)
+        ctx.lm_head(&*self.lm_head, &x)
     }
 
     pub fn residual_tensors_m(&self, uvb_m: UnVarBuilder) -> Vec<(String, Tensor)> {
@@ -578,6 +595,9 @@ impl NormalModel for SmolLm3 {
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
+    }
+    fn supports_packed_prefill(&self) -> bool {
+        true
     }
     #[cfg(feature = "cuda")]
     fn supports_cuda_decode_graphs(&self) -> bool {

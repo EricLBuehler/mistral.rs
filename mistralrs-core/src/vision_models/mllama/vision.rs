@@ -10,7 +10,7 @@ use mistralrs_quant::{
 
 use crate::{
     attention::{AttentionMask, SdpaParams},
-    layers::{conv2d_no_bias, embedding, layer_norm, GetFloatInfo, Sdpa},
+    layers::{conv2d_no_bias, dense_embedding, layer_norm, GetFloatInfo, Sdpa},
     pipeline::{text_models_inputs_processor::FlashParams, IsqModel},
     utils::unvarbuilder::UnVarBuilder,
 };
@@ -32,7 +32,7 @@ impl MLlamaPrecomputedPositionEmbedding {
         Ok(Self {
             gate: vb.get((1,), "gate")?,
             embedding: vb.get((num_patches, cfg.hidden_size), "embedding")?,
-            tile_embedding: embedding(
+            tile_embedding: dense_embedding(
                 cfg.max_aspect_ratio_id() + 1,
                 cfg.max_num_tiles * num_patches * cfg.hidden_size,
                 vb.pp("tile_embedding"),
@@ -90,7 +90,7 @@ struct MLlamaPrecomputedAspectRatioEmbedding {
 impl MLlamaPrecomputedAspectRatioEmbedding {
     fn new<const GATED: bool>(cfg: &MLlamaVisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
         Ok(Self {
-            embedding: embedding(
+            embedding: dense_embedding(
                 cfg.max_aspect_ratio_id() + 1,
                 cfg.max_num_tiles * cfg.hidden_size,
                 vb.pp("embedding"),

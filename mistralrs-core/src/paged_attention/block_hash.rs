@@ -4,7 +4,7 @@
 //! following vLLM's v1 approach. Each block is identified by a chain hash of:
 //! - The hash of all previous blocks (parent hash)
 //! - The tokens contained in the current block
-//! - Optional extra keys (multimodal content hashes, LoRA names, cache salt)
+//! - Optional extra keys (multimodal content hashes, adapter generations, cache salt)
 //!
 //! This creates a chain of hashes that uniquely identifies each block's position
 //! and content in a sequence, enabling automatic prefix cache reuse.
@@ -13,6 +13,8 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
     ops::Range,
 };
+
+use crate::AdapterGenerationId;
 
 /// A hash that uniquely identifies a KV cache block by its content and position.
 ///
@@ -54,12 +56,14 @@ pub enum ExtraHashKey {
         block_relative_offset: i64,
         attention_policy: MultimodalAttentionPolicy,
     },
-    /// LoRA adapter name, different adapters produce different KV values.
-    #[allow(dead_code)]
-    LoraName(String),
+    AdapterGeneration(AdapterGenerationId),
     /// User-provided cache salt for per-request isolation.
     #[allow(dead_code)]
     CacheSalt(String),
+}
+
+pub fn adapter_generation_key(generation: Option<AdapterGenerationId>) -> Option<ExtraHashKey> {
+    generation.map(ExtraHashKey::AdapterGeneration)
 }
 
 #[derive(Debug, Clone)]
@@ -392,6 +396,21 @@ mod tests {
         // Verify chain property: recomputing should give same result
         let hashes2 = compute_block_hashes(&tokens, 4, &[], &[]);
         assert_eq!(hashes, hashes2);
+    }
+
+    #[test]
+    fn adapter_generations_cannot_cross_hit_block_cache() {
+        let tokens = [1, 2, 3, 4, 5, 6, 7, 8];
+        let generation_a = adapter_generation_key(Some(AdapterGenerationId::from_bytes([1; 32])));
+        let generation_b = adapter_generation_key(Some(AdapterGenerationId::from_bytes([2; 32])));
+
+        let base = compute_block_hashes(&tokens, 4, &[], &[]);
+        let adapter_a = compute_block_hashes(&tokens, 4, &[], generation_a.as_slice());
+        let adapter_b = compute_block_hashes(&tokens, 4, &[], generation_b.as_slice());
+
+        assert_ne!(base, adapter_a);
+        assert_ne!(base, adapter_b);
+        assert_ne!(adapter_a, adapter_b);
     }
 
     #[test]

@@ -16,6 +16,9 @@ use crate::{
         NormalModel,
     },
     utils::unvarbuilder::UnVarBuilder,
+    vision_models::multimodal_layout::{
+        MultimodalEncoderKey, MultimodalEncoderOutputs, PackedMultimodalLayout,
+    },
     AnyMoeConfig, AnyMoeExpertType,
 };
 use candle_core::{DType, Device, Result, Tensor, D};
@@ -178,14 +181,16 @@ impl Mistral3Model {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Self> {
+        let non_text_vb = vb.clone().without_lora_registry();
         let vision_model = Mistral3VisionModel::new(
             &cfg.vision_config,
-            vb.pp("vision_tower"),
+            non_text_vb.pp("vision_tower"),
             &normal_loading_metadata,
         )?;
         let mmproj = Mistral3MultiModalProjector::new(
             cfg,
-            vb.pp("multi_modal_projector")
+            non_text_vb
+                .pp("multi_modal_projector")
                 .set_device(normal_loading_metadata.real_device.clone()),
         )?;
         let text_model = Mistral::new(
@@ -228,6 +233,7 @@ impl Mistral3Model {
         pixel_values: Option<Tensor>,
         image_hashes: &[u64],
         image_sizes: Option<Vec<(u32, u32)>>,
+        packed_layout: Option<&PackedMultimodalLayout>,
         ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
         let mut input_embeds = self.text_model.get_input_embeddings(input_ids)?;
@@ -248,7 +254,7 @@ impl Mistral3Model {
 
             // Per-image caching (Mistral3 has variable patch counts per image).
             let n_images = image_hashes.len();
-            let image_features = if n_images > 0 {
+            let (image_features, per_image_features) = if n_images > 0 {
                 let mut per_image: Vec<Tensor> = Vec::with_capacity(n_images);
                 let mut miss_indices = Vec::new();
                 {
@@ -289,19 +295,40 @@ impl Mistral3Model {
                         per_image[idx] = feats;
                     }
                 }
-                Tensor::cat(&per_image, 0)?
+                (Tensor::cat(&per_image, 0)?, Some(per_image))
             } else {
-                self.get_image_features(&pixel_values, image_sizes)?
+                (self.get_image_features(&pixel_values, image_sizes)?, None)
             };
 
-            let mut x_flat = input_embeds.flatten_all()?;
-            let src_flat = image_features.flatten_all()?;
-
-            let current_vals = x_flat.gather(&indices, 0)?;
-            let diff = (src_flat - current_vals)?;
-            x_flat = x_flat.scatter_add(&indices, &diff, 0)?;
-
-            input_embeds = x_flat.reshape(input_embeds.shape())?;
+            if let Some(layout) = packed_layout {
+                let per_image_features = per_image_features.ok_or_else(|| {
+                    candle_core::Error::msg(
+                        "packed Mistral 3 input requires per-image encoder outputs",
+                    )
+                })?;
+                let encoder_outputs = image_hashes
+                    .iter()
+                    .copied()
+                    .zip(per_image_features)
+                    .map(|(hash, output)| {
+                        (
+                            MultimodalEncoderKey {
+                                kind: crate::paged_attention::block_hash::MultimodalKind::Image,
+                                hash,
+                            },
+                            vec![output],
+                        )
+                    })
+                    .collect::<MultimodalEncoderOutputs>();
+                input_embeds = layout.splice_embeddings(&input_embeds, &encoder_outputs)?;
+            } else {
+                let mut x_flat = input_embeds.flatten_all()?;
+                let src_flat = image_features.flatten_all()?;
+                let current_vals = x_flat.gather(&indices, 0)?;
+                let diff = (src_flat - current_vals)?;
+                x_flat = x_flat.scatter_add(&indices, &diff, 0)?;
+                input_embeds = x_flat.reshape(input_embeds.shape())?;
+            }
         }
 
         self.text_model.forward_embeds(input_ids, input_embeds, ctx)
@@ -326,6 +353,7 @@ impl IsqModel for Mistral3Model {
 pub struct Mistral3SpecificArgs {
     pub image_sizes: Option<Vec<(u32, u32)>>,
     pub image_hashes: Vec<u64>,
+    pub(crate) packed_layout: Option<PackedMultimodalLayout>,
 }
 
 impl crate::speculative::SpeculativeTargetMixin for Mistral3Model {}
@@ -333,6 +361,14 @@ impl crate::speculative::SpeculativeTargetMixin for Mistral3Model {}
 impl crate::block_diffusion::BlockDiffusionMixin for Mistral3Model {}
 
 impl MultimodalModel for Mistral3Model {
+    fn supports_packed_prefill(&self) -> bool {
+        true
+    }
+
+    fn supports_mixed_media_batches(&self) -> bool {
+        true
+    }
+
     fn forward(
         &self,
         input_ids: &Tensor,
@@ -343,10 +379,18 @@ impl MultimodalModel for Mistral3Model {
         let Mistral3SpecificArgs {
             image_sizes,
             image_hashes,
+            packed_layout,
         } = *model_specific_args
             .downcast()
             .expect("Cannot downcast into `Mistral3SpecificArgs`");
-        self.forward(input_ids, pixel_values, &image_hashes, image_sizes, ctx)
+        self.forward(
+            input_ids,
+            pixel_values,
+            &image_hashes,
+            image_sizes,
+            packed_layout.as_ref(),
+            ctx,
+        )
     }
     fn default_model_specific_args(&self, _input_ids: &Tensor) -> Box<dyn std::any::Any> {
         Box::new(Mistral3SpecificArgs::default())
@@ -362,6 +406,9 @@ impl MultimodalModel for Mistral3Model {
     }
     fn config(&self) -> &ModelConfigMetadata {
         self.text_model.config()
+    }
+    fn encoder_cache(&self) -> Option<&Mutex<EncoderCacheManager>> {
+        Some(&self.encoder_cache)
     }
     fn encoder_cache_counters(
         &self,

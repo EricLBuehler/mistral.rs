@@ -228,14 +228,16 @@ impl DiffusionGemmaModel {
     }
 
     pub fn soft_embed(&self, logits: &Tensor) -> Result<Tensor> {
-        let embed_w = self.text.embedding().embeddings();
+        let embed_w = self.text.embedding_weight()?;
         let probs = candle_nn::ops::softmax(&logits.to_dtype(DType::F32)?, D::Minus1)?;
-        let soft = probs.to_dtype(embed_w.dtype())?.broadcast_matmul(embed_w)?;
+        let soft = probs
+            .to_dtype(embed_w.dtype())?
+            .broadcast_matmul(&embed_w)?;
         soft * self.embed_scale
     }
 
     pub fn self_conditioning_logits(&self, logits: &Tensor) -> Result<Tensor> {
-        logits.to_dtype(self.text.embedding().embeddings().dtype())
+        logits.to_dtype(self.text.embedding_dtype())
     }
 
     pub fn set_diffusion_params(&self, params: generation::DiffusionParams) {

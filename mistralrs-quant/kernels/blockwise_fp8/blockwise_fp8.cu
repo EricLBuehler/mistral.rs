@@ -6,6 +6,10 @@
 #include <cuda_fp16.h>
 #include <cuda_fp8.h>
 
+constexpr int FP8_ROWWISE_THREADS = 256;
+constexpr float FP8_E4M3_MAX = 448.0f;
+constexpr float FP8_MIN_SCALE = 1e-12f;
+
 #define CUDA_CHECK(call)                                                       \
   do {                                                                         \
     cudaError_t err = call;                                                    \
@@ -138,6 +142,57 @@ __global__ void quant_fp8_blockwise_kernel(
   }
 }
 
+template <typename T>
+__global__ void quant_fp8_rowwise_kernel(const T *__restrict__ input,
+                                         __nv_fp8_e4m3 *__restrict__ output,
+                                         float *__restrict__ scales, int rows,
+                                         int columns, int row_stride) {
+  int row = blockIdx.x;
+  if (row >= rows)
+    return;
+
+  float local_max = 0.0f;
+  size_t input_row = static_cast<size_t>(row) * row_stride;
+  size_t output_row = static_cast<size_t>(row) * columns;
+  for (int column = threadIdx.x; column < columns; column += blockDim.x) {
+    local_max =
+        fmaxf(local_max, fabsf(static_cast<float>(input[input_row + column])));
+  }
+
+  __shared__ float maxima[FP8_ROWWISE_THREADS];
+  maxima[threadIdx.x] = local_max;
+  __syncthreads();
+  for (int stride = FP8_ROWWISE_THREADS / 2; stride > 0; stride /= 2) {
+    if (threadIdx.x < stride)
+      maxima[threadIdx.x] =
+          fmaxf(maxima[threadIdx.x], maxima[threadIdx.x + stride]);
+    __syncthreads();
+  }
+
+  float scale = fmaxf(maxima[0] / FP8_E4M3_MAX, FP8_MIN_SCALE);
+  if (threadIdx.x == 0)
+    scales[row] = scale;
+  for (int column = threadIdx.x; column < columns; column += blockDim.x) {
+    float value = static_cast<float>(input[input_row + column]) / scale;
+    value = fminf(fmaxf(value, -FP8_E4M3_MAX), FP8_E4M3_MAX);
+    output[output_row + column].__x =
+        __nv_cvt_float_to_fp8(value, __NV_SATFINITE, __NV_E4M3);
+  }
+}
+
+template <typename T>
+__global__ void quant_fp8_static_kernel(const T *__restrict__ input,
+                                        const float *__restrict__ scale,
+                                        __nv_fp8_e4m3 *__restrict__ output,
+                                        size_t elements) {
+  size_t index = blockIdx.x * blockDim.x + threadIdx.x;
+  if (index >= elements)
+    return;
+  float value = static_cast<float>(input[index]) / scale[0];
+  value = fminf(fmaxf(value, -FP8_E4M3_MAX), FP8_E4M3_MAX);
+  output[index].__x = __nv_cvt_float_to_fp8(value, __NV_SATFINITE, __NV_E4M3);
+}
+
 extern "C" void launch_dequant_fp8_blockwise_kernel_f32(
     const __nv_fp8_e4m3 *d_weight, const float *d_scale, float *d_output,
     int weight_height, int weight_width, int weight_row_stride,
@@ -238,4 +293,69 @@ extern "C" void launch_quant_fp8_blockwise_kernel_bf16(
       weight_row_stride, scale_stride, weight_block_size_y,
       weight_block_size_x);
   CUDA_CHECK(cudaGetLastError());
+}
+
+extern "C" int launch_quant_fp8_rowwise_kernel_f32(const float *input,
+                                                   __nv_fp8_e4m3 *output,
+                                                   float *scales, int rows,
+                                                   int columns, int row_stride,
+                                                   cudaStream_t stream) {
+  quant_fp8_rowwise_kernel<float><<<rows, FP8_ROWWISE_THREADS, 0, stream>>>(
+      input, output, scales, rows, columns, row_stride);
+  return static_cast<int>(cudaGetLastError());
+}
+
+extern "C" int launch_quant_fp8_rowwise_kernel_f16(const __half *input,
+                                                   __nv_fp8_e4m3 *output,
+                                                   float *scales, int rows,
+                                                   int columns, int row_stride,
+                                                   cudaStream_t stream) {
+  quant_fp8_rowwise_kernel<__half><<<rows, FP8_ROWWISE_THREADS, 0, stream>>>(
+      input, output, scales, rows, columns, row_stride);
+  return static_cast<int>(cudaGetLastError());
+}
+
+extern "C" int launch_quant_fp8_rowwise_kernel_bf16(const __nv_bfloat16 *input,
+                                                    __nv_fp8_e4m3 *output,
+                                                    float *scales, int rows,
+                                                    int columns, int row_stride,
+                                                    cudaStream_t stream) {
+  quant_fp8_rowwise_kernel<__nv_bfloat16>
+      <<<rows, FP8_ROWWISE_THREADS, 0, stream>>>(input, output, scales, rows,
+                                                 columns, row_stride);
+  return static_cast<int>(cudaGetLastError());
+}
+
+extern "C" int launch_quant_fp8_static_kernel_f32(const float *input,
+                                                  const float *scale,
+                                                  __nv_fp8_e4m3 *output,
+                                                  size_t elements,
+                                                  cudaStream_t stream) {
+  int blocks = (elements + FP8_ROWWISE_THREADS - 1) / FP8_ROWWISE_THREADS;
+  quant_fp8_static_kernel<float><<<blocks, FP8_ROWWISE_THREADS, 0, stream>>>(
+      input, scale, output, elements);
+  return static_cast<int>(cudaGetLastError());
+}
+
+extern "C" int launch_quant_fp8_static_kernel_f16(const __half *input,
+                                                  const float *scale,
+                                                  __nv_fp8_e4m3 *output,
+                                                  size_t elements,
+                                                  cudaStream_t stream) {
+  int blocks = (elements + FP8_ROWWISE_THREADS - 1) / FP8_ROWWISE_THREADS;
+  quant_fp8_static_kernel<__half><<<blocks, FP8_ROWWISE_THREADS, 0, stream>>>(
+      input, scale, output, elements);
+  return static_cast<int>(cudaGetLastError());
+}
+
+extern "C" int launch_quant_fp8_static_kernel_bf16(const __nv_bfloat16 *input,
+                                                   const float *scale,
+                                                   __nv_fp8_e4m3 *output,
+                                                   size_t elements,
+                                                   cudaStream_t stream) {
+  int blocks = (elements + FP8_ROWWISE_THREADS - 1) / FP8_ROWWISE_THREADS;
+  quant_fp8_static_kernel<__nv_bfloat16>
+      <<<blocks, FP8_ROWWISE_THREADS, 0, stream>>>(input, scale, output,
+                                                   elements);
+  return static_cast<int>(cudaGetLastError());
 }

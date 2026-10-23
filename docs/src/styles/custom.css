@@ -7,9 +7,16 @@
 }
 
 :root[data-theme='dark'] {
+  --sl-color-black: #000;
+  --sl-color-bg: #000;
+  --sl-color-bg-nav: #000;
+  --sl-color-bg-sidebar: #000;
   --sl-color-accent-low: #3a1800;
   --sl-color-accent: #e8772e;
   --sl-color-accent-high: #ffd6b8;
+  --sl-color-text-accent: var(--sl-color-accent);
+  --sl-color-text-invert: #000;
+  --sl-color-bg-accent: var(--sl-color-accent);
   --mrs-code-bg: #111214;
 }
 
@@ -25,7 +32,7 @@
   letter-spacing: 0;
 }
 
-.header {
+header.header {
   border-bottom: 1px solid var(--mrs-rule);
 }
 

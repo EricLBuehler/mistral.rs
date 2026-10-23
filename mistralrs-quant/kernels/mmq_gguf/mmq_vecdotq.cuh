@@ -124,7 +124,7 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q4_0_q8_1_imp
         sumi = ggml_cuda_dp4a(vi1, u[2*i+1], sumi);
     }
 
-    const float2 ds8f = __half22float2(ds8);
+    const float2 ds8f = mmq_decode_ds4(ds8);
 
     // second part effectively subtracts 8 from each quant value
     return d4 * (sumi * ds8f.x - (8*vdr/QI4_0) * ds8f.y);
@@ -148,16 +148,9 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q4_1_q8_1_imp
         sumi = ggml_cuda_dp4a(vi1, u[2*i+1], sumi);
     }
 
-#ifdef FAST_FP16_AVAILABLE
-    const float2 tmp = __half22float2(__hmul2(dm4, ds8));
+    const float2 tmp = mmq_multiply_ds4(dm4, ds8);
     const float d4d8 = tmp.x;
     const float m4s8 = tmp.y;
-#else
-    const float2 dm4f = __half22float2(dm4);
-    const float2 ds8f = __half22float2(ds8);
-    const float d4d8 = dm4f.x * ds8f.x;
-    const float m4s8 = dm4f.y * ds8f.y;
-#endif // FAST_FP16_AVAILABLE
 
     // scale second part of sum by QI8_1/(vdr * QR4_1) to compensate for multiple threads adding it
     return sumi * d4d8 + m4s8 / (QI8_1 / (vdr * QR4_1));
@@ -219,16 +212,9 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q5_1_q8_1_imp
         sumi = ggml_cuda_dp4a(vi1, u[2*i+1], sumi); // SIMD dot product of quantized values
     }
 
-#ifdef FAST_FP16_AVAILABLE
-    const float2 tmp = __half22float2(__hmul2(dm5, ds8));
+    const float2 tmp = mmq_multiply_ds4(dm5, ds8);
     const float d5d8 = tmp.x;
     const float m5s8 = tmp.y;
-#else
-    const float2 dm5f = __half22float2(dm5);
-    const float2 ds8f = __half22float2(ds8);
-    const float d5d8 = dm5f.x * ds8f.x;
-    const float m5s8 = dm5f.y * ds8f.y;
-#endif // FAST_FP16_AVAILABLE
 
     // scale second part of sum by QI5_1 / vdr to compensate for multiple threads adding it
     return sumi*d5d8 + m5s8 / (QI5_1 / vdr);
@@ -262,16 +248,9 @@ template <int vdr> static __device__ __forceinline__ float vec_dot_q8_1_q8_1_imp
         sumi = ggml_cuda_dp4a(v[i], u[i], sumi);
     }
 
-#ifdef FAST_FP16_AVAILABLE
-    const float2 tmp = __half22float2(__hmul2(dm8, ds8));
+    const float2 tmp = mmq_multiply_ds4(dm8, ds8);
     const float d8d8 = tmp.x;
     const float m8s8 = tmp.y;
-#else
-    const float2 dm8f = __half22float2(dm8);
-    const float2 ds8f = __half22float2(ds8);
-    const float d8d8 = dm8f.x * ds8f.x;
-    const float m8s8 = dm8f.y * ds8f.y;
-#endif // FAST_FP16_AVAILABLE
 
     // scale second part of sum by QI8_1/ vdr to compensate for multiple threads adding it
     return sumi*d8d8 + m8s8 / (QI8_1 / vdr);
@@ -540,7 +519,7 @@ static __device__ __forceinline__ float vec_dot_q4_K_q8_1_impl_mmq(
             sumi_d = ggml_cuda_dp4a((v[j] >> (4*i)) & 0x0F0F0F0F, u[i*QI8_1 + j], sumi_d); // SIMD dot product
         }
 
-        const float2 ds8f = __half22float2(ds8[i]);
+        const float2 ds8f = mmq_decode_ds4(ds8[i]);
 
         sumf_d += ds8f.x * (sc[i] * sumi_d);
         sumf_m += ds8f.y *   m[i]; // sum of q8_1 block * q4_K min val
@@ -603,7 +582,7 @@ static __device__ __forceinline__ float vec_dot_q5_K_q8_1_impl_mmq(
             sumi_d = ggml_cuda_dp4a(v[i*QI8_1 + j], u[i*QI8_1 + j], sumi_d); // SIMD dot product
         }
 
-        const float2 ds8f = __half22float2(ds8[i]);
+        const float2 ds8f = mmq_decode_ds4(ds8[i]);
 
         sumf_d += ds8f.x * (sc[i] * sumi_d);
         sumf_m += ds8f.y *   m[i]; // sum of q8_1 block * q4_K min val

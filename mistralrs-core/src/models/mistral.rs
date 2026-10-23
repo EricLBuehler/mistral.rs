@@ -2,7 +2,7 @@
 
 /// Mistral LLM, https://github.com/mistralai/mistral-src
 use crate::layers_masker::CausalMaskConfig;
-use candle_core::{Device, Module, Result, Tensor};
+use candle_core::{DType, Device, Module, Result, Tensor};
 use mistralrs_quant::{
     ColumnParallelLayer, QuantMethod, QuantizedConfig, ReplicatedLayer, RowParallelLayer,
     ShardedVarBuilder,
@@ -15,7 +15,10 @@ use crate::{
     attention::{AttentionMask, SdpaParams},
     device_map::{DeviceMappedMask, DeviceMapper},
     get_delta_from_lora_ab,
-    layers::{embedding, Activation, CausalMasker, MatMul, Mlp, RmsNorm, RotaryEmbedding, Sdpa},
+    layers::{
+        embedding_with_legacy_tied_uqff, Activation, CausalMasker, MatMul, Mlp, RmsNorm,
+        RotaryEmbedding, Sdpa, YarnRopeConfig,
+    },
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -53,6 +56,8 @@ pub struct MistralRopeParameters {
     pub mscale: Option<f32>,
     pub mscale_all_dim: Option<f32>,
     pub original_max_position_embeddings: Option<usize>,
+    #[serde(default)]
+    pub llama_4_scaling_beta: Option<f32>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -91,6 +96,14 @@ impl Config {
             .map(|p| p.rope_theta)
             .unwrap_or(self.rope_theta)
     }
+
+    fn attention_temperature(&self) -> Option<(f32, usize)> {
+        let rope = self.rope_parameters.as_ref()?;
+        Some((
+            rope.llama_4_scaling_beta?,
+            rope.original_max_position_embeddings?,
+        ))
+    }
 }
 
 struct Attention {
@@ -104,6 +117,7 @@ struct Attention {
     rotary_emb: Arc<RotaryEmbedding>,
     paged_attn: Option<PagedAttention>,
     sdpa_params: SdpaParams,
+    attention_temperature: Option<(f32, usize)>,
 }
 
 impl Attention {
@@ -167,6 +181,7 @@ impl Attention {
             head_dim,
             rotary_emb,
             paged_attn,
+            attention_temperature: cfg.attention_temperature(),
             sdpa_params: SdpaParams {
                 n_kv_groups: mistralrs_quant::compute_n_kv_groups(
                     cfg.num_key_value_heads,
@@ -214,7 +229,16 @@ impl Attention {
         let rope_positions = ctx
             .text_positions(q.device(), q.dim(2)?)?
             .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
-        let (q, k) = self.rotary_emb.forward(&q, &k, rope_positions)?;
+        let (mut q, k) = self.rotary_emb.forward(&q, &k, rope_positions)?;
+        if let Some((scale, floor_scale)) = self.attention_temperature {
+            let floor = (rope_positions.to_dtype(DType::F32)? / floor_scale as f64)?.floor()?;
+            let scales =
+                ((((floor + 1.)?.log()? * scale as f64)? + 1.)?).reshape((b_sz, 1, q_len, 1))?;
+            q = q
+                .to_dtype(DType::F32)?
+                .broadcast_mul(&scales)?
+                .to_dtype(q.dtype())?;
+        }
         let metadata = ctx.paged_layer(layer_idx);
 
         let mut attn_output = match &self.paged_attn {
@@ -338,20 +362,20 @@ impl DecoderLayer {
         let xs = self
             .self_attn
             .forward(&xs, attention_mask, kv_cache, ctx, layer_idx)?;
-        let xs = (xs + residual)?;
-        let residual = &xs;
-        let xs = self
-            .mlp
-            .forward(&xs.apply(&self.post_attention_layernorm)?)?;
+        let (residual, xs) = self
+            .post_attention_layernorm
+            .forward_add_rms_norm(&xs, residual)?;
+        let xs = self.mlp.forward(&xs)?;
         residual + xs
     }
 }
 
 pub struct Model {
-    embed_tokens: candle_nn::Embedding,
+    embed_tokens: Arc<dyn QuantMethod>,
     layers: Vec<DecoderLayer>,
     norm: RmsNorm,
     lm_head: Arc<dyn QuantMethod>,
+    dtype: DType,
     sliding_window: Option<usize>,
     device: Device,
     pub(crate) cache: EitherCache,
@@ -396,11 +420,15 @@ impl Model {
             );
         }
         let mapper = normal_loading_metadata.mapper;
+        let dtype = vb_m.dtype();
 
-        let embed_tokens = embedding(
+        let embed_tokens = embedding_with_legacy_tied_uqff(
             cfg.vocab_size,
             cfg.hidden_size,
-            mapper.set_nm_device(vb_m.pp("embed_tokens"), false),
+            mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
+            cfg.tie_word_embeddings.then(|| {
+                mapper.set_nm_device(vb_lm_head.clone(), normal_loading_metadata.loading_isq)
+            }),
             &cfg.quantization_config,
         )?;
 
@@ -410,17 +438,52 @@ impl Model {
             let device = mapper
                 .device_for(layer_idx, false)
                 .unwrap_or(&normal_loading_metadata.real_device);
-            ropes.insert(
-                device.location(),
-                Arc::new(RotaryEmbedding::new(
+            let location = device.location();
+            if ropes.contains_key(&location) {
+                continue;
+            }
+            let rotary = match cfg.rope_parameters.as_ref() {
+                Some(rope) if matches!(rope.rope_type, MistralRopeType::Yarn) => {
+                    RotaryEmbedding::new_yarn(
+                        &YarnRopeConfig {
+                            base: rope.rope_theta as f32,
+                            head_dim,
+                            max_position_embeddings: cfg.max_position_embeddings,
+                            original_max_position_embeddings: rope
+                                .original_max_position_embeddings
+                                .ok_or_else(|| {
+                                    candle_core::Error::msg(
+                                        "YARN original context length is required",
+                                    )
+                                })?,
+                            factor: rope.factor.ok_or_else(|| {
+                                candle_core::Error::msg("YARN factor is required")
+                            })?,
+                            beta_fast: rope.beta_fast.ok_or_else(|| {
+                                candle_core::Error::msg("YARN beta_fast is required")
+                            })?,
+                            beta_slow: rope.beta_slow.ok_or_else(|| {
+                                candle_core::Error::msg("YARN beta_slow is required")
+                            })?,
+                            mscale: rope.mscale.unwrap_or(1.),
+                            mscale_all_dim: rope.mscale_all_dim.unwrap_or(0.),
+                            attention_factor: None,
+                        },
+                        device,
+                        is_gptx,
+                        vb_m.dtype(),
+                    )?
+                }
+                _ => RotaryEmbedding::new(
                     cfg.get_rope_theta() as f32,
                     head_dim,
                     cfg.max_position_embeddings,
                     device,
                     is_gptx,
                     vb_m.dtype(),
-                )?),
-            );
+                )?,
+            };
+            ropes.insert(location, Arc::new(rotary));
         }
 
         let vb_l = vb_m.pp("layers");
@@ -469,22 +532,14 @@ impl Model {
                 mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
             )?
         } else {
-            ReplicatedLayer::from_linear(
-                candle_nn::Linear::new(
-                    mapper.cast_nm_device(
-                        embed_tokens.embeddings(),
-                        normal_loading_metadata.loading_isq,
-                    )?,
-                    None,
-                ),
-                mapper.set_nm_device(vb_lm_head, normal_loading_metadata.loading_isq),
-            )?
+            embed_tokens.clone()
         };
         Ok(Self {
             embed_tokens,
             layers,
             norm,
             lm_head,
+            dtype,
             sliding_window: cfg.sliding_window,
             device: normal_loading_metadata.real_device,
             cache: EitherCache::Normal(NormalCache::new_sliding(
@@ -510,7 +565,7 @@ impl Model {
     }
 
     pub fn get_input_embeddings(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.forward(input_ids)
+        self.embed_tokens.embedding_forward(input_ids, self.dtype)
     }
 
     pub fn forward(
@@ -518,7 +573,11 @@ impl Model {
         input_ids: &Tensor,
         ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        self.forward_embeds(input_ids, self.embed_tokens.forward(input_ids)?, ctx)
+        self.forward_embeds(
+            input_ids,
+            self.embed_tokens.embedding_forward(input_ids, self.dtype)?,
+            ctx,
+        )
     }
 
     pub fn forward_embeds(
@@ -553,7 +612,7 @@ impl Model {
         let xs = xs.to_device(&self.device)?;
         let xs = xs.apply(&self.norm)?;
         let xs = ctx.logits(&xs)?;
-        self.lm_head.forward(&xs)
+        ctx.lm_head(&*self.lm_head, &xs)
     }
 }
 
@@ -616,6 +675,9 @@ impl NormalModel for Model {
     }
     fn config(&self) -> &ModelConfigMetadata {
         &self.cfg
+    }
+    fn supports_packed_prefill(&self) -> bool {
+        true
     }
     #[cfg(feature = "cuda")]
     fn supports_cuda_decode_graphs(&self) -> bool {

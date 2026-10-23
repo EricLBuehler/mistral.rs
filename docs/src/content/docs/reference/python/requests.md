@@ -4,6 +4,15 @@ description: "Request dataclasses passed to Runner methods."
 sidebar:
   order: 4
 ---
+## `LoraAdapterGeneration`
+
+Select one exact immutable LoRA adapter generation by its 64-character ID.
+
+| Field | Type |
+| --- | --- |
+| `generation` | `str` |
+
+
 ## `ChatCompletionRequest`
 
 A ChatCompletionRequest represents a request sent to the mistral.rs engine. It encodes information
@@ -20,8 +29,13 @@ Agent permission fields:
   `AgentToolApproval`. Return `True`, `False`, or
   `AgentToolApprovalDecision`.
 
-See [agent permissions](/mistral.rs/guides/agents/permissions-and-approvals/)
+See [agent permissions](/guides/agents/permissions-and-approvals/)
 for the shared CLI, HTTP, Python, and Rust behavior.
+
+`reasoning_effort` accepts `off`, `low`, `medium`, `high`, and `xhigh`; `none`
+aliases `off`. Values are trimmed and case-insensitive. If both reasoning controls
+are omitted, thinking is enabled with no selected effort. Contradictory
+`enable_thinking` and `reasoning_effort` values raise `ValueError`.
 
 | Field | Type | Default |
 | --- | --- | --- |
@@ -52,7 +66,7 @@ for the shared CLI, HTTP, Python, and Rust behavior.
 | `web_search_options` | `WebSearchOptions \| None` | `None` |
 | `enable_thinking` | `bool \| None` | `None` |
 | `truncate_sequence` | `bool` | `False` |
-| `reasoning_effort` | `str \| None` | `None` |
+| `reasoning_effort` | `Literal['off', 'none', 'low', 'medium', 'high', 'xhigh'] \| None` | `None` |
 | `max_tool_rounds` | `int \| None` | `None` |
 | `tool_dispatch_url` | `str \| None` | `None` |
 | `enable_code_execution` | `bool` | `False` |
@@ -64,6 +78,8 @@ for the shared CLI, HTTP, Python, and Rust behavior.
 | `session_id` | `str \| None` | `None` |
 | `files` | `list[RequestedFile] \| None` | `None` |
 | `input_files` | `list[InputFile] \| None` | `None` |
+| `ignore_eos` | `bool` | `False` |
+| `adapter` | `str \| LoraAdapterGeneration \| None` | `None (keyword-only)` |
 
 
 ## `CompletionRequest`
@@ -98,6 +114,8 @@ about input data, sampling, and how to return the response.
 | `dry_allowed_length` | `int \| None` | `None` |
 | `dry_sequence_breakers` | `list[str] \| None` | `None` |
 | `truncate_sequence` | `bool` | `False` |
+| `ignore_eos` | `bool` | `False` |
+| `adapter` | `str \| LoraAdapterGeneration \| None` | `None (keyword-only)` |
 
 
 ## `EmbeddingRequest`

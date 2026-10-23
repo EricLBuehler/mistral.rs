@@ -13,10 +13,12 @@ use candle_core::{DType, Device, Result, Tensor};
 pub enum AttentionMask {
     /// No masking. Used for single-token decode or truly unmasked attention.
     None,
-    /// Flash attention with `is_causal = true`. No mask tensor is needed;
-    /// the flash kernel applies causal masking internally. Also signals
-    /// "this is a prefill" to the paged attention layer.
+    /// Structured causal attention; the selected backend applies or materializes the mask.
     CausalFlash,
+    /// Bidirectional attention with a symmetric window when configured.
+    Bidirectional,
+    /// Causal attention confined to fixed chunks in absolute token coordinates.
+    ChunkedCausal { chunk_size: usize },
     /// An explicit mask tensor (causal, sliding window, bidirectional, etc).
     /// CPU fused attention can consume it directly; other backends route to eager as needed.
     Custom(Tensor),
@@ -41,16 +43,110 @@ impl AttentionMask {
     pub fn is_custom(&self) -> bool {
         matches!(self, Self::Custom(_))
     }
+
+    pub fn is_none(&self) -> bool {
+        matches!(self, Self::None)
+    }
 }
 
 mod backends;
 
 #[allow(unused)]
-pub(crate) use backends::{flash_attn, maybe_synchronize, naive_sdpa, sinks_attn};
+pub(crate) use backends::cpu::fast_exp;
+#[cfg(feature = "cuda")]
+use backends::naive::maybe_synchronize;
+pub(crate) use backends::{
+    flash_attn, flash_backend_supports, flash_backend_supports_sdpa, naive_sdpa, sinks_attn,
+    sinks_backend_is_available, sinks_backend_supports,
+};
 
 /// Chunk size for attention computation to avoid OOM on long sequences
 pub(crate) const ATTENTION_CHUNK_SIZE: usize = 1024;
-const FLASH_ATTN_NATIVE_MAX_GQA_GROUP: usize = 8;
+pub(crate) const FLASH_ATTN_NATIVE_MAX_GQA_GROUP: usize = 8;
+
+#[cfg(any(
+    feature = "flash-attn",
+    feature = "flash-attn-v3",
+    all(feature = "cuda", target_family = "unix")
+))]
+pub(crate) fn sliding_window_left(sliding_window: Option<usize>) -> Option<usize> {
+    sliding_window.map(|window| window.saturating_sub(1))
+}
+
+#[derive(Clone, Copy)]
+struct EagerMaskShape {
+    query_len: usize,
+    key_len: usize,
+    causal: bool,
+    window_left: Option<usize>,
+    window_right: Option<usize>,
+    chunk_size: Option<usize>,
+}
+
+fn eager_attention_mask_with_shape(
+    shape: EagerMaskShape,
+    dtype: DType,
+    device: &Device,
+) -> Result<Option<Tensor>> {
+    let EagerMaskShape {
+        query_len,
+        key_len,
+        causal,
+        window_left,
+        window_right,
+        chunk_size,
+    } = shape;
+    if !causal && window_left.is_none() && window_right.is_none() && chunk_size.is_none() {
+        return Ok(None);
+    }
+    let prefix_len = key_len.saturating_sub(query_len);
+    let mut mask = Vec::with_capacity(query_len * key_len);
+    for query_idx in 0..query_len {
+        let query_pos = prefix_len + query_idx;
+        for key_idx in 0..key_len {
+            let future = causal && key_idx > query_pos
+                || window_right.is_some_and(|window| key_idx >= query_pos.saturating_add(window));
+            let too_old = window_left
+                .is_some_and(|window| query_pos >= window && key_idx <= query_pos - window);
+            let different_chunk =
+                chunk_size.is_some_and(|chunk| key_idx / chunk != query_pos / chunk);
+            mask.push(if future || too_old || different_chunk {
+                f32::NEG_INFINITY
+            } else {
+                0.0
+            });
+        }
+    }
+    Tensor::from_vec(mask, (query_len, key_len), device)
+        .and_then(|mask| mask.to_dtype(dtype))
+        .map(Some)
+}
+
+fn eager_attention_mask(
+    query_len: usize,
+    key_len: usize,
+    causal: bool,
+    sliding_window: Option<usize>,
+    dtype: DType,
+    device: &Device,
+) -> Result<Option<Tensor>> {
+    eager_attention_mask_with_shape(
+        EagerMaskShape {
+            query_len,
+            key_len,
+            causal,
+            window_left: sliding_window,
+            window_right: None,
+            chunk_size: None,
+        },
+        dtype,
+        device,
+    )
+}
+
+pub(crate) fn supports_compact_paged_prefill(device: &Device) -> bool {
+    device.is_metal() || device.is_cuda() && crate::using_flash_attn()
+}
 
 /// Generic chunked attention computation that can be used by different backends
 pub(crate) fn chunked_attention<F>(
@@ -123,6 +219,24 @@ where
     Tensor::cat(&attn_chunks, 2)
 }
 
+// Metal SDPA kernels only honor batch/head strides and assume each head's rows are packed.
+fn packed_rows(x: &Tensor) -> Result<Tensor> {
+    let (_, _, seq_len, head_dim) = x.dims4()?;
+    match x.stride() {
+        [.., seq_stride, 1] if seq_len == 1 || *seq_stride == head_dim => Ok(x.clone()),
+        _ => x.contiguous(),
+    }
+}
+
+// candle's Metal SDPA binds the mask buffer without its storage offset.
+fn offset_free(x: &Tensor) -> Result<Tensor> {
+    if x.layout().start_offset() == 0 {
+        Ok(x.clone())
+    } else {
+        x.force_contiguous()
+    }
+}
+
 fn repeat_kv(x: Tensor, n_rep: usize) -> Result<Tensor> {
     if n_rep == 1 {
         Ok(x)
@@ -139,12 +253,44 @@ fn run_flash_attn_cpu_for_dtype(
     mask: Option<&Tensor>,
     sdpa_params: &SdpaParams,
 ) -> Result<Tensor> {
-    match q.dtype() {
+    // KV may be stored at lower precision than the activations (f16 CPU KV cache);
+    // kernels accumulate in f32 either way, so convert q down and the output back up.
+    let out_dtype = q.dtype();
+    let q_conv;
+    let q = if q.dtype() != k.dtype() {
+        q_conv = q.to_dtype(k.dtype())?;
+        &q_conv
+    } else {
+        q
+    };
+    let res = match k.dtype() {
         DType::F32 => cpu::run_flash_attn_cpu::<f32>(q, k, v, mask, sdpa_params),
         DType::F16 => cpu::run_flash_attn_cpu::<half::f16>(q, k, v, mask, sdpa_params),
         DType::BF16 => cpu::run_flash_attn_cpu::<half::bf16>(q, k, v, mask, sdpa_params),
-        _ => Err(candle_core::Error::Msg("Unsupported data type".into())),
+        other => candle_core::bail!("Unsupported dtype for CPU flash attn: {other:?}"),
+    }?;
+    if res.dtype() != out_dtype {
+        res.to_dtype(out_dtype)
+    } else {
+        Ok(res)
     }
+}
+
+fn packed_attention_backend_is_available(q: &Tensor, sdpa_params: &SdpaParams) -> Result<bool> {
+    let head_dim = q.dim(3)?;
+    if sdpa_params.sinks.is_some() {
+        return Ok(
+            (q.device().is_cuda() || q.dim(0)? > 1) && sinks_backend_is_available(q, head_dim)
+        );
+    }
+    Ok(q.device().is_cuda()
+        && crate::using_flash_attn()
+        && matches!(q.dtype(), DType::F16 | DType::BF16)
+        && flash_backend_supports_sdpa(
+            head_dim,
+            sdpa_params.softcap.is_some(),
+            sdpa_params.sliding_window.is_some(),
+        ))
 }
 
 pub struct SdpaParams {
@@ -180,6 +326,44 @@ impl Sdpa {
         flash_params: Option<&FlashParams>,
         sdpa_params: &SdpaParams,
     ) -> Result<Tensor> {
+        if flash_params.is_some_and(|params| params.packed)
+            && (!matches!(mask, AttentionMask::CausalFlash)
+                || !flash_params.is_some_and(|params| params.causal)
+                || !packed_attention_backend_is_available(q, sdpa_params)?)
+        {
+            candle_core::bail!("packed prefill requires causal varlen attention support");
+        }
+
+        let bidirectional = matches!(mask, AttentionMask::Bidirectional);
+        let chunk_size = match mask {
+            AttentionMask::ChunkedCausal { chunk_size } => Some(*chunk_size),
+            _ => None,
+        };
+        if bidirectional
+            || chunk_size.is_some()
+            || (q.device().is_metal() || q.device().is_cpu())
+                && matches!(mask, AttentionMask::CausalFlash)
+        {
+            let causal = chunk_size.is_some()
+                || !bidirectional && flash_params.is_none_or(|params| params.causal);
+            let mask = eager_attention_mask_with_shape(
+                EagerMaskShape {
+                    query_len: q.dim(2)?,
+                    key_len: k.dim(2)?,
+                    causal,
+                    window_left: sdpa_params.sliding_window,
+                    window_right: bidirectional
+                        .then_some(sdpa_params.sliding_window)
+                        .flatten(),
+                    chunk_size,
+                },
+                q.dtype(),
+                q.device(),
+            )?
+            .map_or(AttentionMask::None, AttentionMask::Custom);
+            return self.run_attention(q, k, v, &mask, flash_params, sdpa_params);
+        }
+
         // If sinks are present, dispatch to the sinks backend
         if let Some(sinks) = &sdpa_params.sinks {
             let mask_tensor = match mask {
@@ -233,6 +417,41 @@ impl Sdpa {
                 None => (k, v, sdpa_params),
             };
 
+            let head_dim = q.dim(3)?;
+            if q.device().is_cuda()
+                && !flash_backend_supports_sdpa(
+                    head_dim,
+                    sdpa_params.softcap.is_some(),
+                    sdpa_params.sliding_window.is_some(),
+                )
+            {
+                if flash_params.is_some_and(|params| params.packed) {
+                    candle_core::bail!(
+                        "packed prefill requires FlashAttention support for head_dim={head_dim} \
+                         with softcap={}, sliding_window={}",
+                        sdpa_params.softcap.is_some(),
+                        sdpa_params.sliding_window.is_some()
+                    );
+                }
+                let causal = matches!(mask, AttentionMask::CausalFlash) || do_causal;
+                let fallback_mask = eager_attention_mask(
+                    q.dim(2)?,
+                    k.dim(2)?,
+                    causal,
+                    sdpa_params.sliding_window,
+                    q.dtype(),
+                    q.device(),
+                )?;
+                return self.run_attention_noflash(
+                    q,
+                    k,
+                    v,
+                    fallback_mask.as_ref(),
+                    sdpa_params,
+                    causal,
+                );
+            }
+
             // flash-attn expects (b_sz, seq_len, nheads, head_dim)
             let q = q.transpose(1, 2)?;
             let k = k.transpose(1, 2)?;
@@ -241,19 +460,6 @@ impl Sdpa {
             if q.device().is_cpu() {
                 return run_flash_attn_cpu_for_dtype(&q, &k, &v, None, sdpa_params);
             } else {
-                // hd512 flash kernels drop softcap/sliding-window at compile time; fail loud, not silent.
-                let (_, _, _, head_dim) = q.dims4()?;
-                if head_dim == 512
-                    && (sdpa_params.softcap.is_some_and(|s| s != 1.0)
-                        || sdpa_params.sliding_window.is_some())
-                {
-                    return Err(candle_core::Error::Msg(
-                        "flash-attn head_dim 512 kernels are compiled without softcap/sliding-window; \
-                         remove the FLASHATTENTION_DISABLE_* defines in \
-                         mistralrs-flash-attn/kernels/*hdim512*.cu to re-enable (slow compile)"
-                            .to_string(),
-                    ));
-                }
                 return flash_attn(&q, &k, &v, flash_params, sdpa_params)?.transpose(1, 2);
             }
         }
@@ -279,6 +485,19 @@ impl Sdpa {
         let (b_sz, n_attn_heads, seq_len, head_dim) = q.dims4()?;
         let (_, _, _, k_head_dim) = k.dims4()?;
         let (_, _, _, v_head_dim) = v.dims4()?;
+
+        // Metal's vector paths do not implement general additive masks correctly.
+        if q.device().is_metal() && seq_len == 1 && mask.is_some() {
+            let k = repeat_kv(k.clone(), sdpa_params.n_kv_groups)?;
+            let v = repeat_kv(v.clone(), sdpa_params.n_kv_groups)?;
+            return naive_sdpa(
+                &q.contiguous()?,
+                &k.contiguous()?,
+                &v.contiguous()?,
+                mask,
+                sdpa_params,
+            );
+        }
 
         // We can use Metal SDPA (vector/full) if the mask is the correct size and head dims match.
         // If the mask is provided, then softcapping isn't allowed - default back to naive SDPA
@@ -352,7 +571,7 @@ impl Sdpa {
             && !(head_dim == 512 && seq_len > 8)
         {
             let mask = match mask {
-                Some(mask) => Some(mask.broadcast_as(tgt_mask_shape)?),
+                Some(mask) => Some(offset_free(mask)?.broadcast_as(tgt_mask_shape)?),
                 None => None,
             };
             // do_causal lets the steel_attention kernel bound its kb-loop to
@@ -360,9 +579,9 @@ impl Sdpa {
             // entirely (roughly halves matmul cost for prefill).
             let do_causal = seq_len > 1 && causal;
             return candle_nn::ops::sdpa(
-                q,
-                k,
-                v,
+                &packed_rows(q)?,
+                &packed_rows(k)?,
+                &packed_rows(v)?,
                 mask.as_ref(),
                 do_causal,
                 sdpa_params.softmax_scale,
@@ -515,6 +734,103 @@ mod tests {
     }
 
     #[test]
+    fn causal_flash_has_attention_intent_without_a_custom_tensor() {
+        let mask = AttentionMask::CausalFlash;
+
+        assert!(!mask.is_none());
+        assert!(!mask.is_custom());
+    }
+
+    fn structured_mask_matches_dense(device: &Device) -> CandleResult<()> {
+        const HEAD_DIM: usize = 64;
+        const TOLERANCE: f32 = 0.0003;
+        for (query_len, key_len) in [(4, 4), (3, 9), (1, 7)] {
+            for (mask, window) in [
+                (AttentionMask::CausalFlash, None),
+                (AttentionMask::CausalFlash, Some(3)),
+                (AttentionMask::Bidirectional, Some(3)),
+                (AttentionMask::ChunkedCausal { chunk_size: 4 }, None),
+            ] {
+                let tensor = |length: usize, factor: usize| {
+                    Tensor::from_vec(
+                        (0..2 * length * HEAD_DIM)
+                            .map(|i| ((i * factor) as f32).sin() * 0.5)
+                            .collect::<Vec<_>>(),
+                        (1, 2, length, HEAD_DIM),
+                        &Device::Cpu,
+                    )
+                };
+                let q = tensor(query_len, 1)?;
+                let k = tensor(key_len, 3)?;
+                let v = tensor(key_len, 7)?;
+                let mut bias = Vec::new();
+                for row in 0..query_len {
+                    let pos = key_len - query_len + row;
+                    for col in 0..key_len {
+                        let visible = match mask {
+                            AttentionMask::Bidirectional => {
+                                window.is_none_or(|w| pos.abs_diff(col) < w)
+                            }
+                            AttentionMask::ChunkedCausal { chunk_size } => {
+                                col <= pos && col / chunk_size == pos / chunk_size
+                            }
+                            _ => col <= pos && window.is_none_or(|w| pos - col < w),
+                        };
+                        bias.push(if visible { 0f32 } else { f32::NEG_INFINITY });
+                    }
+                }
+                let bias = Tensor::from_vec(bias, (query_len, key_len), &Device::Cpu)?;
+                let logits = q
+                    .matmul(&k.transpose(2, 3)?.contiguous()?)?
+                    .affine(0.125, 0.)?
+                    .broadcast_add(&bias)?;
+                let expected = candle_nn::ops::softmax(&logits, D::Minus1)?.matmul(&v)?;
+                let params = SdpaParams {
+                    n_kv_groups: 1,
+                    softcap: None,
+                    softmax_scale: 0.125,
+                    sliding_window: window,
+                    sinks: None,
+                };
+                let actual = Sdpa.run_attention(
+                    &q.to_device(device)?,
+                    &k.to_device(device)?,
+                    &v.to_device(device)?,
+                    &mask,
+                    Some(&FlashParams::empty(!matches!(
+                        mask,
+                        AttentionMask::Bidirectional
+                    ))),
+                    &params,
+                )?;
+                let actual = actual
+                    .to_device(&Device::Cpu)?
+                    .flatten_all()?
+                    .to_vec1::<f32>()?;
+                let expected = expected.flatten_all()?.to_vec1::<f32>()?;
+                for (actual, expected) in actual.into_iter().zip(expected) {
+                    assert!(
+                        (actual - expected).abs() < TOLERANCE,
+                        "{mask:?} Q={query_len} K={key_len}: {actual} != {expected}"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn structured_attention_preserves_cpu_dense_semantics() -> CandleResult<()> {
+        structured_mask_matches_dense(&Device::Cpu)
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn structured_attention_preserves_metal_dense_semantics() -> CandleResult<()> {
+        structured_mask_matches_dense(&Device::new_metal(0)?)
+    }
+
+    #[test]
     fn test_custom_cpu_mask_uses_attention_dispatch() -> CandleResult<()> {
         let (b, h, q_len, kv_len, d) = (1, 2, 3, 3, 4);
         let q = Tensor::from_vec(
@@ -574,5 +890,45 @@ mod tests {
 
         assert_eq!(out.shape().dims(), &[b, h, q_len, d]);
         assert_close(&out, &expected)
+    }
+
+    #[cfg(any(
+        feature = "flash-attn",
+        feature = "flash-attn-v3",
+        all(feature = "cuda", target_family = "unix")
+    ))]
+    #[test]
+    fn sliding_window_capacity_converts_to_left_distance() {
+        assert_eq!(sliding_window_left(None), None);
+        assert_eq!(sliding_window_left(Some(1)), Some(0));
+        assert_eq!(sliding_window_left(Some(4096)), Some(4095));
+    }
+
+    #[test]
+    fn eager_mask_combines_suffix_causality_and_sliding_capacity() -> CandleResult<()> {
+        let mask = eager_attention_mask(3, 8, true, Some(4), DType::F32, &Device::Cpu)?
+            .expect("causal sliding mask");
+        let mask = mask.to_vec2::<f32>()?;
+
+        for (row, values) in mask.iter().enumerate() {
+            let query_pos = row + 5;
+            for (key_pos, &value) in values.iter().enumerate() {
+                let visible = key_pos <= query_pos && key_pos + 4 > query_pos;
+                assert_eq!(value == 0.0, visible);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn eager_mask_unit_window_keeps_only_current_token() -> CandleResult<()> {
+        let mask = eager_attention_mask(1, 3, true, Some(1), DType::F32, &Device::Cpu)?
+            .expect("unit sliding mask");
+
+        assert_eq!(
+            mask.flatten_all()?.to_vec1::<f32>()?,
+            vec![f32::NEG_INFINITY, f32::NEG_INFINITY, 0.0]
+        );
+        Ok(())
     }
 }

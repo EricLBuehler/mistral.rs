@@ -9,7 +9,7 @@ use mistralrs_quant::ShardedVarBuilder;
 use serde::Deserialize;
 use std::sync::Arc;
 
-use crate::layers::{clamp_for_f16, embedding, linear_no_bias, MatMul};
+use crate::layers::{clamp_for_f16, dense_embedding, linear_no_bias, MatMul};
 
 fn default_relative_attention_max_distance() -> usize {
     128
@@ -322,7 +322,7 @@ impl T5Attention {
         let v = linear_no_bias(cfg.d_model, inner_dim, vb.pp("v"))?;
         let o = linear_no_bias(inner_dim, cfg.d_model, vb.pp("o"))?;
         let relative_attention_bias = if has_relative_attention_bias {
-            let emb = embedding(
+            let emb = dense_embedding(
                 cfg.relative_attention_num_buckets,
                 cfg.num_heads,
                 vb.pp("relative_attention_bias"),
@@ -766,7 +766,7 @@ impl T5EncoderModel {
         } else {
             vb.pp("encoder").pp("embed_tokens")
         };
-        let shared = embedding(
+        let shared = dense_embedding(
             cfg.vocab_size,
             cfg.d_model,
             shared_vb.set_device(device.clone()),

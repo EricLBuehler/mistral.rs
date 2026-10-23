@@ -94,7 +94,12 @@ impl T5RelativeAttentionLogitBias {
         }
 
         Ok(Self {
-            bias_values: layers::embedding(num_buckets, num_heads, vb.pp("bias_values"), &None)?,
+            bias_values: layers::dense_embedding(
+                num_buckets,
+                num_heads,
+                vb.pp("bias_values"),
+                &None,
+            )?,
             skip_bucketing,
             symmetric,
             max_distance,

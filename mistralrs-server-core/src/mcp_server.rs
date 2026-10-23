@@ -2,13 +2,18 @@
 
 use std::sync::Arc;
 
-use axum::{extract::State, response::Json, routing::post, Router};
+use axum::{
+    extract::{rejection::JsonRejection, State},
+    response::Json,
+    routing::post,
+    Router,
+};
 use mistralrs_core::{Response, SupportedModality};
 use serde_json::{json, Value};
 
 use crate::{
     chat_completion::{parse_request, ChatCompletionParseContext},
-    handler_core::{create_response_channel, send_request},
+    handler_core::{create_response_channel, send_request, ApiError, ApiErrorKind},
     openai::{ChatCompletionRequest, OpenAiToolSurface},
     types::SharedMistralRsState,
 };
@@ -19,16 +24,19 @@ pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
 const JSONRPC_VERSION: &str = "2.0";
 const CHAT_TOOL_NAME: &str = "chat";
 
+const PARSE_ERROR: i32 = -32700;
 const INVALID_REQUEST: i32 = -32600;
+const INVALID_PARAMS: i32 = -32602;
 const METHOD_NOT_FOUND: i32 = -32601;
 const INTERNAL_ERROR: i32 = -32603;
+const INTERNAL_ERROR_MESSAGE: &str = "Internal error";
 
 const MCP_INSTRUCTIONS: &str = r#"
 This server provides LLM text and multimodal model inference. You can use the following tools:
 - `chat` for sending a chat completion request with a model message history
 "#;
 
-#[derive(serde::Deserialize)]
+#[derive(Debug, serde::Deserialize)]
 struct JsonRpcRequest {
     jsonrpc: String,
     id: Option<Value>,
@@ -167,9 +175,21 @@ pub fn create_mcp_router(mistralrs: SharedMistralRsState) -> Router {
 
 async fn handle_jsonrpc(
     State(state): State<Arc<McpState>>,
-    Json(request): Json<JsonRpcRequest>,
+    payload: Result<Json<JsonRpcRequest>, JsonRejection>,
 ) -> Json<JsonRpcResponse> {
+    let request = match payload {
+        Ok(Json(request)) => request,
+        Err(error) => return Json(json_rejection_response(error)),
+    };
     Json(handle_request(&state, request).await)
+}
+
+fn json_rejection_response(error: JsonRejection) -> JsonRpcResponse {
+    let (code, message) = match error {
+        JsonRejection::JsonSyntaxError(_) => (PARSE_ERROR, "Parse error"),
+        _ => (INVALID_REQUEST, "Invalid Request"),
+    };
+    error_response(None, code, message.to_string())
 }
 
 async fn handle_request(state: &McpState, request: JsonRpcRequest) -> JsonRpcResponse {
@@ -192,7 +212,7 @@ async fn handle_request(state: &McpState, request: JsonRpcRequest) -> JsonRpcRes
     if tool_name != CHAT_TOOL_NAME || !state.chat_enabled {
         return error_response(
             request.id,
-            METHOD_NOT_FOUND,
+            INVALID_PARAMS,
             format!("Unknown tool: {tool_name}"),
         );
     }
@@ -200,17 +220,42 @@ async fn handle_request(state: &McpState, request: JsonRpcRequest) -> JsonRpcRes
     let args = params.get("arguments").cloned().unwrap_or(json!({}));
     match call_chat_tool(&state.mistralrs, args).await {
         Ok(result) => ok_response(request.id, result),
-        Err(msg) => error_response(
+        Err(McpCallError::InvalidParams(message)) => {
+            error_response(request.id, INVALID_PARAMS, message)
+        }
+        Err(McpCallError::Internal) => error_response(
             request.id,
             INTERNAL_ERROR,
-            format!("Tool execution error: {msg}"),
+            INTERNAL_ERROR_MESSAGE.to_string(),
         ),
     }
 }
 
-async fn call_chat_tool(state: &SharedMistralRsState, args: Value) -> Result<Value, String> {
-    let chat_req: ChatCompletionRequest =
-        serde_json::from_value(args).map_err(|e| e.to_string())?;
+enum McpCallError {
+    InvalidParams(String),
+    Internal,
+}
+
+impl McpCallError {
+    fn from_error(error: &(dyn std::error::Error + 'static), fallback: ApiErrorKind) -> Self {
+        let error = ApiError::from_error(error, fallback);
+        match error.kind {
+            ApiErrorKind::InvalidRequest
+            | ApiErrorKind::NotFound
+            | ApiErrorKind::Conflict
+            | ApiErrorKind::PayloadTooLarge
+            | ApiErrorKind::UnsupportedMediaType => Self::InvalidParams(error.message),
+            ApiErrorKind::RateLimited
+            | ApiErrorKind::Unavailable
+            | ApiErrorKind::Overloaded
+            | ApiErrorKind::Internal => Self::Internal,
+        }
+    }
+}
+
+async fn call_chat_tool(state: &SharedMistralRsState, args: Value) -> Result<Value, McpCallError> {
+    let chat_req: ChatCompletionRequest = serde_json::from_value(args)
+        .map_err(|error| McpCallError::InvalidParams(error.to_string()))?;
 
     let (tx, mut rx) = create_response_channel(None);
     let (request, _is_streaming) = parse_request(
@@ -226,10 +271,10 @@ async fn call_chat_tool(state: &SharedMistralRsState, args: Value) -> Result<Val
         },
     )
     .await
-    .map_err(|e| e.to_string())?;
+    .map_err(|error| McpCallError::from_error(error.as_ref(), ApiErrorKind::InvalidRequest))?;
     send_request(state, request)
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|error| McpCallError::from_error(&error, ApiErrorKind::Internal))?;
 
     loop {
         match rx.recv().await {
@@ -245,14 +290,21 @@ async fn call_chat_tool(state: &SharedMistralRsState, args: Value) -> Result<Val
                     .join("\n");
                 return Ok(json!({ "content": [{ "type": "text", "text": content }] }));
             }
-            Some(Response::ModelError(msg, _)) => return Err(msg),
-            Some(_) | None => return Err("no response".to_string()),
+            Some(Response::ValidationError(error)) => {
+                return Err(McpCallError::from_error(
+                    error.as_ref(),
+                    ApiErrorKind::InvalidRequest,
+                ));
+            }
+            Some(_) | None => return Err(McpCallError::Internal),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use axum::{body::Body, extract::FromRequest, http::Request};
+
     use super::*;
 
     fn dispatch(method: &str, chat_enabled: bool) -> JsonRpcResponse {
@@ -308,5 +360,47 @@ mod tests {
         assert_eq!(wire["jsonrpc"], "2.0");
         assert_eq!(wire["error"]["code"], INVALID_REQUEST);
         assert!(wire.get("result").is_none());
+    }
+
+    #[test]
+    fn call_errors_distinguish_invalid_params_from_internal_failures() {
+        let missing_model = mistralrs_core::MistralRsError::ModelNotFound("missing".to_string());
+        assert!(matches!(
+            McpCallError::from_error(&missing_model, ApiErrorKind::Internal),
+            McpCallError::InvalidParams(_)
+        ));
+
+        let internal = std::io::Error::other("private detail");
+        assert!(matches!(
+            McpCallError::from_error(&internal, ApiErrorKind::Internal),
+            McpCallError::Internal
+        ));
+    }
+
+    #[tokio::test]
+    async fn json_rejections_use_jsonrpc_errors() {
+        let malformed = Request::builder()
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{"))
+            .unwrap();
+        let rejection = Json::<JsonRpcRequest>::from_request(malformed, &())
+            .await
+            .unwrap_err();
+        assert_eq!(
+            json_rejection_response(rejection).error.unwrap().code,
+            PARSE_ERROR
+        );
+
+        let invalid = Request::builder()
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+        let rejection = Json::<JsonRpcRequest>::from_request(invalid, &())
+            .await
+            .unwrap_err();
+        assert_eq!(
+            json_rejection_response(rejection).error.unwrap().code,
+            INVALID_REQUEST
+        );
     }
 }
