@@ -376,15 +376,28 @@ impl QuantMethod for UnquantLinear {
                 }
                 let flat = b_size * seq_len * num_experts_per_tok;
                 let flat_indices = indices.reshape((flat,))?;
-                let selected_w = w.index_select(&flat_indices, 0)?;
                 let a_flat = a.reshape((flat, hidden_dim))?;
 
-                let result = a_flat
-                    .unsqueeze(1)?
-                    .matmul(&selected_w.transpose(1, 2)?)?
-                    .squeeze(1)?;
+                if crate::moe_gather_cpu::per_slot_matmul() {
+                    let selected_w = w.index_select(&flat_indices, 0)?;
+                    let result = a_flat
+                        .unsqueeze(1)?
+                        .matmul(&selected_w.transpose(1, 2)?)?
+                        .squeeze(1)?;
+                    result.reshape((b_size, seq_len, num_experts_per_tok, out_features))
+                } else if let Some(result) =
+                    crate::moe_gather_cpu::gather_rows(&a_flat, w, &flat_indices, out_features)?
+                {
+                    result.reshape((b_size, seq_len, num_experts_per_tok, out_features))
+                } else {
+                    let selected_w = w.index_select(&flat_indices, 0)?;
+                    let result = a_flat
+                        .unsqueeze(1)?
+                        .matmul(&selected_w.transpose(1, 2)?)?
+                        .squeeze(1)?;
 
-                result.reshape((b_size, seq_len, num_experts_per_tok, out_features))
+                    result.reshape((b_size, seq_len, num_experts_per_tok, out_features))
+                }
             }
             dims => {
                 candle_core::bail!(

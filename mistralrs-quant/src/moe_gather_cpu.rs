@@ -405,6 +405,65 @@ pub fn gather_broadcast_rows(
         .map(Some)
 }
 
+/// `MISTRALRS_MOE_DOWN_MATMUL=1` keeps the per-slot (down-projection) inputs on the batched
+/// matmul they used before the gather kernel covered them. The two kernels agree only to the
+/// last bits, so this is for reproducing an older run, not for speed.
+pub fn per_slot_matmul() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        matches!(
+            std::env::var("MISTRALRS_MOE_DOWN_MATMUL").as_deref(),
+            Ok("1" | "true" | "yes" | "on")
+        )
+    })
+}
+
+/// `[n_slots, in] @ gather(w, ids).T` where each slot already carries its own activation row,
+/// returned as `(n_slots, out_features)`.
+///
+/// The per-slot twin of [`gather_broadcast_rows`], for the stacked down projection: its input
+/// has one row per routed expert rather than one row per token. Returns `None` when the fast
+/// path does not apply, so the caller can fall back to index-select-and-matmul.
+pub fn gather_rows(
+    a: &Tensor,
+    w: &Tensor,
+    ids: &Tensor,
+    out_features: usize,
+) -> Result<Option<Tensor>> {
+    let (n_slots, in_features) = a.dims2()?;
+    if in_features == 0 || ids.elem_count() != n_slots {
+        return Ok(None);
+    }
+    if !should_use_gather_gemv(a, w, out_features, n_slots) {
+        return Ok(None);
+    }
+    if !matches!(ids.dtype(), DType::U8 | DType::U32 | DType::I64) {
+        return Ok(None);
+    }
+    let ids: Vec<u32> = match ids.dtype() {
+        DType::U8 => ids
+            .flatten_all()?
+            .to_vec1::<u8>()?
+            .iter()
+            .map(|v| *v as u32)
+            .collect(),
+        DType::U32 => ids.flatten_all()?.to_vec1::<u32>()?,
+        _ => ids
+            .flatten_all()?
+            .to_vec1::<i64>()?
+            .iter()
+            .map(|v| *v as u32)
+            .collect(),
+    };
+
+    let a = a.to_dtype(DType::F32)?.contiguous()?;
+    let a_rows = a.flatten_all()?.to_vec1::<f32>()?;
+    let out = gather_gemv(&a_rows, w, &ids, NO_REPEAT)?;
+    Tensor::from_vec(out, (n_slots, out_features), a.device())?
+        .to_dtype(w.dtype())
+        .map(Some)
+}
+
 #[cfg(target_arch = "aarch64")]
 fn dot_slot(
     ctx: &DotCtx<'_>,
