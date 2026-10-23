@@ -27,6 +27,7 @@ Members and their wire/config names where relevant. The members are fieldless Py
 | `Architecture.GLM4Moe` | `'glm4moe'` |
 | `Architecture.GLM4MoeLite` | `'glm4moelite'` |
 | `Architecture.Qwen3Moe` | `'qwen3moe'` |
+| `Architecture.Flint` | `'flint'` |
 | `Architecture.SmolLm3` | `'smollm3'` |
 | `Architecture.GraniteMoeHybrid` | `'granitemoehybrid'` |
 | `Architecture.GptOss` | `'gptoss'` |

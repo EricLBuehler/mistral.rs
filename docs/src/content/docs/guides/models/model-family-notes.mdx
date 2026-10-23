@@ -77,13 +77,16 @@ automatically; `--quant` is not needed for a pre-quantized FP8 repository.
 
 ```bash
 mistralrs run -m RecursiveSI/flint
+mistralrs run -m RecursiveSI/flint --quant 4
 mistralrs serve -p 1234 -m RecursiveSI/flint
 ```
 
-For 4-bit in-situ quantization, add `--isq 4`. Flint also supports MoQE and UQFF through the standard quantization workflows.
+`--quant 4` selects compatible prebuilt UQFF weights when available and otherwise applies in-situ quantization. Use `--isq 4` to force in-situ quantization. Flint also supports MoQE and UQFF through the standard quantization workflows. Flint GGUF and X-LoRA loading are not supported.
 
-CUDA supports fused attention sinks for chunked prefill and packed batches, including sliding-window attention.
+CUDA uses paged attention by default, with prefix caching and fused attention sinks for chunked prefill and packed batches, including sliding-window attention.
 Sliding-window decode reads the required KV pages directly and supports CUDA graph replay.
+
+Leave `--kv-cache` unset to use [automatic memory sizing](/guides/perf/paged-attention/#automatic-sizing). The shared KV pool is sized from the available memory budget and can hold more tokens than the model's per-request context window. Use `--max-model-len` to lower the per-request prompt-plus-output limit; it does not cap the shared pool's token capacity.
 
 The checkpoint supplies the chat template, stop tokens, and sampling defaults: temperature `1.0`, top-p `0.95`, and top-k `20`. Flint decides whether to emit reasoning on each turn; `enable_thinking` and `reasoning_effort` do not change its template. Reasoning is returned in `reasoning_content`. Preserve that field on assistant messages when sending conversation history back, including messages containing tool calls.
 
