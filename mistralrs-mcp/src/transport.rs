@@ -181,7 +181,11 @@ impl HttpTransport {
         let timeout = timeout_secs
             .map(Duration::from_secs)
             .unwrap_or(Duration::from_secs(30));
-        let client = reqwest::Client::builder().timeout(timeout).build()?;
+        // Keep project identification on MCP tool calls, without user or installation identifiers.
+        let client = reqwest::Client::builder()
+            .user_agent(concat!("mistralrs/", env!("CARGO_PKG_VERSION")))
+            .timeout(timeout)
+            .build()?;
 
         Ok(Self {
             client,
