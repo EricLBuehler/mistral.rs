@@ -48,6 +48,9 @@ accelerate-src = { workspace = true, optional = true }
 intel-mkl-src = { workspace = true, optional = true }
 
 [features]
+cuda-legacy-bf16 = ["cuda", "mistralrs-core/cuda-legacy-bf16"]
+cuda-legacy-fp8 = ["cuda", "mistralrs-core/cuda-legacy-fp8"]
+cuda-legacy-fp4 = ["cuda", "mistralrs-core/cuda-legacy-fp4"]
 default = ["swagger-ui"]
 swagger-ui = ["dep:utoipa-swagger-ui"]
 cuda = ["mistralrs-core/cuda"]

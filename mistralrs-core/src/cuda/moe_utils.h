@@ -51,6 +51,10 @@ inline __device__ float to_float(__nv_bfloat16 u) {
   return __bfloat162float(u);
 }
 
+inline __device__ float to_float(float f) {
+  return f;
+}
+
 } // namespace vllm
 
 #define ASSERT_THROW(cond, msg)                                                \

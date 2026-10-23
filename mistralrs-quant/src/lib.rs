@@ -1328,7 +1328,10 @@ impl TryFrom<GgmlDType> for IsqType {
             GgmlDType::Q8_0 => Ok(Self::Q8_0),
             GgmlDType::Q8_1 => Ok(Self::Q8_1),
             GgmlDType::Q8K => Ok(Self::Q8K),
-            GgmlDType::BF16 | GgmlDType::F32 | GgmlDType::F16 => {
+            // GGUF MXFP4 is a packed GGML tensor type; IsqType::MXFP4
+            // is a distinct learned/activation-aware quantizer and must not
+            // be silently conflated with this serialization representation.
+            GgmlDType::Mxfp4 | GgmlDType::BF16 | GgmlDType::F32 | GgmlDType::F16 => {
                 candle_core::bail!("Expected valid GGML ISQ type.")
             }
         }

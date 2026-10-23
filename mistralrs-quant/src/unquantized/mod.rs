@@ -35,6 +35,15 @@ fn supports_cublaslt_batch_matmul(a: &Tensor, w: &Tensor) -> bool {
     has_cublaslt_batch_layout(a) && has_cublaslt_batch_layout(w)
 }
 
+// Legacy BF16 routes through Candle's supported matmul path on Pascal,
+// avoiding the specialized GEMV/cuBLASLt kernels. Opt-in only.
+fn use_legacy_bf16_fallback(input: &Tensor) -> bool {
+    cfg!(feature = "cuda")
+        && cfg!(allow_legacy_bf16)
+        && input.device().is_cuda()
+        && input.dtype() == DType::BF16
+}
+
 impl UnquantLinear {
     fn forward_cuda_gemm(&self, input: &Tensor) -> Result<Tensor> {
         let input_dim = input.dim(D::Minus1)?;
@@ -143,10 +152,11 @@ impl QuantMethod for UnquantLinear {
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
         // Batch matrix multiplication
         maybe_init_cublas_lt_wrapper(a.device().clone());
+        let legacy_bf16 = use_legacy_bf16_fallback(a);
 
         // Try custom GEMV for single-token decode (batch_size=1)
         #[cfg(feature = "cuda")]
-        if crate::gemv::should_use_gemv(a, &self.w) {
+        if !legacy_bf16 && crate::gemv::should_use_gemv(a, &self.w) {
             return crate::gemv::gemv(a, &self.w, self.b.as_ref());
         }
 
@@ -179,7 +189,7 @@ impl QuantMethod for UnquantLinear {
             match a.device().location() {
                 DeviceLocation::Cuda { .. } => {
                     // Try to use cublaslt, otherwise fallback to gemm
-                    let cublaslt = if supports_cublaslt_batch_matmul(a, &w) {
+                    let cublaslt = if !legacy_bf16 && supports_cublaslt_batch_matmul(a, &w) {
                         CUBLASLT_CONTROLLER.get_for_device(a.device())
                     } else {
                         None
@@ -227,7 +237,7 @@ impl QuantMethod for UnquantLinear {
         } else {
             match a.device().location() {
                 DeviceLocation::Cuda { .. } => {
-                    let cublaslt = if supports_cublaslt_batch_matmul(a, &w) {
+                    let cublaslt = if !legacy_bf16 && supports_cublaslt_batch_matmul(a, &w) {
                         CUBLASLT_CONTROLLER.get_for_device(a.device())
                     } else {
                         None
@@ -945,3 +955,32 @@ mod tests {
 
 #[cfg(all(test, feature = "cuda"))]
 mod wide_gemv_tests;
+
+#[cfg(all(test, feature = "cuda"))]
+mod legacy_bf16_pascal_proof {
+    use super::*;
+
+    #[test]
+    fn legacy_bf16_unquantized_linear_avoids_unsupported_dispatch() -> Result<()> {
+        if !cfg!(allow_legacy_bf16) {
+            return Ok(());
+        }
+        let device = Device::new_cuda(0)?;
+        let a = Tensor::new(&[[1.0_f32, 2.0]], &device)?.to_dtype(DType::BF16)?;
+        assert!(use_legacy_bf16_fallback(&a));
+        let weight = Tensor::new(&[[1.0_f32, 1.0], [2.0, 0.0]], &device)?.to_dtype(DType::BF16)?;
+        let layer = <UnquantLinear as QuantMethod>::new(QuantMethodConfig::Unquantized(
+            Linear::new(weight, None),
+        ))?;
+        let result = layer
+            .forward_raw(&a)?
+            .to_dtype(DType::F32)?
+            .to_device(&Device::Cpu)?
+            .to_vec2::<f32>()?;
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].len(), 2);
+        assert!((result[0][0] - 3.0).abs() < 0.1);
+        assert!((result[0][1] - 2.0).abs() < 0.1);
+        Ok(())
+    }
+}

@@ -120,6 +120,9 @@ dispatch2 = { workspace = true, optional = true }
 mistralrs-metal-compile = { workspace = true, optional = true, features = ["metal"] }
 
 [features]
+cuda-legacy-bf16 = ["cuda", "candle-core/cuda-legacy-bf16", "mistralrs-quant/cuda-legacy-bf16", "mistralrs-paged-attn/cuda-legacy-bf16"]
+cuda-legacy-fp8 = ["cuda", "candle-core/cuda-legacy-fp8", "mistralrs-quant/cuda-legacy-fp8", "mistralrs-paged-attn/cuda-legacy-fp8"]
+cuda-legacy-fp4 = ["cuda", "candle-core/cuda-legacy-fp4", "mistralrs-quant/cuda-legacy-fp4", "mistralrs-paged-attn/cuda-legacy-fp4"]
 pyo3_macros = ["pyo3", "mistralrs-mcp/pyo3_macros"]
 cuda = [
     "candle-core/cuda",
