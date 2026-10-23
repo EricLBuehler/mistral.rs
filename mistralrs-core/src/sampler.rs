@@ -313,6 +313,8 @@ pub struct Sampler {
     top1_cache: Arc<Mutex<Option<crate::ops::CudaTop1LogitsWorkspace>>>,
     #[cfg(feature = "cuda")]
     topk_sampling_cache: Arc<Mutex<Option<crate::ops::CudaTopKSamplingWorkspace>>>,
+    #[cfg(feature = "metal")]
+    metal_top1_cache: Arc<Mutex<Option<crate::ops::MetalTop1LogitsWorkspace>>>,
 }
 
 #[cfg(feature = "cuda")]
@@ -734,6 +736,8 @@ impl Sampler {
             top1_cache: Arc::new(Mutex::new(None)),
             #[cfg(feature = "cuda")]
             topk_sampling_cache: Arc::new(Mutex::new(None)),
+            #[cfg(feature = "metal")]
+            metal_top1_cache: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -1351,7 +1355,7 @@ impl Sampler {
             && !sample_speculative
             && !multiple_sequences
             && self.temperature.is_some()
-            && self.top_k > 0
+            && self.top_k > 1
             && self.top_k <= MAX_DEVICE_TOP_K
             && (supports_logits_bias || self.logits_bias.is_empty())
             && self.logits_processors.is_empty()
@@ -1361,17 +1365,24 @@ impl Sampler {
                 .is_none_or(|params| params.multiplier == 0.0)
     }
 
-    #[cfg(feature = "cuda")]
-    fn can_sample_greedy_on_device(
+    #[cfg(any(feature = "cuda", feature = "metal"))]
+    fn can_sample_top1_on_device(
         &self,
         return_logprobs: bool,
         sample_speculative: bool,
         multiple_sequences: bool,
+        supports_logits_bias: bool,
     ) -> bool {
         !return_logprobs
             && !sample_speculative
             && !multiple_sequences
-            && self.temperature.is_none()
+            && (self.temperature.is_none()
+                || (self.top_k == 1
+                    && self.temperature.is_some_and(|temperature| {
+                        let inverse = (1.0 / temperature) as f32;
+                        temperature.is_finite() && inverse.is_finite() && inverse > 0.0
+                    })))
+            && (supports_logits_bias || self.logits_bias.is_empty())
             && self.logits_processors.is_empty()
             && self
                 .dry_params
@@ -1468,14 +1479,6 @@ impl Sampler {
         temperature: f64,
         rng: Arc<Mutex<Isaac64Rng>>,
     ) -> Result<Logprobs> {
-        if self.top_k == 1 {
-            let packed = {
-                let mut cache = self.top1_cache.lock().unwrap();
-                crate::ops::cuda_top1_logits_f32_cached(&logits, &mut cache)?
-            };
-            return self.sample_cuda_top1_row(&packed);
-        }
-
         let topk =
             crate::ops::cuda_topk_logits_f32_packed(&logits, self.top_k as usize, temperature)?;
         let packed = topk.packed.to_vec1::<f32>()?;
@@ -1565,7 +1568,7 @@ impl Sampler {
     }
 
     #[cfg(feature = "cuda")]
-    fn sample_greedy_on_device(&self, logits: Tensor) -> Result<Logprobs> {
+    fn sample_top1_on_device(&self, logits: Tensor) -> Result<Logprobs> {
         let packed = {
             let mut cache = self.top1_cache.lock().unwrap();
             crate::ops::cuda_top1_logits_f32_cached(&logits, &mut cache)?
@@ -1590,6 +1593,23 @@ impl Sampler {
     }
 
     #[cfg(feature = "metal")]
+    fn sample_top1_on_device_metal(&self, logits: Tensor) -> Result<Logprobs> {
+        let packed = {
+            let mut cache = self.metal_top1_cache.lock().unwrap();
+            crate::ops::metal_top1_logits_cached(&logits, &mut cache)?
+        };
+        if !packed[0].is_finite() {
+            candle_core::bail!("invalid Metal top-1 logits");
+        }
+        Ok(Logprobs {
+            token: packed[1] as u32,
+            logprob: 0.0,
+            top_logprobs: None,
+            bytes: None,
+        })
+    }
+
+    #[cfg(feature = "metal")]
     fn apply_device_sparse_penalties_if_needed_metal(
         &self,
         logits: Tensor,
@@ -1599,15 +1619,14 @@ impl Sampler {
         let frequency_penalty = self.frequency_penalty.unwrap_or(0.0);
         let presence_penalty = self.presence_penalty.unwrap_or(0.0);
         let repetition_penalty = self.repetition_penalty.unwrap_or(1.0);
-        let needs_penalty = frequency_penalty.abs() > f32::EPSILON
-            || presence_penalty.abs() > f32::EPSILON
-            || (repetition_penalty - 1.0).abs() > f32::EPSILON;
+        let needs_penalty =
+            frequency_penalty != 0.0 || presence_penalty != 0.0 || repetition_penalty != 1.0;
         if !needs_penalty || context.is_empty() {
             return Ok(logits);
         }
         let vocab_size = logits.elem_count();
         let mut logits = logits;
-        if frequency_penalty.abs() > f32::EPSILON || presence_penalty.abs() > f32::EPSILON {
+        if frequency_penalty != 0.0 || presence_penalty != 0.0 {
             if let Some((token_ids, token_counts)) = sparse_token_counts(
                 &context[prompt_len.min(context.len())..],
                 vocab_size,
@@ -1623,7 +1642,7 @@ impl Sampler {
                 )?;
             }
         }
-        if (repetition_penalty - 1.0).abs() > f32::EPSILON {
+        if repetition_penalty != 1.0 {
             if let Some((token_ids, token_counts)) =
                 sparse_token_counts(context, vocab_size, logits.device())?
             {
@@ -2136,16 +2155,17 @@ impl Sampler {
     ) -> Result<Logprobs> {
         #[cfg(feature = "cuda")]
         if logits.device().is_cuda()
-            && self.can_sample_greedy_on_device(
+            && self.can_sample_top1_on_device(
                 return_logprobs,
                 sample_speculative,
                 multiple_sequences,
+                true,
             )
         {
             let logits =
                 self.apply_device_sparse_penalties_if_needed(logits, context, prompt_len)?;
             let logits = self.apply_device_logits_bias_if_needed(logits)?;
-            return self.sample_greedy_on_device(logits);
+            return self.sample_top1_on_device(logits);
         }
 
         #[cfg(feature = "cuda")]
@@ -2163,6 +2183,20 @@ impl Sampler {
                 let logits = self.apply_device_logits_bias_if_needed(logits)?;
                 return self.sample_topk_on_device(logits, temperature, rng);
             }
+        }
+
+        #[cfg(feature = "metal")]
+        if logits.device().is_metal()
+            && self.can_sample_top1_on_device(
+                return_logprobs,
+                sample_speculative,
+                multiple_sequences,
+                false,
+            )
+        {
+            let logits =
+                self.apply_device_sparse_penalties_if_needed_metal(logits, context, prompt_len)?;
+            return self.sample_top1_on_device_metal(logits);
         }
 
         #[cfg(feature = "metal")]
@@ -2285,6 +2319,145 @@ mod tests {
         assert!(argmax_f32(&[0.0, f32::INFINITY]).is_err());
         assert!(argmax_f32(&[f32::NEG_INFINITY, f32::NEG_INFINITY]).is_err());
         assert!(argmax_f32(&[]).is_err());
+    }
+
+    #[cfg(any(feature = "cuda", feature = "metal"))]
+    fn top1_sampler(temperature: Option<f64>, top_k: i64) -> super::Sampler {
+        super::Sampler::new(
+            temperature,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            top_k,
+            0.8,
+            0.1,
+            HashMap::new(),
+            vec![],
+        )
+        .unwrap()
+    }
+
+    #[cfg(any(feature = "cuda", feature = "metal"))]
+    #[test]
+    fn device_top1_matches_cpu_with_prompt_aware_penalties() -> candle_core::Result<()> {
+        use candle_core::{Device, Tensor};
+        use rand::SeedableRng;
+        use rand_isaac::Isaac64Rng;
+        use std::sync::{Arc, Mutex};
+
+        let devices = [
+            #[cfg(feature = "cuda")]
+            Device::new_cuda(0)?,
+            #[cfg(feature = "metal")]
+            Device::new_metal(0)?,
+        ];
+        for device in devices {
+            for (values, context, frequency, presence, repetition) in [
+                ([-1.0f32, 4.0, 3.0, 2.0], vec![1, 1, 2], 1.0, 0.5, 1.25),
+                ([0.0, -1e-6, -2.0, -3.0], vec![0; 20], 1e-7, 0.0, 1.0),
+            ] {
+                for (temperature, top_k) in [(None, -1), (None, 4), (Some(0.7), 1)] {
+                    for prompt_len in [0, 2, context.len()] {
+                        let mut sampler = top1_sampler(temperature, top_k);
+                        sampler.frequency_penalty = Some(frequency);
+                        sampler.presence_penalty = Some(presence);
+                        sampler.repetition_penalty = Some(repetition);
+                        let logits = Tensor::new(&values, &Device::Cpu)?;
+                        let sample = |logits| {
+                            sampler.sample(
+                                logits,
+                                &context,
+                                prompt_len,
+                                false,
+                                Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42))),
+                                false,
+                                false,
+                            )
+                        };
+                        let cpu = sample(logits.clone())?;
+                        let gpu = sample(logits.to_device(&device)?)?;
+                        assert_eq!(gpu.token, cpu.token);
+                        assert_eq!(gpu.logprob, 0.0);
+                        assert!(gpu.top_logprobs.is_none());
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn metal_top1_fallback_preserves_logprobs_and_logits_bias() -> candle_core::Result<()> {
+        use candle_core::{Device, Tensor};
+        use rand::SeedableRng;
+        use rand_isaac::Isaac64Rng;
+        use std::sync::{Arc, Mutex};
+
+        let metal = Device::new_metal(0)?;
+        for return_logprobs in [false, true] {
+            let mut sampler = top1_sampler(None, -1);
+            if !return_logprobs {
+                sampler.logits_bias.insert(1, -10.0);
+            }
+            let logits = Tensor::new(&[0.0f32, 4.0, 3.0], &Device::Cpu)?;
+            let sample = |logits| {
+                sampler.sample(
+                    logits,
+                    &[0],
+                    1,
+                    return_logprobs,
+                    Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42))),
+                    false,
+                    false,
+                )
+            };
+            let cpu = sample(logits.clone())?;
+            let gpu = sample(logits.to_device(&metal)?)?;
+            assert_eq!(gpu.token, cpu.token);
+            assert_eq!(gpu.logprob, cpu.logprob);
+            assert_eq!(gpu.top_logprobs.is_some(), return_logprobs);
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn metal_top1_rejects_invalid_logits() -> candle_core::Result<()> {
+        use candle_core::{Device, Tensor};
+        use rand::SeedableRng;
+        use rand_isaac::Isaac64Rng;
+        use std::sync::{Arc, Mutex};
+
+        const VOCAB: usize = 4097;
+        const INVALID_INDEX: usize = 2048;
+
+        let metal = Device::new_metal(0)?;
+        for temperature in [None, Some(0.7)] {
+            let sampler = top1_sampler(temperature, 1);
+            for invalid in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                let mut values = vec![f32::NEG_INFINITY; VOCAB];
+                values[INVALID_INDEX] = invalid;
+                if invalid != f32::NEG_INFINITY {
+                    values[VOCAB - 1] = 1.0;
+                }
+                assert!(sampler
+                    .sample(
+                        Tensor::from_vec(values, VOCAB, &metal)?,
+                        &[0],
+                        1,
+                        false,
+                        Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(42))),
+                        false,
+                        false,
+                    )
+                    .is_err());
+            }
+        }
+        Ok(())
     }
 
     #[test]

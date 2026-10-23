@@ -18,6 +18,8 @@ curl http://localhost:1234/v1/chat/completions -H "Content-Type: application/jso
 
 Fields a request leaves unset fall back to the model's `generation_config.json` (temperature, top-k, top-p, min-p, repetition penalty). Without such defaults the engine samples at temperature 1.0 with no filters. Send `temperature: 0` (or `top_k: 1`) for greedy decoding.
 
+CUDA and Metal use a dedicated device top1 path for greedy decoding and `top_k: 1` when logprobs, speculative sampling, and multiple-sequence sampling are disabled. Frequency, presence, and repetition penalties run on device before selection. Custom logits processors and active DRY penalties use the general sampling path; Metal also uses that path when logit bias is set. The Metal top1 path supports F32, F16, and BF16 logits and reuses its reduction buffers between tokens.
+
 ## Application order
 
 When a request is sampled, the engine applies filters in this order:
