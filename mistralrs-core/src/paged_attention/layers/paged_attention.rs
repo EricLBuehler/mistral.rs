@@ -4072,8 +4072,10 @@ mod sinks_decode_graph_tests {
         disable_event_tracking_for_capture, prepare_cuda_graph_memory_pool,
         restore_event_tracking_after_capture, CudaGraphHandle,
     };
+    use anyhow::Context;
     use candle_core::{cuda::cudarc::driver::sys, Var};
 
+    const ISOLATED_TEST_ENV: &str = "MISTRALRS_SINKS_DECODE_GRAPH_TEST_CHILD";
     const HEADS: usize = 4;
     const KV_HEADS: usize = 2;
     const HEAD_DIM: usize = 128;
@@ -4203,7 +4205,8 @@ mod sinks_decode_graph_tests {
         let captured = forward();
         let graph = CudaGraphHandle::end_capture(&stream);
         restore_event_tracking_after_capture(&stream, restore);
-        let output = captured?;
+        let output =
+            captured.map_err(|error| error.context("paged sink graph captured forward failed"))?;
         let graph = graph?.ok_or_else(|| candle_core::Error::msg("missing paged decode graph"))?;
         graph.upload()?;
         for (case, context) in CONTEXT_CASES.into_iter().enumerate() {
@@ -4272,13 +4275,33 @@ mod sinks_decode_graph_tests {
     }
 
     #[test]
-    fn cuda_paged_sinks_decode_graph_updates_context_and_cache_without_host_lengths() -> Result<()>
-    {
+    fn cuda_paged_sinks_decode_graph_updates_context_and_cache_without_host_lengths(
+    ) -> anyhow::Result<()> {
+        if std::env::var_os(ISOLATED_TEST_ENV).is_none() {
+            // Other CUDA tests share the primary context and can invalidate stream capture.
+            let name = std::any::type_name_of_val(
+                &cuda_paged_sinks_decode_graph_updates_context_and_cache_without_host_lengths,
+            );
+            let name = name.split_once("::").unwrap().1;
+            let output = std::process::Command::new(std::env::current_exe()?)
+                .args(["--exact", name, "--nocapture", "--test-threads=1"])
+                .env(ISOLATED_TEST_ENV, "1")
+                .output()?;
+            anyhow::ensure!(
+                output.status.success(),
+                "isolated paged sink graph test failed ({}):\n{}\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+            return Ok(());
+        }
         let device = Device::new_cuda(0)?;
         for dtype in [DType::BF16, DType::F32] {
             for rows in [1, 2] {
                 for window in [None, Some(WINDOW)] {
-                    check_decode_graph(&device, dtype, rows, window)?;
+                    check_decode_graph(&device, dtype, rows, window)
+                        .with_context(|| format!("{dtype:?} rows={rows} window={window:?}"))?;
                 }
             }
         }
