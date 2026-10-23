@@ -87,7 +87,6 @@ fn pseudo_bytes(len: usize, seed: u32) -> Vec<u8> {
         .collect()
 }
 
-
 /// Bit-for-bit comparison. Synthetic blocks can carry a non-finite scale, and NaN != NaN
 /// would turn that into a spurious mismatch; the bits are what "identical" means here.
 fn assert_same_bits(got: &[f32], want: &[f32], what: &str) {
@@ -239,11 +238,7 @@ fn expert_gather_matches_the_fused_stack_bit_exactly() -> Result<()> {
         let slot_rows: Vec<f32> = (0..tokens * top_k * k)
             .map(|i| ((i % 29) as f32) * 0.0625 - 0.5)
             .collect();
-        let x4 = Tensor::from_vec(
-            slot_rows.clone(),
-            (1, tokens, top_k, k),
-            &Device::Cpu,
-        )?;
+        let x4 = Tensor::from_vec(slot_rows.clone(), (1, tokens, top_k, k), &Device::Cpu)?;
         let got = quant
             .gather_forward(&x4, &ids3)?
             .flatten_all()?
@@ -295,7 +290,11 @@ fn tiny_gather_falls_back_to_the_whole_stack_gather() -> Result<()> {
 
     // 2 * 4 slots at width 4 is below the kernel's threshold, so this takes the fallback.
     assert!(!crate::moe_gather_cpu::should_use_gather_gemv_shape(
-        experts, out, k, out, tokens * top_k
+        experts,
+        out,
+        k,
+        out,
+        tokens * top_k
     ));
 
     let x5 = Tensor::from_vec(a.clone(), (1, tokens, 1, 1, k), &Device::Cpu)?;
@@ -343,11 +342,7 @@ fn parallel_decode_matches_the_serial_decode_bit_exactly() {
             let mut parallel = vec![0f32; n_blocks * block_size];
             dequantize_blocks_par(dtype, &bytes, n_blocks, &mut parallel);
 
-            assert_same_bits(
-                &parallel,
-                &serial,
-                &format!("{name} at {n_blocks} blocks"),
-            );
+            assert_same_bits(&parallel, &serial, &format!("{name} at {n_blocks} blocks"));
         }
     }
 }
@@ -370,8 +365,7 @@ fn decode_and_gather_cost_of_one_token() {
 
     let bytes = pseudo_bytes(experts * out * (k / block_size) * type_size, 16);
     let stack = std::sync::Arc::new(
-        IqTensor::new(bytes.into_boxed_slice(), vec![experts, out, k], dtype)
-            .expect("iq stack"),
+        IqTensor::new(bytes.into_boxed_slice(), vec![experts, out, k], dtype).expect("iq stack"),
     );
     let matmul = IqGgufMatMul::new(stack.clone(), None).expect("iq matmul");
 
@@ -450,10 +444,7 @@ fn decode_and_gather_cost_of_one_token() {
         fused_per_layer * 1e3,
         1.0 / fused_per_layer
     );
-    println!(
-        "fused against the two-step: {:.2}x",
-        gather / fused
-    );
+    println!("fused against the two-step: {:.2}x", gather / fused);
 }
 
 /// Random block bytes can carry a non-finite f16 scale, which says nothing about the
@@ -487,8 +478,7 @@ fn fused_gather_agrees_with_the_two_step_path() {
 
     let bytes = finite_blocks(dtype, experts * out * (k / block_size) * type_size, 5);
     let stack = std::sync::Arc::new(
-        IqTensor::new(bytes.into_boxed_slice(), vec![experts, out, k], dtype)
-            .expect("iq stack"),
+        IqTensor::new(bytes.into_boxed_slice(), vec![experts, out, k], dtype).expect("iq stack"),
     );
     let matmul = IqGgufMatMul::new(stack, None).expect("iq matmul");
 
@@ -541,8 +531,7 @@ fn fused_gather_matches_a_reference_in_f64() {
 
     let bytes = finite_blocks(dtype, experts * out * (k / block_size) * type_size, 77);
     let stack = std::sync::Arc::new(
-        IqTensor::new(bytes.into_boxed_slice(), vec![experts, out, k], dtype)
-            .expect("iq stack"),
+        IqTensor::new(bytes.into_boxed_slice(), vec![experts, out, k], dtype).expect("iq stack"),
     );
     let matmul = IqGgufMatMul::new(stack.clone(), None).expect("iq matmul");
 
@@ -567,9 +556,7 @@ fn fused_gather_matches_a_reference_in_f64() {
             .expect("values");
         let x = &a[(slot / 2) * k..][..k];
         for r in 0..out {
-            let reference: f64 = (0..k)
-                .map(|c| w[r * k + c] as f64 * x[c] as f64)
-                .sum();
+            let reference: f64 = (0..k).map(|c| w[r * k + c] as f64 * x[c] as f64).sum();
             let got = fused[slot * out + r] as f64;
             let rel = (got - reference).abs() / (1.0 + reference.abs());
             worst = worst.max(rel);
@@ -596,8 +583,7 @@ fn fused_gather_handles_the_token_shape() {
     let bytes = pseudo_bytes(experts * out * n_blocks * type_size, 3);
 
     let stack = std::sync::Arc::new(
-        IqTensor::new(bytes.into_boxed_slice(), vec![experts, out, k], dtype)
-            .expect("iq stack"),
+        IqTensor::new(bytes.into_boxed_slice(), vec![experts, out, k], dtype).expect("iq stack"),
     );
     let matmul = IqGgufMatMul::new(stack, None).expect("iq matmul");
 
@@ -648,9 +634,137 @@ fn iq2_xxs_vector_decode_matches_the_scalar_decode_bit_exactly() {
         dequantize_blocks(dtype, &bytes, n_blocks, &mut decoded).expect("dispatch");
 
         for (i, (a, b)) in scalar.iter().zip(&decoded).enumerate() {
-            assert_eq!(a.to_bits(), b.to_bits(), "value {i}: scalar {a} against {b}");
+            assert_eq!(
+                a.to_bits(),
+                b.to_bits(),
+                "value {i}: scalar {a} against {b}"
+            );
         }
     }
+}
+
+fn vector_decode_matches<F>(raw: u32, type_size: usize, scalar: F)
+where
+    F: Fn(&[u8], usize, &mut [f32]),
+{
+    let dtype = GgufDType::new(raw);
+    for n_blocks in [1usize, 3, 17, 64] {
+        let bytes = pseudo_bytes(n_blocks * type_size, 11 + n_blocks as u32 + raw);
+        let mut oracle = vec![0f32; n_blocks * 256];
+        scalar(&bytes, n_blocks, &mut oracle);
+        let mut decoded = vec![0f32; n_blocks * 256];
+        dequantize_blocks(dtype, &bytes, n_blocks, &mut decoded).expect("dispatch");
+        for (i, (a, b)) in oracle.iter().zip(&decoded).enumerate() {
+            assert_eq!(
+                a.to_bits(),
+                b.to_bits(),
+                "dtype {raw} value {i}: scalar {a} against {b}"
+            );
+        }
+    }
+}
+
+/// IQ2_S, IQ1_S and IQ3_XXS take the same vector decoder as IQ2_XXS. The scalar loop stays
+/// the oracle, including on the last bits.
+#[test]
+fn iq_scalar_family_vector_decode_matches_the_scalar_decode_bit_exactly() {
+    vector_decode_matches(22, 82, dequantize_iq2_s);
+    vector_decode_matches(19, 50, dequantize_iq1_s);
+    vector_decode_matches(18, 98, dequantize_iq3_xxs);
+}
+
+/// The fused dot multiplies those same values. Its sum is split across four accumulators,
+/// so it is not bit-identical to a left-to-right sum, but a wrong scale or a wrong grid
+/// would miss by far more than the reassociation.
+fn row_dot_matches<F>(raw: u32, type_size: usize, scalar: F)
+where
+    F: Fn(&[u8], usize, &mut [f32]),
+{
+    let dtype = GgufDType::new(raw);
+    let n_blocks = 3usize;
+    let mut bytes = pseudo_bytes(n_blocks * type_size, 29 + raw);
+    for block in 0..n_blocks {
+        bytes[block * type_size] = 0x00;
+        bytes[block * type_size + 1] = 0x3c;
+    }
+    let mut weights = vec![0f32; n_blocks * 256];
+    scalar(&bytes, n_blocks, &mut weights);
+    let x: Vec<f32> = (0..n_blocks * 256)
+        .map(|i| ((i % 23) as f32) * 0.1 - 1.0)
+        .collect();
+    let reference: f32 = weights.iter().zip(&x).map(|(w, a)| w * a).sum();
+    let mut scratch = vec![0f32; x.len()];
+    let got = row_dot(dtype, &bytes, &x, &mut scratch);
+    assert!(
+        (got - reference).abs() <= 1e-3 * (1.0 + reference.abs()),
+        "dtype {raw}: fused {got} against decoded {reference}"
+    );
+}
+
+#[test]
+fn iq_scalar_family_row_dot_matches_the_decoded_products() {
+    row_dot_matches(22, 82, dequantize_iq2_s);
+    row_dot_matches(19, 50, dequantize_iq1_s);
+    row_dot_matches(18, 98, dequantize_iq3_xxs);
+}
+
+/// Decode rate for the three types that were still scalar. `--ignored`.
+#[test]
+#[ignore = "measurement"]
+fn iq_scalar_family_decode_rate() {
+    decode_rate(22, 82, dequantize_iq2_s);
+    decode_rate(19, 50, dequantize_iq1_s);
+    decode_rate(18, 98, dequantize_iq3_xxs);
+}
+
+fn decode_rate<F>(raw: u32, type_size: usize, scalar: F)
+where
+    F: Fn(&[u8], usize, &mut [f32]),
+{
+    let dtype = GgufDType::new(raw);
+    let n_blocks = 4096usize;
+    let bytes = pseudo_bytes(n_blocks * type_size, 9 + raw);
+    let mut out = vec![0f32; n_blocks * 256];
+    let x: Vec<f32> = (0..n_blocks * 256)
+        .map(|i| ((i * 17) % 64) as f32 * 0.015625 - 0.5)
+        .collect();
+    let mut scratch = vec![0f32; x.len()];
+    scalar(&bytes, n_blocks, &mut out);
+    dequantize_blocks(dtype, &bytes, n_blocks, &mut out).expect("dispatch");
+    let _ = row_dot(dtype, &bytes, &x, &mut scratch);
+    let scalar_s = {
+        let started = std::time::Instant::now();
+        for _ in 0..5 {
+            scalar(&bytes, n_blocks, &mut out);
+            std::hint::black_box(&out);
+        }
+        started.elapsed().as_secs_f64() / 5.0
+    };
+    let vector_s = {
+        let started = std::time::Instant::now();
+        for _ in 0..5 {
+            dequantize_blocks(dtype, &bytes, n_blocks, &mut out).expect("dispatch");
+            std::hint::black_box(&out);
+        }
+        started.elapsed().as_secs_f64() / 5.0
+    };
+    let dot_s = {
+        let started = std::time::Instant::now();
+        for _ in 0..5 {
+            std::hint::black_box(row_dot(dtype, &bytes, &x, &mut scratch));
+        }
+        started.elapsed().as_secs_f64() / 5.0
+    };
+    let values = (n_blocks * 256) as f64;
+    println!(
+        "dtype {raw}: scalar {:.2} ms ({:.2} G/s), vector {:.2} ms ({:.2} G/s), row_dot {:.2} ms ({:.2} G/s)",
+        scalar_s * 1e3,
+        values / scalar_s / 1e9,
+        vector_s * 1e3,
+        values / vector_s / 1e9,
+        dot_s * 1e3,
+        values / dot_s / 1e9,
+    );
 }
 
 /// The vector decoder's rate, against the scalar loop on the same blocks: the gather is
