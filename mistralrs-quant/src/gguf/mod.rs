@@ -8,6 +8,10 @@ pub mod fast_mmq;
 pub mod fast_mmvq;
 #[cfg(feature = "cuda")]
 mod ffi;
+mod iq;
+#[cfg(test)]
+mod iq_golden;
+pub mod iq_tables;
 #[cfg(all(feature = "cuda", has_marlin_kernels))]
 mod packed_affine;
 mod weight_source;
