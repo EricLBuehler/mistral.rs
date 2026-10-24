@@ -2445,6 +2445,10 @@ impl Pipeline for NormalPipeline {
         !self.model.has_speculative_proposer()
     }
 
+    fn supports_sampling_trace(&self) -> bool {
+        !self.model.has_speculative_proposer()
+    }
+
     fn supports_speculative_prompt_bootstrap(&self) -> bool {
         self.model.supports_speculative_prompt_bootstrap()
     }

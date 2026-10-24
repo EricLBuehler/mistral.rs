@@ -89,6 +89,15 @@ impl Engine {
                     && !in_agentic_loop
                     && (has_search || has_tooling || has_agentic || has_input_files)
                 {
+                    if request.sampling_params.sampling_trace.is_some() {
+                        let _ = request
+                            .response
+                            .send(Response::ValidationError(
+                                "sampling_trace does not support automatic tool execution".into(),
+                            ))
+                            .await;
+                        return;
+                    }
                     agentic_loop::agentic_loop(self.clone(), *request).await;
                 } else if request.files.as_ref().is_some_and(|f| !f.is_empty()) {
                     // `request.files` is set but nothing would produce them. Reject rather than silently degrading to a plain chat.
@@ -180,6 +189,44 @@ impl Engine {
                 | RequestMessage::CompletionTokens(_)
                 | RequestMessage::MultimodalChat { .. }
         );
+        if let Some(config) = &request.sampling_params.sampling_trace {
+            let validation = config.validate(request.return_logprobs, request.sampling_params.n_choices)
+                .and_then(|()| {
+                    config.validate_watermark(request.sampling_params.watermark.as_ref())?;
+                    anyhow::ensure!(is_text_generation && !request.return_raw_logits,
+                        "sampling_trace requires ordinary text generation");
+                    anyhow::ensure!(get_mut_arcmutex!(self.pipeline).supports_sampling_trace(),
+                        "sampling_trace requires ordinary token sampling; speculative and block decoding are unsupported");
+                    anyhow::ensure!(request.web_search_options.is_none() && !request.enable_code_execution && !request.enable_shell,
+                        "sampling_trace does not support automatic tool execution");
+                    anyhow::ensure!(!matches!(&request.messages, RequestMessage::Completion { best_of: Some(n), .. } if *n != 1),
+                        "sampling_trace requires best_of=1");
+                    Ok(())
+                });
+            if let Err(error) = validation {
+                request
+                    .response
+                    .send(Response::ValidationError(error.into()))
+                    .await
+                    .unwrap_or_else(|_| warn!("Receiver disconnected"));
+                return;
+            }
+        }
+        if let Some(config) = &request.sampling_params.watermark {
+            let validation = config.validate_generation().and_then(|()| {
+                anyhow::ensure!(!config.uses_tournament() || get_mut_arcmutex!(self.pipeline).supports_sampling_trace(),
+                    "explicit tournament sampling requires ordinary token sampling; speculative and block decoding are unsupported");
+                Ok(())
+            });
+            if let Err(error) = validation {
+                request
+                    .response
+                    .send(Response::ValidationError(error.into()))
+                    .await
+                    .unwrap_or_else(|_| warn!("Receiver disconnected"));
+                return;
+            }
+        }
         if is_text_generation && request.sampling_params.max_len == Some(0) {
             request
                 .response
@@ -590,7 +637,8 @@ impl Engine {
             minp,
             request.sampling_params.logits_bias.unwrap_or_default(),
             request.logits_processors.unwrap_or_default(),
-        );
+        )
+        .and_then(|sampler| sampler.with_watermark(request.sampling_params.watermark.as_ref()));
         let sampler = handle_request_error!(sampler, request.response);
 
         if request.sampling_params.n_choices == 0 {
@@ -799,6 +847,10 @@ impl Engine {
                 eos_toks,
                 choice_seed(request.seed, response_index),
             );
+            seq.sampling_trace = request
+                .sampling_params
+                .sampling_trace
+                .map(crate::sampling_trace::TraceState::new);
             if let Some(adapter_lease) = &adapter_lease {
                 seq.bind_adapter(adapter_lease.clone());
             }

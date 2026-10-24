@@ -1048,6 +1048,12 @@ impl RequestBuilder {
         self
     }
 
+    /// Enable a library token-watermark scheme with a deployment-specific key.
+    pub fn set_sampler_watermark(mut self, config: impl Into<crate::WatermarkConfig>) -> Self {
+        self.sampling_params.watermark = Some(config.into());
+        self
+    }
+
     /// Limit sampling to the top-k most probable tokens.
     pub fn set_sampler_topk(mut self, topk: usize) -> Self {
         self.sampling_params.top_k = Some(topk);

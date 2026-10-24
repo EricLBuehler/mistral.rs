@@ -1,6 +1,6 @@
 ---
 title: Sampling parameters
-description: Temperature, top-k, top-p, min-p, penalties, DRY, and the order the engine applies them.
+description: Temperature, top-k, top-p, min-p, penalties, DRY, watermarking, and sampling order.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
@@ -26,6 +26,7 @@ When a request is sampled, the engine applies filters in this order:
 2. Custom logits processors (Rust SDK only).
 3. Temperature scaling and softmax. Temperature absent or `0.0` means greedy argmax, skipping step 4.
 4. On the resulting probabilities: top-k, then top-p, then min-p.
+5. Optional [text watermarking](/guides/customize/watermarking/), then token selection.
 
 Penalties therefore act before temperature, and the top-k/top-p/min-p trio act after it, on probabilities rather than logits.
 
@@ -136,6 +137,13 @@ let request = RequestBuilder::new()
 
 </TabItem>
 </Tabs>
+
+## Watermarking
+
+Set `watermark` to a supported token-scheme configuration to embed a statistical signal in
+generated token choices. It is disabled by default and requires a secret key.
+See [Text watermarking](/guides/customize/watermarking/) for configuration,
+detection, examples, and performance limits. Greedy decoding has no watermark signal.
 
 ## Seeds
 

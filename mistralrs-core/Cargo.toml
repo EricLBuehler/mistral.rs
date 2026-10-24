@@ -13,6 +13,7 @@ license.workspace = true
 homepage.workspace = true
 
 [dependencies]
+llm-watermarking = { workspace = true, features = ["candle"] }
 anyhow.workspace = true
 candle-core.workspace = true
 metrics.workspace = true
@@ -122,6 +123,7 @@ mistralrs-metal-compile = { workspace = true, optional = true, features = ["meta
 [features]
 pyo3_macros = ["pyo3", "mistralrs-mcp/pyo3_macros"]
 cuda = [
+    "llm-watermarking/cuda",
     "candle-core/cuda",
     "candle-nn/cuda",
     "dep:cudaforge",
@@ -132,6 +134,7 @@ cuda = [
 cudnn = ["candle-core/cudnn"]
 cutile = ["cuda", "mistralrs-quant/cutile"]
 metal = [
+    "llm-watermarking/metal",
     "candle-core/metal",
     "candle-nn/metal",
     "mistralrs-quant/metal",

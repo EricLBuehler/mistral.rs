@@ -697,6 +697,8 @@ const VIDEO_REGEX: &str =
 
 fn interactive_fallback_sample_parameters() -> SamplingParams {
     SamplingParams {
+        watermark: None,
+        sampling_trace: None,
         temperature: Some(INTERACTIVE_FALLBACK_TEMPERATURE),
         top_k: Some(INTERACTIVE_FALLBACK_TOP_K),
         top_p: Some(INTERACTIVE_FALLBACK_TOP_P),
