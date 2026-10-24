@@ -13,6 +13,7 @@ use std::os::raw::c_void;
 use std::sync::{Arc, RwLock};
 use std::{collections::HashMap, sync::OnceLock};
 
+pub(crate) mod fp8;
 mod prepare;
 pub(crate) use prepare::{prepare_afq, prepare_dense, prepare_gguf};
 

@@ -99,3 +99,7 @@ tempfile.workspace = true
 [[example]]
 name = "nvfp4_bench"
 required-features = ["cuda", "cutile"]
+
+[[example]]
+name = "metal_fp8_bench"
+required-features = ["metal"]
