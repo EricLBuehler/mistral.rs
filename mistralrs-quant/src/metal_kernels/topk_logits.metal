@@ -4,6 +4,130 @@
 #include <metal_stdlib>
 using namespace metal;
 
+constant uint TOP1_SIMD_WIDTH = 32;
+constant uint TOP1_MAX_SIMDGROUPS = 8;
+constant uint TOP1_FLOAT_MAGNITUDE_MASK = 0x7fffffffu;
+constant uint TOP1_FLOAT_INFINITY_BITS = 0x7f800000u;
+
+inline float top1_reduce(float value, thread uint &index, bool has_nan,
+                         threadgroup float *warp_values,
+                         threadgroup uint *warp_indices,
+                         threadgroup uint *warp_nans, uint tid, uint tg_size,
+                         uint simd_lid, uint simd_gid) {
+  float warp_max = simd_max(value);
+  uint warp_index = simd_min(value == warp_max ? index : UINT_MAX);
+  bool warp_has_nan = simd_any(has_nan);
+  if (simd_lid == 0) {
+    warp_values[simd_gid] = warp_max;
+    warp_indices[simd_gid] = warp_index;
+    warp_nans[simd_gid] = uint(warp_has_nan);
+  }
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+
+  if (simd_gid == 0) {
+    uint num_warps = (tg_size + TOP1_SIMD_WIDTH - 1) / TOP1_SIMD_WIDTH;
+    float candidate = tid < num_warps ? warp_values[tid] : -INFINITY;
+    uint candidate_index = tid < num_warps ? warp_indices[tid] : UINT_MAX;
+    bool candidate_nan = tid < num_warps && warp_nans[tid] != 0;
+    float result = simd_max(candidate);
+    index = simd_min(candidate == result ? candidate_index : UINT_MAX);
+    return simd_any(candidate_nan) ? NAN : result;
+  }
+  return -INFINITY;
+}
+
+template <typename T>
+[[kernel]] void top1_logits_stage1(
+    device const T *input [[buffer(0)]],
+    device float *block_values [[buffer(1)]],
+    device uint *block_indices [[buffer(2)]],
+    constant uint &ncols [[buffer(3)]],
+    constant uint &chunk_size [[buffer(4)]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint chunk [[threadgroup_position_in_grid]],
+    uint tg_size [[threads_per_threadgroup]],
+    uint simd_lid [[thread_index_in_simdgroup]],
+    uint simd_gid [[simdgroup_index_in_threadgroup]]) {
+  uint start = chunk * chunk_size;
+  uint end = min(start + chunk_size, ncols);
+  float local_max = -INFINITY;
+  uint local_index = UINT_MAX;
+  bool has_nan = false;
+  for (uint index = start + tid; index < end; index += tg_size) {
+    float candidate = float(input[index]);
+    has_nan |= (as_type<uint>(candidate) & TOP1_FLOAT_MAGNITUDE_MASK) >
+               TOP1_FLOAT_INFINITY_BITS;
+    if (candidate > local_max) {
+      local_max = candidate;
+      local_index = index;
+    }
+  }
+
+  threadgroup float warp_values[TOP1_MAX_SIMDGROUPS];
+  threadgroup uint warp_indices[TOP1_MAX_SIMDGROUPS];
+  threadgroup uint warp_nans[TOP1_MAX_SIMDGROUPS];
+  float result = top1_reduce(local_max, local_index, has_nan, warp_values,
+                            warp_indices, warp_nans, tid, tg_size, simd_lid,
+                            simd_gid);
+  if (tid == 0) {
+    block_values[chunk] = result;
+    block_indices[chunk] = local_index;
+  }
+}
+
+#define instantiate_top1_logits_stage1(type, name)                              \
+  template [[host_name(name)]] [[kernel]] void top1_logits_stage1<type>(        \
+      device const type *input [[buffer(0)]],                                  \
+      device float *block_values [[buffer(1)]],                                \
+      device uint *block_indices [[buffer(2)]],                                \
+      constant uint &ncols [[buffer(3)]],                                      \
+      constant uint &chunk_size [[buffer(4)]],                                 \
+      uint tid [[thread_index_in_threadgroup]],                               \
+      uint chunk [[threadgroup_position_in_grid]],                            \
+      uint tg_size [[threads_per_threadgroup]],                               \
+      uint simd_lid [[thread_index_in_simdgroup]],                             \
+      uint simd_gid [[simdgroup_index_in_threadgroup]]);
+
+instantiate_top1_logits_stage1(float, "top1_logits_stage1_f32")
+instantiate_top1_logits_stage1(half, "top1_logits_stage1_f16")
+instantiate_top1_logits_stage1(bfloat, "top1_logits_stage1_bf16")
+
+kernel void top1_logits_stage2_packed_f32(
+    device const float *block_values [[buffer(0)]],
+    device const uint *block_indices [[buffer(1)]],
+    device float *packed_out [[buffer(2)]],
+    constant uint &nblocks [[buffer(3)]],
+    uint tid [[thread_index_in_threadgroup]],
+    uint tg_size [[threads_per_threadgroup]],
+    uint simd_lid [[thread_index_in_simdgroup]],
+    uint simd_gid [[simdgroup_index_in_threadgroup]]) {
+  float local_max = -INFINITY;
+  uint local_index = UINT_MAX;
+  bool has_nan = false;
+  for (uint block = tid; block < nblocks; block += tg_size) {
+    float candidate = block_values[block];
+    uint index = block_indices[block];
+    has_nan |= (as_type<uint>(candidate) & TOP1_FLOAT_MAGNITUDE_MASK) >
+               TOP1_FLOAT_INFINITY_BITS;
+    if (candidate > local_max ||
+        (candidate == local_max && index < local_index)) {
+      local_max = candidate;
+      local_index = index;
+    }
+  }
+
+  threadgroup float warp_values[TOP1_MAX_SIMDGROUPS];
+  threadgroup uint warp_indices[TOP1_MAX_SIMDGROUPS];
+  threadgroup uint warp_nans[TOP1_MAX_SIMDGROUPS];
+  float result = top1_reduce(local_max, local_index, has_nan, warp_values,
+                            warp_indices, warp_nans, tid, tg_size, simd_lid,
+                            simd_gid);
+  if (tid == 0) {
+    packed_out[0] = result;
+    packed_out[1] = float(local_index);
+  }
+}
+
 // Simdgroup-wide max with corresponding index. Returns max value via the
 // builtin, and writes the matching index into `out_idx` for all lanes.
 inline float simd_max_with_idx(float v, int idx, thread int &out_idx) {

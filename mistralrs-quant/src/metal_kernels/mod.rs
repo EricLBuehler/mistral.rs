@@ -28,6 +28,9 @@ use crate::set_params;
 type ComputeCommandEncoderRef = ComputeCommandEncoder;
 type ComputePipelineState = ComputePipeline;
 
+pub const TOP1_LOGITS_CHUNK_SIZE: usize = 2048;
+const TOP1_LOGITS_THREADS: usize = 256;
+
 #[cfg(target_os = "macos")]
 const KERNELS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/mistralrs_quant.metallib"));
 #[cfg(target_os = "ios")]
@@ -4830,6 +4833,74 @@ pub fn call_afq_qmm_qkv(
     Ok(())
 }
 
+pub struct Top1LogitsBuffers<'a> {
+    pub input: (&'a Buffer, usize),
+    pub block_values: &'a Buffer,
+    pub block_indices: &'a Buffer,
+    pub packed_out: &'a Buffer,
+}
+
+pub fn call_top1_logits_packed(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    input_dtype: DType,
+    buffers: Top1LogitsBuffers<'_>,
+    ncols: usize,
+) -> Result<(), MetalKernelError> {
+    let stage1_name = match input_dtype {
+        DType::F32 => "top1_logits_stage1_f32",
+        DType::F16 => "top1_logits_stage1_f16",
+        DType::BF16 => "top1_logits_stage1_bf16",
+        other => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got: other,
+            })
+        }
+    };
+    let stage1 = kernels.load_pipeline(device, stage1_name)?;
+    let stage2 = kernels.load_pipeline(device, "top1_logits_stage2_packed_f32")?;
+    let nblocks = ncols.div_ceil(TOP1_LOGITS_CHUNK_SIZE);
+    let group = MTLSize {
+        width: TOP1_LOGITS_THREADS,
+        height: 1,
+        depth: 1,
+    };
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+
+    encoder.set_compute_pipeline_state(&stage1);
+    encoder.set_input_buffer(0, Some(buffers.input.0), buffers.input.1);
+    encoder.set_output_buffer(1, Some(buffers.block_values), 0);
+    encoder.set_output_buffer(2, Some(buffers.block_indices), 0);
+    <u32 as EncoderParam>::set_param(encoder, 3, ncols as u32);
+    <u32 as EncoderParam>::set_param(encoder, 4, TOP1_LOGITS_CHUNK_SIZE as u32);
+    encoder.dispatch_thread_groups(
+        MTLSize {
+            width: nblocks,
+            height: 1,
+            depth: 1,
+        },
+        group,
+    );
+
+    encoder.set_compute_pipeline_state(&stage2);
+    encoder.set_input_buffer(0, Some(buffers.block_values), 0);
+    encoder.set_input_buffer(1, Some(buffers.block_indices), 0);
+    encoder.set_output_buffer(2, Some(buffers.packed_out), 0);
+    <u32 as EncoderParam>::set_param(encoder, 3, nblocks as u32);
+    encoder.dispatch_thread_groups(
+        MTLSize {
+            width: 1,
+            height: 1,
+            depth: 1,
+        },
+        group,
+    );
+    Ok(())
+}
+
 /// Two-stage top-k + softmax stats over a logits row. `packed_out` is laid
 /// out as `[top_values (k), top_indices_as_f32 (k), denom (1), max (1)]`.
 /// `input_dtype` selects between the F32 and BF16 stage-1 kernels.
@@ -4980,7 +5051,7 @@ pub fn call_apply_sparse_penalties(
     let encoder = ep.encoder();
     let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
     encoder.set_compute_pipeline_state(&pipeline);
-    encoder.set_input_buffer(0, Some(logits), 0);
+    encoder.set_output_buffer(0, Some(logits), 0);
     encoder.set_input_buffer(1, Some(token_ids), 0);
     encoder.set_input_buffer(2, Some(counts), 0);
     <i32 as EncoderParam>::set_param(encoder, 3, n as i32);
