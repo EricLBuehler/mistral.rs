@@ -271,6 +271,8 @@ pub enum NormalLoaderType {
     Lfm3,
     #[serde(rename = "lfm2_moe")]
     Lfm2Moe,
+    #[serde(rename = "kolibri1")]
+    Kolibri1,
 }
 
 // https://github.com/huggingface/transformers/blob/cff06aac6fad28019930be03f5d467055bf62177/src/transformers/models/auto/modeling_auto.py#L448
@@ -305,6 +307,7 @@ impl NormalLoaderType {
             Self::Lfm2 => "Lfm2ForCausalLM",
             Self::Lfm3 => "Lfm3ForCausalLM",
             Self::Lfm2Moe => "Lfm2MoeForCausalLM",
+            Self::Kolibri1 => "Kolibri1ForCausalLM",
         }
     }
 
@@ -338,6 +341,7 @@ impl NormalLoaderType {
             Self::Lfm2 => "lfm2",
             Self::Lfm3 => "lfm3",
             Self::Lfm2Moe => "lfm2_moe",
+            Self::Kolibri1 => "kolibri1",
         }
     }
 
@@ -371,6 +375,7 @@ impl NormalLoaderType {
             "Lfm2ForCausalLM" => Ok(Self::Lfm2),
             "Lfm3ForCausalLM" => Ok(Self::Lfm3),
             "Lfm2MoeForCausalLM" => Ok(Self::Lfm2Moe),
+            "Kolibri1ForCausalLM" => Ok(Self::Kolibri1),
             other => anyhow::bail!(
                 "Unsupported Hugging Face Transformers -CausalLM model class `{other}`. Please raise an issue."
             ),
@@ -410,7 +415,8 @@ impl FromStr for NormalLoaderType {
             "lfm2" => Ok(Self::Lfm2),
             "lfm3" => Ok(Self::Lfm3),
             "lfm2_moe" => Ok(Self::Lfm2Moe),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`, `deepseekv2`, `deepseekv3`, `qwen3`, `glm4`, `glm4moelite`, `glm4moe`, `qwen3moe`, `flint`, `smollm3`, `granitemoehybrid`, `gpt_oss`, `hunyuanv1dense`, `hunyuanv1moe`, `qwen3next`, `qwen3_5`, `lfm2`, `lfm2_moe`, `lfm3`.")),
+            "kolibri1" => Ok(Self::Kolibri1),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`, `deepseekv2`, `deepseekv3`, `qwen3`, `glm4`, `glm4moelite`, `glm4moe`, `qwen3moe`, `flint`, `smollm3`, `granitemoehybrid`, `gpt_oss`, `hunyuanv1dense`, `hunyuanv1moe`, `qwen3next`, `qwen3_5`, `lfm2`, `lfm2_moe`, `lfm3`, `kolibri1`.")),
         }
     }
 }
@@ -446,6 +452,7 @@ impl Display for NormalLoaderType {
             Self::Lfm2 => write!(f, "lfm2"),
             Self::Lfm3 => write!(f, "lfm3"),
             Self::Lfm2Moe => write!(f, "lfm2_moe"),
+            Self::Kolibri1 => write!(f, "kolibri1"),
         }
     }
 }
@@ -510,6 +517,7 @@ impl AutoNormalLoader {
             NormalLoaderType::Lfm2 => Ok(Box::new(Lfm2Loader)),
             NormalLoaderType::Lfm3 => Ok(Box::new(Lfm3Loader)),
             NormalLoaderType::Lfm2Moe => Ok(Box::new(Lfm2Loader)),
+            NormalLoaderType::Kolibri1 => Ok(Box::new(Kolibri1Loader)),
         }
     }
 }
@@ -7143,6 +7151,218 @@ impl DeviceMappedModelLoader for Lfm2Loader {
         };
 
         Ok(Box::new(cfg))
+    }
+}
+
+pub struct Kolibri1Loader;
+
+impl NormalModelLoader for Kolibri1Loader {
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg: crate::models::kolibri1::Config = serde_json::from_str(config)?;
+        Ok(Box::new(models::kolibri1::Model::new(
+            &cfg,
+            vb,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn load_xlora(
+        &self,
+        _config: &str,
+        _vb: ShardedVarBuilder,
+        _lora_config: &[((String, String), LoraConfig)],
+        _xlora_config: Option<XLoraConfig>,
+        _xlora_ordering: Ordering,
+        _normal_loading_metadata: NormalLoadingMetadata,
+        _preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        anyhow::bail!("Kolibri-1 does not support X-LoRA")
+    }
+
+    fn is_gptx(&self, _: &str) -> Result<bool> {
+        Ok(true)
+    }
+
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::models::kolibri1::Config = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
+    }
+}
+
+impl IsqModelLoader for Kolibri1Loader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.q_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.k_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.v_proj\.(weight|bias)$")?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.o_proj\.(weight|bias)$")?,
+            // The shared expert sits outside the routed stack.
+            Regex::new(
+                r"layers\.(\d+)\.mlp\.shared_experts\.(gate_proj|up_proj|down_proj)\.(weight|bias)$",
+            )?,
+            Regex::new(
+                r"layers\.(\d+)\.mlp\.experts\.(gate_up_proj|gate_proj|up_proj|down_proj)\.weight$",
+            )?,
+        ])
+    }
+
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
+
+    fn isq_layer_regexes_moqe(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![Regex::new(
+            r"layers\.(\d+)\.mlp\.experts\.(gate_up_proj|gate_proj|up_proj|down_proj)\.weight$",
+        )?])
+    }
+
+    fn immediate_isq_predicates_moqe(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes_moqe(config)
+    }
+}
+
+impl DeviceMappedModelLoader for Kolibri1Loader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: crate::models::kolibri1::Config = serde_json::from_str(config)?;
+        Ok(ActivationModelConfig {
+            intermediate_size: cfg
+                .moe_intermediate_size
+                .max(cfg.shared_expert_intermediate_size),
+            vocab_size: cfg.vocab_size,
+            attention_features: Some(PrefixPrefillAttentionFeatures {
+                has_sliding_window: cfg.use_sliding_window,
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+    }
+
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expected text AutoDeviceMapParams for this model!")
+        };
+        let cfg: crate::models::kolibri1::Config = serde_json::from_str(config)?;
+        Ok(
+            max_batch_size
+                * cfg.num_attention_heads
+                * max_seq_len.min(&ATTENTION_CHUNK_SIZE).pow(2),
+        )
+    }
+
+    fn non_mapped_max_act_size_elems(
+        &self,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        Ok(0)
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<usize> {
+        let cfg: crate::models::kolibri1::Config = serde_json::from_str(config)?;
+        let (embed_pack, lm_head_pack) = super::language_model_pack_factors(
+            _quantization,
+            "model.embed_tokens.weight",
+            "lm_head.weight",
+            cfg.tie_word_embeddings,
+            dtype,
+            weight_pack_factor,
+        )?;
+        let embed = cfg.hidden_size * cfg.vocab_size / embed_pack;
+        let lm_head = if cfg.tie_word_embeddings {
+            0
+        } else {
+            cfg.hidden_size * cfg.vocab_size / lm_head_pack
+        };
+        let norm = cfg.hidden_size;
+        Ok((embed + lm_head + norm) * dtype.size_in_bytes())
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        let cfg: crate::models::kolibri1::Config = serde_json::from_str(config)?;
+        let mut out = Vec::with_capacity(cfg.num_hidden_layers);
+        for _ in 0..cfg.num_hidden_layers {
+            // Four norms per layer, not two.
+            let norms = 4 * cfg.hidden_size;
+            let size_in = cfg.hidden_size;
+            let head_dim = cfg.head_dim();
+            let size_q = head_dim * cfg.num_attention_heads;
+            let size_kv = head_dim * cfg.num_key_value_heads;
+            let attn =
+                (size_in * size_q + 2 * size_in * size_kv + size_q * size_in) / weight_pack_factor;
+            // qk-norm gammas.
+            let qk_norm = 2 * head_dim;
+            let routed = cfg.num_experts * cfg.hidden_size * cfg.moe_intermediate_size
+                / weight_pack_factor
+                * 3;
+            let shared =
+                3 * cfg.hidden_size * cfg.shared_expert_intermediate_size / weight_pack_factor;
+            let gate = cfg.hidden_size * cfg.num_experts / weight_pack_factor;
+            let bias = cfg.num_experts;
+            out.push(
+                (norms + attn + qk_norm + routed + shared + gate + bias) * dtype.size_in_bytes(),
+            );
+        }
+        Ok(out)
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg: crate::models::kolibri1::Config = serde_json::from_str(config)?;
+        Ok(cfg.num_hidden_layers)
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: crate::models::kolibri1::Config = serde_json::from_str(config)?;
+        let head_dim = cfg.head_dim();
+        Ok(Box::new(ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            // Per-layer windows, so a single value would be a lie here.
+            sliding_window: None,
+            k_head_dim: head_dim,
+            v_head_dim: head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+        }))
     }
 }
 

@@ -11,6 +11,7 @@ pub(crate) mod granite;
 mod hunyuan_rope;
 pub(crate) mod hunyuan_v1_dense;
 pub(crate) mod hunyuan_v1_moe;
+pub(crate) mod kolibri1;
 pub(crate) mod lfm2;
 pub(crate) mod lfm3;
 pub(crate) mod llama;
