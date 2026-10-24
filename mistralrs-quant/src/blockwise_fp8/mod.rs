@@ -247,6 +247,18 @@ impl BlockwiseFP8Linear {
 }
 
 impl QuantMethod for BlockwiseFP8Linear {
+    #[cfg(feature = "metal")]
+    fn prepare_metal_kernels(&self, activation_dtype: DType) -> Result<()> {
+        if activation_dtype == self.dequant_dtype
+            && crate::metal_fp8::supported(&self.weight, &self.weight_scale_inv, self.dequant_dtype)
+        {
+            if let [block_n, block_k] = self.weight_block_size.as_slice() {
+                crate::metal_fp8::prepare(&self.weight, [*block_n, *block_k], activation_dtype)?;
+            }
+        }
+        Ok(())
+    }
+
     fn new(method: QuantMethodConfig) -> candle_core::Result<Self>
     where
         Self: Sized,
@@ -294,6 +306,22 @@ impl QuantMethod for BlockwiseFP8Linear {
     }
 
     fn forward_raw(&self, x: &Tensor) -> Result<Tensor> {
+        #[cfg(feature = "metal")]
+        if let [block_n, block_k] = self.weight_block_size.as_slice() {
+            if let Some(result) = crate::metal_fp8::linear(
+                x,
+                &self.weight,
+                &self.weight_scale_inv,
+                [*block_n, *block_k],
+                self.dequant_dtype,
+            )? {
+                return match &self.bias {
+                    Some(bias) => result.broadcast_add(bias),
+                    None => Ok(result),
+                };
+            }
+        }
+
         #[cfg(all(feature = "cuda", feature = "cutile"))]
         if matches!(self.provider, BlockwiseFp8Provider::CutileW8A16)
             && matches!(x.dtype(), DType::BF16 | DType::F16)

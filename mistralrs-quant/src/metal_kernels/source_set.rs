@@ -7,6 +7,7 @@ mistralrs_metal_compile::metal_source_set! {
         "blockwise_fp8",
         "bnb_dequantize",
         "f8q8",
+        "fp8_linear",
         "flash_attn",
         "fused_glu",
         "hqq_dequantize",

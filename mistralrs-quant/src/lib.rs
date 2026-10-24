@@ -12,6 +12,8 @@ use candle_core::{
 };
 
 #[cfg(feature = "metal")]
+mod metal_fp8;
+#[cfg(feature = "metal")]
 pub mod metal_kernels;
 
 mod afq;
