@@ -787,6 +787,69 @@ mod neon {
         }
         acc.finish()
     }
+
+    /// One group's scale: 4 low bits plus 2 high bits, then the same `- 32` bias as the scalar loop.
+    fn iq4_xs_dl(d: f32, scales_l: &[u8], scales_h: u16, ib: usize) -> f32 {
+        let ls = (((scales_l[ib / 2] >> (4 * (ib % 2))) & 0xf) as i32)
+            | (((scales_h >> (2 * ib)) & 3) as i32) << 4;
+        d * (ls - 32) as f32
+    }
+
+    /// Low nibble is the first 16 values of the group and high nibble the next 16.
+    unsafe fn fma_nibbles(
+        acc: &mut Acc,
+        bytes: *const u8,
+        table: int8x16_t,
+        dl: float32x4_t,
+        x: *const f32,
+        high: bool,
+    ) {
+        let q = vld1q_u8(bytes);
+        let idx = if high {
+            vshrq_n_u8(q, 4)
+        } else {
+            vandq_u8(q, vdupq_n_u8(0x0f))
+        };
+        let g = vqtbl1q_s8(table, idx);
+        let lo16 = vmovl_s8(vget_low_s8(g));
+        let hi16 = vmovl_s8(vget_high_s8(g));
+        let a = vmulq_f32(vcvtq_f32_s32(vmovl_s16(vget_low_s16(lo16))), dl);
+        let b = vmulq_f32(vcvtq_f32_s32(vmovl_s16(vget_high_s16(lo16))), dl);
+        let c = vmulq_f32(vcvtq_f32_s32(vmovl_s16(vget_low_s16(hi16))), dl);
+        let d = vmulq_f32(vcvtq_f32_s32(vmovl_s16(vget_high_s16(hi16))), dl);
+        acc.fma8(a, b, x);
+        acc.fma8(c, d, x.add(8));
+    }
+
+    pub(super) fn iq4_xs_row_dot(blocks: &[u8], n_blocks: usize, x: &[f32]) -> f32 {
+        // The table is 16 i8s and is not 16-byte aligned, so the load is unaligned.
+        let table =
+            unsafe { core::ptr::read_unaligned(KVALUES_IQ4NL.as_ptr() as *const int8x16_t) };
+        let mut acc = Acc::new();
+        for (b, block) in blocks
+            .as_chunks::<136>()
+            .0
+            .iter()
+            .take(n_blocks)
+            .enumerate()
+        {
+            let d = f16_scale(block);
+            let scales_h = u16::from_le_bytes([block[2], block[3]]);
+            let scales_l = &block[4..8];
+            let qs = &block[8..136];
+            for ib in 0..8 {
+                let scale = iq4_xs_dl(d, scales_l, scales_h, ib);
+                let q = qs[16 * ib..].as_ptr();
+                let at = b * 256 + ib * 32;
+                unsafe {
+                    let dl = vdupq_n_f32(scale);
+                    fma_nibbles(&mut acc, q, table, dl, x.as_ptr().add(at), false);
+                    fma_nibbles(&mut acc, q, table, dl, x.as_ptr().add(at + 16), true);
+                }
+            }
+        }
+        acc.finish()
+    }
 }
 
 /// aarch64 takes the vector decoder; everywhere else the scalar oracle.
@@ -864,6 +927,7 @@ fn row_dot(dtype: GgufDType, row_bytes: &[u8], x: &[f32], scratch: &mut [f32]) -
         18 => return neon::iq3_xxs_row_dot(row_bytes, x.len() / 256, x),
         19 => return neon::iq1_s_row_dot(row_bytes, x.len() / 256, x),
         22 => return neon::iq2_s_row_dot(row_bytes, x.len() / 256, x),
+        23 => return neon::iq4_xs_row_dot(row_bytes, x.len() / 256, x),
         _ => {}
     }
     let block_size = dtype.block_size().expect("iq block size");
@@ -1169,6 +1233,12 @@ impl IqGgufMatMul {
 
     fn matmul_f32(&self, a: &Tensor) -> Result<Tensor> {
         let device = a.device();
+        // Decode reads the blocks. The f32 cache is four bytes a value, reread every token.
+        if self.w.dims().len() == 2 && fused_iq_gemv_enabled() {
+            if let Some(y) = self.dense_row_gemv(a)? {
+                return Ok(y);
+            }
+        }
         // The same cache the fp8 dense path keeps: dequantise once, then read f32 forever.
         // A stacked expert weight is handled by the gather instead and is never cached.
         let cached = if self.w.dims().len() == 2 {
@@ -1195,6 +1265,53 @@ impl IqGgufMatMul {
             _ => cached.t()?,
         };
         a.matmul(&w)
+    }
+
+    /// One activation row against a rank-2 IQ weight. More than one row keeps the f32 cache.
+    fn dense_row_gemv(&self, a: &Tensor) -> Result<Option<Tensor>> {
+        if !a.device().is_cpu() || a.rank() < 2 {
+            return Ok(None);
+        }
+        let dims = a.dims().to_vec();
+        let k_in = dims[dims.len() - 1];
+        let rows: usize = dims[..dims.len() - 1].iter().product();
+        if rows != 1 {
+            return Ok(None);
+        }
+        let &[n, k] = self.w.dims() else {
+            return Ok(None);
+        };
+        if k_in != k {
+            return Ok(None);
+        }
+        let (block_size, type_size) = self.w.block_geometry();
+        // A row has to be a whole number of blocks, or the bytes of row r are not row r.
+        if k == 0 || !k.is_multiple_of(block_size) {
+            return Ok(None);
+        }
+        let row_bytes = (k / block_size) * type_size;
+        let bytes = self.w.storage.bytes();
+        if bytes.len() != n * row_bytes {
+            return Ok(None);
+        }
+        let x = a.contiguous()?.flatten_all()?.to_vec1::<f32>()?;
+        let dtype = self.w.dtype();
+        let threads = crate::cpu_threads::resolve().max(1);
+        let chunk = n.div_ceil(threads).max(1);
+        let mut out = vec![0f32; n];
+        crate::gemv_cpu::par_chunks(&mut out, chunk, |chunk_idx, dst| {
+            let mut scratch = vec![0f32; k];
+            let first = chunk_idx * chunk;
+            for (i, slot) in dst.iter_mut().enumerate() {
+                let row = first + i;
+                let start = row * row_bytes;
+                *slot = row_dot(dtype, &bytes[start..start + row_bytes], &x, &mut scratch);
+            }
+        });
+        let last = dims.len() - 1;
+        let mut shape = dims;
+        shape[last] = n;
+        Ok(Some(Tensor::from_vec(out, shape, a.device())?))
     }
 
     fn add_bias(&self, x: Tensor) -> Result<Tensor> {
