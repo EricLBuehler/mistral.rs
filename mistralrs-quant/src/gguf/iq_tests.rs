@@ -706,6 +706,7 @@ fn iq_scalar_family_row_dot_matches_the_decoded_products() {
     row_dot_matches(22, 82, dequantize_iq2_s);
     row_dot_matches(19, 50, dequantize_iq1_s);
     row_dot_matches(18, 98, dequantize_iq3_xxs);
+    row_dot_matches(23, 136, dequantize_iq4_xs);
 }
 
 /// Decode rate for the three types that were still scalar. `--ignored`.
@@ -715,6 +716,7 @@ fn iq_scalar_family_decode_rate() {
     decode_rate(22, 82, dequantize_iq2_s);
     decode_rate(19, 50, dequantize_iq1_s);
     decode_rate(18, 98, dequantize_iq3_xxs);
+    decode_rate(23, 136, dequantize_iq4_xs);
 }
 
 fn decode_rate<F>(raw: u32, type_size: usize, scalar: F)
