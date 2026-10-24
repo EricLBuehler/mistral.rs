@@ -84,7 +84,8 @@ pub use loaders::{
 };
 #[cfg(test)]
 pub(crate) use loaders::{
-    GraniteMoeHybridLoader, Lfm3OmniLoader, Lfm3VlLoader, Qwen3NextLoader, Qwen3_5TextLoader,
+    GraniteMoeHybridLoader, Kolibri1Loader, Lfm3OmniLoader, Lfm3VlLoader, Qwen3NextLoader,
+    Qwen3_5TextLoader,
 };
 pub use loaders::{LayerResource, ResourceSource};
 #[allow(clippy::too_many_arguments)]
