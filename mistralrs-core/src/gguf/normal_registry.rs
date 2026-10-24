@@ -1,8 +1,8 @@
 use crate::NormalLoaderType;
 use std::{error::Error, fmt, str::FromStr};
 
-pub(crate) const GGUF_NORMAL_LOADER_COUNT: usize = 27;
-pub(crate) const CANONICAL_GGUF_ARCHITECTURE_COUNT: usize = 27;
+pub(crate) const GGUF_NORMAL_LOADER_COUNT: usize = 28;
+pub(crate) const CANONICAL_GGUF_ARCHITECTURE_COUNT: usize = 28;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum CanonicalGgufArchitecture {
@@ -33,6 +33,7 @@ pub(crate) enum CanonicalGgufArchitecture {
     HunYuanMoe,
     Lfm2,
     Lfm2Moe,
+    Kolibri1,
 }
 
 impl CanonicalGgufArchitecture {
@@ -65,6 +66,7 @@ impl CanonicalGgufArchitecture {
             Self::HunYuanMoe => "hunyuan-moe",
             Self::Lfm2 => "lfm2",
             Self::Lfm2Moe => "lfm2moe",
+            Self::Kolibri1 => "kolibri1",
         }
     }
 }
@@ -107,6 +109,7 @@ impl FromStr for CanonicalGgufArchitecture {
             "hunyuan-moe" => Ok(Self::HunYuanMoe),
             "lfm2" => Ok(Self::Lfm2),
             "lfm2moe" => Ok(Self::Lfm2Moe),
+            "kolibri1" => Ok(Self::Kolibri1),
             _ => Err(NormalGgufRegistryError::UnknownArchitecture(
                 value.to_string(),
             )),
@@ -463,6 +466,7 @@ const HUNYUAN_DENSE_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::HunYuanDe
 const HUNYUAN_MOE_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::HunYuanMoEV1];
 const LFM2_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Lfm2];
 const LFM2_MOE_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Lfm2Moe];
+const KOLIBRI1_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Kolibri1];
 
 pub(crate) const GGUF_SCHEMAS: &[GgufSchema; CANONICAL_GGUF_ARCHITECTURE_COUNT] = &[
     GgufSchema {
@@ -681,6 +685,14 @@ pub(crate) const GGUF_SCHEMAS: &[GgufSchema; CANONICAL_GGUF_ARCHITECTURE_COUNT] 
         required_tensors: SHORTCONV_TENSORS,
         unsupported_metadata: NO_REQUIREMENTS,
     },
+    GgufSchema {
+        architecture: CanonicalGgufArchitecture::Kolibri1,
+        compatible_loaders: KOLIBRI1_LOADERS,
+        rope_pairing: RopePairing::HalfSplit,
+        required_metadata: MOE_METADATA,
+        required_tensors: MOE_TENSORS,
+        unsupported_metadata: NO_REQUIREMENTS,
+    },
 ];
 
 pub(crate) const NORMAL_MODEL_ADAPTERS: &[NativeModelAdapter; GGUF_NORMAL_LOADER_COUNT] = &[
@@ -893,6 +905,11 @@ pub(crate) const NORMAL_MODEL_ADAPTERS: &[NativeModelAdapter; GGUF_NORMAL_LOADER
             GgufLayout::PerLayerInventory,
             GgufLayout::SqueezedShortConv,
         ],
+    },
+    NativeModelAdapter {
+        loader: NormalLoaderType::Kolibri1,
+        architectures: &[CanonicalGgufArchitecture::Kolibri1],
+        layouts: &[GgufLayout::Direct, GgufLayout::StackedExperts],
     },
 ];
 
