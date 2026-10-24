@@ -786,11 +786,10 @@ fn unsupported_dtypes_are_rejected_at_construction() -> Result<()> {
         GgufTensorBinding::tensor("unsupported.weight"),
     );
     let error = GgufWeightSource::new(archive, &bindings, DType::F32)
-        .expect_err("IQ2_XXS must be rejected before model construction")
+        .expect_err("TQ1_0 has no decoder and must be rejected before model construction")
         .to_string();
     assert!(error.contains("unsupported.weight"));
-    assert!(error.contains("IQ2_XXS (16)"));
-    assert!(error.contains("Q2_K through Q8_K"));
+    assert!(error.contains("TQ1_0 (34)"));
     Ok(())
 }
 

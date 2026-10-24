@@ -664,13 +664,14 @@ where
     }
 }
 
-/// IQ2_S, IQ1_S and IQ3_XXS take the same vector decoder as IQ2_XXS. The scalar loop stays
-/// the oracle, including on the last bits.
+/// IQ2_S, IQ1_S, IQ3_XXS and IQ3_S take the same vector decoder as IQ2_XXS. The scalar loop
+/// stays the oracle, including on the last bits.
 #[test]
 fn iq_scalar_family_vector_decode_matches_the_scalar_decode_bit_exactly() {
     vector_decode_matches(22, 82, dequantize_iq2_s);
     vector_decode_matches(19, 50, dequantize_iq1_s);
     vector_decode_matches(18, 98, dequantize_iq3_xxs);
+    vector_decode_matches(21, 110, dequantize_iq3_s);
 }
 
 /// The fused dot multiplies those same values. Its sum is split across four accumulators,
@@ -706,16 +707,18 @@ fn iq_scalar_family_row_dot_matches_the_decoded_products() {
     row_dot_matches(22, 82, dequantize_iq2_s);
     row_dot_matches(19, 50, dequantize_iq1_s);
     row_dot_matches(18, 98, dequantize_iq3_xxs);
+    row_dot_matches(21, 110, dequantize_iq3_s);
     row_dot_matches(23, 136, dequantize_iq4_xs);
 }
 
-/// Decode rate for the three types that were still scalar. `--ignored`.
+/// Decode rate for the types that were still scalar. `--ignored`.
 #[test]
 #[ignore = "measurement"]
 fn iq_scalar_family_decode_rate() {
     decode_rate(22, 82, dequantize_iq2_s);
     decode_rate(19, 50, dequantize_iq1_s);
     decode_rate(18, 98, dequantize_iq3_xxs);
+    decode_rate(21, 110, dequantize_iq3_s);
     decode_rate(23, 136, dequantize_iq4_xs);
 }
 

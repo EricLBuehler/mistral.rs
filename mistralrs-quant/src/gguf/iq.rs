@@ -170,6 +170,7 @@ fn dequantize_iq3_xxs(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
 }
 
 /// 3.4375 bpw. `d`, 64 bytes of grid indices, 8 of high bits, 32 of signs, 4 of scales.
+#[cfg_attr(target_arch = "aarch64", allow(dead_code))]
 fn dequantize_iq3_s(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
     let mut y = y.iter_mut();
     for block in blocks.as_chunks::<110>().0.iter().take(n_blocks) {
@@ -724,6 +725,99 @@ mod neon {
         acc.finish()
     }
 
+    /// The two scales in one IQ3_S scale byte: `d * (1 + 2 * nibble)`, low nibble first.
+    fn iq3_s_db(d: f32, scale: u8) -> [f32; 2] {
+        [
+            d * (1 + 2 * (scale & 0xf) as i32) as f32,
+            d * (1 + 2 * (scale >> 4) as i32) as f32,
+        ]
+    }
+
+    pub(super) fn dequantize_iq3_s(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
+        let masks = sign_byte_masks();
+        let out = y.as_mut_ptr();
+        for (i, block) in blocks
+            .as_chunks::<110>()
+            .0
+            .iter()
+            .take(n_blocks)
+            .enumerate()
+        {
+            let d = f16_scale(block);
+            let qs = &block[2..66];
+            let qh = &block[66..74];
+            let signs = &block[74..106];
+            let scales = &block[106..110];
+            for group in 0..8 {
+                let db = iq3_s_db(d, scales[group / 2])[group % 2];
+                let qh_byte = qh[group] as usize;
+                let qs_off = group * 8;
+                let signs_off = group * 4;
+                for l in 0..4 {
+                    // The high bit of the 9-bit grid index is one bit of `qh`, shifted per lane.
+                    let index1 = qs[qs_off + 2 * l] as usize | ((qh_byte << (8 - 2 * l)) & 256);
+                    let index2 = qs[qs_off + 2 * l + 1] as usize | ((qh_byte << (7 - 2 * l)) & 256);
+                    let sign = signs[signs_off + l];
+                    unsafe {
+                        let db = vdupq_n_f32(db);
+                        let m = masks[sign as usize].as_ptr();
+                        let lo = scale_signed4(IQ3S_GRID.as_ptr().add(index1) as *const u8, db, m);
+                        let hi = scale_signed4(
+                            IQ3S_GRID.as_ptr().add(index2) as *const u8,
+                            db,
+                            m.add(4),
+                        );
+                        let dst = out.add(i * 256 + (group * 4 + l) * 8);
+                        vst1q_f32(dst, lo);
+                        vst1q_f32(dst.add(4), hi);
+                    }
+                }
+            }
+        }
+    }
+
+    pub(super) fn iq3_s_row_dot(blocks: &[u8], n_blocks: usize, x: &[f32]) -> f32 {
+        let masks = sign_byte_masks();
+        let mut acc = Acc::new();
+        for (b, block) in blocks
+            .as_chunks::<110>()
+            .0
+            .iter()
+            .take(n_blocks)
+            .enumerate()
+        {
+            let d = f16_scale(block);
+            let qs = &block[2..66];
+            let qh = &block[66..74];
+            let signs = &block[74..106];
+            let scales = &block[106..110];
+            for group in 0..8 {
+                let db = iq3_s_db(d, scales[group / 2])[group % 2];
+                let qh_byte = qh[group] as usize;
+                let qs_off = group * 8;
+                let signs_off = group * 4;
+                for l in 0..4 {
+                    let index1 = qs[qs_off + 2 * l] as usize | ((qh_byte << (8 - 2 * l)) & 256);
+                    let index2 = qs[qs_off + 2 * l + 1] as usize | ((qh_byte << (7 - 2 * l)) & 256);
+                    let sign = signs[signs_off + l];
+                    let at = b * 256 + (group * 4 + l) * 8;
+                    unsafe {
+                        let db = vdupq_n_f32(db);
+                        let m = masks[sign as usize].as_ptr();
+                        let lo = scale_signed4(IQ3S_GRID.as_ptr().add(index1) as *const u8, db, m);
+                        let hi = scale_signed4(
+                            IQ3S_GRID.as_ptr().add(index2) as *const u8,
+                            db,
+                            m.add(4),
+                        );
+                        acc.fma8(lo, hi, x.as_ptr().add(at));
+                    }
+                }
+            }
+        }
+        acc.finish()
+    }
+
     pub(super) fn dequantize_iq1_s(blocks: &[u8], n_blocks: usize, y: &mut [f32]) {
         let out = y.as_mut_ptr();
         for (i, block) in blocks.as_chunks::<50>().0.iter().take(n_blocks).enumerate() {
@@ -897,7 +991,13 @@ pub(crate) fn dequantize_blocks(
             y
         ),
         20 => dequantize_iq4_nl(blocks, n_blocks, y),
-        21 => dequantize_iq3_s(blocks, n_blocks, y),
+        21 => dequant_arm!(
+            neon::dequantize_iq3_s,
+            dequantize_iq3_s,
+            blocks,
+            n_blocks,
+            y
+        ),
         22 => dequant_arm!(
             neon::dequantize_iq2_s,
             dequantize_iq2_s,
@@ -926,6 +1026,7 @@ fn row_dot(dtype: GgufDType, row_bytes: &[u8], x: &[f32], scratch: &mut [f32]) -
         16 => return neon::iq2_xxs_row_dot(row_bytes, x.len() / 256, x),
         18 => return neon::iq3_xxs_row_dot(row_bytes, x.len() / 256, x),
         19 => return neon::iq1_s_row_dot(row_bytes, x.len() / 256, x),
+        21 => return neon::iq3_s_row_dot(row_bytes, x.len() / 256, x),
         22 => return neon::iq2_s_row_dot(row_bytes, x.len() / 256, x),
         23 => return neon::iq4_xs_row_dot(row_bytes, x.len() / 256, x),
         _ => {}
