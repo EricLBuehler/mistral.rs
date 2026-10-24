@@ -15,7 +15,9 @@ const SAMPLES: usize = 5;
 const ITERATIONS: usize = 20;
 const DECODE_ROWS: usize = 4;
 const PROJECTIONS: [(usize, usize); 3] = [(4096, 4096), (14336, 4096), (4096, 14336)];
-const ROWS: [usize; 13] = [1, 2, 4, 8, 16, 32, 33, 128, 256, 257, 512, 1024, 4096];
+const ROWS: [usize; 16] = [
+    1, 2, 4, 8, 16, 32, 33, 65, 128, 129, 193, 256, 257, 512, 1024, 4096,
+];
 
 fn measure(
     device: &Device,

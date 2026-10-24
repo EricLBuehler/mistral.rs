@@ -128,11 +128,12 @@ pub(crate) fn call_fp8_linear(
                 && params.k.is_multiple_of(GEMV_K_CHUNK),
         )
     } else {
-        let (tile_m, tile_n) = if params.m as usize <= GEMM_SMALL_TILE {
+        let rows = params.m as usize;
+        let (tile_m, tile_n) = if rows <= GEMM_SMALL_TILE {
             (GEMM_SMALL_TILE, GEMM_TILE)
-        } else if params.m as usize <= GEMM_MEDIUM_TILE {
+        } else if rows <= GEMM_MEDIUM_TILE {
             (GEMM_MEDIUM_TILE, GEMM_TILE)
-        } else if params.m as usize > GEMM_TILE {
+        } else if rows.next_multiple_of(GEMM_LARGE_TILE) - rows < GEMM_TILE {
             (GEMM_LARGE_TILE, GEMM_TILE)
         } else {
             (GEMM_TILE, GEMM_TILE)
