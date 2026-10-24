@@ -1,6 +1,7 @@
 use candle_core::Result;
 use llguidance::api::TopLevelGrammar;
 
+use crate::sequence::StopReason;
 use crate::tools::{
     strategy::{
         AtemToolCallStrategy, HarmonyToolCallStrategy, TextToolCallStrategy, ToolCallStrategy,
@@ -256,10 +257,11 @@ impl ToolCallState {
         raw_delta: &str,
         parser_text: Option<&str>,
         has_external_reasoning: bool,
-        is_done: bool,
+        stop_reason: Option<StopReason>,
     ) -> Result<ToolCallParse> {
+        let truncated = stop_reason_truncated(stop_reason);
         if self.strategy.has_reasoning() {
-            if is_done && self.strategy.has_tool_calls() {
+            if stop_reason.is_some() && self.strategy.has_tool_calls() {
                 self.obligation
                     .mark_satisfied(self.matcher.requires_tool_call());
                 return Ok(ToolCallParse {
@@ -290,12 +292,12 @@ impl ToolCallState {
         }
         let (mut content, tool_calls) = self
             .matcher
-            .get_call_with_content(parse_text)
+            .get_call_with_content_at_limit(parse_text, truncated)
             .map_err(candle_core::Error::msg)?;
         if parser_text.is_some() && tool_calls.is_empty() {
             content = self
                 .matcher
-                .get_call_with_content(&visible_text)
+                .get_call_with_content_at_limit(&visible_text, truncated)
                 .map_err(candle_core::Error::msg)?
                 .0;
         }
@@ -318,6 +320,7 @@ impl ToolCallState {
         parsed_content: Option<String>,
         reasoning_content: Option<String>,
         parser_text: Option<&str>,
+        stop_reason: Option<StopReason>,
     ) -> Result<ToolCallParse> {
         if self.strategy.has_reasoning() {
             let tool_calls = self.strategy.finalize_tool_calls();
@@ -334,16 +337,17 @@ impl ToolCallState {
             });
         }
 
+        let truncated = stop_reason_truncated(stop_reason);
         let visible_text = parsed_content.unwrap_or_else(|| raw_text.to_string());
         let parse_text = parser_text.unwrap_or(&visible_text);
         let (mut content, tool_calls) = self
             .matcher
-            .get_call_with_content(parse_text)
+            .get_call_with_content_at_limit(parse_text, truncated)
             .map_err(candle_core::Error::msg)?;
         if parser_text.is_some() && tool_calls.is_empty() {
             content = self
                 .matcher
-                .get_call_with_content(&visible_text)
+                .get_call_with_content_at_limit(&visible_text, truncated)
                 .map_err(candle_core::Error::msg)?
                 .0;
         }
@@ -359,6 +363,13 @@ impl ToolCallState {
             tool_calls,
         })
     }
+}
+
+fn stop_reason_truncated(stop_reason: Option<StopReason>) -> bool {
+    matches!(
+        stop_reason,
+        Some(StopReason::Length(_) | StopReason::ModelLength(_))
+    )
 }
 
 pub(crate) fn required_tool_call_deadline_tokens(max_generation_len: usize) -> usize {
@@ -517,7 +528,9 @@ mod tests {
             b" to=get_weather<|message|><atem:function_calls><atem:invoke name=\"get_weather\"></atem:invoke></atem:function_calls><|eot|>",
         );
 
-        let parsed = state.parse_streaming(None, "", None, false, true).unwrap();
+        let parsed = state
+            .parse_streaming(None, "", None, false, Some(StopReason::Eos))
+            .unwrap();
         assert!(parsed.tool_calls.is_empty());
     }
 
@@ -565,7 +578,9 @@ mod tests {
         state.observe_token(0, output);
 
         assert_eq!(state.reasoning_delta().as_deref(), Some("checking"));
-        let parsed = state.parse_streaming(None, "", None, false, true).unwrap();
+        let parsed = state
+            .parse_streaming(None, "", None, false, Some(StopReason::Eos))
+            .unwrap();
         assert_eq!(parsed.tool_calls.len(), 1);
         assert_eq!(parsed.tool_calls[0].function.name, "get_weather");
         assert_eq!(
@@ -616,7 +631,9 @@ mod tests {
             0,
             b"<|eom|><|start|>assistant to=search<|message|><atem:function_calls><atem:invoke name=\"search\"></atem:invoke></atem:function_calls><|eot|>",
         );
-        let parsed = state.finalize_for_response("", None, None, None).unwrap();
+        let parsed = state
+            .finalize_for_response("", None, None, None, Some(StopReason::Eos))
+            .unwrap();
 
         assert_eq!(parsed.tool_calls.len(), 2);
         assert_eq!(parsed.tool_calls[0].function.name, "get_weather");
@@ -684,7 +701,7 @@ mod tests {
         state.observe_token(0, b">");
         assert_eq!(
             state
-                .finalize_for_response("", None, None, None)
+                .finalize_for_response("", None, None, None, Some(StopReason::Eos))
                 .unwrap()
                 .tool_calls
                 .len(),
@@ -805,6 +822,7 @@ mod tests {
                 None,
                 None,
                 None,
+                Some(StopReason::Eos),
             )
             .unwrap();
 
@@ -825,7 +843,13 @@ mod tests {
         let mut final_state =
             ToolCallState::new(ToolChoice::Auto, Some(&tools), Some(ToolCallFormat::Qwen)).unwrap();
         let parsed = final_state
-            .finalize_for_response(visible, None, None, Some(&parser_text))
+            .finalize_for_response(
+                visible,
+                None,
+                None,
+                Some(&parser_text),
+                Some(StopReason::Eos),
+            )
             .unwrap();
         assert_eq!(parsed.content, None);
         assert_eq!(parsed.tool_calls.len(), 1);
@@ -839,7 +863,7 @@ mod tests {
                 visible,
                 Some(&parser_text),
                 false,
-                true,
+                Some(StopReason::Eos),
             )
             .unwrap();
         assert_eq!(parsed.content, None);
@@ -857,6 +881,7 @@ mod tests {
                 None,
                 None,
                 Some("ordinary response<STOP_BOUNDARY>"),
+                Some(StopReason::Eos),
             )
             .unwrap();
 
@@ -879,5 +904,172 @@ mod tests {
             .expect("Hunyuan grammar must activate before the merged `>[` token");
 
         assert!(lark(&grammar).contains(r#"start: ">" @json_body "</tool_calls>""#));
+    }
+
+    #[test]
+    fn required_length_exhausted_call_returns_no_calls() {
+        let tools = vec![tool("get_weather")];
+        let mut state = ToolCallState::new(
+            ToolChoice::Required,
+            Some(&tools),
+            Some(ToolCallFormat::Hunyuan),
+        )
+        .unwrap();
+        let truncated = r#"<tool_calls>[{"name":"get_weather","arguments":{"city":"Tok"#;
+
+        let parsed = state
+            .finalize_for_response(truncated, None, None, None, Some(StopReason::Length(8)))
+            .expect("a call cut off by the token limit must not fail the request");
+
+        assert!(parsed.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn named_length_exhausted_call_returns_no_calls() {
+        let tools = vec![tool("get_weather")];
+        let mut state = ToolCallState::new(
+            ToolChoice::NamedFunction(NamedFunctionToolChoice {
+                tp: ToolType::Function,
+                name: "get_weather".to_string(),
+            }),
+            Some(&tools),
+            Some(ToolCallFormat::Hunyuan),
+        )
+        .unwrap();
+        let truncated = r#"<tool_calls>[{"name":"get_weather","arguments":{"city":"Tok"#;
+
+        let parsed = state
+            .finalize_for_response(
+                truncated,
+                None,
+                None,
+                None,
+                Some(StopReason::ModelLength(4096)),
+            )
+            .expect("a named call cut off by the token limit must not fail the request");
+
+        assert!(parsed.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn named_unknown_tool_when_not_truncated_still_errors() {
+        let tools = vec![tool("get_weather")];
+        let mut state = ToolCallState::new(
+            ToolChoice::NamedFunction(NamedFunctionToolChoice {
+                tp: ToolType::Function,
+                name: "get_weather".to_string(),
+            }),
+            Some(&tools),
+            None,
+        )
+        .unwrap();
+
+        let parsed = state.finalize_for_response(
+            r#"{"name":"get_customer","parameters":{}}"#,
+            None,
+            None,
+            None,
+            None,
+        );
+
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn named_unknown_tool_errors_even_at_length() {
+        let tools = vec![tool("get_weather")];
+        let mut state = ToolCallState::new(
+            ToolChoice::NamedFunction(NamedFunctionToolChoice {
+                tp: ToolType::Function,
+                name: "get_weather".to_string(),
+            }),
+            Some(&tools),
+            None,
+        )
+        .unwrap();
+
+        let parsed = state.finalize_for_response(
+            r#"{"name":"get_customer","parameters":{}}"#,
+            None,
+            None,
+            None,
+            Some(StopReason::Length(8)),
+        );
+
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn required_eos_without_call_still_errors() {
+        let tools = vec![tool("get_weather")];
+        let mut state = ToolCallState::new(ToolChoice::Required, Some(&tools), None).unwrap();
+
+        let parsed = state.finalize_for_response(
+            "Sure, here you go.",
+            None,
+            None,
+            None,
+            Some(StopReason::Eos),
+        );
+
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn streaming_length_required_returns_no_calls() {
+        let tools = vec![tool("get_weather")];
+        let mut state = ToolCallState::new(
+            ToolChoice::Required,
+            Some(&tools),
+            Some(ToolCallFormat::Hunyuan),
+        )
+        .unwrap();
+        let truncated = r#"<tool_calls>[{"name":"get_weather","arguments":{"city":"Tok"#;
+
+        let parsed = state
+            .parse_streaming(None, truncated, None, false, Some(StopReason::Length(8)))
+            .expect("a streaming call cut off by the token limit must not fail the request");
+
+        assert!(parsed.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn streaming_model_length_required_returns_no_calls() {
+        let tools = vec![tool("get_weather")];
+        let mut state = ToolCallState::new(
+            ToolChoice::Required,
+            Some(&tools),
+            Some(ToolCallFormat::Hunyuan),
+        )
+        .unwrap();
+        let truncated = r#"<tool_calls>[{"name":"get_weather","arguments":{"city":"Tok"#;
+
+        let parsed = state
+            .parse_streaming(
+                None,
+                truncated,
+                None,
+                false,
+                Some(StopReason::ModelLength(4096)),
+            )
+            .expect("a streaming call cut off by the model limit must not fail the request");
+
+        assert!(parsed.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn streaming_eos_required_without_call_still_errors() {
+        let tools = vec![tool("get_weather")];
+        let mut state = ToolCallState::new(ToolChoice::Required, Some(&tools), None).unwrap();
+
+        let parsed = state.parse_streaming(
+            None,
+            "Sure, here you go.",
+            None,
+            false,
+            Some(StopReason::Eos),
+        );
+
+        assert!(parsed.is_err());
     }
 }
