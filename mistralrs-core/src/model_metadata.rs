@@ -197,6 +197,11 @@ impl NormalLoaderType {
                     ex!("LiquidAI/LFM2-8B-A1B", "LFM2"),
                 ],
             },
+            Self::Kolibri1 => ArchMetadata {
+                families: &["Kolibri-1"],
+                modalities: m,
+                examples: &[ex!("Aleph-Alpha/Kolibri-1")],
+            },
         }
     }
 }
@@ -420,6 +425,7 @@ impl NormalLoaderType {
             Self::Qwen3_5 => "Qwen3_5ForCausalLM",
             Self::Lfm2 => "Lfm2ForCausalLM",
             Self::Lfm2Moe => "Lfm2MoeForCausalLM",
+            Self::Kolibri1 => "Kolibri1ForCausalLM",
         }
     }
 }
