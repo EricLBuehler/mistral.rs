@@ -18,6 +18,7 @@ mod afq;
 mod bitsandbytes;
 mod blockwise_fp8;
 mod cpu_rms_norm;
+pub mod cpu_threads;
 pub mod cublaslt;
 #[cfg(feature = "cuda")]
 pub mod cuda_device;
@@ -34,6 +35,7 @@ mod cuda_toolkit;
 #[cfg(all(feature = "cuda", feature = "cutile"))]
 pub mod cutile;
 pub mod distributed;
+mod dot_cpu;
 mod dummy;
 pub mod elementwise;
 pub mod embedding;
@@ -41,6 +43,7 @@ pub mod f8q8;
 mod fp8;
 mod fp8_config;
 pub mod gemv;
+pub mod gemv_cpu;
 mod gguf;
 mod gptq;
 mod hqq;
