@@ -2,6 +2,9 @@ use std::sync::Arc;
 
 use candle_core::{shape::Dim, DType, Result, Tensor, D};
 
+#[cfg(feature = "metal")]
+pub(crate) mod metal_top1;
+
 #[cfg(feature = "cuda")]
 use crate::cuda::ffi;
 use crate::layers::Activation;
