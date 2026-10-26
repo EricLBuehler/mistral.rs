@@ -160,8 +160,9 @@ fn main() -> Result<()> {
 
     let compute_cap = builder.get_compute_cap().unwrap_or(80);
     let allow_legacy = std::env::var("ALLOW_LEGACY").unwrap_or_default();
-    let allow_legacy_fp8 =
-        allow_legacy == "all" || allow_legacy.split(',').map(str::trim).any(|x| x == "fp8");
+    let allow_legacy_fp8 = cfg!(feature = "cuda-legacy-fp8")
+        || allow_legacy == "all"
+        || allow_legacy.split(',').map(str::trim).any(|x| x == "fp8");
 
     // Native FP8 is SM80+. Pascal uses opt-in software conversion.
     let using_fp8 = if compute_cap >= 80 || allow_legacy_fp8 {

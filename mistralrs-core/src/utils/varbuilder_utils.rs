@@ -13,7 +13,6 @@ use regex::Regex;
 
 use crate::lora::LoraConfig;
 use crate::utils::progress::IterWithProgress;
-use derive_new::new;
 
 const MISTRALRS_NO_MMAP: &str = "MISTRALRS_NO_MMAP";
 
@@ -102,7 +101,7 @@ pub(crate) fn from_mmaped_safetensors(
         if let Some(regexes) = make_dummy_regexes.clone() {
             let predicate = predicate.clone();
             handles.push(thread::spawn(Box::new(move || {
-                let loader = Common::new();
+                let loader = Common;
                 loader.load_tensors_from_path(
                     &path,
                     &base_device,
@@ -117,7 +116,7 @@ pub(crate) fn from_mmaped_safetensors(
         } else {
             let predicate = predicate.clone();
             handles.push(thread::spawn(Box::new(move || {
-                let loader = Common::new();
+                let loader = Common;
                 loader.load_tensors_from_path(
                     &path,
                     &base_device,
@@ -138,7 +137,9 @@ pub(crate) fn from_mmaped_safetensors(
         if let Some(regexes) = make_dummy_regexes.clone() {
             let predicate = predicate.clone();
             handles.push(thread::spawn(Box::new(move || {
-                let loader = XLora::new(i + 1);
+                let loader = XLora {
+                    adapter_index: i + 1,
+                };
                 loader.load_tensors_from_path(
                     &path,
                     &base_device,
@@ -153,7 +154,9 @@ pub(crate) fn from_mmaped_safetensors(
         } else {
             let predicate = predicate.clone();
             handles.push(thread::spawn(Box::new(move || {
-                let loader = XLora::new(i + 1);
+                let loader = XLora {
+                    adapter_index: i + 1,
+                };
                 loader.load_tensors_from_path(
                     &path,
                     &base_device,
@@ -194,7 +197,7 @@ pub(crate) fn load_preload_adapters(
     if let Some(paths) = paths {
         let mut map = HashMap::new();
         for (name, (path, config)) in paths {
-            let loader = Common::new();
+            let loader = Common;
             let loaded_tensors = loader.load_tensors_from_path(
                 path,
                 device,
@@ -289,11 +292,9 @@ trait LoadTensors {
     }
 }
 
-#[derive(new)]
-struct Common {}
+struct Common;
 impl LoadTensors for Common {}
 
-#[derive(new)]
 struct XLora {
     // Matches the associated path instance for reference in `get_name_key_pairs()`
     adapter_index: usize,

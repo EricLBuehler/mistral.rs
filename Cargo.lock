@@ -141,7 +141,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -152,7 +152,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -237,13 +237,13 @@ dependencies = [
 
 [[package]]
 name = "async-trait"
-version = "0.1.89"
+version = "0.1.92"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9035ad2d096bed7955a320ee7e2230574d28fd3c3a0f186cbea1ff3c7eed5dbb"
+checksum = "82f6aeea286b8eb4dd3431a1be1b59d290ace00f5bfd8e2a159bc2a05e2c1667"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 2.0.114",
+ "syn 3.0.8",
 ]
 
 [[package]]
@@ -643,7 +643,7 @@ checksum = "ade8366b8bd5ba243f0a58f036cc0ca8a2f069cff1a2351ef1cac6b083e16fc0"
 [[package]]
 name = "candle-core"
 version = "0.11.0"
-source = "git+https://github.com/haricot/candle.git?rev=e8dfdda04d10d32a381d31f530d7919ffdd0734c#e8dfdda04d10d32a381d31f530d7919ffdd0734c"
+source = "git+https://github.com/haricot/candle.git?rev=bfce966ad4d61a48801eb6af4db8b8eabebc01a8#bfce966ad4d61a48801eb6af4db8b8eabebc01a8"
 dependencies = [
  "accelerate-src",
  "byteorder",
@@ -670,13 +670,13 @@ dependencies = [
  "tokenizers 0.23.2",
  "yoke",
  "zerocopy",
- "zip 8.6.0",
+ "zip 9.0.3",
 ]
 
 [[package]]
 name = "candle-flash-attn-v3"
 version = "0.11.0"
-source = "git+https://github.com/haricot/candle.git?rev=e8dfdda04d10d32a381d31f530d7919ffdd0734c#e8dfdda04d10d32a381d31f530d7919ffdd0734c"
+source = "git+https://github.com/haricot/candle.git?rev=bfce966ad4d61a48801eb6af4db8b8eabebc01a8#bfce966ad4d61a48801eb6af4db8b8eabebc01a8"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -689,7 +689,7 @@ dependencies = [
 [[package]]
 name = "candle-kernels"
 version = "0.11.0"
-source = "git+https://github.com/haricot/candle.git?rev=e8dfdda04d10d32a381d31f530d7919ffdd0734c#e8dfdda04d10d32a381d31f530d7919ffdd0734c"
+source = "git+https://github.com/haricot/candle.git?rev=bfce966ad4d61a48801eb6af4db8b8eabebc01a8#bfce966ad4d61a48801eb6af4db8b8eabebc01a8"
 dependencies = [
  "cudaforge",
 ]
@@ -697,7 +697,7 @@ dependencies = [
 [[package]]
 name = "candle-metal-kernels"
 version = "0.11.0"
-source = "git+https://github.com/haricot/candle.git?rev=e8dfdda04d10d32a381d31f530d7919ffdd0734c#e8dfdda04d10d32a381d31f530d7919ffdd0734c"
+source = "git+https://github.com/haricot/candle.git?rev=bfce966ad4d61a48801eb6af4db8b8eabebc01a8#bfce966ad4d61a48801eb6af4db8b8eabebc01a8"
 dependencies = [
  "block2",
  "half",
@@ -712,7 +712,7 @@ dependencies = [
 [[package]]
 name = "candle-nn"
 version = "0.11.0"
-source = "git+https://github.com/haricot/candle.git?rev=e8dfdda04d10d32a381d31f530d7919ffdd0734c#e8dfdda04d10d32a381d31f530d7919ffdd0734c"
+source = "git+https://github.com/haricot/candle.git?rev=bfce966ad4d61a48801eb6af4db8b8eabebc01a8#bfce966ad4d61a48801eb6af4db8b8eabebc01a8"
 dependencies = [
  "accelerate-src",
  "candle-core",
@@ -1497,17 +1497,6 @@ checksum = "ececcb659e7ba858fb4f10388c250a7252eb0a27373f1a72b8748afdd248e587"
 dependencies = [
  "powerfmt",
  "serde_core",
-]
-
-[[package]]
-name = "derive-new"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2cdc8d50f426189eef89dac62fabfa0abb27d5cc008f25bf4156a0203325becc"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.114",
 ]
 
 [[package]]
@@ -3668,7 +3657,6 @@ dependencies = [
  "clap",
  "csv",
  "cudaforge",
- "derive-new",
  "derive_more",
  "dirs",
  "either",
@@ -4898,7 +4886,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.60.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6146,7 +6134,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "psm",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6415,6 +6403,17 @@ name = "syn"
 version = "2.0.114"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d4d107df263a3013ef9b1879b0df87d706ff80f65a86ea879bd9c31f9b307c2a"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-ident",
+]
+
+[[package]]
+name = "syn"
+version = "3.0.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01016da373cd8f7ef12624f796309f5c31ba8d646dd08856c02cd741d823c622"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -8210,13 +8209,14 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "8.6.0"
+version = "9.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d04a6b5381502aa6087c94c669499eb1602eb9c5e8198e534de571f7154809b"
+checksum = "c2d98561b612a84ae525331a7a094429ef8a5772514ed507ff6db5f54badc971"
 dependencies = [
  "crc32fast",
  "indexmap 2.13.0",
  "memchr",
+ "nix 0.31.3",
  "typed-path",
 ]
 

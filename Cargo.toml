@@ -39,10 +39,10 @@ rust-version = "1.94"
 # candle-nn = { path = "../candle/candle-nn", version = "0.11.0" }
 # candle-flash-attn-v3 = { path = "../candle/candle-flash-attn-v3", version = "0.11.0" }
 # candle-metal-kernels = { path = "../candle/candle-metal-kernels", version = "0.11.0" }
-candle-core = { git = "https://github.com/haricot/candle.git", version = "0.11.0", rev = "e8dfdda04d10d32a381d31f530d7919ffdd0734c" }
-candle-nn = { git = "https://github.com/haricot/candle.git", version = "0.11.0", rev = "e8dfdda04d10d32a381d31f530d7919ffdd0734c" }
-candle-flash-attn-v3 = { git = "https://github.com/haricot/candle.git", version = "0.11.0", rev = "e8dfdda04d10d32a381d31f530d7919ffdd0734c" }
-candle-metal-kernels = { git = "https://github.com/haricot/candle.git", version = "0.11.0", rev = "e8dfdda04d10d32a381d31f530d7919ffdd0734c" }
+candle-core = { git = "https://github.com/haricot/candle.git", version = "0.11.0", rev = "bfce966ad4d61a48801eb6af4db8b8eabebc01a8" }
+candle-nn = { git = "https://github.com/haricot/candle.git", version = "0.11.0", rev = "bfce966ad4d61a48801eb6af4db8b8eabebc01a8" }
+candle-flash-attn-v3 = { git = "https://github.com/haricot/candle.git", version = "0.11.0", rev = "bfce966ad4d61a48801eb6af4db8b8eabebc01a8" }
+candle-metal-kernels = { git = "https://github.com/haricot/candle.git", version = "0.11.0", rev = "bfce966ad4d61a48801eb6af4db8b8eabebc01a8" }
 
 axum = "0.8.8"
 http-body-util = "0.1.3"
@@ -129,12 +129,11 @@ bytemuck = "1.24.0"
 tokio-rayon = "2.1.0"
 rand_isaac = "0.4.0"
 indicatif = { version = "0.18.3", features = ["rayon"] }
-async-trait = "0.1.89"
+async-trait = "0.1.92"
 strum = { version = "0.27.2", features = ["derive"] }
 derive_more = { version = "2.1.1", default-features = false, features = ["from"] }
 akin = "0.4.0"
 variantly = "0.4.0"
-derive-new = "0.7.0"
 sysinfo = "0.36.1"
 csv = "1.4.0"
 bytemuck_derive = "1.10.2"

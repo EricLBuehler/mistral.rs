@@ -8,27 +8,16 @@ const DEEPGEMM_CUTLASS_COMMIT: &str = "f3fde58372d33e9a5650ba7b80fc48b3b49d40c8"
 const CUTLASS_COMMIT_ENV: &str = "MISTRALRS_CUTLASS_COMMIT";
 #[cfg(feature = "cuda")]
 const CUDA_BUILD_ROOT_ENV: &str = "MISTRALRS_CUDA_BUILD_ROOT";
+
 #[cfg(feature = "cuda")]
-const SUPPORTED_CUDA_TOOLKIT_VERSIONS: &[(usize, usize)] = &[
-    (13, 3),
-    (13, 2),
-    (13, 1),
-    (13, 0),
-    (12, 9),
-    (12, 8),
-    (12, 6),
-    (12, 5),
-    (12, 4),
-    (12, 3),
-    (12, 2),
-    (12, 1),
-    (12, 0),
-    (11, 8),
-    (11, 7),
-    (11, 6),
-    (11, 5),
-    (11, 4),
-];
+#[path = "src/build_support/cuda_toolkit.rs"]
+mod cuda_toolkit;
+
+#[cfg(feature = "cuda")]
+use cuda_toolkit::{
+    nvfp4_cutlass_supported_for_build, parse_cuda_version_from_nvcc,
+    SUPPORTED_CUDA_TOOLKIT_VERSIONS,
+};
 
 #[cfg(feature = "cuda")]
 fn cuda_build_dir(out_dir: &std::path::Path, component: &str) -> std::path::PathBuf {
@@ -111,18 +100,6 @@ fn cuda_version_from_build_system() -> (usize, usize) {
 }
 
 #[cfg(feature = "cuda")]
-fn parse_cuda_version_from_nvcc(stdout: &str) -> Option<(usize, usize)> {
-    let release = stdout.split("release ").nth(1)?;
-    let version = release
-        .split(|c: char| c == ',' || c.is_whitespace())
-        .next()?;
-    let mut parts = version.split('.');
-    let major = parts.next()?.parse().ok()?;
-    let minor = parts.next().unwrap_or("0").parse().ok()?;
-    Some((major, minor))
-}
-
-#[cfg(feature = "cuda")]
 fn cutile_supported_for_build_cuda(major: usize, minor: usize, compute_cap: usize) -> bool {
     let cuda_code = major * 100 + minor;
     ((80..90).contains(&compute_cap) && cuda_code >= 1302)
@@ -130,29 +107,19 @@ fn cutile_supported_for_build_cuda(major: usize, minor: usize, compute_cap: usiz
         || (compute_cap >= 100 && cuda_code >= 1302)
 }
 
-#[cfg(feature = "cuda")]
-fn nvfp4_cutlass_supported_for_build(
-    cuda_version: (usize, usize),
-    compute_cap: usize,
-    cutile: bool,
-    target: &str,
-) -> bool {
-    cuda_version == (13, 3) && compute_cap == 121 && cutile && target.contains("linux")
-}
-
 fn main() -> Result<(), String> {
     // Declare expected cfg values for check-cfg lint
     println!("cargo::rustc-check-cfg=cfg(has_marlin_kernels)");
-    println!("cargo::rustc-check-cfg=cfg(has_blockwise_fp8_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_fp8_mma_kernels)");
+    println!("cargo::rustc-check-cfg=cfg(allow_legacy_bf16)");
+    println!("cargo::rustc-check-cfg=cfg(allow_legacy_fp8)");
+    println!("cargo::rustc-check-cfg=cfg(has_blockwise_fp8_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_cutlass_fp8_sm90_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_deepgemm_fp8_sm90_provider)");
     println!("cargo::rustc-check-cfg=cfg(has_scalar_fp8_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_vector_fp8_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_mxfp4_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_mxfp4_wmma_kernels)");
-    println!("cargo::rustc-check-cfg=cfg(allow_legacy_bf16)");
-    println!("cargo::rustc-check-cfg=cfg(allow_legacy_fp8)");
     println!("cargo::rustc-check-cfg=cfg(has_cutlass_moe_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_nvfp4_cutlass_sm121_kernels)");
     println!("cargo::rustc-check-cfg=cfg(cuda_ge_13000)");
@@ -190,30 +157,22 @@ fn main() -> Result<(), String> {
             .watch(["kernels"])
             .arg(&header_hash_arg);
 
-        let allow_legacy = std::env::var("ALLOW_LEGACY").unwrap_or_default();
-        let allow_legacy_bf16 = allow_legacy == "all"
-            || allow_legacy
-                .split(',')
-                .map(str::trim)
-                .any(|feature| feature == "bf16");
-        let allow_legacy_fp8 = allow_legacy == "all"
-            || allow_legacy
-                .split(',')
-                .map(str::trim)
-                .any(|feature| feature == "fp8");
-        if allow_legacy_bf16 {
+        let legacy = std::env::var("ALLOW_LEGACY").unwrap_or_default();
+        let requested =
+            |name| legacy == "all" || legacy.split(',').map(str::trim).any(|part| part == name);
+        let legacy_bf16 = cfg!(feature = "cuda-legacy-bf16") || requested("bf16");
+        let legacy_fp8 = cfg!(feature = "cuda-legacy-fp8") || requested("fp8");
+        if legacy_bf16 {
             builder = builder.arg("-DALLOW_LEGACY_BF16");
             println!("cargo:rustc-cfg=allow_legacy_bf16");
         }
-        if allow_legacy_fp8 {
+        if legacy_fp8 {
             builder = builder.arg("-DALLOW_LEGACY_FP8");
             println!("cargo:rustc-cfg=allow_legacy_fp8");
         }
-
         let compute_cap = builder.get_compute_cap().unwrap_or(80);
         // ======== Handle optional kernel compilation via rustc-cfg flags
         let cc_over_80 = compute_cap >= 80;
-        let enable_legacy_fp8 = cc_over_80 || allow_legacy_fp8;
         let target = std::env::var("TARGET").unwrap();
 
         // The CUTLASS 2.x grouped-GEMM MoE kernels include gemm_universal.hpp, which textually pulls in
@@ -223,16 +182,14 @@ fn main() -> Result<(), String> {
 
         if cc_over_80 {
             println!("cargo:rustc-cfg=has_marlin_kernels");
-            // Never advertise native MMA when *_fp8_mma.cu is excluded (SM61).
-            // Keep the original SM80+ compilation capability unchanged.
             println!("cargo:rustc-cfg=has_fp8_mma_kernels");
-            // WMMA tensor core MXFP4 kernel (FP16/BF16 WMMA requires SM >= 80)
             println!("cargo:rustc-cfg=has_mxfp4_wmma_kernels");
         }
-        if enable_legacy_fp8 {
+        if cc_over_80 || legacy_fp8 {
             println!("cargo:rustc-cfg=has_blockwise_fp8_kernels");
             println!("cargo:rustc-cfg=has_scalar_fp8_kernels");
             println!("cargo:rustc-cfg=has_vector_fp8_kernels");
+            // WMMA tensor core MXFP4 kernel (FP16/BF16 WMMA requires SM >= 80)
         }
         let cutlass_fp8_sm90 = compute_cap == 90 && cuda_major >= 12 && !target.contains("msvc");
         if cutlass_fp8_sm90 {
@@ -276,7 +233,7 @@ fn main() -> Result<(), String> {
                 "grouped_mm_*.cu",
             ]
         };
-        if !cc_over_80 && !allow_legacy_fp8 {
+        if !cc_over_80 && !legacy_fp8 {
             excluded_files.extend(["*_fp8.cu", "*_fp8_gemm.cu"]);
         }
         if cc_over_80 && !cutlass_moe {

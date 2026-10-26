@@ -456,6 +456,45 @@ mod tests {
     use super::*;
     use candle_core::{DType, Device, Result, Tensor};
 
+    const ROUNDTRIP_SCALES: [f32; 3] = [1.0 / 256.0, 1.0, 16.0];
+    // These FP8 midpoints are exactly representable in CUDA's intermediate f16 conversion.
+    const ROUNDTRIP_INPUT: [f32; 16] = [
+        -448.0,
+        -432.0,
+        -400.0,
+        -1.1875,
+        -1.0625,
+        -1.0,
+        -3.0 / 1024.0,
+        -1.0 / 1024.0,
+        0.0,
+        1.0 / 1024.0,
+        3.0 / 1024.0,
+        1.0625,
+        1.1875,
+        400.0,
+        432.0,
+        448.0,
+    ];
+    const ROUNDTRIP_EXPECTED: [f32; 16] = [
+        -448.0,
+        -448.0,
+        -384.0,
+        -1.25,
+        -1.0,
+        -1.0,
+        -1.0 / 256.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0 / 256.0,
+        1.0,
+        1.25,
+        384.0,
+        448.0,
+        448.0,
+    ];
+
     #[test]
     fn test_fp8_vector_dequant() -> Result<()> {
         let dev = &Device::Cpu;
@@ -479,76 +518,42 @@ mod tests {
 
     #[test]
     fn test_fp8_vector_quant_cpu() -> Result<()> {
-        let dev = &Device::Cpu;
-
-        // Create test input with 256 elements (2 vectors)
-        let input = Tensor::randn(0f32, 2f32, 256, dev)?;
-
-        // Quantize
-        let (quantized, scales) = fp8_vector_quantize(&input)?;
-
-        // Verify shapes
-        assert_eq!(quantized.shape(), input.shape());
-        assert_eq!(scales.dims1()?, 2); // 256/128 = 2 vectors
-
-        // Dequantize
-        let dequantized = fp8_vector_dequantize(&quantized, &scales, input.dtype())?;
-
-        // Check that shapes match
-        assert_eq!(dequantized.shape(), input.shape());
-
-        // The values won't be exactly the same due to quantization loss,
-        // but they should be reasonably close
-        let input_vec = input.to_vec1::<f32>()?;
-        let dequant_vec = dequantized.to_vec1::<f32>()?;
-
-        let mut max_error = 0f32;
-        for (val_in, val_out) in input_vec.iter().zip(dequant_vec.iter()) {
-            let error = (val_in - val_out).abs();
-            max_error = max_error.max(error);
-        }
-
-        // FP8 E4M3 has limited precision, so we expect some error
-        assert!(max_error < 0.27, "Max error {max_error} is too large");
-
-        Ok(())
+        check_fp8_vector_quant_roundtrip(&Device::Cpu)
     }
 
     #[cfg(feature = "cuda")]
     #[test]
     fn test_fp8_vector_quant_dequant_roundtrip() -> Result<()> {
-        let dev = &Device::new_cuda(0)?;
+        check_fp8_vector_quant_roundtrip(&Device::new_cuda(0)?)
+    }
 
-        // Create test input with 256 elements (2 vectors)
-        let input = Tensor::randn(0f32, 2f32, 256, dev)?;
-
-        // Quantize
+    fn check_fp8_vector_quant_roundtrip(dev: &Device) -> Result<()> {
+        let input_data: Vec<f32> = ROUNDTRIP_SCALES
+            .iter()
+            .flat_map(|&scale| {
+                (0..VECTOR_SIZE).map(move |i| ROUNDTRIP_INPUT[i % ROUNDTRIP_INPUT.len()] * scale)
+            })
+            .collect();
+        let input = Tensor::from_vec(input_data, ROUNDTRIP_SCALES.len() * VECTOR_SIZE, dev)?;
         let (quantized, scales) = fp8_vector_quantize(&input)?;
-
-        // Verify shapes
         assert_eq!(quantized.shape(), input.shape());
-        assert_eq!(scales.dims1()?, 2); // 256/128 = 2 vectors
+        assert_eq!(quantized.dtype(), DType::F8E4M3);
+        assert_eq!(scales.to_vec1::<f32>()?, ROUNDTRIP_SCALES);
 
-        // Dequantize
-        let dequantized = fp8_vector_dequantize(&quantized, &scales, input.dtype())?;
-
-        // Check that shapes match
+        let dequantized = fp8_vector_dequantize(&quantized, &scales, DType::F32)?;
         assert_eq!(dequantized.shape(), input.shape());
-
-        // The values won't be exactly the same due to quantization loss,
-        // but they should be reasonably close
-        let input_vec = input.to_vec1::<f32>()?;
-        let dequant_vec = dequantized.to_vec1::<f32>()?;
-
-        let mut max_error = 0f32;
-        for (val_in, val_out) in input_vec.iter().zip(dequant_vec.iter()) {
-            let error = (val_in - val_out).abs();
-            max_error = max_error.max(error);
+        for (block, &scale) in dequantized
+            .to_vec1::<f32>()?
+            .as_chunks::<VECTOR_SIZE>()
+            .0
+            .iter()
+            .zip(&ROUNDTRIP_SCALES)
+        {
+            for (i, &actual) in block.iter().enumerate() {
+                let expected = ROUNDTRIP_EXPECTED[i % ROUNDTRIP_EXPECTED.len()] * scale;
+                assert_eq!(actual, expected, "element {i}, scale {scale}");
+            }
         }
-
-        // FP8 E4M3 has limited precision, so we expect some error
-        assert!(max_error < 0.24, "Max error {} is too large", max_error);
-
         Ok(())
     }
 

@@ -21,6 +21,9 @@ pub mod cublaslt;
 #[cfg(test)]
 #[path = "build_support/cuda_headers.rs"]
 mod cuda_headers;
+#[cfg(test)]
+#[path = "build_support/cuda_toolkit.rs"]
+mod cuda_toolkit;
 #[cfg(all(feature = "cuda", feature = "cutile"))]
 pub mod cutile;
 pub mod distributed;
@@ -1313,10 +1316,7 @@ impl TryFrom<GgmlDType> for IsqType {
             GgmlDType::Q8_0 => Ok(Self::Q8_0),
             GgmlDType::Q8_1 => Ok(Self::Q8_1),
             GgmlDType::Q8K => Ok(Self::Q8K),
-            // GGUF MXFP4 is a packed GGML tensor type; IsqType::MXFP4
-            // is a distinct learned/activation-aware quantizer and must not
-            // be silently conflated with this serialization representation.
-            GgmlDType::Mxfp4 | GgmlDType::BF16 | GgmlDType::F32 | GgmlDType::F16 => {
+            GgmlDType::BF16 | GgmlDType::F32 | GgmlDType::F16 | GgmlDType::Mxfp4 => {
                 candle_core::bail!("Expected valid GGML ISQ type.")
             }
         }

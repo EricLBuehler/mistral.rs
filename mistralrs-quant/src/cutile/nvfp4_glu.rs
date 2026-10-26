@@ -332,17 +332,17 @@ mod kernels {
     }
 }
 
-use std::sync::Arc;
-#[cfg(test)]
-use std::sync::Mutex;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use candle_core::{CudaStorage, DType, Device, Layout, Result, Shape, Storage, Tensor};
 use cutile::core::{f4e2m1fnx2, f8e4m3fn};
 use cutile::cuda_async::device_buffer::DevicePointer;
 use cutile::cuda_async::device_operation::DeviceOp;
 use cutile::cuda_core::sys::CUdeviceptr;
+use cutile::cutile_compiler::specialization::{DivHint, SpecializationBits};
 use cutile::tensor::IntoPartition;
-use cutile::tile_kernel::{contains_cuda_function, CompileOptions, TileKernel};
+use cutile::tile_kernel::{contains_cuda_function, CompileOptions, TileFunctionKey, TileKernel};
 use float8::F8E4M3;
 use half::{bf16, f16};
 
@@ -364,6 +364,23 @@ const WARMUP_ACTIVATIONS: [GluActivationType; 3] = [
     GluActivationType::Relu,
     GluActivationType::Sigmoid,
 ];
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct WarmupKey {
+    context: usize,
+    ordinal: usize,
+    dtype: DType,
+    activation: i32,
+    output: SpecializationBits,
+    global: SpecializationBits,
+    pointer_hints: [DivHint; 3],
+    scalar_hints: [DivHint; 5],
+}
+
+fn warmed_kernels() -> &'static Mutex<HashMap<WarmupKey, TileFunctionKey>> {
+    static WARMED: OnceLock<Mutex<HashMap<WarmupKey, TileFunctionKey>>> = OnceLock::new();
+    WARMED.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 pub(crate) struct GluQuantArgs<'a> {
     pub gate: &'a Tensor,
@@ -522,10 +539,28 @@ pub(crate) fn launch(
                         vec![packed_columns as i32, 1],
                     )
                 };
+                let warmup_key = WarmupKey {
+                    context: stream.context().cu_ctx() as usize,
+                    ordinal,
+                    dtype: args.gate.dtype(),
+                    activation: args.activation as i32,
+                    output: output.spec().clone(),
+                    global: global.spec().clone(),
+                    pointer_hints: [scale_address, gate_address, value_address]
+                        .map(|pointer| DivHint::from_ptr(pointer as CUdeviceptr)),
+                    scalar_hints: [
+                        rows,
+                        columns,
+                        scale_columns,
+                        gate_stride,
+                        value_matrix.row_stride,
+                    ]
+                    .map(|value| DivHint::from_value(value as i32)),
+                };
                 let output = output
                     .partition([QUANT_ROWS, QUANT_K / 2])
                     .map([1, 1], blocks);
-                unsafe {
+                let launcher = unsafe {
                     $kernel(
                         output,
                         DevicePointer::<f8e4m3fn>::from_cu_deviceptr(scale_address as CUdeviceptr),
@@ -540,19 +575,22 @@ pub(crate) fn launch(
                     )
                 }
                 .generics(generics.clone())
-                .compile_options(compile_options.clone())
+                .compile_options(compile_options.clone());
+                (launcher, warmup_key)
             };
+            let (launcher, warmup_key) = make_launcher();
             if compile_only {
                 catch_cutile_panic("NVFP4 GLU compile", || {
-                    make_launcher().compile_on(&cutile_stream).map_err(|error| {
+                    launcher.compile_on(&cutile_stream).map_err(|error| {
                         candle_core::Error::msg(format!(
                             "cuTile NVFP4 GLU compile failed: {error:?}"
                         ))
                     })
                 })?;
-            } else {
+                // cuTile key resolution synchronizes the stream, so keep it outside inference and capture.
                 let key = catch_cutile_panic("NVFP4 GLU specialization", || {
                     make_launcher()
+                        .0
                         .l1_cache_key_on(&cutile_stream)
                         .map_err(|error| {
                             candle_core::Error::msg(format!(
@@ -560,12 +598,19 @@ pub(crate) fn launch(
                             ))
                         })
                 })?;
+                warmed_kernels().lock().unwrap().insert(warmup_key, key);
+            } else {
                 // Never compile a missing specialization during inference or graph capture.
-                if !contains_cuda_function(&key) {
+                let warmed = warmed_kernels()
+                    .lock()
+                    .unwrap()
+                    .get(&warmup_key)
+                    .is_some_and(contains_cuda_function);
+                if !warmed {
                     return Ok(None);
                 }
                 catch_cutile_panic("NVFP4 GLU launch", || unsafe {
-                    make_launcher().async_on(&cutile_stream).map_err(|error| {
+                    launcher.async_on(&cutile_stream).map_err(|error| {
                         candle_core::Error::msg(format!(
                             "cuTile NVFP4 GLU launch failed: {error:?}"
                         ))

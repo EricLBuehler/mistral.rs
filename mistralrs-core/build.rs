@@ -135,7 +135,8 @@ fn main() {
         }
 
         let allow_legacy = std::env::var("ALLOW_LEGACY").unwrap_or_default();
-        let allow_legacy_bf16 = allow_legacy == "all"
+        let allow_legacy_bf16 = cfg!(feature = "cuda-legacy-bf16")
+            || allow_legacy == "all"
             || allow_legacy
                 .split(',')
                 .map(str::trim)
