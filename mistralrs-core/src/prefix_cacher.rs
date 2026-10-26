@@ -843,7 +843,23 @@ impl PrefixCacheManagerV2 {
             }
         }
 
-        if let Some((match_len, cache_element)) = best_match {
+        if let Some((mut match_len, cache_element)) = best_match {
+            // An exact hit needs a prompt token to produce fresh logits.
+            if match_len == toks.0.len()
+                && mm_features.is_empty()
+                && image_hashes.is_none()
+                && audio_hashes.is_none()
+                && video_hashes.is_none()
+                && cache_element.image_hashes.is_none()
+                && cache_element.audio_hashes.is_none()
+                && cache_element.video_hashes.is_none()
+                && cache_element.recurrent_snapshots.is_none()
+                && cache_element.cache.iter().all(|layer| {
+                    matches!(layer, Some(KvCache::Normal { .. } | KvCache::Shared { .. }))
+                })
+            {
+                match_len -= 1;
+            }
             let new_toks = toks.0[match_len..].to_vec();
             if new_toks.is_empty() {
                 return Ok(None);
@@ -892,6 +908,10 @@ impl PrefixCacheManagerV2 {
         Ok(None)
     }
 }
+
+#[cfg(test)]
+#[path = "prefix_replay_tests.rs"]
+mod replay_tests;
 
 #[cfg(test)]
 mod tests {
