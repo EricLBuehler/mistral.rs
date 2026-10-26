@@ -1,0 +1,19 @@
+{
+  "base_master_sha": "28ed6daca455b4ae063896014d1ea698b912c539",
+  "candle_branch": "cuda_legacy",
+  "candle_repository": "haricot/candle",
+  "candle_sha": "bfce966ad4d61a48801eb6af4db8b8eabebc01a8",
+  "candle_validation_ref": "refs/tags/archive/candle-pruned-20261016/archive/legacy/sm61-validated-38898658386-1",
+  "component": "legacy",
+  "contract_hash": "371a215171452d3fdf04fc0578d23ecc8eb852d5a973f608f727f2d0649fc0dc",
+  "features": [
+    "cuda-legacy-bf16",
+    "cuda-legacy-fp8",
+    "cuda-legacy-fp4"
+  ],
+  "kind": "mistral-standalone",
+  "prerequisites": {},
+  "schema_version": 2,
+  "target_branch": "allow_old_card",
+  "toolchain": "1.99.0"
+}

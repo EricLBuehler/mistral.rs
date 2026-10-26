@@ -219,3 +219,13 @@ debug = true
 [profile.dev]
 debug = true
 opt-level = 3
+
+[profile.campaign]
+inherits = "dev"
+opt-level = 1
+debug = 0
+incremental = false
+codegen-units = 8
+
+[profile.campaign.package.mistralrs-core]
+opt-level = 0
