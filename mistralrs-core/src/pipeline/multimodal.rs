@@ -1528,6 +1528,12 @@ impl Loader for MultimodalLoader {
             super::prepare_cuda_runtime(&device, pipeline_mapper.as_ref())?;
         }
 
+        if let Some(source) = &weight_source {
+            #[cfg(feature = "cuda")]
+            super::synchronize_cuda_contexts(&device, pipeline_mapper.as_ref())?;
+            source.release_source_cache()?;
+        }
+
         let (cache_config, cache_engine) = if let Some(paged_attn_config) =
             paged_attn_config.as_mut()
         {

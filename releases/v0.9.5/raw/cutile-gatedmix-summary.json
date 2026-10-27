@@ -1,0 +1,76 @@
+{
+  "results": [
+    {
+      "hidden": 511,
+      "rank": 512,
+      "streams": 3,
+      "cold": "false",
+      "median_us": [
+        2.73344,
+        4.48424,
+        4.868,
+        4.60736,
+        6.39888,
+        9.21504
+      ]
+    },
+    {
+      "hidden": 511,
+      "rank": 512,
+      "streams": 3,
+      "cold": "true",
+      "median_us": [
+        5.90902,
+        6.53521,
+        8.25785,
+        8.00577,
+        10.25887,
+        17.73583
+      ]
+    },
+    {
+      "hidden": 2560,
+      "rank": 320,
+      "streams": 4,
+      "cold": "false",
+      "median_us": [
+        6.08496,
+        16.42376,
+        16.54144,
+        12.2476,
+        28.54856,
+        14.6324
+      ]
+    },
+    {
+      "hidden": 2560,
+      "rank": 320,
+      "streams": 4,
+      "cold": "true",
+      "median_us": [
+        19.85784,
+        25.36867,
+        27.16003,
+        24.59852,
+        46.67426,
+        33.28039
+      ]
+    }
+  ],
+  "version_config": [
+    "existing gated_mix",
+    "cuTile BN1 BG8",
+    "cuTile BN2 BG8",
+    "cuTile BN4 BG4",
+    "cuTile BN4 BG16",
+    "cuTile BN8 BG4"
+  ],
+  "correctness_cases_passed": 48,
+  "weight_formats": [
+    "Q8_0",
+    "Q8_1"
+  ],
+  "timing_format": "Q8_0",
+  "scope": "runtime hidden/rank/streams, parallel padded stream tile; original packed weights and Q8_1 activations; integer block reduction, F32 scale accumulation, BF16 projection rounding before sigmoid, F32 residual mix",
+  "decision": "All measured cuTile variants regress; keep production unchanged."
+}

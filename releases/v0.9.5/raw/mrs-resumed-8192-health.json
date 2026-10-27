@@ -1,0 +1,25 @@
+{
+  "source_sha256": "464e5a6f7001b3d52d15548fca3a91d8e7f59a8d20c79fb70bbdbe1c0b81150a",
+  "binary_sha256": "81d1e23b618ef09bdd8b183c420b0b4a3999c164b1385832c288cbcfce36df65",
+  "fresh_server_prewarm_requests": 12,
+  "measured_sweep_requests": 12,
+  "requests_in_medians": 9,
+  "all_output_tokens": 128,
+  "all_requests_complete": true,
+  "nan_or_request_errors": false,
+  "maximum_measured_intertoken_seconds": 0.03940887690987438,
+  "measured_intervals_above_40ms": 0,
+  "post_sweep_residency": {
+    "before": {
+      "eligible_uploaded_source_resident_bytes": 33935360,
+      "ple_resident_page_bytes": 28800143360
+    },
+    "after": {
+      "eligible_uploaded_source_resident_bytes": 33935360,
+      "ple_resident_page_bytes": 28800143360
+    }
+  },
+  "residency_scan_applied_advice": false,
+  "residency_scan_utc": "2026-10-27T15:53:08.348974+00:00",
+  "residency_note": "Read-only page-residency scan after measurements; candidate uploaded-source tensor ranges identified by GGUF metadata, excluding the mapped PLE table. It does not independently prove that every nonexcluded tensor was uploaded."
+}

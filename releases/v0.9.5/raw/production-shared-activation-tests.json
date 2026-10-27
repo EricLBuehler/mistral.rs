@@ -1,0 +1,31 @@
+[
+  {
+    "command": [
+      "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+      "tests::shared_activation_",
+      "--include-ignored",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "tests": 2,
+    "exit_code": 0,
+    "seconds": 0.07683324813842773,
+    "log": "/tmp/qwen38-broad/production-test-shared-activation.log"
+  },
+  {
+    "command": [
+      "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+      "native_loading_mutable_shared_scales_and_post_cast_bias_match_oracle",
+      "--include-ignored",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "tests": 0,
+    "exit_code": 0,
+    "seconds": 0.07221007347106934,
+    "log": "/tmp/qwen38-broad/production-test-nvfp4-shared-scales.log",
+    "selection_exit_code": 1,
+    "status": "not_compiled",
+    "reason": "Existing has_nvfp4_cutlass_sm121_kernels guard requires CUDA>=13.3; this build uses CUDA13.2. The test is absent and was not run."
+  }
+]

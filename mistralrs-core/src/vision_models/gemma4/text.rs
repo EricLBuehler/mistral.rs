@@ -259,7 +259,7 @@ impl Gemma4Router {
         let normed = xs.apply(&self.norm)?;
 
         let router_input = normed.to_dtype(self.proj.weight().dtype())?;
-        let logits = router_input.apply(&self.proj)?;
+        let logits = crate::layers::router_linear(&self.proj, &router_input)?;
         let logits = match &self.proj_lora {
             Some(site) => mistralrs_quant::apply_dynamic_lora_delta(site, &router_input, logits)?,
             None => logits,

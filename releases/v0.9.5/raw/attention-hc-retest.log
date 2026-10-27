@@ -1,0 +1,25 @@
+warning: mistralrs-paged-attn@0.9.5: Using 10 threads for compilation
+warning: mistralrs-paged-attn@0.9.5: Compiling 15 of 15 kernels
+warning: mistralrs-quant@0.9.5: Using 10 threads for compilation
+warning: mistralrs-quant@0.9.5: Using cached cutlass at /home/ericbuehler/.cudaforge/git/checkouts/cutlass-7127592069c2fe01
+warning: mistralrs-quant@0.9.5: Compiling 1 of 52 kernels
+warning: mistralrs-flash-attn@0.9.5: Using 10 threads for compilation
+warning: mistralrs-flash-attn@0.9.5: Using cached cutlass at /home/ericbuehler/.cudaforge/git/checkouts/cutlass-7127592069c2fe01
+warning: mistralrs-flash-attn@0.9.5: Compiling 53 of 53 kernels
+   Compiling mistralrs-core v0.9.5 (/home/ericbuehler/mistral.rs/mistralrs-core)
+warning: mistralrs-core@0.9.5: Using 10 threads for compilation
+warning: mistralrs-core@0.9.5: All library kernels up-to-date, skipping compilation
+    Finished `test` profile [optimized + debuginfo] target(s) in 1m 06s
+     Running unittests src/lib.rs (target/debug/deps/mistralrs_core-2dfd7f3c1634b658)
+
+running 7 tests
+test layers::hyper_connection::tests::fused_hyper_connection_kernels_match_reference ... ok
+test layers::hyper_connection::tests::fused_hyper_connection_projections_match_reference ... ok
+test layers::hyper_connection::tests::hyper_connection_consumes_offset_and_strided_projection_views ... ok
+test layers::hyper_connection::tests::hyper_connection_orders_cross_stream_inputs_and_outputs ... ok
+test layers::hyper_connection::tests::hyper_connection_vector_combine_replays_strided_views_and_fallbacks ... ok
+test layers::hyper_connection::tests::packed_hyper_connection_projections_match_reference ... ok
+test layers::hyper_connection::tests::quantized_hyper_connection_graph_replay_matches_reference ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 1864 filtered out; finished in 1.54s
+

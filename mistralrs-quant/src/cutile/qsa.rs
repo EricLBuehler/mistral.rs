@@ -821,6 +821,7 @@ impl CutileKernel for QsaKernel {
         let device = Device::Cuda(dev.clone());
         tracing::info!("Warming cuTile QSA kernels.");
         for shape in shapes {
+            super::qsa_decode::warm_decode(shape, dev)?;
             let tables = Tensor::zeros((1, 1), DType::I32, &device)?;
             let paged = QsaPaged {
                 block_tables: &tables,

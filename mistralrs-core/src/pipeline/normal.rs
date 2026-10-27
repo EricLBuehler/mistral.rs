@@ -244,6 +244,12 @@ pub(crate) fn build_normal_pipeline(
         super::prepare_cuda_runtime(&device, mapper.as_ref())?;
     }
 
+    if let Some(source) = &source_weight_source {
+        #[cfg(feature = "cuda")]
+        super::synchronize_cuda_contexts(&device, mapper.as_ref())?;
+        source.release_source_cache()?;
+    }
+
     let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config.as_mut() {
         let paged_snapshot = paged_attn_config.clone();
         let estimate_for_capacity =

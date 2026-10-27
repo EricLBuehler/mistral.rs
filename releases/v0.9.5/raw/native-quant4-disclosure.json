@@ -1,0 +1,286 @@
+{
+  "source_inventory": "/tmp/qwen38-perf/quant-format-comparison.json",
+  "current_policy_verified_at": [
+    "mistralrs-core/src/pipeline/loaders/multimodal_loaders.rs:8454",
+    "mistralrs-quant/src/utils/isq.rs:249",
+    "mistralrs-core/src/vision_models/qwen4_exp/ple.rs:32"
+  ],
+  "scope": "All text linear, token embedding and PLE runtime bindings; dense norms, vision and optional MTP excluded. Logical payload bytes exclude CUDA allocator padding and runtime repacks.",
+  "summary": {
+    "cataloged_total": {
+      "default_isq_payload_bytes": 102625474560,
+      "gguf_runtime_payload_bytes": 111161768960,
+      "gguf_file_bytes": 111313402880
+    },
+    "text_without_ple": {
+      "default_isq_payload_bytes": 73825336320,
+      "gguf_runtime_payload_bytes": 82361630720,
+      "gguf_file_bytes": 82513264640
+    },
+    "routed_experts": {
+      "default_isq_payload_bytes": 70464307200,
+      "gguf_runtime_payload_bytes": 77017907200,
+      "gguf_file_bytes": 77017907200
+    },
+    "nonexpert_text_including_full_embedding": {
+      "default_isq_payload_bytes": 3361029120,
+      "gguf_runtime_payload_bytes": 5343723520,
+      "gguf_file_bytes": 5495357440
+    },
+    "idealized_active_payload_per_decode_token": {
+      "default_isq_payload_bytes": 4215816660.0,
+      "gguf_runtime_payload_bytes": 6172553280.0,
+      "gguf_file_bytes": 6324187200.0
+    },
+    "native_active_reduction_vs_mrs_gguf": 0.3170060315785561,
+    "native_active_reduction_vs_gguf_file_formats": 0.3333820573812236
+  },
+  "active_payload_assumptions": "Single-pass logical weight payload proxy: all cataloged nonexpert projections/head once, one token-embedding row,10of512experts per each of48layers,16PLE rows. Excludes norms/convolution, vision,MTP, allocator padding,repacking and actual cache/DRAM traffic. GGUF runtime payload is MRS loader representation; llama retains some F32 tensors instead.",
+  "groups": [
+    {
+      "role": "lm_head.weight",
+      "default_isq_type": "Q6_K",
+      "gguf_runtime_type": "Q8_0",
+      "count": 1,
+      "default_isq_payload_bytes": 521472000,
+      "gguf_runtime_payload_bytes": 675430400
+    },
+    {
+      "role": "model.language_model.embed_tokens.weight",
+      "default_isq_type": "Q6_K",
+      "gguf_runtime_type": "Q8_0",
+      "count": 1,
+      "default_isq_payload_bytes": 521472000,
+      "gguf_runtime_payload_bytes": 675430400
+    },
+    {
+      "role": "hyper.input_mix_weight_down",
+      "default_isq_type": "Q6_K",
+      "gguf_runtime_type": "Q8_0",
+      "count": 97,
+      "default_isq_payload_bytes": 260736000,
+      "gguf_runtime_payload_bytes": 337715200
+    },
+    {
+      "role": "hyper.input_mix_weight_up",
+      "default_isq_type": "Q5_1",
+      "gguf_runtime_type": "Q8_0",
+      "count": 97,
+      "default_isq_payload_bytes": 238387200,
+      "gguf_runtime_payload_bytes": 337715200
+    },
+    {
+      "role": "hyper.block_inject_weight",
+      "default_isq_type": "Q6_K",
+      "gguf_runtime_type": "BF16",
+      "count": 96,
+      "default_isq_payload_bytes": 3225600,
+      "gguf_runtime_payload_bytes": 7864320
+    },
+    {
+      "role": "model.language_model.layers.*.linear_attn.in_proj_a.weight",
+      "default_isq_type": "Q4_K",
+      "gguf_runtime_type": "BF16",
+      "count": 36,
+      "default_isq_payload_bytes": 2488320,
+      "gguf_runtime_payload_bytes": 8847360
+    },
+    {
+      "role": "model.language_model.layers.*.linear_attn.in_proj_b.weight",
+      "default_isq_type": "Q4_K",
+      "gguf_runtime_type": "BF16",
+      "count": 36,
+      "default_isq_payload_bytes": 2488320,
+      "gguf_runtime_payload_bytes": 8847360
+    },
+    {
+      "role": "model.language_model.layers.*.linear_attn.in_proj_qkv.weight",
+      "default_isq_type": "Q4_K",
+      "gguf_runtime_type": "Q8_0",
+      "count": 36,
+      "default_isq_payload_bytes": 530841600,
+      "gguf_runtime_payload_bytes": 1002700800
+    },
+    {
+      "role": "model.language_model.layers.*.linear_attn.in_proj_z.weight",
+      "default_isq_type": "Q4_K",
+      "gguf_runtime_type": "Q8_0",
+      "count": 36,
+      "default_isq_payload_bytes": 318504960,
+      "gguf_runtime_payload_bytes": 601620480
+    },
+    {
+      "role": "model.language_model.layers.*.linear_attn.out_proj.weight",
+      "default_isq_type": "Q4_K",
+      "gguf_runtime_type": "Q8_0",
+      "count": 36,
+      "default_isq_payload_bytes": 318504960,
+      "gguf_runtime_payload_bytes": 601620480
+    },
+    {
+      "role": "down_proj.weight",
+      "default_isq_type": "Q4_1",
+      "gguf_runtime_type": "Q5_1",
+      "count": 43,
+      "default_isq_payload_bytes": 22544384000,
+      "gguf_runtime_payload_bytes": 27053260800
+    },
+    {
+      "role": "gate_proj.weight",
+      "default_isq_type": "Q4_K",
+      "gguf_runtime_type": "Q4_K",
+      "count": 47,
+      "default_isq_payload_bytes": 22177382400,
+      "gguf_runtime_payload_bytes": 22177382400
+    },
+    {
+      "role": "up_proj.weight",
+      "default_isq_type": "Q4_K",
+      "gguf_runtime_type": "Q4_K",
+      "count": 47,
+      "default_isq_payload_bytes": 22177382400,
+      "gguf_runtime_payload_bytes": 22177382400
+    },
+    {
+      "role": "model.language_model.layers.*.mlp.gate.weight",
+      "default_isq_type": "BF16",
+      "gguf_runtime_type": "BF16",
+      "count": 48,
+      "default_isq_payload_bytes": 125829120,
+      "gguf_runtime_payload_bytes": 125829120
+    },
+    {
+      "role": "model.language_model.layers.*.mlp.shared_expert.down_proj.weight",
+      "default_isq_type": "Q4_1",
+      "gguf_runtime_type": "Q8_0",
+      "count": 48,
+      "default_isq_payload_bytes": 49152000,
+      "gguf_runtime_payload_bytes": 83558400
+    },
+    {
+      "role": "model.language_model.layers.*.mlp.shared_expert.gate_proj.weight",
+      "default_isq_type": "Q4_K",
+      "gguf_runtime_type": "Q8_0",
+      "count": 48,
+      "default_isq_payload_bytes": 44236800,
+      "gguf_runtime_payload_bytes": 83558400
+    },
+    {
+      "role": "model.language_model.layers.*.mlp.shared_expert.up_proj.weight",
+      "default_isq_type": "Q4_K",
+      "gguf_runtime_type": "Q8_0",
+      "count": 48,
+      "default_isq_payload_bytes": 44236800,
+      "gguf_runtime_payload_bytes": 83558400
+    },
+    {
+      "role": "model.language_model.layers.*.mlp.shared_expert_gate.weight",
+      "default_isq_type": "BF16",
+      "gguf_runtime_type": "BF16",
+      "count": 48,
+      "default_isq_payload_bytes": 245760,
+      "gguf_runtime_payload_bytes": 245760
+    },
+    {
+      "role": "model.language_model.layers.*.ple.key_proj.weight",
+      "default_isq_type": "Q6_K",
+      "gguf_runtime_type": "Q8_0",
+      "count": 1,
+      "default_isq_payload_bytes": 21504000,
+      "gguf_runtime_payload_bytes": 27852800
+    },
+    {
+      "role": "model.language_model.layers.*.ple.value_proj.weight",
+      "default_isq_type": "Q6_K",
+      "gguf_runtime_type": "Q8_0",
+      "count": 1,
+      "default_isq_payload_bytes": 5376000,
+      "gguf_runtime_payload_bytes": 6963200
+    },
+    {
+      "role": "model.language_model.layers.*.self_attn.indexer.index_qk_proj.weight",
+      "default_isq_type": "Q6_K",
+      "gguf_runtime_type": "BF16",
+      "count": 12,
+      "default_isq_payload_bytes": 16128000,
+      "gguf_runtime_payload_bytes": 39321600
+    },
+    {
+      "role": "model.language_model.layers.*.self_attn.k_proj.weight",
+      "default_isq_type": "Q4_K",
+      "gguf_runtime_type": "Q8_0",
+      "count": 12,
+      "default_isq_payload_bytes": 8847360,
+      "gguf_runtime_payload_bytes": 16711680
+    },
+    {
+      "role": "model.language_model.layers.*.self_attn.o_proj.weight",
+      "default_isq_type": "Q4_K",
+      "gguf_runtime_type": "Q8_0",
+      "count": 12,
+      "default_isq_payload_bytes": 106168320,
+      "gguf_runtime_payload_bytes": 200540160
+    },
+    {
+      "role": "model.language_model.layers.*.self_attn.q_proj.weight",
+      "default_isq_type": "Q4_K",
+      "gguf_runtime_type": "Q8_0",
+      "count": 12,
+      "default_isq_payload_bytes": 212336640,
+      "gguf_runtime_payload_bytes": 401080320
+    },
+    {
+      "role": "model.language_model.layers.*.self_attn.v_proj.weight",
+      "default_isq_type": "Q4_K",
+      "gguf_runtime_type": "Q8_0",
+      "count": 12,
+      "default_isq_payload_bytes": 8847360,
+      "gguf_runtime_payload_bytes": 16711680
+    },
+    {
+      "role": "down_proj.weight",
+      "default_isq_type": "Q4_1",
+      "gguf_runtime_type": "Q8_0",
+      "count": 5,
+      "default_isq_payload_bytes": 2621440000,
+      "gguf_runtime_payload_bytes": 4456448000
+    },
+    {
+      "role": "gate_proj.weight",
+      "default_isq_type": "Q4_K",
+      "gguf_runtime_type": "Q5_K",
+      "count": 1,
+      "default_isq_payload_bytes": 471859200,
+      "gguf_runtime_payload_bytes": 576716800
+    },
+    {
+      "role": "up_proj.weight",
+      "default_isq_type": "Q4_K",
+      "gguf_runtime_type": "Q5_K",
+      "count": 1,
+      "default_isq_payload_bytes": 471859200,
+      "gguf_runtime_payload_bytes": 576716800
+    },
+    {
+      "role": "PLE n-gram table",
+      "default_isq_type": "custom Q4 symmetric groups32 with f16 scales",
+      "gguf_runtime_type": "IQ4_NL",
+      "count": 1,
+      "default_isq_payload_bytes": 28800138240,
+      "gguf_runtime_payload_bytes": 28800138240
+    }
+  ],
+  "disclosure": "Native --quant4 is a separately quantized configuration, not the same UD-Q4_K_XL checkpoint. It reduces bit widths for dense attention/GDN and shared experts, token embedding/output head, hyper-connection projections, indexer and PLE projections, and routed expert down projections. Native PLE symmetric Q4 and GGUF IQ4_NL use the same packed size but different values. Its smaller active weight payload can materially increase decode throughput; the performance comparison does not establish equal model quality or isolate runtime-kernel speed.",
+  "runtime_validation": {
+    "label": "mrs-production-native4-8192",
+    "source_checkpoint_revision": "de4b8e4d43b917e7706784d8bb445c9af86a3540",
+    "ple": "mapped symmetric Q4 with F16 scales",
+    "ple_logged_gib": 26,
+    "ple_preparation_seconds": 171,
+    "decoder_layers_on_cuda": 48,
+    "startup_seconds": 540.4456567764282,
+    "native_preset_changed_by_this_work": false,
+    "source_binary": "production-source-manifest.json",
+    "startup_log_excerpt": "2026-10-27T14:52:57.308270Z INFO Qwen4-Exp PLE table quantized into reclaimable memory-mapped storage size_gb=26 elapsed_s=171 gpu_prefault=true"
+  }
+}

@@ -1,0 +1,173 @@
+[
+  {
+    "stage": "attention-format",
+    "command": [
+      "cargo",
+      "fmt",
+      "--all"
+    ],
+    "started": 1793118969.6287153,
+    "seconds": 2.7797327041625977,
+    "exit_code": 0,
+    "log": "/tmp/qwen38-broad/attention-format.log"
+  },
+  {
+    "stage": "attention-diff-check",
+    "command": [
+      "git",
+      "diff",
+      "--check"
+    ],
+    "started": 1793118972.408694,
+    "seconds": 0.03745627403259277,
+    "exit_code": 0,
+    "log": "/tmp/qwen38-broad/attention-diff-check.log"
+  },
+  {
+    "stage": "attention-cuda-check",
+    "command": [
+      "cargo",
+      "check",
+      "-p",
+      "mistralrs-cli",
+      "--features",
+      "cuda,flash-attn,cutile",
+      "-j10"
+    ],
+    "started": 1793118972.4463334,
+    "seconds": 9.612532138824463,
+    "exit_code": 0,
+    "log": "/tmp/qwen38-broad/attention-cuda-check.log"
+  },
+  {
+    "stage": "attention-cpu-check",
+    "command": [
+      "cargo",
+      "check",
+      "-p",
+      "mistralrs-core",
+      "-p",
+      "mistralrs-quant",
+      "--no-default-features",
+      "-j10"
+    ],
+    "started": 1793118982.0590692,
+    "seconds": 5.354279279708862,
+    "exit_code": 0,
+    "log": "/tmp/qwen38-broad/attention-cpu-check.log"
+  },
+  {
+    "stage": "attention-test-build",
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "mistralrs-core",
+      "-p",
+      "mistralrs-quant",
+      "--lib",
+      "--features",
+      "cuda,flash-attn,cutile",
+      "--no-run",
+      "-j10"
+    ],
+    "started": 1793118987.413552,
+    "seconds": 82.43634724617004,
+    "exit_code": 0,
+    "log": "/tmp/qwen38-broad/attention-test-build.log"
+  },
+  {
+    "stage": "attention-cuda-tests",
+    "command": [
+      "python3",
+      "/tmp/qwen38-broad/run_attention_cuda_correctness.py"
+    ],
+    "started": 1793119069.8501787,
+    "seconds": 42.117018699645996,
+    "exit_code": 0,
+    "log": "/tmp/qwen38-broad/attention-cuda-tests.log",
+    "initial_exit_code": 1,
+    "repaired_groups": [
+      {
+        "stage": "attention-hc-retest",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "mistralrs-core",
+          "--lib",
+          "--features",
+          "cuda,flash-attn,cutile",
+          "-j10",
+          "layers::hyper_connection::tests::",
+          "--",
+          "--include-ignored",
+          "--test-threads=1"
+        ],
+        "log": "/tmp/qwen38-broad/attention-hc-retest.log",
+        "seconds": 68.47129225730896,
+        "exit_code": 0
+      }
+    ]
+  },
+  {
+    "stage": "attention-hc-retest",
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "mistralrs-core",
+      "--lib",
+      "--features",
+      "cuda,flash-attn,cutile",
+      "-j10",
+      "layers::hyper_connection::tests::",
+      "--",
+      "--include-ignored",
+      "--test-threads=1"
+    ],
+    "log": "/tmp/qwen38-broad/attention-hc-retest.log",
+    "seconds": 68.47129225730896,
+    "exit_code": 0
+  },
+  {
+    "stage": "attention-release-build",
+    "command": [
+      "cargo",
+      "--config",
+      "profile.release.package.candle-core.codegen-units=1",
+      "build",
+      "--release",
+      "-p",
+      "mistralrs-cli",
+      "--features",
+      "cuda,flash-attn,cutile",
+      "-j10"
+    ],
+    "log": "/tmp/qwen38-broad/attention-release-build.log",
+    "seconds": 100.58146500587463,
+    "exit_code": 0
+  },
+  {
+    "stage": "attention-final-checks",
+    "command": [
+      "python3",
+      "/tmp/qwen38-broad/validate_attention_final.py"
+    ],
+    "log": "/tmp/qwen38-broad/attention-final-checks.log",
+    "seconds": 14.654900312423706,
+    "exit_code": 0
+  },
+  {
+    "stage": "attention-source-snapshot",
+    "command": [
+      "python3",
+      "/tmp/qwen38-broad/snapshot_sources.py",
+      "--output",
+      "/tmp/qwen38-broad/attention-source-manifest.json"
+    ],
+    "log": "/tmp/qwen38-broad/attention-source-snapshot.log",
+    "seconds": 0.3978748321533203,
+    "exit_code": 0
+  }
+]

@@ -5,6 +5,7 @@ use std::{
     mem::{align_of, size_of},
     ops::Range,
     path::{Path, PathBuf},
+    sync::Mutex,
 };
 
 use byteorder::{BigEndian, ByteOrder, LittleEndian};
@@ -329,13 +330,15 @@ where
             let mmap = unsafe { MmapOptions::new().map(&file) }
                 .map_err(Error::wrap)
                 .map_err(|err| err.with_path(&path))?;
-            ParsedShard::parse(path.clone(), mmap).map_err(|err| err.with_path(&path))
+            ParsedShard::parse(path.clone(), file, mmap).map_err(|err| err.with_path(&path))
         })
         .collect()
 }
 
 pub struct GgufArchive {
+    files: Vec<File>,
     mappings: Vec<Mmap>,
+    uploaded_tensors: Mutex<HashSet<String>>,
     shards: Vec<GgufShardInfo>,
     metadata: HashMap<String, Value>,
     tensors: HashMap<String, GgufTensorInfo>,
@@ -408,6 +411,7 @@ impl GgufArchive {
         validate_and_order_splits(&mut parsed)?;
         let alignment = archive_alignment(&parsed)?;
         let declared_total = declared_tensor_count(&parsed)?;
+        let mut files = Vec::with_capacity(parsed.len());
         let mut mappings = Vec::with_capacity(parsed.len());
         let mut shards = Vec::with_capacity(parsed.len());
         let mut metadata = HashMap::new();
@@ -419,7 +423,7 @@ impl GgufArchive {
                 std::mem::take(&mut shard.metadata),
                 shard_index,
             )?;
-            let (mmap, shard_info, shard_tensors) = shard.finish(shard_index, alignment)?;
+            let (file, mmap, shard_info, shard_tensors) = shard.finish(shard_index, alignment)?;
             for tensor in shard_tensors {
                 let name = tensor.name.clone();
                 match tensors.entry(name.clone()) {
@@ -431,6 +435,7 @@ impl GgufArchive {
                     }
                 }
             }
+            files.push(file);
             mappings.push(mmap);
             shards.push(shard_info);
         }
@@ -445,7 +450,9 @@ impl GgufArchive {
         }
 
         Ok(Self {
+            files,
             mappings,
+            uploaded_tensors: Mutex::new(HashSet::new()),
             shards,
             metadata,
             tensors,
@@ -499,7 +506,9 @@ impl GgufArchive {
         for component in components {
             let shard_offset = self.shards.len();
             let Self {
+                files,
                 mappings,
+                uploaded_tensors,
                 shards,
                 tensors,
                 ..
@@ -508,7 +517,16 @@ impl GgufArchive {
                 tensor.shard_index += shard_offset;
                 self.tensors.insert(name, tensor);
             }
+            self.files.extend(files);
             self.mappings.extend(mappings);
+            self.uploaded_tensors
+                .get_mut()
+                .expect("GGUF upload tracking poisoned")
+                .extend(
+                    uploaded_tensors
+                        .into_inner()
+                        .expect("GGUF upload tracking poisoned"),
+                );
             self.shards.extend(shards);
         }
         Ok(())
@@ -580,13 +598,73 @@ impl GgufArchive {
                 MAPPED_UPLOAD_PREFETCH_BYTES,
             );
         }
-        let result = qtensor_from_gguf_data(dtype, data.bytes(), info.shape.clone(), device);
+        let tensor = qtensor_from_gguf_data(dtype, data.bytes(), info.shape.clone(), device)?;
+        if device.is_cuda() {
+            self.mark_tensor_uploaded(name);
+        }
         #[cfg(all(feature = "cuda", target_os = "linux"))]
         if advise {
-            // Drop copied source mappings so reclaim does not invalidate GPU translations page by page.
+            // Drop copied source PTEs before host-page reclaim invalidates GPU translations page by page.
             advise_mapped_upload(data.bytes(), libc::MADV_DONTNEED, data.bytes().len());
         }
-        result
+        Ok(tensor)
+    }
+
+    pub(crate) fn mark_tensor_uploaded(&self, name: &str) {
+        self.uploaded_tensors
+            .lock()
+            .expect("GGUF upload tracking poisoned")
+            .insert(name.to_owned());
+    }
+
+    /// Reclaim uploaded sources after loading; untouched mapped tensors remain available for inference.
+    pub fn release_source_cache(&self) -> Result<()> {
+        let uploaded = std::mem::take(
+            &mut *self
+                .uploaded_tensors
+                .lock()
+                .expect("GGUF upload tracking poisoned"),
+        );
+        #[cfg(all(feature = "cuda", target_os = "linux"))]
+        for name in uploaded {
+            self.reclaim_tensor_source(&name)?;
+        }
+        #[cfg(not(all(feature = "cuda", target_os = "linux")))]
+        let _ = uploaded;
+        Ok(())
+    }
+
+    #[cfg(all(feature = "cuda", target_os = "linux"))]
+    fn reclaim_tensor_source(&self, name: &str) -> Result<()> {
+        use std::os::fd::AsRawFd;
+
+        let data = self.tensor_data(name)?;
+        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        if page <= 0 {
+            return Ok(());
+        }
+        let page = page as usize;
+        let info = data.info();
+        let range = info
+            .data_range
+            .as_ref()
+            .expect("validated tensor byte range");
+        let start = range.start.div_ceil(page) * page;
+        let end = range.end / page * page;
+        if start >= end {
+            return Ok(());
+        }
+        // Releasing PTEs alone leaves copied weights competing with mapped tensors in the file cache.
+        advise_mapped_upload(data.bytes(), libc::MADV_DONTNEED, data.bytes().len());
+        unsafe {
+            libc::posix_fadvise(
+                self.files[info.shard_index].as_raw_fd(),
+                start as libc::off_t,
+                (end - start) as libc::off_t,
+                libc::POSIX_FADV_DONTNEED,
+            );
+        }
+        Ok(())
     }
 }
 
@@ -677,6 +755,7 @@ struct RawTensorInfo {
 
 struct ParsedShard {
     path: PathBuf,
+    file: File,
     mmap: Mmap,
     version: GgufVersion,
     endian: GgufEndian,
@@ -686,7 +765,7 @@ struct ParsedShard {
 }
 
 impl ParsedShard {
-    fn parse(path: PathBuf, mmap: Mmap) -> Result<Self> {
+    fn parse(path: PathBuf, file: File, mmap: Mmap) -> Result<Self> {
         let (endian, initial_offset) = parse_magic(&mmap)?;
         let mut reader = SliceReader::new(&mmap, initial_offset, endian);
         let version = match reader.read_u32()? {
@@ -755,6 +834,7 @@ impl ParsedShard {
         let header_end = reader.position();
         Ok(Self {
             path,
+            file,
             mmap,
             version,
             endian,
@@ -768,7 +848,7 @@ impl ParsedShard {
         self,
         shard_index: usize,
         alignment: usize,
-    ) -> Result<(Mmap, GgufShardInfo, Vec<GgufTensorInfo>)> {
+    ) -> Result<(File, Mmap, GgufShardInfo, Vec<GgufTensorInfo>)> {
         let tensor_data_offset = align_up(self.header_end, alignment)?;
         if !self.tensors.is_empty() && tensor_data_offset > self.mmap.len() {
             candle_core::bail!(
@@ -890,7 +970,7 @@ impl ParsedShard {
             tensor_data_offset,
             file_len: self.mmap.len(),
         };
-        Ok((self.mmap, info, tensors))
+        Ok((self.file, self.mmap, info, tensors))
     }
 }
 
@@ -1518,7 +1598,7 @@ mod tests {
     #[cfg(all(feature = "cuda", target_os = "linux"))]
     #[test]
     #[ignore = "requires a CUDA device"]
-    fn mapped_cuda_load_preserves_native_bytes_after_source_unmap() -> Result<()> {
+    fn mapped_cuda_load_preserves_bytes_after_source_reclaim_and_unlink() -> Result<()> {
         const EXPERTS: usize = 48;
         const ROWS: usize = 640;
         const COLS: usize = 2560;
@@ -1555,9 +1635,13 @@ mod tests {
                 },
             ];
             let file = write_test_gguf(&base_metadata(), &tensors, DEFAULT_ALIGNMENT);
+            file.as_file().sync_all().map_err(Error::wrap)?;
             let archive = GgufArchive::open_file(file.path())?;
+            file.close().map_err(Error::wrap)?;
             for _ in 0..2 {
                 let tensor = archive.load_qtensor("experts", &device)?;
+                device.synchronize()?;
+                archive.release_source_cache()?;
                 assert_eq!(tensor.shape().dims(), shape);
                 assert_eq!(tensor.dtype(), dtype);
                 assert_eq!(&*tensor.data()?, tensors[1].data.as_slice());

@@ -2,12 +2,17 @@ pub mod archive;
 pub mod cpu;
 #[cfg(feature = "cuda")]
 pub(crate) mod cuda;
+pub mod embedding;
+#[cfg(test)]
+mod embedding_tests;
 #[cfg(feature = "cuda")]
 pub mod fast_mmq;
 #[cfg(feature = "cuda")]
 pub mod fast_mmvq;
 #[cfg(feature = "cuda")]
 mod ffi;
+#[cfg(feature = "cuda")]
+pub(crate) mod gated_mix;
 #[cfg(all(feature = "cuda", has_marlin_kernels))]
 mod packed_affine;
 pub(crate) mod quantize;

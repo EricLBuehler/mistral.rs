@@ -1,0 +1,244 @@
+[
+  {
+    "command": [
+      "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+      "cutile::qsa_decode::tests::",
+      "--include-ignored",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "log": "/tmp/qwen38-broad/attention-test-cutile-qsa_decode-tests.log",
+    "tests": 3,
+    "exit_code": 0,
+    "seconds": 21.639824151992798
+  },
+  {
+    "command": [
+      "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+      "gguf::fast_mmvq::shared_tests::",
+      "--include-ignored",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "log": "/tmp/qwen38-broad/attention-test-gguf-fast_mmvq-shared_tests.log",
+    "tests": 2,
+    "exit_code": 0,
+    "seconds": 0.8839364051818848
+  },
+  {
+    "command": [
+      "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+      "cuda_memory::tests::",
+      "--include-ignored",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "log": "/tmp/qwen38-broad/attention-test-cuda_memory-tests.log",
+    "tests": 1,
+    "exit_code": 0,
+    "seconds": 0.4609262943267822
+  },
+  {
+    "command": [
+      "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+      "gguf::embedding_tests::",
+      "--include-ignored",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "log": "/tmp/qwen38-broad/attention-test-gguf-embedding_tests.log",
+    "tests": 5,
+    "exit_code": 0,
+    "seconds": 0.5428590774536133
+  },
+  {
+    "command": [
+      "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+      "gguf::gated_mix::tests::",
+      "--include-ignored",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "log": "/tmp/qwen38-broad/attention-test-gguf-gated_mix-tests.log",
+    "tests": 3,
+    "exit_code": 0,
+    "seconds": 1.149317979812622
+  },
+  {
+    "command": [
+      "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+      "gguf::fast_mmvq::sm121_tests::",
+      "--include-ignored",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "log": "/tmp/qwen38-broad/attention-test-gguf-fast_mmvq-sm121_tests.log",
+    "tests": 1,
+    "exit_code": 0,
+    "seconds": 0.6790595054626465
+  },
+  {
+    "command": [
+      "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+      "gguf::cuda::moe_sm121_tests::",
+      "--include-ignored",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "log": "/tmp/qwen38-broad/attention-test-gguf-cuda-moe_sm121_tests.log",
+    "tests": 5,
+    "exit_code": 0,
+    "seconds": 2.957838773727417
+  },
+  {
+    "command": [
+      "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+      "gguf::fast_mmq::compact_mmq_tests::",
+      "--include-ignored",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "log": "/tmp/qwen38-broad/attention-test-gguf-fast_mmq-compact_mmq_tests.log",
+    "tests": 2,
+    "exit_code": 0,
+    "seconds": 2.716306686401367
+  },
+  {
+    "command": [
+      "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+      "gguf::archive::tests::mapped_cuda_load_preserves_bytes_after_source_reclaim_and_unlink",
+      "--include-ignored",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "log": "/tmp/qwen38-broad/attention-test-gguf-archive-tests-mapped_cuda_load_preserves_bytes_after_source_reclaim_and_unlink.log",
+    "tests": 1,
+    "exit_code": 0,
+    "seconds": 2.2765400409698486
+  },
+  {
+    "command": [
+      "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+      "gguf::weight_source::tests::shared_binding_cache_release_preserves_uploaded_aliases_and_raw_neighbors",
+      "--include-ignored",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "log": "/tmp/qwen38-broad/attention-test-gguf-weight_source-tests-shared_binding_cache_release_preserves_uploaded_aliases_and_raw_neighbors.log",
+    "tests": 1,
+    "exit_code": 0,
+    "seconds": 0.5033032894134521
+  },
+  {
+    "command": [
+      "target/debug/deps/mistralrs_core-2dfd7f3c1634b658",
+      "layers::gated_add::tests::",
+      "--include-ignored",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "log": "/tmp/qwen38-broad/attention-test-layers-gated_add-tests.log",
+    "tests": 3,
+    "exit_code": 0,
+    "seconds": 1.333580493927002
+  },
+  {
+    "command": [
+      "target/debug/deps/mistralrs_core-2dfd7f3c1634b658",
+      "cuda::qwen4_exp::selection_tests::",
+      "--include-ignored",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "log": "/tmp/qwen38-broad/attention-test-cuda-qwen4_exp-selection_tests.log",
+    "tests": 2,
+    "exit_code": 0,
+    "seconds": 0.5213027000427246
+  },
+  {
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "mistralrs-core",
+      "--lib",
+      "--features",
+      "cuda,flash-attn,cutile",
+      "-j10",
+      "layers::hyper_connection::tests::",
+      "--",
+      "--include-ignored",
+      "--test-threads=1"
+    ],
+    "log": "/tmp/qwen38-broad/attention-hc-retest.log",
+    "tests": 7,
+    "exit_code": 0,
+    "seconds": 68.47129225730896,
+    "retest_reason": "CPU F32 reference error; independent FP64 reference replaces it, unchanged tolerance and kernel."
+  },
+  {
+    "command": [
+      "target/debug/deps/mistralrs_core-2dfd7f3c1634b658",
+      "layers::router::tests::",
+      "--include-ignored",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "log": "/tmp/qwen38-broad/attention-test-layers-router-tests.log",
+    "tests": 3,
+    "exit_code": 0,
+    "seconds": 1.3829107284545898
+  },
+  {
+    "command": [
+      "target/debug/deps/mistralrs_core-2dfd7f3c1634b658",
+      "cuda::gdn::tests::mma_prefill_",
+      "--include-ignored",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "log": "/tmp/qwen38-broad/attention-test-cuda-gdn-tests-mma_prefill_.log",
+    "tests": 4,
+    "exit_code": 0,
+    "seconds": 0.9577653408050537
+  },
+  {
+    "command": [
+      "target/debug/deps/mistralrs_core-2dfd7f3c1634b658",
+      "vision_models::qwen4_exp::ple::tests::",
+      "--include-ignored",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "log": "/tmp/qwen38-broad/attention-test-vision_models-qwen4_exp-ple-tests.log",
+    "tests": 5,
+    "exit_code": 0,
+    "seconds": 0.5291786193847656
+  },
+  {
+    "command": [
+      "target/debug/deps/mistralrs_core-2dfd7f3c1634b658",
+      "cuda::qwen4_exp::tests::",
+      "--include-ignored",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "log": "/tmp/qwen38-broad/attention-test-cuda-qwen4_exp-tests.log",
+    "tests": 3,
+    "exit_code": 0,
+    "seconds": 1.373352289199829
+  },
+  {
+    "command": [
+      "target/debug/deps/mistralrs_core-2dfd7f3c1634b658",
+      "ops::tests::cuda_top1_",
+      "--include-ignored",
+      "--nocapture",
+      "--test-threads=1"
+    ],
+    "log": "/tmp/qwen38-broad/attention-test-ops-tests-cuda_top1_.log",
+    "tests": 1,
+    "exit_code": 0,
+    "seconds": 0.4623281955718994
+  }
+]

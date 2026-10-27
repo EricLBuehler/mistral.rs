@@ -1,0 +1,1143 @@
+{
+  "scope": "Isolated development microbenchmarks on the same GB10; these are not full-model speedups.",
+  "hyper_scaled_silu": {
+    "description": "Fused scaled SiLU into Q8_1 activation quantization ahead of gated projection; no intermediate SiLU allocation or launch for eligible decode. Division and SiLU both round to input dtype before quantization, matching prior behavior.",
+    "api": "QuantizedInputTransform::{Identity,ScaledSilu{divisor}} in generic quant gated-projection API.",
+    "expected_kernel_reduction": "One launch per eligible hyper-connection projection (about96 per decoded token plus final mixer).",
+    "cuda_graph_measurements": [
+      {
+        "dtype": 1,
+        "project": 0,
+        "mode": 0,
+        "version": 0,
+        "median_us": 1.584,
+        "samples_us": [
+          1.584,
+          1.591,
+          1.584,
+          1.584
+        ]
+      },
+      {
+        "dtype": 1,
+        "project": 0,
+        "mode": 0,
+        "version": 1,
+        "median_us": 0.907,
+        "samples_us": [
+          0.907,
+          0.907,
+          0.907,
+          0.907
+        ]
+      },
+      {
+        "dtype": 1,
+        "project": 1,
+        "mode": 0,
+        "version": 0,
+        "median_us": 7.3495,
+        "samples_us": [
+          7.375,
+          7.393,
+          7.324,
+          7.324
+        ]
+      },
+      {
+        "dtype": 1,
+        "project": 1,
+        "mode": 0,
+        "version": 1,
+        "median_us": 6.675,
+        "samples_us": [
+          6.698,
+          6.691,
+          6.646,
+          6.659
+        ]
+      },
+      {
+        "dtype": 1,
+        "project": 1,
+        "mode": 1,
+        "version": 0,
+        "median_us": 20.8385,
+        "samples_us": [
+          21.289,
+          20.911,
+          20.766,
+          20.763
+        ]
+      },
+      {
+        "dtype": 1,
+        "project": 1,
+        "mode": 1,
+        "version": 1,
+        "median_us": 20.1045,
+        "samples_us": [
+          20.191,
+          20.071,
+          20.106,
+          20.103
+        ]
+      },
+      {
+        "dtype": 0,
+        "project": 0,
+        "mode": 0,
+        "version": 0,
+        "median_us": 1.8,
+        "samples_us": [
+          1.798,
+          1.798,
+          1.802,
+          1.802
+        ]
+      },
+      {
+        "dtype": 0,
+        "project": 0,
+        "mode": 0,
+        "version": 1,
+        "median_us": 1.005,
+        "samples_us": [
+          1.024,
+          1.005,
+          1.005,
+          1.005
+        ]
+      },
+      {
+        "dtype": 0,
+        "project": 1,
+        "mode": 0,
+        "version": 0,
+        "median_us": 7.6505,
+        "samples_us": [
+          7.676,
+          7.666,
+          7.634,
+          7.635
+        ]
+      },
+      {
+        "dtype": 0,
+        "project": 1,
+        "mode": 0,
+        "version": 1,
+        "median_us": 6.861000000000001,
+        "samples_us": [
+          6.91,
+          6.857,
+          6.865,
+          6.823
+        ]
+      },
+      {
+        "dtype": 0,
+        "project": 1,
+        "mode": 1,
+        "version": 0,
+        "median_us": 21.637500000000003,
+        "samples_us": [
+          22.22,
+          21.698,
+          21.569,
+          21.577
+        ]
+      },
+      {
+        "dtype": 0,
+        "project": 1,
+        "mode": 1,
+        "version": 1,
+        "median_us": 20.519,
+        "samples_us": [
+          20.529,
+          20.494,
+          20.537,
+          20.509
+        ]
+      }
+    ],
+    "measurement_legend": {
+      "dtype": {
+        "0": "F16",
+        "1": "BF16"
+      },
+      "project": {
+        "0": "SiLU+Q8_1 activation preparation only",
+        "1": "Preparation plus up projection and gated residual mix"
+      },
+      "mode": {
+        "0": "one cached weight matrix",
+        "1": "rotating64 matrices, about220MB"
+      },
+      "version": {
+        "0": "separate SiLU and quantization",
+        "1": "fused SiLU+quantization"
+      }
+    },
+    "bitwise_activation_parity": [
+      "BF16",
+      "F16"
+    ],
+    "harness": "/tmp/qwen38-broad/hyper-transform-bench.cu",
+    "results": "/tmp/qwen38-broad/hyper-transform-results.log"
+  },
+  "hyper_dense_consumers": {
+    "scope": "Projection, scaled SiLU, residual combine and next grouped norm; exact offset/stride correctness tested separately.",
+    "measurements": [
+      {
+        "dtype": "BF16",
+        "tokens": 1,
+        "mode": 1,
+        "version": 0,
+        "median_us": 12.821,
+        "samples_us": [
+          12.753,
+          12.83,
+          12.821
+        ]
+      },
+      {
+        "dtype": "BF16",
+        "tokens": 1,
+        "mode": 2,
+        "version": 1,
+        "median_us": 11.028,
+        "samples_us": [
+          11.028,
+          10.961,
+          11.063
+        ]
+      },
+      {
+        "dtype": "BF16",
+        "tokens": 17,
+        "mode": 1,
+        "version": 0,
+        "median_us": 23.46,
+        "samples_us": [
+          23.46,
+          24.3,
+          23.433
+        ]
+      },
+      {
+        "dtype": "BF16",
+        "tokens": 17,
+        "mode": 2,
+        "version": 1,
+        "median_us": 20.598,
+        "samples_us": [
+          20.567,
+          21.22,
+          20.598
+        ]
+      },
+      {
+        "dtype": "BF16",
+        "tokens": 512,
+        "mode": 1,
+        "version": 0,
+        "median_us": 250.942,
+        "samples_us": [
+          255.046,
+          249.168,
+          250.942
+        ]
+      },
+      {
+        "dtype": "BF16",
+        "tokens": 512,
+        "mode": 2,
+        "version": 1,
+        "median_us": 242.383,
+        "samples_us": [
+          242.383,
+          242.643,
+          238.613
+        ]
+      },
+      {
+        "dtype": "BF16",
+        "tokens": 2048,
+        "mode": 1,
+        "version": 0,
+        "median_us": 1069.949,
+        "samples_us": [
+          1071.163,
+          1065.606,
+          1069.949
+        ]
+      },
+      {
+        "dtype": "BF16",
+        "tokens": 2048,
+        "mode": 2,
+        "version": 1,
+        "median_us": 886.584,
+        "samples_us": [
+          881.64,
+          886.837,
+          886.584
+        ]
+      },
+      {
+        "dtype": "F16",
+        "tokens": 1,
+        "mode": 1,
+        "version": 0,
+        "median_us": 12.292,
+        "samples_us": [
+          12.982,
+          12.287,
+          12.292
+        ]
+      },
+      {
+        "dtype": "F16",
+        "tokens": 1,
+        "mode": 2,
+        "version": 1,
+        "median_us": 10.247,
+        "samples_us": [
+          10.241,
+          10.256,
+          10.247
+        ]
+      },
+      {
+        "dtype": "F16",
+        "tokens": 17,
+        "mode": 1,
+        "version": 0,
+        "median_us": 22.604,
+        "samples_us": [
+          22.604,
+          23.572,
+          22.584
+        ]
+      },
+      {
+        "dtype": "F16",
+        "tokens": 17,
+        "mode": 2,
+        "version": 1,
+        "median_us": 17.543,
+        "samples_us": [
+          18.257,
+          17.492,
+          17.543
+        ]
+      },
+      {
+        "dtype": "F16",
+        "tokens": 512,
+        "mode": 1,
+        "version": 0,
+        "median_us": 248.548,
+        "samples_us": [
+          250.323,
+          248.195,
+          248.548
+        ]
+      },
+      {
+        "dtype": "F16",
+        "tokens": 512,
+        "mode": 2,
+        "version": 1,
+        "median_us": 240.589,
+        "samples_us": [
+          239.423,
+          240.95,
+          240.589
+        ]
+      },
+      {
+        "dtype": "F16",
+        "tokens": 2048,
+        "mode": 1,
+        "version": 0,
+        "median_us": 1068.928,
+        "samples_us": [
+          1068.928,
+          1068.999,
+          1062.538
+        ]
+      },
+      {
+        "dtype": "F16",
+        "tokens": 2048,
+        "mode": 2,
+        "version": 1,
+        "median_us": 889.314,
+        "samples_us": [
+          881.146,
+          889.325,
+          889.314
+        ]
+      }
+    ],
+    "mode_legend": {
+      "0": "projection views only",
+      "1": "projection + contiguous split materialization + scaledSiLU + residual combine + nextnorm",
+      "2": "projection + direct strided scaledSiLU + residual combine + nextnorm"
+    },
+    "version_legend": {
+      "0": "separate320+4",
+      "1": "packed324",
+      "2": "padded336"
+    },
+    "final_policy": "Retain packed loading via existing generic capability and consume packed views directly. No model-specific padding or token-count exceptions.",
+    "superseded": "The initial incomplete dense harness omitted graph HTOD cache and is excluded."
+  },
+  "hyper_generic_cold": {
+    "description": "Generic32lane up+mix preserved old fixed kernel performance with rotating weights. Other warp geometries were prototyped without changing production.",
+    "measurements": [
+      {
+        "mode": 0,
+        "version": 0,
+        "median_us": 5.878,
+        "samples_us": [
+          5.886,
+          5.889,
+          5.87,
+          5.87
+        ]
+      },
+      {
+        "mode": 0,
+        "version": 1,
+        "median_us": 6.064,
+        "samples_us": [
+          6.082,
+          6.046,
+          6.122,
+          6.038
+        ]
+      },
+      {
+        "mode": 0,
+        "version": 2,
+        "median_us": 5.1945,
+        "samples_us": [
+          5.187,
+          5.264,
+          5.194,
+          5.195
+        ]
+      },
+      {
+        "mode": 0,
+        "version": 3,
+        "median_us": 5.502,
+        "samples_us": [
+          5.486,
+          5.482,
+          5.518,
+          5.574
+        ]
+      },
+      {
+        "mode": 0,
+        "version": 4,
+        "median_us": 6.9625,
+        "samples_us": [
+          6.993,
+          6.932,
+          7.007,
+          6.931
+        ]
+      },
+      {
+        "mode": 1,
+        "version": 0,
+        "median_us": 19.445,
+        "samples_us": [
+          19.551,
+          19.555,
+          19.284,
+          19.339
+        ]
+      },
+      {
+        "mode": 1,
+        "version": 1,
+        "median_us": 19.467,
+        "samples_us": [
+          19.368,
+          19.509,
+          19.521,
+          19.425
+        ]
+      },
+      {
+        "mode": 1,
+        "version": 2,
+        "median_us": 19.5175,
+        "samples_us": [
+          19.672,
+          19.521,
+          19.442,
+          19.514
+        ]
+      },
+      {
+        "mode": 1,
+        "version": 3,
+        "median_us": 22.1785,
+        "samples_us": [
+          22.163,
+          22.112,
+          22.207,
+          22.194
+        ]
+      },
+      {
+        "mode": 1,
+        "version": 4,
+        "median_us": 23.9025,
+        "samples_us": [
+          23.947,
+          23.966,
+          23.81,
+          23.858
+        ]
+      }
+    ],
+    "version_legend": {
+      "0": "old model-fixed32lane kernel",
+      "1": "generic32lane production kernel",
+      "2": "16lane subgroup prototype",
+      "3": "8lane subgroup prototype",
+      "4": "4lane subgroup prototype"
+    },
+    "decision": "Keep32lane production:16lane improves cached weights but no rotating-weight gain;8lane/4lane regress rotating-weight throughput.",
+    "results": "/tmp/qwen38-broad/hyper-generic-results.log"
+  },
+  "hyper_combine_rejected": {
+    "description": "Retained per-thread combined residual values in registers to avoid re-reading output for next RMSNorm.",
+    "measurements": [
+      {
+        "tokens": 1,
+        "version": 0,
+        "median_us": 3.0134999999999996,
+        "samples_us": [
+          3.01,
+          3.01,
+          3.017,
+          3.019
+        ]
+      },
+      {
+        "tokens": 1,
+        "version": 1,
+        "median_us": 3.058,
+        "samples_us": [
+          3.054,
+          3.064,
+          3.058,
+          3.058
+        ]
+      },
+      {
+        "tokens": 512,
+        "version": 0,
+        "median_us": 143.265,
+        "samples_us": [
+          145.449,
+          143.767,
+          142.048,
+          142.763
+        ]
+      },
+      {
+        "tokens": 512,
+        "version": 1,
+        "median_us": 146.5685,
+        "samples_us": [
+          146.613,
+          146.912,
+          146.524,
+          146.165
+        ]
+      },
+      {
+        "tokens": 2048,
+        "version": 0,
+        "median_us": 607.12,
+        "samples_us": [
+          608.688,
+          607.181,
+          606.411,
+          607.059
+        ]
+      },
+      {
+        "tokens": 2048,
+        "version": 1,
+        "median_us": 620.2745,
+        "samples_us": [
+          619.893,
+          619.965,
+          620.584,
+          620.591
+        ]
+      }
+    ],
+    "version_legend": {
+      "0": "current kernel",
+      "1": "register-retained prototype"
+    },
+    "decision": "Rejected because slower at1,512,2048tokens despite bitwise output equivalence.",
+    "results": "/tmp/qwen38-broad/hyper-combine-results.log"
+  },
+  "quant_dispatch": {
+    "dense_and_fused_qkv": {
+      "formats": [
+        "Q4_0",
+        "Q4_1",
+        "Q5_0",
+        "Q5_1",
+        "Q8_0",
+        "Q2_K",
+        "Q3_K",
+        "Q4_K",
+        "Q5_K",
+        "Q6_K"
+      ],
+      "activation_dtypes": [
+        "BF16",
+        "F16",
+        "F32"
+      ],
+      "hardware": "SM121 only",
+      "batch": 1,
+      "min_weight_bytes": 8388608,
+      "min_input_columns": 2048,
+      "min_packed_bytes_per_weight": 0.5,
+      "additional_condition": "packed density > 0.75 bytes/value OR columns >= 4096",
+      "otherwise": "existing multi-row MMVQ kernels",
+      "kernel": "eight warps per row with one iteration of L2 prefetch; shared row helper; QKV uses explicit q/k/v fields and runtime output row counts",
+      "reason": "one-row geometry regresses unpacking-bound Q2/Q3 and short Q4 reductions"
+    },
+    "indexed_moe_decode": {
+      "formats": [
+        "Q4_0",
+        "Q4_1",
+        "Q5_0",
+        "Q5_1",
+        "Q8_0",
+        "Q2_K",
+        "Q3_K",
+        "Q4_K",
+        "Q5_K",
+        "Q6_K",
+        "Q8_1"
+      ],
+      "hardware": "SM121 only",
+      "batch": "1..=2",
+      "input_rows": "must equal batch",
+      "geometry": "eight warps per block; two interleaved output rows per warp; one iteration of L2 prefetch",
+      "runtime_parameters": [
+        "rows",
+        "columns",
+        "experts through weight shape and indices",
+        "topk",
+        "input_stride",
+        "activation"
+      ],
+      "activations": [
+        "SiLU",
+        "GELU tanh"
+      ],
+      "unsupported_batches": "Three or more tokens retain legacy decode geometry; grouped prefill uses the general32-token policy."
+    },
+    "compact_moe_prefill": {
+      "formats": [
+        "Q4_0",
+        "Q4_1",
+        "Q5_0",
+        "Q5_1",
+        "Q8_0",
+        "Q2_K",
+        "Q3_K",
+        "Q4_K",
+        "Q5_K",
+        "Q6_K"
+      ],
+      "hardware": "SM121 only",
+      "shape_constraints": "tile upper bound assignments/16 + experts <=65535 and worklist fits existing scratch allocation",
+      "runtime_geometry": "16/32/64/128 columns by routed tokens per expert; maximum128 if input_columns >= output_rows, otherwise64;128 output rows",
+      "supports_partial_rows": true,
+      "expert_scan_chunk_size": 1024
+    },
+    "other_quant_backends": "These are GGUF backend kernels. FP8/NVFP4/HQQ/GPTQ/AWQ keep their own backend kernels; arch agent generalized projection sharing at QuantMethod API level."
+  },
+  "quant_accepted": [
+    {
+      "name": "shared GGUF vecdot header",
+      "path": "mistralrs-quant/kernels/gguf/vecdot.cuh",
+      "coverage": "11 GGUF types used by dense, experts, and gated mixing",
+      "correctness_fix": "Q8_1 sum metadata is not an affine offset; removed erroneous sum-product in Q8_1 x Q8_1 dot"
+    },
+    {
+      "name": "generic dense one-row prefetch with storage/shape policy",
+      "artifact": "/tmp/qwen38-broad/q8-prefetch-generic-results.jsonl",
+      "variants": {
+        "0": "legacy plain",
+        "16": "initial generic production direct restricted-pointer kernel"
+      },
+      "cold_measurements": [
+        {
+          "rows": 10240,
+          "columns": 2560,
+          "legacy_us_median": 123.647255,
+          "generic_us_median": 113.94207349999999
+        },
+        {
+          "rows": 6144,
+          "columns": 2560,
+          "legacy_us_median": 74.323402,
+          "generic_us_median": 69.484726
+        },
+        {
+          "rows": 2560,
+          "columns": 6144,
+          "legacy_us_median": 74.811447,
+          "generic_us_median": 69.2817
+        },
+        {
+          "rows": 320,
+          "columns": 10240,
+          "legacy_us_median": 17.622099,
+          "generic_us_median": 16.1585495
+        },
+        {
+          "rows": 2560,
+          "columns": 640,
+          "legacy_us_median": 8.53335,
+          "generic_us_median": 11.373876
+        },
+        {
+          "rows": 248320,
+          "columns": 2560,
+          "legacy_us_median": 2890.50415,
+          "generic_us_median": 2767.3720700000003
+        }
+      ],
+      "limitation": "Final source factors this same restricted-pointer row body into shared helper; final QKV helper benchmark is refreshed, final dense Rust regression tests await rebuild"
+    },
+    {
+      "name": "runtime MoE prefetch",
+      "artifact": "/tmp/qwen38-broad/moe-prefetch-generic-results.txt",
+      "variants": {
+        "0": "prior exact-shape narrow kernel",
+        "1": "generic production"
+      },
+      "cold_us": {
+        "gate_Q4K": {
+          "before": 89.0984,
+          "after": 90.077
+        },
+        "down_Q5_1": {
+          "before": 52.4336,
+          "after": 54.71
+        }
+      },
+      "numerical": "gate exact; down maxabs5.96046e-8 from atomic reduction order"
+    },
+    {
+      "name": "final production QKV named-pointer mapping",
+      "artifact": "/tmp/qwen38-broad/fused-prefetch-final-results.txt",
+      "artifact_status": "ACCEPTED",
+      "variants": {
+        "0": "legacy fused QKV",
+        "5": "final production shared row helper and explicit q/k/v fields"
+      },
+      "shape": {
+        "q_rows": 12288,
+        "k_rows": 512,
+        "v_rows": 512,
+        "columns": 2560
+      },
+      "median_us": {
+        "hot": {
+          "before": 149.371445,
+          "after": 142.07034299999998
+        },
+        "cold": {
+          "before": 155.634842,
+          "after": 148.2582475
+        }
+      },
+      "numerical": "F32 maxabs0 and relative RMS0 against legacy"
+    },
+    {
+      "name": "adaptive compact MoE prefill",
+      "artifacts": [
+        "/tmp/qwen38-broad/compact-128-0-results.txt",
+        "/tmp/qwen38-broad/compact-128-1-results.txt",
+        "/tmp/qwen38-broad/compact-128-2-results.txt",
+        "/tmp/qwen38-broad/compact-512-0-results.txt",
+        "/tmp/qwen38-broad/compact-512-1-results.txt",
+        "/tmp/qwen38-broad/compact-512-2-results.txt",
+        "/tmp/qwen38-broad/compact-2048-0-results.txt",
+        "/tmp/qwen38-broad/compact-2048-1-results.txt",
+        "/tmp/qwen38-broad/compact-2048-2-results.txt"
+      ],
+      "variants": {
+        "J=1": "old narrow compact16-column kernel",
+        "J=0": "new adaptive production compact kernel",
+        "original": "regular MMQ"
+      },
+      "result": "128/512 tokens broadly neutral;2048 balanced and single-hot1.31-1.41x faster versus old compact; fully concentrated routing neutral",
+      "numerical": "all logged output max_diff0"
+    }
+  ],
+  "quant_rejected": [
+    {
+      "name": "intermediate production QKV array-indexed parameter struct",
+      "artifact": "/tmp/qwen38-broad/fused_prefetch_production_bench-results.txt",
+      "artifact_status": "REJECTED",
+      "variant": 5,
+      "reason": "232-241us versus155-158us old; dynamic struct parameter indexing caused large regression. Replaced by explicitly named pointers and verified in final artifact."
+    },
+    {
+      "name": "blanket one-row dense dispatch",
+      "artifacts": [
+        "/tmp/qwen38-broad/formats-prefetch-results.txt",
+        "/tmp/qwen38-broad/formats_prefetch_rows_bench-results.txt",
+        "/tmp/qwen38-broad/formats-rows2-restrict-results.txt"
+      ],
+      "reason": "Q2_K20-29% slower; Q3 short and short Q4 shapes regress. Replaced with storage/shape policy."
+    },
+    {
+      "name": "generic two-row prefetch replacement",
+      "artifact": "/tmp/qwen38-broad/formats-rows2-restrict-results.txt",
+      "variant": 2,
+      "reason": "did not consistently recover low-bit performance; preserve established multi-row kernel"
+    },
+    {
+      "name": "fused GLU prefetch",
+      "artifact": "/tmp/qwen38-broad/fused-prefetch-results.txt",
+      "reason": "no consistent cold gain; hot regression; retained established GLU kernel"
+    },
+    {
+      "name": "MoE restrict-pointer tuning",
+      "artifact": "/tmp/qwen38-broad/moe_prefetch_restrict_bench-results.txt",
+      "reason": "unvalidated prototype; stopped early on exact-equality harness threshold with3.8e-6 F32 difference; not integrated"
+    }
+  ],
+  "small_batch_moe": {
+    "accepted": "extend existing generic prefetch launch eligibility from one to two tokens; no arithmetic changes",
+    "artifact": "/tmp/qwen38-broad/moe_small_batch_results.jsonl",
+    "correctness_cases": 324,
+    "graph_replays_per_case": 4,
+    "correctness_formats": 11,
+    "correctness_batches": [
+      1,
+      2,
+      4,
+      8
+    ],
+    "correctness_max_relative_rms": 7.40978972e-08,
+    "cold_two_token_measurements": [
+      {
+        "format": "q4_1",
+        "gate": false,
+        "tokens": 2,
+        "routing_overlap": "identical",
+        "legacy_us": 59.212198,
+        "prefetch_us": 57.440201,
+        "speedup": 1.0308494219927955
+      },
+      {
+        "format": "q4_1",
+        "gate": false,
+        "tokens": 2,
+        "routing_overlap": "half",
+        "legacy_us": 76.17440049999999,
+        "prefetch_us": 72.16999799999999,
+        "speedup": 1.0554856950390936
+      },
+      {
+        "format": "q4_1",
+        "gate": false,
+        "tokens": 2,
+        "routing_overlap": "disjoint",
+        "legacy_us": 99.29020299999999,
+        "prefetch_us": 91.3824045,
+        "speedup": 1.08653524213187
+      },
+      {
+        "format": "q4k",
+        "gate": true,
+        "tokens": 2,
+        "routing_overlap": "identical",
+        "legacy_us": 106.0719985,
+        "prefetch_us": 97.3664015,
+        "speedup": 1.08941068855256
+      },
+      {
+        "format": "q4k",
+        "gate": true,
+        "tokens": 2,
+        "routing_overlap": "half",
+        "legacy_us": 152.13378899999998,
+        "prefetch_us": 132.35379799999998,
+        "speedup": 1.1494478533966965
+      },
+      {
+        "format": "q4k",
+        "gate": true,
+        "tokens": 2,
+        "routing_overlap": "disjoint",
+        "legacy_us": 207.69341300000002,
+        "prefetch_us": 176.161598,
+        "speedup": 1.178993693052217
+      },
+      {
+        "format": "q5_1",
+        "gate": false,
+        "tokens": 2,
+        "routing_overlap": "identical",
+        "legacy_us": 70.490002,
+        "prefetch_us": 67.337799,
+        "speedup": 1.0468117913981714
+      },
+      {
+        "format": "q5_1",
+        "gate": false,
+        "tokens": 2,
+        "routing_overlap": "half",
+        "legacy_us": 90.2892,
+        "prefetch_us": 85.96020150000001,
+        "speedup": 1.0503604973517888
+      },
+      {
+        "format": "q5_1",
+        "gate": false,
+        "tokens": 2,
+        "routing_overlap": "disjoint",
+        "legacy_us": 117.256401,
+        "prefetch_us": 106.029198,
+        "speedup": 1.1058878423281104
+      },
+      {
+        "format": "q8_0",
+        "gate": false,
+        "tokens": 2,
+        "routing_overlap": "identical",
+        "legacy_us": 97.62620150000001,
+        "prefetch_us": 95.7137985,
+        "speedup": 1.0199804315571073
+      },
+      {
+        "format": "q8_0",
+        "gate": false,
+        "tokens": 2,
+        "routing_overlap": "half",
+        "legacy_us": 129.2987975,
+        "prefetch_us": 122.149597,
+        "speedup": 1.0585282364869366
+      },
+      {
+        "format": "q8_0",
+        "gate": false,
+        "tokens": 2,
+        "routing_overlap": "disjoint",
+        "legacy_us": 168.7193985,
+        "prefetch_us": 155.433205,
+        "speedup": 1.0854784761081135
+      },
+      {
+        "format": "q8_0",
+        "gate": true,
+        "tokens": 2,
+        "routing_overlap": "identical",
+        "legacy_us": 291.638397,
+        "prefetch_us": 272.99980200000005,
+        "speedup": 1.068273291275134
+      },
+      {
+        "format": "q8_0",
+        "gate": true,
+        "tokens": 2,
+        "routing_overlap": "half",
+        "legacy_us": 254.50599699999998,
+        "prefetch_us": 246.2381895,
+        "speedup": 1.0335764631667745
+      },
+      {
+        "format": "q8_0",
+        "gate": true,
+        "tokens": 2,
+        "routing_overlap": "disjoint",
+        "legacy_us": 334.01341249999996,
+        "prefetch_us": 310.7664185,
+        "speedup": 1.0748053606055892
+      }
+    ],
+    "rejected": "4/8-token extension: native Q4_1 down loses 3-5 percent on some cold overlapping routes",
+    "tradeoff": "L2-resident repeated identical expert microbenchmarks can be roughly 10 percent slower at two tokens; transformer layers stream weights far beyond L2.",
+    "rust_test": "PASSED: gguf::cuda::moe_sm121_tests::sm121_moe_graph_replay_matches_legacy_with_changing_routing captures batches1/2 and compares legacy batches3/6 for all11formats and BF16/F16/F32; final-test-gguf-cuda-moe_sm121_tests.log"
+  },
+  "embedding": {
+    "hardware_capabilities": {
+      "integrated": {
+        "status": 0,
+        "value": 1
+      },
+      "pageable_memory_access": {
+        "status": 0,
+        "value": 1
+      },
+      "concurrent_managed_access": {
+        "status": 0,
+        "value": 1
+      },
+      "pageable_uses_host_page_tables": {
+        "status": 0,
+        "value": 1
+      }
+    },
+    "scope": "Standalone graph-replay microbench over actual PLE table rows; all methods use identical CPU-gather prefill. This is not an end-to-end serving speedup.",
+    "correctness": "All four prototypes passed exact F32 comparison for collisions, duplicate IDs, and changed-ID graph replay.",
+    "repeated_microbench": {
+      "mapped_gpu_gather": {
+        "per_round_mean_decode_us": [
+          354.81528608923884,
+          222.24982742782151,
+          352.7627716535433
+        ],
+        "median_round_mean_decode_us": 352.7627716535433,
+        "per_prompt_median_round_mean_decode_us": {
+          "512": 307.2046614173228,
+          "2048": 238.39924409448818,
+          "8192": 407.7571653543307
+        }
+      },
+      "gpu_row_cache": {
+        "per_round_mean_decode_us": [
+          241.5920839895013,
+          231.6272965879265,
+          551.5991811023622
+        ],
+        "median_round_mean_decode_us": 241.5920839895013,
+        "per_prompt_median_round_mean_decode_us": {
+          "512": 341.02998425196853,
+          "2048": 156.5616377952756,
+          "8192": 298.4887559055118
+        }
+      },
+      "host_gather_callback": {
+        "per_round_mean_decode_us": [
+          66.59023622047245,
+          63.61436220472441,
+          122.1607559055118
+        ],
+        "median_round_mean_decode_us": 66.59023622047245,
+        "per_prompt_median_round_mean_decode_us": {
+          "512": 60.77007874015748,
+          "2048": 85.31829921259843,
+          "8192": 54.29952755905512
+        }
+      },
+      "host_prefault_callback_then_gpu_gather": {
+        "per_round_mean_decode_us": [
+          140.39328083989503,
+          97.31000524934383,
+          116.79162204724409
+        ],
+        "median_round_mean_decode_us": 116.79162204724409,
+        "per_prompt_median_round_mean_decode_us": {
+          "512": 104.6495748031496,
+          "2048": 158.9883464566929,
+          "8192": 81.75313385826772
+        }
+      }
+    },
+    "startup_gpu_prefault": {
+      "startup_milliseconds": 40733.66,
+      "mean_decode_us": 7.0839055118110235,
+      "median_decode_us": 7.712,
+      "decode_calls": 1524,
+      "source_warming": "OS page cache warm, CPU/GPU mapping cold before startup sweep"
+    },
+    "production_selected": "Generic synchronous raw-byte prefault on devices supporting pageable access through host page tables, CPU fallback elsewhere. Host callbacks and GPU row cache remain standalone prototypes.",
+    "production_files": [
+      "mistralrs-quant/src/cuda_memory.rs",
+      "mistralrs-quant/kernels/memory/mapped.cu",
+      "mistralrs-core/src/vision_models/qwen4_exp/ple.rs"
+    ],
+    "validation": {
+      "build_and_check": "Root completed batch builds and cargo checks successfully.",
+      "embedding_tests": "All five CPU/CUDA embedding tests passed, covering all 16 formats, unaligned storage, empty IDs, zero-width rejection, big-endian rejection, resident/mapped gathers, prefault byte preservation, and changed-ID graph replay.",
+      "prefault_test": "Capture rejection, unaligned byte preservation, and worker-thread use passed.",
+      "gdn_tests": "All four MMA tests passed again in the fresh suite.",
+      "remaining": "Whole-model retention and end-to-end performance validation coordinated by root."
+    }
+  },
+  "final_validation_reference": "validation.json supersedes development-status and pending-test text inside preserved microbenchmark notes.",
+  "quant_validation": {
+    "passed_before_final_rebuild": [
+      {
+        "artifact": "/tmp/qwen38-broad/test-prefetch_dispatch_graph_replay.log",
+        "tests_passed": 1,
+        "scope": "10 GGUF formats;BF16/F16/F32;strides and offsets;graph replay changed inputs;batch2 fallback"
+      },
+      {
+        "artifact": "/tmp/qwen38-broad/test-sm121_moe_graph_replay.log",
+        "tests_passed": 1,
+        "scope": "11 GGUF formats;nonmodel dimensions;graph replay changed routing;batch2 reference"
+      },
+      {
+        "artifact": "/tmp/qwen38-broad/test-compact_mmq.log",
+        "tests_passed": 2,
+        "scope": "10 GGUF formats;balanced/hot/concentrated/max tile routing;graph replay;partial rows;1025 experts"
+      }
+    ],
+    "important": "Independent q8_1_experts_treat_block_sums_as_metadata and gated-mix dequantized-reference tests passed after the shared dot correction. Final MoE dispatch test captures batches1/2, with batches3/6 forced through the independent legacy launch geometry.",
+    "final_rebuilt_test_logs": [
+      {
+        "artifact": "/tmp/qwen38-broad/final-test-gguf-cuda-moe_sm121_tests.log",
+        "tests_passed": 2
+      },
+      {
+        "artifact": "/tmp/qwen38-broad/final-test-gguf-gated_mix-tests.log",
+        "tests_passed": 3
+      },
+      {
+        "artifact": "/tmp/qwen38-broad/final-test-gguf-fast_mmvq-sm121_tests.log",
+        "tests_passed": 1
+      },
+      {
+        "artifact": "/tmp/qwen38-broad/final-test-gguf-fast_mmq-compact_mmq_tests.log",
+        "tests_passed": 2
+      },
+      {
+        "artifact": "/tmp/qwen38-broad/final-test-cuda-qwen4_exp-tests.log",
+        "tests_passed": 3
+      }
+    ]
+  },
+  "quant_q8_1_correction": {
+    "semantics": "Q8_1 sum metadata stores the scaled quantized block sum; it is not an additive affine weight offset. The weight dot is scale_w * scale_x * integer_dot only.",
+    "removed_term": "weight_sum * activation_sum",
+    "affected_shared_users": [
+      "indexed MoE",
+      "generic gated projection/mix"
+    ],
+    "validation": [
+      "independent constant-weight reference test",
+      "independent dequantized FP32 matmul reference for gated mixing"
+    ],
+    "dense_dispatch_note": "Dense fast_mmvq supports10formats and does not dispatch Q8_1; the shared vector header and MoE/gated-mix support11 includingQ8_1."
+  }
+}

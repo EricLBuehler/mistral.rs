@@ -1,0 +1,53 @@
+[
+  {
+    "stage": "cuda-without-cutile",
+    "command": [
+      "cargo",
+      "check",
+      "-p",
+      "mistralrs-cli",
+      "--features",
+      "cuda,flash-attn",
+      "-j10"
+    ],
+    "seconds": 1379.3682556152344,
+    "exit_code": 0,
+    "log": "/tmp/qwen38-broad/paired-final-compatibility-cuda-without-cutile.log"
+  },
+  {
+    "stage": "format",
+    "command": [
+      "cargo",
+      "fmt",
+      "--all",
+      "--",
+      "--check"
+    ],
+    "seconds": 2.93804931640625,
+    "exit_code": 0,
+    "log": "/tmp/qwen38-broad/paired-final-compatibility-format.log"
+  },
+  {
+    "stage": "diff",
+    "command": [
+      "git",
+      "diff",
+      "--check"
+    ],
+    "seconds": 0.04458808898925781,
+    "exit_code": 0,
+    "log": "/tmp/qwen38-broad/paired-final-compatibility-diff.log"
+  },
+  {
+    "stage": "source-snapshot",
+    "command": [
+      "python3",
+      "/tmp/qwen38-broad/snapshot_sources.py",
+      "--output",
+      "/tmp/qwen38-broad/final-source-manifest.json"
+    ],
+    "seconds": 0.9891383647918701,
+    "exit_code": 0,
+    "log": "/tmp/qwen38-broad/paired-final-compatibility-source-snapshot.log"
+  }
+]

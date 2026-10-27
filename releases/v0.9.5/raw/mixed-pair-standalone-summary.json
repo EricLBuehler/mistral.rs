@@ -1,0 +1,60 @@
+{
+  "updated_utc": "2026-10-27T17:03:52.798236+00:00",
+  "status": "Standalone validation complete. Integrated source24b72dc9 subsequently passed production checks/tests and canonical serving; see paired-build-validation.json and final-comparison.json.",
+  "abi_variant_map": {
+    "-1": "production GgufMatMul + UnquantLinear",
+    "0": "separate copied original MMVQ and vector2 GEMV helpers",
+    "1": "one grid, quantized CTAs then dense CTAs",
+    "2": "one grid, dense CTAs first"
+  },
+  "numeric": {
+    "projection_comparisons": 1620,
+    "changed_values": 0,
+    "formats": 10,
+    "dtypes": [
+      "BF16",
+      "F16",
+      "F32"
+    ],
+    "shapes": [
+      [
+        319,
+        3,
+        512
+      ],
+      [
+        321,
+        7,
+        2048
+      ],
+      [
+        320,
+        4,
+        10240
+      ]
+    ],
+    "input_changes_per_graph": 3,
+    "criterion": "Bitwise equal outputs to production separate methods; finite inputs/outputs",
+    "source_padding": "Explicit even-row padded GGUF storage for odd-row fixture; production must guard odd row or decline it",
+    "input_offset": "2elements, preserving vector2 alignment; initial1half offset rejected by CUDA misalignment and not retained as a valid input case"
+  },
+  "timing": {
+    "cases": 67,
+    "hot_cold_comparisons": 134,
+    "negative_comparisons": 0,
+    "lower_latency_pct_range": [
+      4.740571624563068,
+      35.145213301094245
+    ],
+    "quantizer_included": true,
+    "cold_rotating_weight_bytes_min": 134217728,
+    "method": "CUDA graph event timing; three rounds alternating variant order; median reported; one repeated actualshape included",
+    "summary": "plain-timing-summary.json"
+  },
+  "source_sha256": {
+    "bench.rs": "57666f49fe5e7ea6015de7cc340430402005e3b09cfadd146e53dc199c361a1c",
+    "build-rust.py": "b225c7823910b38c6169b535be072cd61855950cece6d846dc25c3a74ee6ea19",
+    "kernel.cu": "c3b0b6b33757c189f1d7cabf8a17bbced9a3d270e77489c8151a713dff306d4a"
+  },
+  "caveat": "Standalone kernel timing is not end-to-end performance evidence."
+}

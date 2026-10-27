@@ -7013,6 +7013,12 @@ impl MergedDenseProjection {
         }
     }
 
+    fn originals_require_forward(&self) -> bool {
+        self.originals.iter().any(|projection| {
+            projection.is_dynamic_lora_active() || projection.stats_snapshot().is_some()
+        })
+    }
+
     pub(crate) fn forward(&self, xs: &Tensor) -> Result<Vec<Tensor>> {
         let Some(ys) = self.forward_packed(xs)? else {
             return self.originals.iter().map(|proj| proj.forward(xs)).collect();
@@ -7027,11 +7033,7 @@ impl MergedDenseProjection {
     }
 
     pub(crate) fn forward_packed(&self, xs: &Tensor) -> Result<Option<Tensor>> {
-        if self
-            .originals
-            .iter()
-            .any(|proj| proj.is_dynamic_lora_active())
-        {
+        if self.originals_require_forward() {
             Ok(None)
         } else {
             self.proj.forward(xs).map(Some)
@@ -7042,11 +7044,7 @@ impl MergedDenseProjection {
         &self,
         xs: &Tensor,
     ) -> Option<mistralrs_quant::ActivationQuantizationScheme> {
-        if self
-            .originals
-            .iter()
-            .any(|proj| proj.is_dynamic_lora_active())
-        {
+        if self.originals_require_forward() {
             None
         } else {
             self.proj.activation_quantization_scheme_for(xs)
@@ -7057,11 +7055,7 @@ impl MergedDenseProjection {
         &self,
         xs: &Tensor,
     ) -> Option<mistralrs_quant::ActivationScaleLayout> {
-        if self
-            .originals
-            .iter()
-            .any(|proj| proj.is_dynamic_lora_active())
-        {
+        if self.originals_require_forward() {
             None
         } else {
             self.proj.preferred_activation_scale_layout_for(xs)
@@ -7072,13 +7066,9 @@ impl MergedDenseProjection {
         &self,
         activation: &mistralrs_quant::QuantizedActivation,
     ) -> Result<Tensor> {
-        if self
-            .originals
-            .iter()
-            .any(|proj| proj.is_dynamic_lora_active())
-        {
+        if self.originals_require_forward() {
             candle_core::bail!(
-                "packed projection cannot use a prequantized activation with active dynamic LoRA"
+                "packed projection cannot use prequantized activation with active adapters or stats collection"
             )
         }
         self.proj.forward_quantized(activation)
@@ -7823,6 +7813,41 @@ mod tests {
         let active = with_lora_execution(Some(Arc::new(execution)), || merged.forward(&input))?;
         assert_eq!(active[0].to_vec2::<f32>()?, vec![vec![6., 3.]]);
         assert_eq!(active[1].to_vec2::<f32>()?, vec![vec![5., -1.]]);
+        Ok(())
+    }
+
+    #[test]
+    fn merged_projection_records_constituent_stats() -> candle_core::Result<()> {
+        let device = Device::Cpu;
+        let weights = Tensor::new(&[[1f32, 0.], [0., 1.], [1., 1.]], &device)?;
+        let linear = |weight| -> candle_core::Result<Arc<dyn QuantMethod>> {
+            Ok(Arc::new(UnquantLinear::new(
+                QuantMethodConfig::Unquantized(Linear::new(weight, None)),
+            )?))
+        };
+        let first = linear(weights.narrow(0, 0, 2)?)?;
+        let second = linear(weights.narrow(0, 2, 1)?)?;
+        let merged = MergedDenseProjection::from_packed(&mistralrs_quant::PackedLinear {
+            packed: linear(weights)?,
+            constituents: vec![first.clone(), second.clone()],
+            rows_per_rank: vec![2, 1],
+        });
+        let input = Tensor::new(&[[2f32, 3.], [4., 5.]], &device)?;
+        first.begin_track_stats()?;
+        second.begin_track_stats()?;
+        assert!(merged.forward_packed(&input)?.is_none());
+        assert!(merged.activation_quantization_scheme_for(&input).is_none());
+        let output = merged.forward(&input)?;
+        assert_eq!(
+            output[0].to_vec2::<f32>()?,
+            vec![vec![2., 3.], vec![4., 5.]]
+        );
+        assert_eq!(output[1].to_vec2::<f32>()?, vec![vec![5.], vec![9.]]);
+        assert_eq!(first.stats_snapshot(), Some((1, 2)));
+        assert_eq!(second.stats_snapshot(), Some((1, 2)));
+        first.end_track_stats()?;
+        second.end_track_stats()?;
+        assert!(merged.forward_packed(&input)?.is_some());
         Ok(())
     }
 

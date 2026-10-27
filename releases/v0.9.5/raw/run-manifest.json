@@ -1,0 +1,205 @@
+{
+  "date_utc": "2026-10-27",
+  "hardware": {
+    "gpu": "NVIDIA GB10",
+    "compute_capability": "12.1",
+    "host_architecture": "aarch64",
+    "physical_memory": "128 GB unified memory",
+    "os_memtotal_kib": 127600748,
+    "driver": "580.126.09",
+    "cuda_toolkit": "13.2",
+    "l2_bytes": 25165824
+  },
+  "toolchain": {
+    "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+    "llvm": "23.1.1"
+  },
+  "models": {
+    "model": "Qwen/Qwen3.8-Flash-Next",
+    "source_revision": "de4b8e4d43b917e7706784d8bb445c9af86a3540",
+    "gguf_repository": "unsloth/Qwen3.8-Flash-Next-GGUF",
+    "gguf_revision": "38bb39ee97821de2c9009abb7e93950eec396e66",
+    "gguf_quantization": "UD-Q4_K_XL",
+    "gguf_shards": 4,
+    "weights_policy": "Both GGUF servers load the same four files. No claim of bitwise numerical identity across engines.",
+    "native_quantization": {
+      "preset": "--quant 4",
+      "source_revision": "de4b8e4d43b917e7706784d8bb445c9af86a3540",
+      "precision_distribution": "native-quant4-disclosure.json",
+      "preset_changed_by_this_work": false,
+      "quality_equivalence_established": false
+    }
+  },
+  "software": {
+    "mistralrs_base_commit": "142bc95a506512eb21d9458bce73400e6ec9f335",
+    "candle_revision": "66a8cf184a5a519671454066b1b9efd446ec9f5c",
+    "llama_commit": "7aca0d2ea8d92b56911233b822db01f9fbb1ae50",
+    "llama_binary_sha256": "b670440317d3356fb6bda9e4fe290a176157ecb04d95ea93b8b246958272aa76",
+    "vllm_reviewed_revision": "3d81a510f9ebc802a7864ced38832182295f4cad",
+    "vllm_benchmarked": false,
+    "historical_mistralrs_source_sha256": "b55a21dbf070239b30336520810c85906eb2ab69a9e31c51742afd68d005a965",
+    "historical_mistralrs_binary_sha256": "eca4ba522dc65558ab91800341ae9459d53f0dc36115c4b685444f2a09898b93",
+    "current_mistralrs_source_sha256": "24b72dc9f7a4bab0a215fbe87543ad0a7c23ad20b3bd856590d313d950c1ac77",
+    "current_mistralrs_binary_sha256": "6681778b528263db9c729a69c98f74c0f1a8327f4d337d04cd3c79a7485b7ec5"
+  },
+  "workload": {
+    "concurrency": 1,
+    "prompt_lengths": [
+      512,
+      2048,
+      8192
+    ],
+    "fixture_sha256": "049f78cd048bd286deb0deb54bb5715b0b80397ddee98a9bd49eed45cbc69f44",
+    "warmup_requests_per_length": 1,
+    "measured_requests_per_length": 3,
+    "output_tokens": 128,
+    "temperature": 0,
+    "ignore_eos": true,
+    "prefix_caching": false,
+    "max_context": 16384,
+    "activation_dtype": {
+      "mistral.rs": "BF16 selected by --dtype bf16",
+      "llama.cpp": "Internal mixed activation implementation; not claimed identical to mistral.rs"
+    },
+    "kv_cache_dtype": "BF16",
+    "transport": {
+      "llama.cpp": "token IDs",
+      "mistral.rs": "decoded text with exact tokenizer round-trip assertion and server token-count check"
+    },
+    "warm_state": "A full fixture sweep precedes the measured sweep. The earlier llama512 canonical sweep followed an exploratory full sweep. Each measured sweep additionally discards the first request per length.",
+    "measurement": "One server at a time; no profiler attached and no concurrent compilers during serving measurements.",
+    "prompt_rate_definition": "prompt_tokens / time_to_first_nonempty_text_chunk",
+    "decode_rate_definition": "(completion_tokens - 1) / (last_nonempty_chunk_time - first_nonempty_chunk_time)",
+    "stream_validation": "All canonical requests have 128 nonempty text chunks and 128 completion tokens.",
+    "decode_workload_caveat": "Generated tokens and MoE routing differ between engines; fixed-prompt/fixed-length serving, not teacher-forced identical-token decode."
+  },
+  "cells": [
+    {
+      "engine": "mistral.rs",
+      "chunk_tokens": 512,
+      "result": "mrs-production-512-serving.json",
+      "prewarm": "mrs-production-512-prewarm.json",
+      "quantization": "UD-Q4_K_XL GGUF",
+      "measurement_generation": "historical",
+      "source_sha256": "b55a21dbf070239b30336520810c85906eb2ab69a9e31c51742afd68d005a965",
+      "binary_sha256": "eca4ba522dc65558ab91800341ae9459d53f0dc36115c4b685444f2a09898b93"
+    },
+    {
+      "engine": "llama.cpp",
+      "chunk_tokens": 512,
+      "result": "llama-clean-serving.json",
+      "quantization": "UD-Q4_K_XL GGUF",
+      "measurement_generation": "historical",
+      "binary_sha256": "b670440317d3356fb6bda9e4fe290a176157ecb04d95ea93b8b246958272aa76",
+      "source_commit": "7aca0d2ea8d92b56911233b822db01f9fbb1ae50"
+    },
+    {
+      "engine": "llama.cpp",
+      "chunk_tokens": 8192,
+      "result": "llama-chunk8192-serving.json",
+      "prewarm": "llama-chunk8192-warmup-serving.json",
+      "quantization": "UD-Q4_K_XL GGUF",
+      "measurement_generation": "historical",
+      "binary_sha256": "b670440317d3356fb6bda9e4fe290a176157ecb04d95ea93b8b246958272aa76",
+      "source_commit": "7aca0d2ea8d92b56911233b822db01f9fbb1ae50"
+    },
+    {
+      "engine": "mistral.rs",
+      "chunk_tokens": 8192,
+      "result": "mrs-production-8192-serving.json",
+      "prewarm": "mrs-production-8192-prewarm.json",
+      "decoder_layers_on_cuda": 48,
+      "quantization": "UD-Q4_K_XL GGUF",
+      "measurement_generation": "historical",
+      "source_sha256": "b55a21dbf070239b30336520810c85906eb2ab69a9e31c51742afd68d005a965",
+      "binary_sha256": "eca4ba522dc65558ab91800341ae9459d53f0dc36115c4b685444f2a09898b93"
+    },
+    {
+      "engine": "mistral.rs",
+      "quantization": "native --quant 4 mixed-format preset",
+      "chunk_tokens": 8192,
+      "result": "mrs-production-native4-8192-serving.json",
+      "prewarm": "mrs-production-native4-8192-prewarm.json",
+      "decoder_layers_on_cuda": 48,
+      "same_gguf_weights": false,
+      "disclosure": "native-quant4-disclosure.json",
+      "measurement_generation": "historical",
+      "source_sha256": "b55a21dbf070239b30336520810c85906eb2ab69a9e31c51742afd68d005a965",
+      "binary_sha256": "eca4ba522dc65558ab91800341ae9459d53f0dc36115c4b685444f2a09898b93"
+    },
+    {
+      "engine": "mistral.rs",
+      "chunk_tokens": 8192,
+      "result": "mrs-resumed-8192-serving.json",
+      "prewarm": "mrs-resumed-8192-prewarm.json",
+      "decoder_layers_on_cuda": 48,
+      "quantization": "UD-Q4_K_XL GGUF",
+      "measurement_generation": "intermediate",
+      "source_sha256": "464e5a6f7001b3d52d15548fca3a91d8e7f59a8d20c79fb70bbdbe1c0b81150a",
+      "binary_sha256": "81d1e23b618ef09bdd8b183c420b0b4a3999c164b1385832c288cbcfce36df65"
+    },
+    {
+      "engine": "mistral.rs",
+      "chunk_tokens": 8192,
+      "result": "mrs-attention-8192-serving.json",
+      "prewarm": "mrs-attention-8192-prewarm.json",
+      "decoder_layers_on_cuda": 48,
+      "quantization": "UD-Q4_K_XL GGUF",
+      "measurement_generation": "attention-optimization",
+      "source_sha256": "4ac5bbc7122f69a3391861b0208879e7aa45125ffe94db4b77703cac77c4040c",
+      "binary_sha256": "2f66d0a61e4070e86a761fd01b59c98668837f868305e6b838fe1ff2035db23e"
+    },
+    {
+      "engine": "mistral.rs",
+      "chunk_tokens": 8192,
+      "result": "mrs-paired-8192-serving.json",
+      "prewarm": "mrs-paired-8192-prewarm.json",
+      "decoder_layers_on_cuda": 48,
+      "quantization": "UD-Q4_K_XL GGUF",
+      "measurement_generation": "current",
+      "source_sha256": "24b72dc9f7a4bab0a215fbe87543ad0a7c23ad20b3bd856590d313d950c1ac77",
+      "binary_sha256": "6681778b528263db9c729a69c98f74c0f1a8327f4d337d04cd3c79a7485b7ec5"
+    },
+    {
+      "engine": "llama.cpp",
+      "chunk_tokens": 512,
+      "result": "llama-verify-paired512-serving.json",
+      "prewarm": "llama-verify-paired512-warmup-serving.json",
+      "metadata": "llama-verify-paired512-metadata.json",
+      "quantization": "UD-Q4_K_XL GGUF",
+      "measurement_generation": "fresh-verification",
+      "source_commit": "7aca0d2ea8d92b56911233b822db01f9fbb1ae50",
+      "binary_sha256": "b670440317d3356fb6bda9e4fe290a176157ecb04d95ea93b8b246958272aa76"
+    },
+    {
+      "engine": "llama.cpp",
+      "chunk_tokens": 8192,
+      "result": "llama-verify-paired8192-serving.json",
+      "prewarm": "llama-verify-paired8192-warmup-serving.json",
+      "metadata": "llama-verify-paired8192-metadata.json",
+      "quantization": "UD-Q4_K_XL GGUF",
+      "measurement_generation": "fresh-verification",
+      "source_commit": "7aca0d2ea8d92b56911233b822db01f9fbb1ae50",
+      "binary_sha256": "b670440317d3356fb6bda9e4fe290a176157ecb04d95ea93b8b246958272aa76"
+    }
+  ],
+  "startup": {
+    "mistralrs_gguf512_seconds": 198.48799467086792,
+    "mistralrs_gguf512_ple_prefault_logged_seconds": 56,
+    "llama8192_seconds": 127.36176050500944,
+    "comparison_note": "Loading and mapping preparation are excluded from serving throughput; these timings have different cache histories and are not a cold-start speed comparison.",
+    "mistralrs_gguf8192_seconds": 236.3244287967682,
+    "mistralrs_gguf8192_ple_prefault_logged_seconds": 103,
+    "mistralrs_native4_8192_seconds": 540.4456567764282,
+    "mistralrs_native4_8192_ple_preparation_seconds": 171,
+    "mistralrs_native4_8192_preparation_scope": "Native weight quantization plus mapped PLE quantization/prefault; not a prefault-only timing.",
+    "mistralrs_resumed_gguf8192_seconds": 141.33122277259827,
+    "mistralrs_attention_gguf8192_seconds": 158.0894331932068,
+    "mistralrs_paired_gguf8192_seconds": 155.38846969604492,
+    "llama_verify_paired512_seconds": 126.0123492149869,
+    "llama_verify_paired8192_seconds": 116.90522722096648
+  },
+  "measurement_generation": "Six mistral.rs canonical runs with separately recorded source/binary provenance, two historical llama controls and two fresh llama verification controls at512/8192 batch limits.",
+  "current_source_status": "Complete: release build, CPU check, CUDA checks with and without optional cuTile, formatting/whitespace checks and95 distinct tests passed. Current24-request same-GGUF run and both fresh24-request llama controls completed. Uniform10% decode target achieved versus the best historical/fresh control at every length. Final source and release binary exactly match measured provenance.",
+  "final_source_verification": "final-source-verification.json"
+}

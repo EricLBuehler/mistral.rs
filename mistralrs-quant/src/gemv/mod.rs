@@ -15,12 +15,12 @@ mod ffi;
 
 #[cfg(feature = "cuda")]
 use candle_core::{
-    cuda::cudarc::driver::DevicePtrMut, CudaDevice, CudaStorage, DType, Result, Shape, Storage,
-    Tensor,
+    cuda::cudarc::driver::{CudaStream, DevicePtrMut},
+    CudaDevice, CudaStorage, DType, Result, Shape, Storage, Tensor,
 };
 
 #[cfg(feature = "cuda")]
-use crate::utils::{get_cuda_device, slice_ptr};
+use crate::utils::{get_cuda_device, slice_ptr_on_stream};
 
 #[cfg(feature = "cuda")]
 use half::{bf16, f16};
@@ -45,7 +45,7 @@ const WIDE_GEMV_COMPUTE_MAJOR: i32 = 12;
 #[cfg(any(feature = "cuda", test))]
 const WIDE_GEMV_COMPUTE_MINOR: i32 = 1;
 #[cfg(feature = "cuda")]
-const HALF_PAIR_ALIGNMENT_BYTES: u64 = 4;
+const GEMV_VECTOR_ELEMENTS: usize = 2;
 #[cfg(any(feature = "cuda", test))]
 const SM90_SPLIT_K_MIN_BATCH_REDUCTION: usize = 32_768;
 #[cfg(any(feature = "cuda", test))]
@@ -161,18 +161,9 @@ pub static GEMV_CONTROLLER: LazyLock<GemvController> = LazyLock::new(|| GemvCont
     enabled: AtomicBool::new(true),
 });
 
-/// Check if custom GEMV should be used instead of cuBLAS.
-///
-/// Returns true if:
-/// - GEMV is enabled via controller
-/// - Tensors are on CUDA device
-/// - Batch size is 1-8
-/// - The shape and device favor GEMV over a split-K GEMM
-/// - Data type is supported (BF16, F16, F32)
-/// - K dimension is even (required for vectorized loads)
+/// Whether the CUDA geometry, dtype, and vector alignment favor GEMV over split-K GEMM.
 #[cfg(feature = "cuda")]
 pub fn should_use_gemv(x: &Tensor, w: &Tensor) -> bool {
-    // Check if enabled
     if !GEMV_CONTROLLER.is_enabled() {
         return false;
     }
@@ -181,24 +172,20 @@ pub fn should_use_gemv(x: &Tensor, w: &Tensor) -> bool {
         return false;
     };
 
-    // Check batch size (1-8 supported)
     let x_dims = x.dims();
     let batch_size: usize = x_dims[..x_dims.len().saturating_sub(1)]
         .iter()
         .product::<usize>()
         .max(1);
-    // Must be supported dtype
     let supported = matches!(x.dtype(), DType::BF16 | DType::F16 | DType::F32);
     if !supported {
         return false;
     }
 
-    // Must match dtypes
     if x.dtype() != w.dtype() {
         return false;
     }
 
-    // K must be even for vectorized loads
     let k = x.dim(x.rank() - 1).unwrap_or(0);
     if !k.is_multiple_of(2) {
         return false;
@@ -215,17 +202,17 @@ pub fn should_use_gemv(x: &Tensor, w: &Tensor) -> bool {
         return false;
     }
 
-    // Check that K dimensions match
     let w_k = w.dim(w.rank() - 1).unwrap_or(0);
     if k != w_k {
         return false;
     }
 
-    true
+    let stream = device.cuda_stream();
+    has_aligned_pairs(x, &stream) && has_aligned_pairs(w, &stream)
 }
 
 #[cfg(feature = "cuda")]
-fn has_aligned_half_pairs(tensor: &Tensor) -> bool {
+fn has_aligned_pairs(tensor: &Tensor, stream: &CudaStream) -> bool {
     let (storage, layout) = tensor.storage_and_layout();
     let Storage::Cuda(storage) = &*storage else {
         return false;
@@ -235,19 +222,26 @@ fn has_aligned_half_pairs(tensor: &Tensor) -> bool {
             let Ok(slice) = storage.as_cuda_slice::<bf16>() else {
                 return false;
             };
-            let (pointer, _guard) = slice_ptr(slice, layout.start_offset());
+            let (pointer, _guard) = slice_ptr_on_stream(slice, layout.start_offset(), stream);
             pointer
         }
         DType::F16 => {
             let Ok(slice) = storage.as_cuda_slice::<f16>() else {
                 return false;
             };
-            let (pointer, _guard) = slice_ptr(slice, layout.start_offset());
+            let (pointer, _guard) = slice_ptr_on_stream(slice, layout.start_offset(), stream);
+            pointer
+        }
+        DType::F32 => {
+            let Ok(slice) = storage.as_cuda_slice::<f32>() else {
+                return false;
+            };
+            let (pointer, _guard) = slice_ptr_on_stream(slice, layout.start_offset(), stream);
             pointer
         }
         _ => return false,
     };
-    pointer.is_multiple_of(HALF_PAIR_ALIGNMENT_BYTES)
+    pointer.is_multiple_of((GEMV_VECTOR_ELEMENTS * tensor.dtype().size_in_bytes()) as u64)
 }
 
 #[cfg(feature = "cuda")]
@@ -275,14 +269,15 @@ pub(crate) fn should_use_wide_gemv(x: &Tensor, w: &Tensor) -> bool {
     if batch_dims.iter().any(|&dimension| dimension != 1) || input_dim != weight_input_dim {
         return false;
     }
+    let stream = device.cuda_stream();
     should_use_wide_gemv_shape(
         1,
         output_dim,
         input_dim,
         matches!(x.dtype(), DType::BF16 | DType::F16),
         gemv_device_info(device),
-    ) && has_aligned_half_pairs(x)
-        && has_aligned_half_pairs(w)
+    ) && has_aligned_pairs(x, &stream)
+        && has_aligned_pairs(w, &stream)
 }
 
 /// Fallback for non-CUDA builds
@@ -369,6 +364,7 @@ fn gemv_bf16(
     output_shape: &[usize],
 ) -> Result<Tensor> {
     // Allocate output: [B, M]
+    let stream = dev.cuda_stream();
     let mut y_buf = unsafe { dev.alloc::<bf16>(batch_size * m)? };
 
     // Get weight pointer
@@ -376,7 +372,8 @@ fn gemv_bf16(
     let Storage::Cuda(w_s) = &*w_s else {
         candle_core::bail!("Expected CUDA storage for weights");
     };
-    let (w_ptr, _w_guard) = slice_ptr(w_s.as_cuda_slice::<bf16>()?, w_l.start_offset());
+    let (w_ptr, _w_guard) =
+        slice_ptr_on_stream(w_s.as_cuda_slice::<bf16>()?, w_l.start_offset(), &stream);
 
     let x_contig;
     let (x_s, x_l) = if batch_size == 1 && x.layout().stride()[x.rank() - 1] == 1 {
@@ -388,9 +385,9 @@ fn gemv_bf16(
     let Storage::Cuda(x_s) = &*x_s else {
         candle_core::bail!("Expected CUDA storage for input");
     };
-    let (x_ptr, _x_guard) = slice_ptr(x_s.as_cuda_slice::<bf16>()?, x_l.start_offset());
+    let (x_ptr, _x_guard) =
+        slice_ptr_on_stream(x_s.as_cuda_slice::<bf16>()?, x_l.start_offset(), &stream);
 
-    let stream = dev.cuda_stream();
     let (y_ptr, y_guard) = y_buf.device_ptr_mut(&stream);
 
     // Get bias storage
@@ -399,7 +396,8 @@ fn gemv_bf16(
         let Storage::Cuda(b_s) = &**b_arc else {
             candle_core::bail!("Expected CUDA storage for bias");
         };
-        let (b_ptr, b_guard) = slice_ptr(b_s.as_cuda_slice::<bf16>()?, b_l.start_offset());
+        let (b_ptr, b_guard) =
+            slice_ptr_on_stream(b_s.as_cuda_slice::<bf16>()?, b_l.start_offset(), &stream);
         (b_ptr, true, Some(b_guard))
     } else {
         (0u64, false, None)
@@ -439,13 +437,15 @@ fn gemv_f16(
     k: usize,
     output_shape: &[usize],
 ) -> Result<Tensor> {
+    let stream = dev.cuda_stream();
     let mut y_buf = unsafe { dev.alloc::<f16>(batch_size * m)? };
 
     let (w_s, w_l) = w.storage_and_layout();
     let Storage::Cuda(w_s) = &*w_s else {
         candle_core::bail!("Expected CUDA storage for weights");
     };
-    let (w_ptr, _w_guard) = slice_ptr(w_s.as_cuda_slice::<f16>()?, w_l.start_offset());
+    let (w_ptr, _w_guard) =
+        slice_ptr_on_stream(w_s.as_cuda_slice::<f16>()?, w_l.start_offset(), &stream);
 
     let x_contig;
     let (x_s, x_l) = if batch_size == 1 && x.layout().stride()[x.rank() - 1] == 1 {
@@ -457,9 +457,9 @@ fn gemv_f16(
     let Storage::Cuda(x_s) = &*x_s else {
         candle_core::bail!("Expected CUDA storage for input");
     };
-    let (x_ptr, _x_guard) = slice_ptr(x_s.as_cuda_slice::<f16>()?, x_l.start_offset());
+    let (x_ptr, _x_guard) =
+        slice_ptr_on_stream(x_s.as_cuda_slice::<f16>()?, x_l.start_offset(), &stream);
 
-    let stream = dev.cuda_stream();
     let (y_ptr, y_guard) = y_buf.device_ptr_mut(&stream);
 
     let bias_storage = bias.map(|b| b.storage_and_layout());
@@ -467,7 +467,8 @@ fn gemv_f16(
         let Storage::Cuda(b_s) = &**b_arc else {
             candle_core::bail!("Expected CUDA storage for bias");
         };
-        let (b_ptr, b_guard) = slice_ptr(b_s.as_cuda_slice::<f16>()?, b_l.start_offset());
+        let (b_ptr, b_guard) =
+            slice_ptr_on_stream(b_s.as_cuda_slice::<f16>()?, b_l.start_offset(), &stream);
         (b_ptr, true, Some(b_guard))
     } else {
         (0u64, false, None)
@@ -507,13 +508,15 @@ fn gemv_f32(
     k: usize,
     output_shape: &[usize],
 ) -> Result<Tensor> {
+    let stream = dev.cuda_stream();
     let mut y_buf = unsafe { dev.alloc::<f32>(batch_size * m)? };
 
     let (w_s, w_l) = w.storage_and_layout();
     let Storage::Cuda(w_s) = &*w_s else {
         candle_core::bail!("Expected CUDA storage for weights");
     };
-    let (w_ptr, _w_guard) = slice_ptr(w_s.as_cuda_slice::<f32>()?, w_l.start_offset());
+    let (w_ptr, _w_guard) =
+        slice_ptr_on_stream(w_s.as_cuda_slice::<f32>()?, w_l.start_offset(), &stream);
 
     let x_contig;
     let (x_s, x_l) = if batch_size == 1 && x.layout().stride()[x.rank() - 1] == 1 {
@@ -525,9 +528,9 @@ fn gemv_f32(
     let Storage::Cuda(x_s) = &*x_s else {
         candle_core::bail!("Expected CUDA storage for input");
     };
-    let (x_ptr, _x_guard) = slice_ptr(x_s.as_cuda_slice::<f32>()?, x_l.start_offset());
+    let (x_ptr, _x_guard) =
+        slice_ptr_on_stream(x_s.as_cuda_slice::<f32>()?, x_l.start_offset(), &stream);
 
-    let stream = dev.cuda_stream();
     let (y_ptr, y_guard) = y_buf.device_ptr_mut(&stream);
 
     let bias_storage = bias.map(|b| b.storage_and_layout());
@@ -535,7 +538,8 @@ fn gemv_f32(
         let Storage::Cuda(b_s) = &**b_arc else {
             candle_core::bail!("Expected CUDA storage for bias");
         };
-        let (b_ptr, b_guard) = slice_ptr(b_s.as_cuda_slice::<f32>()?, b_l.start_offset());
+        let (b_ptr, b_guard) =
+            slice_ptr_on_stream(b_s.as_cuda_slice::<f32>()?, b_l.start_offset(), &stream);
         (b_ptr, true, Some(b_guard))
     } else {
         (0u64, false, None)
@@ -939,3 +943,6 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(all(test, feature = "cuda"))]
+mod alignment_tests;

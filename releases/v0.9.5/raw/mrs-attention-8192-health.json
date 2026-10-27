@@ -1,0 +1,25 @@
+{
+  "source_sha256": "4ac5bbc7122f69a3391861b0208879e7aa45125ffe94db4b77703cac77c4040c",
+  "binary_sha256": "2f66d0a61e4070e86a761fd01b59c98668837f868305e6b838fe1ff2035db23e",
+  "fresh_server_prewarm_requests": 12,
+  "measured_sweep_requests": 12,
+  "requests_in_medians": 9,
+  "all_output_tokens": 128,
+  "all_requests_complete": true,
+  "nan_or_request_errors": false,
+  "maximum_measured_intertoken_seconds": 0.03892375202849507,
+  "measured_intervals_above_40ms": 0,
+  "post_sweep_residency": {
+    "before": {
+      "eligible_uploaded_source_resident_bytes": 16703488,
+      "ple_resident_page_bytes": 28800143360
+    },
+    "after": {
+      "eligible_uploaded_source_resident_bytes": 16703488,
+      "ple_resident_page_bytes": 28800143360
+    }
+  },
+  "residency_scan_applied_advice": false,
+  "residency_scan_utc": "2026-10-27T16:50:07.796614+00:00",
+  "residency_note": "Read-only scan after measurements; eligible source ranges come from GGUF metadata excluding the mapped PLE table. This does not independently prove every eligible tensor was uploaded."
+}

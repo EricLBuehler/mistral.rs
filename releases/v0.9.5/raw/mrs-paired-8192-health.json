@@ -1,0 +1,25 @@
+{
+  "source_sha256": "24b72dc9f7a4bab0a215fbe87543ad0a7c23ad20b3bd856590d313d950c1ac77",
+  "binary_sha256": "6681778b528263db9c729a69c98f74c0f1a8327f4d337d04cd3c79a7485b7ec5",
+  "fresh_server_prewarm_requests": 12,
+  "measured_sweep_requests": 12,
+  "requests_in_medians": 9,
+  "all_output_tokens": 128,
+  "all_requests_complete": true,
+  "nan_or_request_errors": false,
+  "maximum_measured_intertoken_seconds": 0.045695947017520666,
+  "measured_intervals_above_40ms": 20,
+  "post_sweep_residency": {
+    "before": {
+      "eligible_uploaded_source_resident_bytes": 32784384,
+      "ple_resident_page_bytes": 28789878784
+    },
+    "after": {
+      "eligible_uploaded_source_resident_bytes": 32784384,
+      "ple_resident_page_bytes": 28789878784
+    }
+  },
+  "residency_scan_applied_advice": false,
+  "residency_scan_utc": "2026-10-27T17:32:20.313367+00:00",
+  "residency_note": "Read-only scan after measurements; eligible source ranges come from GGUF metadata excluding mapped PLE. This does not independently prove every eligible tensor was uploaded or establish a cause for token latency."
+}

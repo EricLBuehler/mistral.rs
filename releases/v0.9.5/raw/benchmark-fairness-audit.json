@@ -1,0 +1,99 @@
+{
+  "llama8192_medians": {
+    "512": {
+      "ttft_seconds": 0.6718992800451815,
+      "prompt_tokens_per_second": 762.018973983081,
+      "tpot_seconds": 0.03651716397693894,
+      "decode_tokens_per_second": 27.384382879007607
+    },
+    "2048": {
+      "ttft_seconds": 1.8724455880001187,
+      "prompt_tokens_per_second": 1093.756749528505,
+      "tpot_seconds": 0.037070218085927344,
+      "decode_tokens_per_second": 26.975832666590694
+    },
+    "8192": {
+      "ttft_seconds": 6.767407995997928,
+      "prompt_tokens_per_second": 1210.5077756276169,
+      "tpot_seconds": 0.03951260588942169,
+      "decode_tokens_per_second": 25.308378870241
+    }
+  },
+  "command": [
+    "/home/ericbuehler/llama.cpp/build-bench-cuda132/bin/llama-server",
+    "-m",
+    "/home/ericbuehler/qwen4exp_work/gguf/UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf",
+    "-ngl",
+    "99",
+    "-fa",
+    "on",
+    "-ctk",
+    "bf16",
+    "-ctv",
+    "bf16",
+    "-b",
+    "8192",
+    "-ub",
+    "8192",
+    "-t",
+    "10",
+    "-c",
+    "16384",
+    "-np",
+    "1",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "1235",
+    "--alias",
+    "qwen38",
+    "--no-cache-prompt",
+    "--cache-ram",
+    "0",
+    "--no-webui"
+  ],
+  "shell_command": "/home/ericbuehler/llama.cpp/build-bench-cuda132/bin/llama-server -m /home/ericbuehler/qwen4exp_work/gguf/UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf -ngl 99 -fa on -ctk bf16 -ctv bf16 -b 8192 -ub 8192 -t 10 -c 16384 -np 1 --host 127.0.0.1 --port 1235 --alias qwen38 --no-cache-prompt --cache-ram 0 --no-webui",
+  "llama_git_head": "7aca0d2ea8d92b56911233b822db01f9fbb1ae50",
+  "binary_sha256": "b670440317d3356fb6bda9e4fe290a176157ecb04d95ea93b8b246958272aa76",
+  "loaded_artifact_sha256": {
+    "/home/ericbuehler/llama.cpp/build-bench-cuda132/bin/libggml-base.so.0.27.0": "74bea6b01a9d67c6075284c2a6314a1051be967b78a1360ceb0b5d5ea0d813dc",
+    "/home/ericbuehler/llama.cpp/build-bench-cuda132/bin/libggml-cpu.so.0.27.0": "1557de39ef8babc01ca099414e26460ad768d6d516dcf9c21178cf397a070178",
+    "/home/ericbuehler/llama.cpp/build-bench-cuda132/bin/libggml-cuda.so.0.27.0": "6e2f76f0bf7161910ceb1e01df77e623e9a22010ea3aa842b3c34fa0f5252cc7",
+    "/home/ericbuehler/llama.cpp/build-bench-cuda132/bin/libggml.so.0.27.0": "328a062996b95f2664606c621afea0dcb333fd34a89f2cfba5bb4afe7e063714",
+    "/home/ericbuehler/llama.cpp/build-bench-cuda132/bin/libllama-common.so.0.7.0": "cd118e7c89430cf7277c63766dbd389ee0a0e8c2782aac3e9248d963ed13a03f",
+    "/home/ericbuehler/llama.cpp/build-bench-cuda132/bin/libllama-server-impl.so": "105fd07d7f3ba7628e1c88b92a3f0b2bd1c76815a998889d0b777b35d1c71496",
+    "/home/ericbuehler/llama.cpp/build-bench-cuda132/bin/libllama.so.0.7.0": "5a321b476da8dc94ea2354dbd6b8d02afbb457aeb905ad7c727dafcfc19f774e",
+    "/home/ericbuehler/llama.cpp/build-bench-cuda132/bin/libmtmd.so.0.7.0": "132cbd10a1955c242dd9f22b5ad3fb56c40d6c19d1d8163faae3dde5985acac7",
+    "/home/ericbuehler/llama.cpp/build-bench-cuda132/bin/llama-server": "b670440317d3356fb6bda9e4fe290a176157ecb04d95ea93b8b246958272aa76"
+  },
+  "prompts_sha256": "049f78cd048bd286deb0deb54bb5715b0b80397ddee98a9bd49eed45cbc69f44",
+  "gguf_revision": "38bb39ee97821de2c9009abb7e93950eec396e66",
+  "validation": {
+    "requests": 24,
+    "output_tokens_per_request": 128,
+    "nonempty_stream_chunks_per_request": 128,
+    "compiler_overlap": false,
+    "artifacts_unchanged": true,
+    "exit_code": 0
+  },
+  "matched_conditions": [
+    "Same four frozen GGUF shards and checkpoint revision.",
+    "Same exact512/2048/8192 token-ID fixtures. MRS transports decoded text and asserts tokenizer round-trip; llama sends IDs.",
+    "Same BF16 KV, context16384, c1, temperature0,128 output tokens, no prefix cache, no MTP.",
+    "Same prefill chunk/batch sizes within the512 and8192 comparisons.",
+    "Both perform one full unmeasured fixture sweep followed by1warmup+3measured requests per prompt length.",
+    "Single active model, stopped rust-analyzer, no concurrent compiler or profiling in final measured windows.",
+    "Both use the same client timing formula: prompt_tokens/time_to_first_nonempty_text and127/(last-first text chunk time)."
+  ],
+  "interpretation": [
+    "No identified configuration mismatch invalidates the512/8192 engine comparisons.",
+    "Prefill throughput is end-to-end TTFT-derived, including HTTP, server scheduling and first-token computation; it is not a pure kernel throughput metric.",
+    "Decode outputs differ between engines, so MoE expert routing differs; these are fixed-prompt/fixed-length serving comparisons, not teacher-forced identical-token decode measurements.",
+    "Different numerical activation implementations are intrinsic to the engines; exact checkpoint bytes do not establish numerical or quality equivalence.",
+    "MRS additionally loads the vision projector, while llama is text-only; no vision inference runs. This consumes extra MRS memory, not a MRS performance advantage.",
+    "Separate process runs are serial rather than interleaved randomized trials;3measured cases per length do not provide confidence intervals.",
+    "512 and8192 are tested configurations, not an exhaustive optimum; distinguish matched configuration from best observed results.",
+    "Native ISQ4 runs must be separately labeled; they do not use identical weight quantization to UD-Q4_K_XL."
+  ],
+  "counting_note": "MRS reads isolated metrics only outside the timing interval when stream usage is absent; llama uses stream usage. Both validate the same input/output counts and128 nonempty chunks."
+}

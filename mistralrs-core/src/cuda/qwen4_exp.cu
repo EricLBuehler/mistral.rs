@@ -1,5 +1,4 @@
-// Qwen4-Exp (Qwen3.8-Flash-Next) kernels: hyper-connections, hashed n-gram PLE
-// and QSA sparse attention.
+// Qwen4-Exp hashed n-gram PLE and QSA sparse attention.
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
@@ -12,34 +11,16 @@
 #define Q4_MAX_CONV_STATE 16
 #define Q4_QSA_MAX_INDEX_HEADS 8
 #define Q4_QSA_HEAD_DIM 128
+#define Q4_QSA_SCORE_KEYS 16
+#define Q4_QSA_SCORE_THREADS 128
+#define Q4_QSA_KEY_PADDING 2
+#define Q4_QSA_RADIX_BINS 256
+#define Q4_QSA_RADIX_WARPS (Q4_QSA_RADIX_BINS / 32)
+#define Q4_QSA_RADIX_MASK (Q4_QSA_RADIX_BINS - 1)
 #define Q4_ATTN_HEAD_DIM 256
 #define Q4_ATTN_WARPS 4
 #define Q4_ATTN_MAX_HEADS_PER_WARP 4
 #define Q4_ATTN_ITEMS 4
-#define Q4_HC_THREADS 128
-#define Q4_HC_WARP_SIZE 32
-#define Q4_HC_HIDDEN 2560
-#define Q4_HC_RANK 320
-#define Q4_HC_STREAMS 4
-#define Q4_HC_QUANT_GROUP 32
-#define Q4_HC_QUANT_THREADS 256
-
-struct Q4HcQ8Input {
-  __half2 ds;
-  int8_t qs[Q4_HC_QUANT_GROUP];
-};
-
-struct Q4HcQ8Weight {
-  __half d;
-  int8_t qs[Q4_HC_QUANT_GROUP];
-};
-
-struct Q4HcQ5Weight {
-  __half2 dm;
-  uint32_t high;
-  int8_t qs[Q4_HC_QUANT_GROUP / 2];
-};
-
 template <typename T> __device__ __forceinline__ float q4_f(T v) {
   return (float)v;
 }
@@ -102,169 +83,7 @@ __device__ __forceinline__ void q4_load8(const T *__restrict__ p, float *out) {
   }
 }
 
-template <int FORMAT>
-__device__ __forceinline__ float q4_hc_weight(const void *weight, size_t i) {
-  if constexpr (FORMAT == 3) {
-    const unsigned char *block = (const unsigned char *)weight + (i / 32) * 24;
-    const int q = i % 32;
-    const unsigned int high = *(const unsigned int *)(block + 4);
-    const int value = ((block[8 + q % 16] >> (4 * (q / 16))) & 15) | (((high >> q) & 1) << 4);
-    return __half2float(*(const __half *)block) * value + __half2float(*(const __half *)(block + 2));
-  } else if constexpr (FORMAT == 2) {
-    const unsigned char *block = (const unsigned char *)weight + (i / 32) * 34;
-    return __half2float(*(const __half *)block) * (float)((const int8_t *)(block + 2))[i % 32];
-  } else if constexpr (FORMAT == 1) {
-    return __bfloat162float(((const __nv_bfloat16 *)weight)[i]);
-  } else {
-    return __half2float(((const __half *)weight)[i]);
-  }
-}
-
-template <typename T, int FORMAT>
-__global__ void q4_hc_up_mix_kernel(const T *__restrict__ lo, const void *up,
-                                   const T *__restrict__ xn, T *__restrict__ out,
-                                   int hidden, int rank, int hc) {
-  const int warp = threadIdx.x / Q4_HC_WARP_SIZE;
-  const int lane = threadIdx.x % Q4_HC_WARP_SIZE;
-  const int h = blockIdx.x * (Q4_HC_THREADS / Q4_HC_WARP_SIZE) + warp;
-  if (h >= hidden) {
-    return;
-  }
-  const int token = blockIdx.y;
-  const T *input = lo + (size_t)token * rank;
-  float mixed = 0.0f;
-  for (int stream = 0; stream < hc; ++stream) {
-    const int row = stream * hidden + h;
-    float sum = 0.0f;
-    for (int k = lane; k < rank; k += Q4_HC_WARP_SIZE) {
-      sum = fmaf(q4_f(input[k]), q4_hc_weight<FORMAT>(up, (size_t)row * rank + k), sum);
-    }
-    sum = q4_warp_sum(sum);
-    if (lane == 0) {
-      mixed += q4_f(xn[(size_t)token * hc * hidden + row]) * q4_sigmoid(q4_f(q4_t<T>(sum)));
-    }
-  }
-  if (lane == 0) {
-    out[(size_t)token * hidden + h] = q4_t<T>(mixed / hc);
-  }
-}
-
-template <typename T>
-__global__ void q4_hc_silu_kernel(const T *__restrict__ input, T *__restrict__ output,
-                                 size_t elements, int hc) {
-  const size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
-  if (i < elements) {
-    const float scaled = q4_f(q4_t<T>(q4_f(input[i]) / hc));
-    output[i] = q4_t<T>(q4_silu(scaled));
-  }
-}
-
-template <typename T>
-__global__ void q4_hc_quantize_kernel(const T *input, Q4HcQ8Input *output) {
-  const int index = blockIdx.x * blockDim.x + threadIdx.x;
-  if (index >= Q4_HC_RANK) {
-    return;
-  }
-  const int lane = index % Q4_HC_QUANT_GROUP;
-  const float value = q4_f(input[index]);
-  float amax = fabsf(value);
-#pragma unroll
-  for (int shift = Q4_HC_WARP_SIZE / 2; shift > 0; shift >>= 1) {
-    amax = fmaxf(amax, __shfl_xor_sync(0xffffffff, amax, shift));
-  }
-  const float sum = q4_warp_sum(value);
-  const float scale = amax / 127.0f;
-  auto &block = output[index / Q4_HC_QUANT_GROUP];
-  block.qs[lane] =
-      amax == 0.0f ? 0 : static_cast<int8_t>(roundf(value / scale));
-  if (lane == 0) {
-    block.ds = __floats2half2_rn(scale, sum);
-  }
-}
-
-__device__ __forceinline__ int q4_hc_quant_int(const int8_t *values,
-                                               int index) {
-  const auto *halves =
-      reinterpret_cast<const uint16_t *>(values + sizeof(int) * index);
-  return halves[0] | (static_cast<int>(halves[1]) << 16);
-}
-
-template <int FORMAT>
-__device__ __forceinline__ float
-q4_hc_quant_dot(const void *weights, const Q4HcQ8Input *input, int row) {
-  constexpr int threads_per_group = FORMAT == 2 ? 4 : 2;
-  constexpr int blocks_per_row = Q4_HC_RANK / Q4_HC_QUANT_GROUP;
-  const int lane = threadIdx.x % Q4_HC_WARP_SIZE;
-  float total = 0.0f;
-  for (int block = lane / threads_per_group; block < blocks_per_row;
-       block += Q4_HC_WARP_SIZE / threads_per_group) {
-    const int part = 2 * (lane % threads_per_group);
-    const auto *activation = reinterpret_cast<const int *>(input[block].qs);
-    int sum = 0;
-    if constexpr (FORMAT == 2) {
-      const auto *weight = static_cast<const Q4HcQ8Weight *>(weights) +
-                           row * blocks_per_row + block;
-#pragma unroll
-      for (int i = 0; i < 2; ++i) {
-        sum = __dp4a(q4_hc_quant_int(weight->qs, part + i),
-                     activation[part + i], sum);
-      }
-      // Match the separately rounded warp partials of the Q8_1 MMVQ reduction.
-      const float scaled =
-          __fmul_rn(static_cast<float>(sum), __half2float(weight->d));
-      total = __fadd_rn(total, __fmul_rn(scaled, __low2float(input[block].ds)));
-    } else {
-      const auto *weight = static_cast<const Q4HcQ5Weight *>(weights) +
-                           row * blocks_per_row + block;
-#pragma unroll
-      for (int i = 0; i < 2; ++i) {
-        const int low_bits =
-            reinterpret_cast<const int *>(weight->qs)[part + i];
-        const int high_bits = weight->high >> (4 * (part + i));
-        const int low = (low_bits & 0x0f0f0f0f) | ((high_bits << 4) & 0x10) |
-                        ((high_bits << 11) & 0x1000) |
-                        ((high_bits << 18) & 0x100000) |
-                        ((high_bits << 25) & 0x10000000);
-        const int high =
-            ((low_bits >> 4) & 0x0f0f0f0f) | ((high_bits >> 12) & 0x10) |
-            ((high_bits >> 5) & 0x1000) | ((high_bits << 2) & 0x100000) |
-            ((high_bits << 9) & 0x10000000);
-        sum = __dp4a(low, activation[part + i], sum);
-        sum = __dp4a(high, activation[part + i + 4], sum);
-      }
-      const float2 dm = __half22float2(weight->dm);
-      const float2 ds = __half22float2(input[block].ds);
-      total += sum * (dm.x * ds.x) + (dm.y * ds.y) / 2;
-    }
-  }
-  return q4_warp_sum(total);
-}
-
-template <typename T, int FORMAT>
-__global__ void q4_hc_quant_up_mix_kernel(const Q4HcQ8Input *input,
-                                          const void *weights, const T *xn,
-                                          T *output) {
-  const int warp = threadIdx.x / Q4_HC_WARP_SIZE;
-  const int lane = threadIdx.x % Q4_HC_WARP_SIZE;
-  const int hidden = blockIdx.x * (Q4_HC_THREADS / Q4_HC_WARP_SIZE) + warp;
-  float value = 0.0f;
-#pragma unroll
-  for (int stream = 0; stream < Q4_HC_STREAMS; ++stream) {
-    const int row = stream * Q4_HC_HIDDEN + hidden;
-    const float gate =
-        q4_f(q4_t<T>(q4_hc_quant_dot<FORMAT>(weights, input, row)));
-    if (lane == 0) {
-      value = fmaf(q4_f(xn[row]), q4_sigmoid(gate), value);
-    }
-  }
-  if (lane == 0) {
-    output[hidden] = q4_t<T>(value / Q4_HC_STREAMS);
-  }
-}
-
-// Flattened token -> logical sequence mapping. A null tok_seq is the
-// rectangular layout: every sequence has q_len consecutive new tokens (decode
-// is q_len 1). tok_seq < 0 marks padding.
+// A null tok_seq means rectangular q_len-token sequences; negative tok_seq entries mark padding.
 struct Q4Tokens {
   const int *tok_seq;
   const int *tok_local;
@@ -288,82 +107,6 @@ __device__ __forceinline__ int q4_len_of(const Q4Tokens &l, int seq) {
   return l.seq_len ? l.seq_len[seq] : l.q_len;
 }
 
-template <typename T>
-__global__ void
-q4_hc_norm_kernel(const T *__restrict__ x, const float *__restrict__ weight,
-                  T *__restrict__ out, int hc, int hidden, float eps) {
-  __shared__ float smem[32];
-  const size_t row = blockIdx.x;
-  const int stream = row % hc;
-  const T *xr = x + row * hidden;
-  const float *wr = weight + (size_t)stream * hidden;
-  T *orow = out + row * hidden;
-  float ss = 0.0f;
-  for (int i = threadIdx.x; i < hidden; i += blockDim.x) {
-    const float v = q4_f(xr[i]);
-    ss = fmaf(v, v, ss);
-  }
-  ss = q4_block_sum(ss, smem);
-  const float inv = rsqrtf(ss / (float)hidden + eps);
-  for (int i = threadIdx.x; i < hidden; i += blockDim.x) {
-    orow[i] = q4_t<T>(q4_f(xr[i]) * inv * wr[i]);
-  }
-}
-
-template <typename T>
-__global__ void
-q4_hc_mix_kernel(const T *__restrict__ xn, const T *__restrict__ gate,
-                 T *__restrict__ out, size_t total, int hc, int hidden) {
-  const size_t idx = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
-  if (idx >= total) {
-    return;
-  }
-  const size_t t = idx / hidden;
-  const int i = idx - t * hidden;
-  float acc = 0.0f;
-  for (int c = 0; c < hc; ++c) {
-    const size_t o = (t * hc + c) * hidden + i;
-    acc = fmaf(q4_f(xn[o]), q4_sigmoid(q4_f(gate[o])), acc);
-  }
-  out[idx] = q4_t<T>(acc / (float)hc);
-}
-
-// res_out[t, c] = res[t, c] + block_out[t] * 2 * sigmoid(inject[t, c] / hc);
-// when next_weight is set, xn_out is the grouped RMSNorm of res_out for the
-// next mixer.
-template <typename T>
-__global__ void
-q4_hc_combine_kernel(const T *__restrict__ res, const T *__restrict__ block_out,
-                     const T *__restrict__ inject, T *__restrict__ res_out,
-                     const float *__restrict__ next_weight,
-                     T *__restrict__ xn_out, int hc, int hidden, float eps) {
-  __shared__ float smem[32];
-  const size_t row = blockIdx.x;
-  const size_t t = row / hc;
-  const int stream = row - t * hc;
-  const float w = 2.0f * q4_sigmoid(q4_f(inject[row]) / (float)hc);
-  const T *rr = res + row * hidden;
-  const T *br = block_out + t * hidden;
-  T *orow = res_out + row * hidden;
-  float ss = 0.0f;
-  for (int i = threadIdx.x; i < hidden; i += blockDim.x) {
-    const T v = q4_t<T>(fmaf(q4_f(br[i]), w, q4_f(rr[i])));
-    orow[i] = v;
-    const float vf = q4_f(v);
-    ss = fmaf(vf, vf, ss);
-  }
-  if (next_weight == nullptr) {
-    return;
-  }
-  ss = q4_block_sum(ss, smem);
-  const float inv = rsqrtf(ss / (float)hidden + eps);
-  const float *wr = next_weight + (size_t)stream * hidden;
-  T *xr = xn_out + row * hidden;
-  for (int i = threadIdx.x; i < hidden; i += blockDim.x) {
-    xr[i] = q4_t<T>(q4_f(orow[i]) * inv * wr[i]);
-  }
-}
-
 struct Q4PleHashParams {
   unsigned long long multipliers[Q4_MAX_PLE_NGRAM];
   unsigned long long vocab_sizes[Q4_MAX_PLE_HEADS];
@@ -374,8 +117,7 @@ struct Q4PleHashParams {
   unsigned int eos;
 };
 
-// hist_pool rows hold the last `hist_len` token ids of each sequence, oldest
-// first, stored as id + 1 so a zeroed slot reads as "no token" (EOS).
+// History stores oldest-first token ids plus one, so zeroed slots read as missing tokens.
 __global__ void q4_ple_hash_kernel(const unsigned int *__restrict__ tokens,
                                    Q4Tokens l,
                                    const float *__restrict__ hist_pool,
@@ -434,7 +176,6 @@ __global__ void q4_ple_hash_kernel(const unsigned int *__restrict__ tokens,
   }
 }
 
-// New history = last hist_len tokens of (history ++ this chunk), per sequence.
 __global__ void
 q4_ple_hist_update_kernel(const unsigned int *__restrict__ tokens, Q4Tokens l,
                           float *__restrict__ hist_pool,
@@ -461,8 +202,7 @@ q4_ple_hist_update_kernel(const unsigned int *__restrict__ tokens, Q4Tokens l,
   }
 }
 
-// One warp per (token, head): copy a 16-bit row of the n-gram table. The shards
-// may be host memory the GPU reads through ATS/HMM.
+// Table shards may be host memory accessed through ATS/HMM.
 __global__ void
 q4_ple_gather_kernel(const long long *__restrict__ rows, int n_lookups,
                      const unsigned long long *__restrict__ shard_ptrs,
@@ -493,18 +233,9 @@ q4_ple_gather_kernel(const long long *__restrict__ rows, int n_lookups,
   }
 }
 
-// Gather from the device-resident quantized table. Q8/Q4: per row, symmetric
-// int8 or offset-8 nibbles with one f16 scale per Q4_PLE_GROUP values in
-// `scales`. IQ4_NL: ggml block_iq4_nl rows (f16 scale + 16 nibble bytes per
-// Q4_PLE_GROUP values, low nibbles first) straight from a GGUF; `scales` unused.
 #define Q4_PLE_GROUP 32
 #define Q4_PLE_FMT_Q8 0
-#define Q4_PLE_FMT_Q4 1
-#define Q4_PLE_FMT_IQ4_NL 2
-#define Q4_IQ4_NL_BLOCK_BYTES 18
 #define Q4_PLE_QUANT_WARPS 8
-__constant__ signed char q4_kvalues_iq4nl[16] = {
-    -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113};
 
 template <typename T>
 __global__ void q4_ple_quantize_table_kernel(
@@ -554,20 +285,6 @@ q4_ple_gather_quant_kernel(const long long *__restrict__ rows, int n_lookups,
   const size_t r = (size_t)rows[lookup];
   const int groups = head_dim / Q4_PLE_GROUP;
   __nv_bfloat16 *dst = out + (size_t)lookup * head_dim;
-  if (format == Q4_PLE_FMT_IQ4_NL) {
-    const unsigned char *src =
-        data + r * (size_t)groups * Q4_IQ4_NL_BLOCK_BYTES;
-    for (int i = lane; i < head_dim; i += 32) {
-      const unsigned char *blk =
-          src + (size_t)(i / Q4_PLE_GROUP) * Q4_IQ4_NL_BLOCK_BYTES;
-      const int j = i % Q4_PLE_GROUP;
-      const unsigned char byte = blk[2 + (j & 15)];
-      const int idx = j < 16 ? (byte & 15) : (byte >> 4);
-      const float d = __half2float(*reinterpret_cast<const __half *>(blk));
-      dst[i] = __float2bfloat16_rn(d * (float)q4_kvalues_iq4nl[idx]);
-    }
-    return;
-  }
   const int bits = format == Q4_PLE_FMT_Q8 ? 8 : 4;
   const size_t row_bytes = (size_t)head_dim * bits / 8;
   const unsigned char *src = data + r * row_bytes;
@@ -584,9 +301,6 @@ q4_ple_gather_quant_kernel(const long long *__restrict__ rows, int n_lookups,
   }
 }
 
-// Per token: gate each hyper-connection stream by the normalized key/query dot
-// product, scale the shared value, and RMS-normalize the gated value for the
-// conv. One block per token.
 template <typename T>
 __global__ void
 q4_ple_gate_kernel(const T *__restrict__ key,
@@ -649,9 +363,7 @@ q4_ple_gate_kernel(const T *__restrict__ key,
   }
 }
 
-// out = residual + gated + silu(dilated causal depthwise conv(normed)); history
-// before the chunk comes from the pooled conv state `[slot, channels,
-// state_len]` (oldest first).
+// The pooled [slot, channels, state_len] state stores oldest-first history preceding this chunk.
 template <typename T>
 __global__ void
 q4_ple_conv_kernel(const T *__restrict__ normed, const T *__restrict__ gated,
@@ -720,8 +432,7 @@ q4_ple_conv_state_update_kernel(const T *__restrict__ normed,
   }
 }
 
-// QSA aux cache rows are [raw indexer key | cos | sin] per token slot; once a
-// block completes, its first token's key becomes the pooled, rotated block key.
+// Aux rows retain [raw indexer key | cos | sin]; completed blocks get a separate pooled, rotated key.
 
 struct Q4Paged {
   const int *block_tables;
@@ -737,7 +448,6 @@ __device__ __forceinline__ long long q4_slot(const Q4Paged &pg, int seq,
   return (long long)blk * pg.block_size + pos % pg.block_size;
 }
 
-// Absolute kv position of flattened token t, or -1 for padding.
 __device__ __forceinline__ int q4_pos_of(const Q4Tokens &l, const Q4Paged &pg,
                                          int t, int &seq) {
   seq = q4_seq_of(l, t);
@@ -770,8 +480,7 @@ __global__ void q4_qsa_aux_write_kernel(
   }
 }
 
-// One warp per token; the token that completes a block writes the block key.
-// key_dim must be 128.
+// One warp finalizes each completed block; the indexer key dimension is Q4_QSA_HEAD_DIM.
 template <typename T>
 __global__ void
 q4_qsa_finalize_kernel(const T *__restrict__ aux, T *__restrict__ block_keys,
@@ -819,7 +528,6 @@ q4_qsa_finalize_kernel(const T *__restrict__ aux, T *__restrict__ block_keys,
   for (int i = 0; i < 4; ++i) {
     out[i] = v[i];
   }
-  // rotate_half partner is half_rot dims away
 #pragma unroll
   for (int i = 0; i < 4; ++i) {
     const int d = lane * 4 + i;
@@ -839,31 +547,9 @@ q4_qsa_finalize_kernel(const T *__restrict__ aux, T *__restrict__ block_keys,
   }
 }
 
-// scores[t, j] = sum_h relu(q[t, h] . block_key[j]) / sqrt(d) for rows with
-// more complete blocks than the budget selects; other rows are skipped.
 template <typename T>
-__global__ void
-q4_qsa_score_kernel(const T *__restrict__ q, const T *__restrict__ block_keys,
-                    Q4Tokens l, Q4Paged pg, float *__restrict__ scores,
-                    int score_stride, int n_heads, int ratio, int topk,
-                    int key_dim) {
-  __shared__ float qs[Q4_QSA_MAX_INDEX_HEADS * Q4_QSA_HEAD_DIM];
-  const int t = blockIdx.y;
-  int seq;
-  const int pos = q4_pos_of(l, pg, t, seq);
-  const int nb = pos < 0 ? 0 : (pos + 1) / ratio;
-  if (nb <= topk || (int)(blockIdx.x * blockDim.x) >= nb) {
-    return;
-  }
-  for (int i = threadIdx.x; i < n_heads * Q4_QSA_HEAD_DIM; i += blockDim.x) {
-    qs[i] = q4_f(q[(size_t)t * n_heads * Q4_QSA_HEAD_DIM + i]);
-  }
-  __syncthreads();
-  const int j = blockIdx.x * blockDim.x + threadIdx.x;
-  if (j >= nb) {
-    return;
-  }
-  const T *key = block_keys + q4_slot(pg, seq, j * ratio) / ratio * key_dim;
+__device__ __forceinline__ float q4_qsa_score_key(const T *key, const float *qs,
+                                                  int n_heads) {
   float dots[Q4_QSA_MAX_INDEX_HEADS];
 #pragma unroll
   for (int h = 0; h < Q4_QSA_MAX_INDEX_HEADS; ++h) {
@@ -890,7 +576,77 @@ q4_qsa_score_kernel(const T *__restrict__ q, const T *__restrict__ block_keys,
       total += fmaxf(dots[h], 0.0f);
     }
   }
-  scores[(size_t)t * score_stride + j] = total * rsqrtf((float)Q4_QSA_HEAD_DIM);
+  return total * rsqrtf((float)Q4_QSA_HEAD_DIM);
+}
+
+// Rows within the selection budget bypass score generation.
+template <typename T>
+__global__ void
+q4_qsa_score_kernel(const T *__restrict__ q, const T *__restrict__ block_keys,
+                    Q4Tokens l, Q4Paged pg, float *__restrict__ scores,
+                    int score_stride, int n_heads, int ratio, int topk,
+                    int key_dim) {
+  __shared__ float qs[Q4_QSA_MAX_INDEX_HEADS * Q4_QSA_HEAD_DIM];
+  const int t = blockIdx.y;
+  int seq;
+  const int pos = q4_pos_of(l, pg, t, seq);
+  const int nb = pos < 0 ? 0 : (pos + 1) / ratio;
+  if (nb <= topk || (int)(blockIdx.x * blockDim.x) >= nb) {
+    return;
+  }
+  for (int i = threadIdx.x; i < n_heads * Q4_QSA_HEAD_DIM; i += blockDim.x) {
+    qs[i] = q4_f(q[(size_t)t * n_heads * Q4_QSA_HEAD_DIM + i]);
+  }
+  __syncthreads();
+  const int j = blockIdx.x * blockDim.x + threadIdx.x;
+  if (j >= nb) {
+    return;
+  }
+  const T *key = block_keys + q4_slot(pg, seq, j * ratio) / ratio * key_dim;
+  scores[(size_t)t * score_stride + j] = q4_qsa_score_key(key, qs, n_heads);
+}
+
+template <typename T>
+__global__ void q4_qsa_score_staged_kernel(const T *__restrict__ q,
+                                           const T *__restrict__ block_keys,
+                                           Q4Tokens l, Q4Paged pg,
+                                           float *__restrict__ scores,
+                                           int score_stride, int n_heads,
+                                           int ratio, int topk, int key_dim) {
+  __shared__ float qs[Q4_QSA_MAX_INDEX_HEADS * Q4_QSA_HEAD_DIM];
+  // An odd packed-pair row stride avoids bank conflicts in the per-key dot products.
+  __shared__ __align__(16)
+      T keys[Q4_QSA_SCORE_KEYS][Q4_QSA_HEAD_DIM + Q4_QSA_KEY_PADDING];
+  const int t = blockIdx.y;
+  int seq;
+  const int pos = q4_pos_of(l, pg, t, seq);
+  const int nb = pos < 0 ? 0 : (pos + 1) / ratio;
+  const int first = blockIdx.x * Q4_QSA_SCORE_KEYS;
+  if (nb <= topk || first >= nb) {
+    return;
+  }
+  for (int i = threadIdx.x; i < n_heads * Q4_QSA_HEAD_DIM; i += blockDim.x) {
+    qs[i] = q4_f(q[(size_t)t * n_heads * Q4_QSA_HEAD_DIM + i]);
+  }
+  for (int index = threadIdx.x;
+       index < Q4_QSA_SCORE_KEYS * (Q4_QSA_HEAD_DIM / 2); index += blockDim.x) {
+    const int row = index / (Q4_QSA_HEAD_DIM / 2);
+    const int col = (index % (Q4_QSA_HEAD_DIM / 2)) * 2;
+    if (first + row < nb) {
+      const T *key = block_keys +
+                     q4_slot(pg, seq, (first + row) * ratio) / ratio * key_dim;
+      *reinterpret_cast<unsigned int *>(&keys[row][col]) =
+          *reinterpret_cast<const unsigned int *>(key + col);
+    }
+  }
+  __syncthreads();
+  const int row = threadIdx.x;
+  const int j = first + row;
+  if (row >= Q4_QSA_SCORE_KEYS || j >= nb) {
+    return;
+  }
+  scores[(size_t)t * score_stride + j] =
+      q4_qsa_score_key(&keys[row][0], qs, n_heads);
 }
 
 __device__ __forceinline__ unsigned int q4_ordered(float v) {
@@ -901,17 +657,16 @@ __device__ __forceinline__ unsigned int q4_ordered(float v) {
   return (bits & 0x80000000u) ? ~bits : (bits ^ 0x80000000u);
 }
 
-// Per query row: the indices of the topk largest scores among the first nb
-// complete blocks (all of them when nb <= topk). Radix select over the
-// order-preserving float bits.
 __global__ void q4_qsa_topk_kernel(const float *__restrict__ scores,
                                    int score_stride, Q4Tokens l, Q4Paged pg,
                                    int ratio, int topk,
                                    int *__restrict__ selected,
                                    int *__restrict__ n_selected) {
-  __shared__ unsigned int hist[256];
+  __shared__ unsigned int hist[Q4_QSA_RADIX_BINS];
   __shared__ unsigned int s_prefix, s_mask, s_remaining;
   __shared__ unsigned int s_gt, s_eq;
+  __shared__ unsigned int warp_totals[Q4_QSA_RADIX_WARPS], winner_digit,
+      winner_above;
   const int t = blockIdx.x;
   int seq;
   const int pos = q4_pos_of(l, pg, t, seq);
@@ -933,7 +688,7 @@ __global__ void q4_qsa_topk_kernel(const float *__restrict__ scores,
     s_remaining = topk;
   }
   for (int shift = 24; shift >= 0; shift -= 8) {
-    for (int i = threadIdx.x; i < 256; i += blockDim.x) {
+    for (int i = threadIdx.x; i < Q4_QSA_RADIX_BINS; i += blockDim.x) {
       hist[i] = 0u;
     }
     __syncthreads();
@@ -942,23 +697,42 @@ __global__ void q4_qsa_topk_kernel(const float *__restrict__ scores,
     for (int j = threadIdx.x; j < nb; j += blockDim.x) {
       const unsigned int key = q4_ordered(row[j]);
       if ((key & mask) == prefix) {
-        atomicAdd(&hist[(key >> shift) & 255u], 1u);
+        atomicAdd(&hist[(key >> shift) & Q4_QSA_RADIX_MASK], 1u);
+      }
+    }
+    __syncthreads();
+    unsigned int inclusive = 0, count = 0;
+    if (threadIdx.x < Q4_QSA_RADIX_BINS) {
+      count = hist[Q4_QSA_RADIX_MASK - threadIdx.x];
+      inclusive = count;
+      const int lane = threadIdx.x & 31;
+      for (int offset = 1; offset < 32; offset *= 2) {
+        const unsigned int value =
+            __shfl_up_sync(0xffffffffu, inclusive, offset);
+        if (lane >= offset) {
+          inclusive += value;
+        }
+      }
+      if (lane == 31) {
+        warp_totals[threadIdx.x / 32] = inclusive;
+      }
+    }
+    __syncthreads();
+    if (threadIdx.x < Q4_QSA_RADIX_BINS) {
+      unsigned int above = inclusive - count;
+      for (int warp = 0; warp < threadIdx.x / 32; ++warp) {
+        above += warp_totals[warp];
+      }
+      if (above < s_remaining && above + count >= s_remaining) {
+        winner_digit = Q4_QSA_RADIX_MASK - threadIdx.x;
+        winner_above = above;
       }
     }
     __syncthreads();
     if (threadIdx.x == 0) {
-      unsigned int remaining = s_remaining;
-      unsigned int above = 0u;
-      int digit = 255;
-      for (; digit > 0; --digit) {
-        if (above + hist[digit] >= remaining) {
-          break;
-        }
-        above += hist[digit];
-      }
-      s_remaining = remaining - above;
-      s_prefix = prefix | ((unsigned int)digit << shift);
-      s_mask = mask | (255u << shift);
+      s_remaining -= winner_above;
+      s_prefix = prefix | (winner_digit << shift);
+      s_mask = mask | ((unsigned int)Q4_QSA_RADIX_MASK << shift);
     }
     __syncthreads();
   }
@@ -986,13 +760,9 @@ __global__ void q4_qsa_topk_kernel(const float *__restrict__ scores,
   }
 }
 
-// Sparse GQA attention of each query over its selected blocks plus the
-// incomplete tail. Grid: (tokens, kv_heads, splits); each split covers a
-// contiguous chunk of the token's item list and writes partial (max, sum, acc)
-// when splits > 1. Head dim is fixed at 256: each lane owns 8 dims.
-// flashinfer_layout: K and V are [blocks, kv_heads, block_size, 256]; otherwise
-// K is [blocks, kv_heads, 256/8, block_size, 8] and V is [blocks, kv_heads,
-// 256, block_size].
+// Splits cover contiguous ranges of selected blocks plus the incomplete tail.
+// FlashInfer caches use [blocks, kv_heads, block_size, head_dim] for both K and V.
+// Otherwise K uses [blocks, kv_heads, head_dim/8, block_size, 8] and V uses [blocks, kv_heads, head_dim, block_size].
 template <typename T>
 __global__ void __launch_bounds__(Q4_ATTN_WARPS * 32) q4_qsa_attention_kernel(
     const T *__restrict__ q, const T *__restrict__ k_cache,
@@ -1232,116 +1002,6 @@ q4_qsa_attention_reduce_kernel(const float *__restrict__ part_acc,
     }                                                                          \
   } while (0)
 
-static inline int q4_row_threads(int hidden) {
-  int threads = 32;
-  while (threads < 512 && threads * 4 < hidden) {
-    threads <<= 1;
-  }
-  return threads;
-}
-
-extern "C" void qwen4_hc_up_mix(const void *lo, const void *up, const void *xn,
-                                void *out, int tokens, int hidden, int rank,
-                                int hc, int format, int dtype, int64_t stream) {
-  const cudaStream_t s = (cudaStream_t)stream;
-  const dim3 grid((hidden + Q4_HC_THREADS / Q4_HC_WARP_SIZE - 1) /
-                      (Q4_HC_THREADS / Q4_HC_WARP_SIZE), tokens);
-#define Q4_HC_UP(FORMAT)                                                        \
-  q4_hc_up_mix_kernel<scalar_t, FORMAT><<<grid, Q4_HC_THREADS, 0, s>>>(            \
-      (const scalar_t *)lo, up, (const scalar_t *)xn, (scalar_t *)out, hidden,    \
-      rank, hc)
-  Q4_DISPATCH_HALF(dtype, {
-    if (format == 3) {
-      Q4_HC_UP(3);
-    } else if (format == 2) {
-      Q4_HC_UP(2);
-    } else if (format == 1) {
-      Q4_HC_UP(1);
-    } else {
-      Q4_HC_UP(0);
-    }
-  });
-#undef Q4_HC_UP
-}
-
-extern "C" void qwen4_hc_quant_up_mix(const void *lo, const void *up,
-                                      const void *xn, void *scratch, void *out,
-                                      int format, int dtype, int64_t stream) {
-  const cudaStream_t s =
-      static_cast<cudaStream_t>(reinterpret_cast<void *>(stream));
-  auto *quantized = static_cast<Q4HcQ8Input *>(scratch);
-  const int blocks =
-      (Q4_HC_RANK + Q4_HC_QUANT_THREADS - 1) / Q4_HC_QUANT_THREADS;
-  const int output_blocks = Q4_HC_HIDDEN / (Q4_HC_THREADS / Q4_HC_WARP_SIZE);
-  Q4_DISPATCH_HALF(dtype, {
-    q4_hc_quantize_kernel<scalar_t><<<blocks, Q4_HC_QUANT_THREADS, 0, s>>>(
-        static_cast<const scalar_t *>(lo), quantized);
-    if (format == 2) {
-      q4_hc_quant_up_mix_kernel<scalar_t, 2>
-          <<<output_blocks, Q4_HC_THREADS, 0, s>>>(
-              quantized, up, static_cast<const scalar_t *>(xn),
-              static_cast<scalar_t *>(out));
-    } else {
-      q4_hc_quant_up_mix_kernel<scalar_t, 3>
-          <<<output_blocks, Q4_HC_THREADS, 0, s>>>(
-              quantized, up, static_cast<const scalar_t *>(xn),
-              static_cast<scalar_t *>(out));
-    }
-  });
-}
-
-extern "C" void qwen4_hc_silu(const void *input, void *output, size_t elements,
-                              int hc, int dtype, int64_t stream) {
-  const int threads = 256;
-  Q4_DISPATCH(dtype, q4_hc_silu_kernel<scalar_t>
-              <<<(elements + threads - 1) / threads, threads, 0, (cudaStream_t)stream>>>(
-                  (const scalar_t *)input, (scalar_t *)output, elements, hc));
-}
-
-extern "C" void qwen4_hc_norm(const void *x, const float *weight, void *out,
-                              int rows, int hc, int hidden, float eps,
-                              int dtype, int64_t stream) {
-  if (rows == 0) {
-    return;
-  }
-  const cudaStream_t s = (cudaStream_t)stream;
-  Q4_DISPATCH(dtype, q4_hc_norm_kernel<scalar_t>
-              <<<rows, q4_row_threads(hidden), 0, s>>>((const scalar_t *)x,
-                                                       weight, (scalar_t *)out,
-                                                       hc, hidden, eps));
-}
-
-extern "C" void qwen4_hc_mix(const void *xn, const void *gate, void *out,
-                             int tokens, int hc, int hidden, int dtype,
-                             int64_t stream) {
-  const size_t total = (size_t)tokens * hidden;
-  if (total == 0) {
-    return;
-  }
-  const cudaStream_t s = (cudaStream_t)stream;
-  const int threads = 256;
-  const unsigned int blocks = (total + threads - 1) / threads;
-  Q4_DISPATCH(dtype, q4_hc_mix_kernel<scalar_t><<<blocks, threads, 0, s>>>(
-                         (const scalar_t *)xn, (const scalar_t *)gate,
-                         (scalar_t *)out, total, hc, hidden));
-}
-
-extern "C" void qwen4_hc_combine(const void *res, const void *block_out,
-                                 const void *inject, void *res_out,
-                                 const float *next_weight, void *xn_out,
-                                 int rows, int hc, int hidden, float eps,
-                                 int dtype, int64_t stream) {
-  if (rows == 0) {
-    return;
-  }
-  const cudaStream_t s = (cudaStream_t)stream;
-  Q4_DISPATCH(dtype, q4_hc_combine_kernel<scalar_t>
-              <<<rows, q4_row_threads(hidden), 0, s>>>(
-                  (const scalar_t *)res, (const scalar_t *)block_out,
-                  (const scalar_t *)inject, (scalar_t *)res_out, next_weight,
-                  (scalar_t *)xn_out, hc, hidden, eps));
-}
-
 extern "C" void qwen4_ple_hash(const unsigned int *tokens, Q4Tokens layout,
                                const float *hist_pool,
                                const unsigned int *slots, int hist_len,
@@ -1498,18 +1158,30 @@ extern "C" void qwen4_qsa_select(const void *q, const void *block_keys,
   }
   const cudaStream_t s = (cudaStream_t)stream;
   if (score_stride > topk) {
-    const int threads = 128;
-    const dim3 grid((score_stride + threads - 1) / threads, layout.n_tokens);
-    Q4_DISPATCH_HALF(
-        dtype, q4_qsa_score_kernel<scalar_t><<<grid, threads, 0, s>>>(
-                   (const scalar_t *)q, (const scalar_t *)block_keys, layout,
-                   paged, scores, score_stride, n_heads, ratio, topk, key_dim));
+    const int threads = Q4_QSA_SCORE_THREADS;
+    if (layout.n_tokens == 1 && key_dim % 2 == 0 &&
+        reinterpret_cast<uintptr_t>(block_keys) % alignof(unsigned int) == 0) {
+      const dim3 grid((score_stride + Q4_QSA_SCORE_KEYS - 1) /
+                          Q4_QSA_SCORE_KEYS,
+                      layout.n_tokens);
+      Q4_DISPATCH_HALF(dtype, q4_qsa_score_staged_kernel<scalar_t>
+                       <<<grid, threads, 0, s>>>(
+                           (const scalar_t *)q, (const scalar_t *)block_keys,
+                           layout, paged, scores, score_stride, n_heads, ratio,
+                           topk, key_dim));
+    } else {
+      const dim3 grid((score_stride + threads - 1) / threads, layout.n_tokens);
+      Q4_DISPATCH_HALF(dtype,
+                       q4_qsa_score_kernel<scalar_t><<<grid, threads, 0, s>>>(
+                           (const scalar_t *)q, (const scalar_t *)block_keys,
+                           layout, paged, scores, score_stride, n_heads, ratio,
+                           topk, key_dim));
+    }
   }
   q4_qsa_topk_kernel<<<layout.n_tokens, 1024, 0, s>>>(
       scores, score_stride, layout, paged, ratio, topk, selected, n_selected);
 }
 
-// Top-k over scores produced elsewhere (the cuTile scoring kernel).
 extern "C" void qwen4_qsa_topk(const float *scores, int score_stride,
                                Q4Tokens layout, Q4Paged paged, int ratio,
                                int topk, int *selected, int *n_selected,

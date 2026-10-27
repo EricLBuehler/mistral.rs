@@ -387,6 +387,10 @@ impl QuantMethod for RuntimeOutputLinear {
         Ok(Self::wrap(inner, Some(self.runtime_to_canonical.clone())))
     }
 
+    fn unquant_forward_weight(&self) -> Option<Tensor> {
+        self.inner.unquant_forward_weight()
+    }
+
     fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
         let (weight, bias) = self.inner.unquant_weight_bias()?;
         let weight = select_rows(&weight, &self.canonical_to_runtime).ok()?;
@@ -436,6 +440,32 @@ enum PackedWeightKind {
     },
 }
 
+fn pack_dense_weights(parts: Vec<(Tensor, Option<Arc<[usize]>>)>) -> Result<PackedWeights> {
+    let rows = parts
+        .iter()
+        .map(|(part, _)| part.dim(0))
+        .collect::<Result<Vec<_>>>()?;
+    let packed_weight = Tensor::cat(&parts.iter().map(|(part, _)| part).collect::<Vec<_>>(), 0)?;
+    let packed = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+        Linear::new(packed_weight.clone(), None),
+    ))?) as Arc<dyn QuantMethod>;
+    let mut constituents = Vec::with_capacity(parts.len());
+    let mut offset = 0;
+    for (&rows, (_, output_map)) in rows.iter().zip(parts) {
+        let weight = packed_weight.narrow(0, offset, rows)?;
+        let weight = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+            Linear::new(weight, None),
+        ))?) as Arc<dyn QuantMethod>;
+        constituents.push(RuntimeOutputLinear::wrap(weight, output_map));
+        offset += rows;
+    }
+    Ok(PackedWeights {
+        packed,
+        constituents,
+        rows,
+    })
+}
+
 fn load_packed_weights(
     in_dim: usize,
     out_dims: &[usize],
@@ -459,11 +489,54 @@ fn load_packed_weights(
     }
 
     let builders = names.iter().map(|name| vb.pp(name)).collect::<Vec<_>>();
+    if builders.iter().any(should_apply_immediate_isq) {
+        return Ok(None);
+    }
     if builders
         .iter()
-        .any(|builder| should_apply_immediate_isq(builder) || builder.weight_source().is_some())
+        .any(|builder| builder.weight_source().is_some())
     {
-        return Ok(None);
+        for builder in &builders {
+            let Some(source) = builder.weight_source() else {
+                return Ok(None);
+            };
+            if !source.supports_dense_packing(&builder.prefix())? {
+                return Ok(None);
+            }
+        }
+        let mut parts: Vec<(Tensor, Option<Arc<[usize]>>)> = Vec::with_capacity(builders.len());
+        for (((builder, &out_dim), &shard), layout) in builders
+            .iter()
+            .zip(out_dims)
+            .zip(shards)
+            .zip(output_layouts)
+        {
+            let Some(layer) = load_weight_source_linear_shard(shard, builder)? else {
+                return Ok(None);
+            };
+            let Some((weight, None)) = layer.unquant_weight_bias() else {
+                return Ok(None);
+            };
+            let output_map = layout.local_runtime_to_canonical(out_dim, shard)?;
+            let expected_rows = match shard {
+                Shard::Simple { world_size, .. } => out_dim / world_size,
+                Shard::Offset { len, .. } => len,
+            };
+            if weight.dims() != [expected_rows, in_dim]
+                || !matches!(weight.dtype(), DType::BF16 | DType::F16 | DType::F32)
+                || parts.first().is_some_and(|(first, _)| {
+                    first.dtype() != weight.dtype() || !first.device().same_device(weight.device())
+                })
+            {
+                return Ok(None);
+            }
+            let weight = match &output_map {
+                Some(output_map) => select_rows(&weight, output_map)?,
+                None => weight,
+            };
+            parts.push((weight, output_map));
+        }
+        return pack_dense_weights(parts).map(Some);
     }
     if let Some(
         config @ (QuantizedConfig::ModelOpt { .. } | QuantizedConfig::CompressedTensors { .. }),
@@ -599,30 +672,7 @@ fn load_packed_weights(
                     Ok((weight, output_map))
                 })
                 .collect::<Result<Vec<_>>>()?;
-            let rows = parts
-                .iter()
-                .map(|(part, _)| part.dim(0))
-                .collect::<Result<Vec<_>>>()?;
-            let packed_weight =
-                Tensor::cat(&parts.iter().map(|(part, _)| part).collect::<Vec<_>>(), 0)?;
-            let packed = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                Linear::new(packed_weight.clone(), None),
-            ))?) as Arc<dyn QuantMethod>;
-            let mut constituents = Vec::with_capacity(parts.len());
-            let mut offset = 0;
-            for (&rows, (_, output_map)) in rows.iter().zip(parts) {
-                let weight = packed_weight.narrow(0, offset, rows)?;
-                let weight = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                    Linear::new(weight, None),
-                ))?) as Arc<dyn QuantMethod>;
-                constituents.push(RuntimeOutputLinear::wrap(weight, output_map));
-                offset += rows;
-            }
-            Ok(Some(PackedWeights {
-                packed,
-                constituents,
-                rows,
-            }))
+            pack_dense_weights(parts).map(Some)
         }
         PackedWeightKind::BlockwiseFp8 {
             block_size,
@@ -1160,6 +1210,14 @@ impl QuantMethod for RowParallelLayer {
 
     fn quantized_act_type(&self) -> Option<candle_core::DType> {
         self.weight.quantized_act_type()
+    }
+
+    fn unquant_forward_weight(&self) -> Option<Tensor> {
+        if self.all_reduce.is_noop() {
+            self.weight.unquant_forward_weight()
+        } else {
+            None
+        }
     }
 
     fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
@@ -1837,6 +1895,10 @@ impl QuantMethod for ColumnParallelLayer {
         self.weight.quantized_act_type()
     }
 
+    fn unquant_forward_weight(&self) -> Option<Tensor> {
+        self.weight.unquant_forward_weight()
+    }
+
     fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
         self.weight.unquant_weight_bias()
     }
@@ -2390,6 +2452,10 @@ impl QuantMethod for ReplicatedLayer {
 
     fn quantized_act_type(&self) -> Option<candle_core::DType> {
         self.0.quantized_act_type()
+    }
+
+    fn unquant_forward_weight(&self) -> Option<Tensor> {
+        self.0.unquant_forward_weight()
     }
 
     fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
@@ -3623,6 +3689,177 @@ mod tests {
         Ok(())
     }
 
+    struct DensePackingSource {
+        weights: HashMap<String, Tensor>,
+        denied: Option<String>,
+        loads: AtomicUsize,
+    }
+
+    impl QuantizedWeightSource for DensePackingSource {
+        fn contains(&self, name: &str) -> bool {
+            self.weights.contains_key(name.trim_end_matches(".weight"))
+        }
+        fn supports_dense_packing(&self, key: &str) -> candle_core::Result<bool> {
+            Ok(self.weights.contains_key(key) && self.denied.as_deref() != Some(key))
+        }
+        fn load_linear(
+            &self,
+            key: &str,
+            device: &Device,
+            shard: Shard,
+        ) -> candle_core::Result<Option<Arc<dyn QuantMethod>>> {
+            let Some(weight) = self.weights.get(key) else {
+                return Ok(None);
+            };
+            self.loads
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let weight = shard.apply_to(weight)?.to_device(device)?;
+            Ok(Some(Arc::new(UnquantLinear::new(
+                QuantMethodConfig::Unquantized(candle_nn::Linear::new(weight, None)),
+            )?)))
+        }
+        fn load_optional_tensor(&self, _: &str, _: &Device) -> candle_core::Result<Option<Tensor>> {
+            Ok(None)
+        }
+        fn shard_alignment(&self, _: &str) -> candle_core::Result<usize> {
+            Ok(1)
+        }
+        fn pack_factor(&self, _: DType) -> candle_core::Result<usize> {
+            Ok(1)
+        }
+        fn pack_factor_for(&self, _: &str, _: DType) -> candle_core::Result<Option<usize>> {
+            Ok(Some(1))
+        }
+    }
+
+    #[test]
+    fn packed_dense_sources_preserve_dtype_shards_and_output_layouts() -> candle_core::Result<()> {
+        let device = Device::Cpu;
+        let comm = Arc::new(Comm::from_device(Id::new(), &device, 1, 2)?);
+        let shards = [
+            Shard::Simple {
+                dim: 0,
+                rank: 1,
+                world_size: 2,
+            },
+            Shard::Offset {
+                dim: 0,
+                offset: 0,
+                len: 2,
+            },
+        ];
+        let layouts = [
+            PackedOutputLayout::from_runtime_to_canonical(vec![1, 0, 3, 2])?,
+            PackedOutputLayout::identity(6),
+        ];
+        for dtype in [DType::F32, DType::F16, DType::BF16] {
+            let source = Arc::new(DensePackingSource {
+                weights: [("left", 4usize), ("right", 6)]
+                    .into_iter()
+                    .map(|(key, rows)| {
+                        Ok((
+                            key.to_owned(),
+                            Tensor::from_vec(
+                                (0..rows * 4)
+                                    .map(|i| i as f32 / 8.0 + 0.10001)
+                                    .collect::<Vec<_>>(),
+                                (rows, 4),
+                                &device,
+                            )?
+                            .to_dtype(dtype)?,
+                        ))
+                    })
+                    .collect::<candle_core::Result<HashMap<_, _>>>()?,
+                denied: None,
+                loads: AtomicUsize::new(0),
+            });
+            let vb = ShardedSafeTensors::wrap(
+                HashMap::<String, Tensor>::new(),
+                DType::BF16,
+                device.clone(),
+            )
+            .with_weight_source(source.clone());
+            let config = Some(QuantizedConfig::GptqAwq {
+                bits: 4,
+                group_size: 128,
+                checkpoint_format: None,
+                is_awq: true,
+            });
+            let group = ColumnParallelLayer::new_packed_with_output_layouts(
+                4,
+                &[4, 6],
+                &["left", "right"],
+                &layouts,
+                &config,
+                false,
+                &comm,
+                Some(&shards),
+                vb,
+            )?
+            .expect("source-backed dense group");
+            assert_eq!(group.rows_per_rank, [2, 2]);
+            let packed = group.packed.unquant_weight_bias().unwrap().0;
+            assert_eq!(packed.dtype(), dtype);
+            let expected = Tensor::cat(
+                &[
+                    source.weights["left"].narrow(0, 3, 1)?,
+                    source.weights["left"].narrow(0, 2, 1)?,
+                    source.weights["right"].narrow(0, 0, 2)?,
+                ],
+                0,
+            )?;
+            assert_eq!(
+                packed.to_dtype(DType::F32)?.to_vec2::<f32>()?,
+                expected.to_dtype(DType::F32)?.to_vec2::<f32>()?
+            );
+            assert_eq!(
+                group.constituents[0]
+                    .dequantize_w()?
+                    .to_dtype(DType::F32)?
+                    .to_vec2::<f32>()?,
+                source.weights["left"]
+                    .narrow(0, 2, 2)?
+                    .to_dtype(DType::F32)?
+                    .to_vec2::<f32>()?
+            );
+            assert_eq!(source.loads.load(std::sync::atomic::Ordering::Relaxed), 2);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn packed_dense_source_declines_before_loading_unsupported_member() -> candle_core::Result<()> {
+        let source = Arc::new(DensePackingSource {
+            weights: [
+                (
+                    "left".into(),
+                    Tensor::ones((4, 4), DType::F32, &Device::Cpu)?,
+                ),
+                (
+                    "right".into(),
+                    Tensor::ones((4, 4), DType::F32, &Device::Cpu)?,
+                ),
+            ]
+            .into(),
+            denied: Some("right".into()),
+            loads: AtomicUsize::new(0),
+        });
+        let vb =
+            ShardedSafeTensors::wrap(HashMap::<String, Tensor>::new(), DType::F32, Device::Cpu)
+                .with_weight_source(source.clone());
+        let specs = [
+            LoraLinearSpec::replicated(4, 4),
+            LoraLinearSpec::replicated(4, 4),
+        ];
+        for names in [["left", "right"], ["left", "missing"]] {
+            assert!(
+                ReplicatedLayer::new_packed(&specs, &names, &None, false, vb.clone())?.is_none()
+            );
+        }
+        assert_eq!(source.loads.load(std::sync::atomic::Ordering::Relaxed), 0);
+        Ok(())
+    }
+
     #[test]
     fn packed_column_shards_each_projection_before_concatenating() -> candle_core::Result<()> {
         let device = Device::Cpu;
@@ -4281,5 +4518,80 @@ mod tests {
     fn tp_head_layout_rejects_replicated_kv_remainder() {
         let err = validate_tp_head_layout(24, 2, 3).unwrap_err();
         assert!(err.to_string().contains("Tensor parallel size (3)"));
+    }
+    #[cfg(feature = "cuda")]
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn mixed_pair_preserves_runtime_output_layout() -> candle_core::Result<()> {
+        use candle_core::quantized::{GgmlDType, QTensor};
+        const COLUMNS: usize = 512;
+        const QUANT_ROWS: usize = 64;
+        const DENSE_ROWS: usize = 4;
+        const OUTPUT_MAP: [usize; DENSE_ROWS] = [2, 0, 3, 1];
+        let device = Device::new_cuda_with_stream(0)?;
+        let q_source = Tensor::from_vec(
+            (0..QUANT_ROWS * COLUMNS)
+                .map(|i| (i % 97) as f32 / 512.0)
+                .collect(),
+            (QUANT_ROWS, COLUMNS),
+            &Device::Cpu,
+        )?;
+        let quant = crate::GgufMatMul::new(QuantMethodConfig::Gguf {
+            q_weight: Arc::new(QTensor::quantize_onto(&q_source, GgmlDType::Q4K, &device)?),
+            b: None,
+        })?;
+        let layout = PackedOutputLayout::from_runtime_to_canonical(OUTPUT_MAP.to_vec())?;
+        let output_map = layout.local_runtime_to_canonical(
+            DENSE_ROWS,
+            Shard::Simple {
+                dim: 0,
+                rank: 0,
+                world_size: 1,
+            },
+        )?;
+        for dtype in [DType::BF16, DType::F16, DType::F32] {
+            let canonical = Tensor::from_vec(
+                (0..DENSE_ROWS * COLUMNS)
+                    .map(|i| (i / COLUMNS + 1) as f32 / 128.0)
+                    .collect(),
+                (DENSE_ROWS, COLUMNS),
+                &device,
+            )?
+            .to_dtype(dtype)?;
+            let runtime = super::select_rows(&canonical, &OUTPUT_MAP)?;
+            let dense = super::RuntimeOutputLinear::wrap(
+                Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+                    candle_nn::Linear::new(runtime.clone(), None),
+                ))?),
+                output_map.clone(),
+            );
+            assert_eq!(
+                dense
+                    .unquant_weight_bias()
+                    .unwrap()
+                    .0
+                    .to_dtype(DType::F32)?
+                    .to_vec2::<f32>()?,
+                canonical.to_dtype(DType::F32)?.to_vec2::<f32>()?,
+            );
+            assert_eq!(
+                dense
+                    .unquant_forward_weight()
+                    .unwrap()
+                    .to_dtype(DType::F32)?
+                    .to_vec2::<f32>()?,
+                runtime.to_dtype(DType::F32)?.to_vec2::<f32>()?,
+            );
+            let input = Tensor::ones((1, COLUMNS), dtype, &device)?;
+            let expected = dense
+                .forward(&input)?
+                .to_dtype(DType::F32)?
+                .to_vec2::<f32>()?;
+            let forward = crate::try_fused_quantized_pair(&input, &quant, dense.as_ref())?.unwrap();
+            let reverse = crate::try_fused_quantized_pair(&input, dense.as_ref(), &quant)?.unwrap();
+            assert_eq!(forward.1.to_dtype(DType::F32)?.to_vec2::<f32>()?, expected);
+            assert_eq!(reverse.0.to_dtype(DType::F32)?.to_vec2::<f32>()?, expected);
+        }
+        Ok(())
     }
 }

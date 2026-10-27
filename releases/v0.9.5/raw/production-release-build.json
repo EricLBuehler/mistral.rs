@@ -1,0 +1,14 @@
+{
+  "command": [
+    "cargo",
+    "build",
+    "--release",
+    "-p",
+    "mistralrs-cli",
+    "--features",
+    "cuda,flash-attn,cutile",
+    "-j10"
+  ],
+  "exit_code": 101,
+  "seconds": 1408.0033383369446
+}

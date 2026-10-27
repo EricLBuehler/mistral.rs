@@ -222,6 +222,10 @@ impl QuantMethod for DynamicLoraLinear {
         )))
     }
 
+    fn unquant_forward_weight(&self) -> Option<Tensor> {
+        self.base.unquant_forward_weight()
+    }
+
     fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
         self.base.unquant_weight_bias()
     }

@@ -1,0 +1,3 @@
+{"test":"topk_changed_graph_inputs","cases":490,"status":"pass"}
+{"test":"score_bitwise_graph_replay","dtype":"bf16","cases":378,"status":"pass"}
+{"test":"score_bitwise_graph_replay","dtype":"f16","cases":378,"status":"pass"}

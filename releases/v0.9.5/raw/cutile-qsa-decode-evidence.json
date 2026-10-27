@@ -1,0 +1,230 @@
+{
+  "status": "Integrated in the validated release and completed24-request same-GGUF canonical sweep; applicable repository tests passed. Standalone timings retain their prototype scope and do not isolate complete-model gains.",
+  "implementation": {
+    "files": [
+      "mistralrs-quant/src/cutile/qsa_decode.rs",
+      "mistralrs-quant/src/cutile/qsa_decode_tests.rs",
+      "mistralrs-quant/kernels/ops/sparse_attention_reduce.cu",
+      "mistralrs-quant/src/cutile/qsa.rs",
+      "mistralrs-core/src/cuda/qwen4_exp.rs"
+    ],
+    "algorithm": "Split-K cuTile QK/PV with FP32 softmax/statistics and FP32 partials/reduction; probability uses three original-dtype components before PV MMA. Shared BF16/F16 implementation, head dimensions128/256, grouped heads1..16, live device context lengths, dense or sparse selection with incomplete tail, rectangular multiquery/multisequence support. SM-count-derived split size, no model-specific dimensions.",
+    "capability_fallbacks": "Existing CUDA attention handles unsupported dtype/layout/geometry, misaligned contiguous views, signed-i32 address overflow or f32 scalar inexactness. Startup warms both dtypes and head dimensions using shared architecture registration.",
+    "rounding": "No added Q/K/V quantization or conversion. Reduction order differs from scalar CUDA; tests compare against independent higher-precision reference."
+  },
+  "methodology": {
+    "timing": "Medians of3 rounds, CUDA graph replay includes both attention and partial reduction for baseline and candidate.",
+    "cold": "Rotating shuffled physical KV banks totaling at least128MiB of actually visited K/V, greater than24MiB L2.",
+    "supersedes": "Initial benchmark used allocated rather than visited KV pool size; corrected v2 logs are the canonical standalone timing evidence.",
+    "production_difference": "Prototype variants use fixed split sizes and integer dynamic arguments; production derives split sizes from SM count and passes graph-varying integers as exact f32 values to avoid new JIT divisibility specializations. Production kernel verification remains required."
+  },
+  "timings": [
+    {
+      "dtype": "bf16",
+      "case": 0,
+      "cold_rotating": false,
+      "baseline_us": 27.45288,
+      "candidate_us": 9.72704,
+      "speedup": 2.8223262164029346,
+      "rounds": 3,
+      "selected_prototype_version": 3
+    },
+    {
+      "dtype": "bf16",
+      "case": 0,
+      "cold_rotating": true,
+      "baseline_us": 33.07804,
+      "candidate_us": 15.65799,
+      "speedup": 2.1125342397076508,
+      "rounds": 3,
+      "selected_prototype_version": 3
+    },
+    {
+      "dtype": "bf16",
+      "case": 1,
+      "cold_rotating": false,
+      "baseline_us": 42.75336,
+      "candidate_us": 14.2148,
+      "speedup": 3.0076652503025016,
+      "rounds": 3,
+      "selected_prototype_version": 6
+    },
+    {
+      "dtype": "bf16",
+      "case": 1,
+      "cold_rotating": true,
+      "baseline_us": 49.99778,
+      "candidate_us": 29.8405,
+      "speedup": 1.6755007456309379,
+      "rounds": 3,
+      "selected_prototype_version": 6
+    },
+    {
+      "dtype": "bf16",
+      "case": 2,
+      "cold_rotating": false,
+      "baseline_us": 42.37984,
+      "candidate_us": 14.29056,
+      "speedup": 2.9655828742890415,
+      "rounds": 3,
+      "selected_prototype_version": 6
+    },
+    {
+      "dtype": "bf16",
+      "case": 2,
+      "cold_rotating": true,
+      "baseline_us": 49.9632,
+      "candidate_us": 30.01236,
+      "speedup": 1.6647541213020236,
+      "rounds": 3,
+      "selected_prototype_version": 6
+    },
+    {
+      "dtype": "bf16",
+      "case": 3,
+      "cold_rotating": false,
+      "baseline_us": 34.20336,
+      "candidate_us": 14.2128,
+      "speedup": 2.4065180682201963,
+      "rounds": 3,
+      "selected_prototype_version": 6
+    },
+    {
+      "dtype": "bf16",
+      "case": 3,
+      "cold_rotating": true,
+      "baseline_us": 41.53316,
+      "candidate_us": 29.37502,
+      "speedup": 1.4138938458595094,
+      "rounds": 3,
+      "selected_prototype_version": 6
+    },
+    {
+      "dtype": "f16",
+      "case": 0,
+      "cold_rotating": false,
+      "baseline_us": 27.49632,
+      "candidate_us": 8.584,
+      "speedup": 3.2032059645852753,
+      "rounds": 3,
+      "selected_prototype_version": 3
+    },
+    {
+      "dtype": "f16",
+      "case": 0,
+      "cold_rotating": true,
+      "baseline_us": 33.10363,
+      "candidate_us": 15.14971,
+      "speedup": 2.1850999128036115,
+      "rounds": 3,
+      "selected_prototype_version": 3
+    },
+    {
+      "dtype": "f16",
+      "case": 1,
+      "cold_rotating": false,
+      "baseline_us": 42.938,
+      "candidate_us": 12.02848,
+      "speedup": 3.5696945915028335,
+      "rounds": 3,
+      "selected_prototype_version": 6
+    },
+    {
+      "dtype": "f16",
+      "case": 1,
+      "cold_rotating": true,
+      "baseline_us": 49.93886,
+      "candidate_us": 28.90788,
+      "speedup": 1.727517202921833,
+      "rounds": 3,
+      "selected_prototype_version": 6
+    },
+    {
+      "dtype": "f16",
+      "case": 2,
+      "cold_rotating": false,
+      "baseline_us": 42.43376,
+      "candidate_us": 12.27464,
+      "speedup": 3.4570268455938424,
+      "rounds": 3,
+      "selected_prototype_version": 6
+    },
+    {
+      "dtype": "f16",
+      "case": 2,
+      "cold_rotating": true,
+      "baseline_us": 49.5487,
+      "candidate_us": 29.19452,
+      "speedup": 1.6971918017490952,
+      "rounds": 3,
+      "selected_prototype_version": 6
+    },
+    {
+      "dtype": "f16",
+      "case": 3,
+      "cold_rotating": false,
+      "baseline_us": 34.16792,
+      "candidate_us": 12.0472,
+      "speedup": 2.836171060495385,
+      "rounds": 3,
+      "selected_prototype_version": 6
+    },
+    {
+      "dtype": "f16",
+      "case": 3,
+      "cold_rotating": true,
+      "baseline_us": 41.58886,
+      "candidate_us": 28.07836,
+      "speedup": 1.4811712649884108,
+      "rounds": 3,
+      "selected_prototype_version": 6
+    }
+  ],
+  "prototype_correctness": {
+    "bf16": {
+      "cases": 216,
+      "max_absolute_error": 0.0026581287,
+      "max_relative_rms": 0.0018763707094426978,
+      "reference": "independent CPU F64 attention, original input dtype values, all six prototype variants"
+    },
+    "f16": {
+      "cases": 216,
+      "max_absolute_error": 0.00033646822,
+      "max_relative_rms": 0.00023441478424422938,
+      "reference": "independent CPU F64 attention, original input dtype values, all six prototype variants"
+    }
+  },
+  "repository_tests": [
+    "qsa_decode_graph_tracks_metadata_and_matches_independent_attention",
+    "qsa_decode_orders_secondary_stream_inputs_and_preserves_fallbacks",
+    "qsa_decode_index_and_alignment_guards_reject_unsupported_views"
+  ],
+  "evidence": [
+    "cutile-qsa-v2-bf16-bench.log",
+    "cutile-qsa-v2-bf16-check.log",
+    "cutile-qsa-v2-f16-bench.log",
+    "cutile-qsa-v2-f16-check.log"
+  ],
+  "evidence_scope": "Standalone prototype timings; integrated helper differs in scalar specialization and SM-derived split policy. Production tests and combined full-model sweep passed; an isolated serving contribution is not established.",
+  "prototype_artifact_sha256": {
+    "cutile-qsa-host.rs": "c2f673c94ff2d310a397722dcc048e6178e3404e5c2c51b7c42efe2fd550bedb",
+    "cutile-qsa-kernels.rs": "e58be03d14b72a05fd9fbcb69834dbdded3a8bfd6dbe06fb3b40559cd1a15518",
+    "cutile-qsa-control.cu": "5151f0e7fcf1f5a8c9f18614ecf051364517ddf496dce87713786c324019809b",
+    "cutile-qsa-v2-bf16-bench.log": "28a9ac03554cc40a12cc66d164b30ca37d823f3decce5c5df9972fb16a4af67a",
+    "cutile-qsa-v2-f16-bench.log": "7b2f3ad363f176759be6e55311af519f28f00813694740f1dc96aef638d4c855",
+    "cutile-qsa-v2-bf16-check.log": "3a39c33d2357281a2c793c378a78d6bbeb791e85b12182a5f3f226e5e0bb8b95",
+    "cutile-qsa-v2-f16-check.log": "4b905bf3cfd4fa0ee4c53ab782f01663313a4dfecc831366d3809631a912bb2d"
+  },
+  "validated_release_source_sha256": "4ac5bbc7122f69a3391861b0208879e7aa45125ffe94db4b77703cac77c4040c",
+  "validated_release_binary_sha256": "2f66d0a61e4070e86a761fd01b59c98668837f868305e6b838fe1ff2035db23e",
+  "release_validation": "attention-build-validation.json",
+  "full_model_status": {
+    "complete": true,
+    "result": "mrs-attention-8192-serving.json",
+    "prewarm": "mrs-attention-8192-prewarm.json",
+    "requests": 24,
+    "request_errors": 0,
+    "uniform_10_percent_best_llama_decode_lead": false,
+    "comparison": "attention-comparison.json"
+  }
+}

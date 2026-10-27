@@ -1,7 +1,15 @@
 use super::*;
 use candle_core::cuda::cudarc::driver::sys;
-use candle_core::quantized::QStorage;
-use std::borrow::Cow;
+
+const COMPACT_EXPERTS: usize = 65;
+const COMPACT_TOKENS: usize = 129;
+const COMPACT_TOPK: usize = 3;
+const COMPACT_HIDDEN: usize = 768;
+const COMPACT_INTERMEDIATE: usize = 512;
+
+thread_local! {
+    pub(super) static FORCE_REGULAR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
 
 const ASSIGNMENTS: usize = COMPACT_TOKENS * COMPACT_TOPK;
 const ROUTING_STRIDE: usize = 37;
@@ -11,18 +19,10 @@ const CONCENTRATED: usize = 2;
 const MAXIMUM_TILES: usize = 3;
 
 fn weights(device: &Device, dtype: GgmlDType, rows: usize, cols: usize) -> Result<QTensor> {
-    let blocks_per_expert = rows * cols / dtype.block_size();
-    let mut bytes = vec![0x5a; COMPACT_EXPERTS * blocks_per_expert * dtype.type_size()];
-    let scale = half::f16::from_f32(0.002).to_bits().to_le_bytes();
-    let minimum = half::f16::from_f32(0.001).to_bits().to_le_bytes();
-    for (index, block) in bytes.chunks_exact_mut(dtype.type_size()).enumerate() {
-        block[..2].copy_from_slice(&scale);
-        block[2..4].copy_from_slice(&minimum);
-        block[4] = (index / blocks_per_expert + index) as u8;
-    }
-    QTensor::new(
-        QStorage::from_data(Cow::Owned(bytes), device, dtype)?,
-        (COMPACT_EXPERTS, rows, cols),
+    QTensor::quantize_onto(
+        &tests::patterned((COMPACT_EXPERTS, rows, cols), 29, 0.03)?,
+        dtype,
+        device,
     )
 }
 
@@ -32,7 +32,10 @@ fn routing(mode: usize) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
         let larger_experts = (ASSIGNMENTS - COMPACT_EXPERTS) / COMPACT_COLUMNS;
         let mut assignment = 0;
         for (expert, routes) in experts.iter_mut().enumerate() {
-            let count = 1 + usize::from(expert < larger_experts) * COMPACT_COLUMNS;
+            let remainder = (ASSIGNMENTS - COMPACT_EXPERTS) % COMPACT_COLUMNS;
+            let count = 1
+                + usize::from(expert < larger_experts) * COMPACT_COLUMNS
+                + usize::from(expert == larger_experts) * remainder;
             for _ in 0..count {
                 let token = assignment % COMPACT_TOKENS;
                 let slot = assignment / COMPACT_TOKENS;
@@ -79,7 +82,7 @@ fn routing(mode: usize) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
 }
 
 #[test]
-#[ignore = "requires an SM121 CUDA device and 2 GiB of memory"]
+#[ignore = "requires an SM121 CUDA device"]
 fn compact_mmq_graph_replay_rebuilds_routing_and_reuses_workspace() -> Result<()> {
     let device = Device::new_cuda_with_stream(0)?;
     let cuda = device.as_cuda_device()?;
@@ -88,6 +91,11 @@ fn compact_mmq_graph_replay_rebuilds_routing_and_reuses_workspace() -> Result<()
     }
     let _htod_cache_guard = cuda.enable_cuda_graph_htod_cache();
     for dtype in [
+        GgmlDType::Q4_0,
+        GgmlDType::Q5_0,
+        GgmlDType::Q2K,
+        GgmlDType::Q3K,
+        GgmlDType::Q6K,
         GgmlDType::Q4K,
         GgmlDType::Q5K,
         GgmlDType::Q4_1,
@@ -176,7 +184,7 @@ fn compact_mmq_graph_replay_rebuilds_routing_and_reuses_workspace() -> Result<()
             cuda.memcpy_htod(&routes.2, &mut bounds)?;
             graph.launch().map_err(candle_core::Error::msg)?;
             device.synchronize()?;
-            // A larger safe column bound selects the original kernel without changing the routes.
+            FORCE_REGULAR.with(|flag| flag.set(true));
             let reference = if paired {
                 grouped(
                     &weight,
@@ -203,6 +211,7 @@ fn compact_mmq_graph_replay_rebuilds_routing_and_reuses_workspace() -> Result<()
                     cuda,
                 )?
             };
+            FORCE_REGULAR.with(|flag| flag.set(false));
             if paired {
                 tests::assert_close(&output.narrow(1, 0, rows)?, &reference)?;
                 tests::assert_close(&output.narrow(1, rows, rows)?, &reference)?;
@@ -210,6 +219,45 @@ fn compact_mmq_graph_replay_rebuilds_routing_and_reuses_workspace() -> Result<()
                 tests::assert_close(&output, &reference)?;
             }
         }
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires an SM121 CUDA device"]
+fn compact_mmq_handles_partial_rows_and_multiple_expert_chunks() -> Result<()> {
+    const EXPERTS: usize = 1025;
+    const TOKENS: usize = 17;
+    const ROWS: usize = 129;
+    const COLS: usize = 256;
+    let device = Device::new_cuda(0)?;
+    let cuda = device.as_cuda_device()?;
+    if get_device_info(cuda).cc != COMPACT_CAPABILITY {
+        return Ok(());
+    }
+    let xs = tests::patterned((TOKENS, COLS), 3, 0.2)?.to_device(&device)?;
+    let ids = cuda.clone_htod(&(0..TOKENS as u32).collect::<Vec<_>>())?;
+    let bounds = cuda.clone_htod(
+        &(0..=EXPERTS)
+            .map(|expert| ((expert + 63) / 64).min(TOKENS) as u32)
+            .collect::<Vec<_>>(),
+    )?;
+    for dtype in [GgmlDType::Q4_0, GgmlDType::Q2K] {
+        let weight = QTensor::quantize_onto(
+            &tests::patterned((EXPERTS, ROWS, COLS), 29, 0.03)?,
+            dtype,
+            &device,
+        )?;
+        let project = || {
+            grouped(
+                &weight, &xs, &ids, &ids, &bounds, TOKENS, TOKENS, EXPERTS, cuda,
+            )
+        };
+        let actual = project()?;
+        FORCE_REGULAR.with(|flag| flag.set(true));
+        let reference = project();
+        FORCE_REGULAR.with(|flag| flag.set(false));
+        tests::assert_close(&actual, &reference?)?;
     }
     Ok(())
 }

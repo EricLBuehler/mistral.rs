@@ -1,0 +1,67 @@
+[
+  {
+    "stage": "production-cli-build",
+    "command": [
+      "cargo",
+      "build",
+      "-p",
+      "mistralrs-cli",
+      "--features",
+      "cuda,flash-attn,cutile",
+      "-j6"
+    ],
+    "exit_code": 0,
+    "seconds": 104.39919257164001,
+    "log": "/tmp/qwen38-broad/production-cli-build.log"
+  },
+  {
+    "stage": "production-test-build",
+    "command": [
+      "cargo",
+      "test",
+      "-p",
+      "mistralrs-core",
+      "-p",
+      "mistralrs-quant",
+      "--lib",
+      "--features",
+      "cuda,flash-attn,cutile",
+      "--no-run",
+      "-j6"
+    ],
+    "exit_code": 0,
+    "seconds": 107.3331151008606,
+    "log": "/tmp/qwen38-broad/production-test-build.log"
+  },
+  {
+    "stage": "production-cuda-check",
+    "command": [
+      "cargo",
+      "check",
+      "-p",
+      "mistralrs-cli",
+      "--features",
+      "cuda,flash-attn,cutile",
+      "-j6"
+    ],
+    "exit_code": 0,
+    "seconds": 10.260070562362671,
+    "log": "/tmp/qwen38-broad/production-cuda-check.log"
+  },
+  {
+    "stage": "production-cpu-check",
+    "command": [
+      "cargo",
+      "check",
+      "-p",
+      "mistralrs-core",
+      "-p",
+      "mistralrs-quant",
+      "--no-default-features",
+      "-j6"
+    ],
+    "exit_code": 0,
+    "seconds": 5.877460241317749,
+    "log": "/tmp/qwen38-broad/production-cpu-check.log"
+  }
+]

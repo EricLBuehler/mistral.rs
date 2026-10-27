@@ -144,13 +144,13 @@ impl QuantMethod for UnquantLinear {
         // Batch matrix multiplication
         maybe_init_cublas_lt_wrapper(a.device().clone());
 
+        self.stats.process(a)?;
+
         // Try custom GEMV for single-token decode (batch_size=1)
         #[cfg(feature = "cuda")]
         if crate::gemv::should_use_gemv(a, &self.w) {
             return crate::gemv::gemv(a, &self.w, self.b.as_ref());
         }
-
-        self.stats.process(a)?;
 
         #[cfg(feature = "cuda")]
         if crate::gemv::should_use_wide_gemv(a, &self.w) {
@@ -613,6 +613,10 @@ impl QuantMethod for UnquantLinear {
         Some((self.w.clone(), self.b.clone()))
     }
 
+    fn unquant_forward_weight(&self) -> Option<Tensor> {
+        Some(self.w.clone())
+    }
+
     fn begin_track_stats(&self) -> Result<()> {
         // Stacked [E, out, in] expert weights collect per expert via the routed path.
         if self.w.dims().len() == 3 {
@@ -945,3 +949,6 @@ mod tests {
 
 #[cfg(all(test, feature = "cuda"))]
 mod wide_gemv_tests;
+
+#[cfg(all(test, feature = "cuda"))]
+mod stats_tests;

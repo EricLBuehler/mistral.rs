@@ -12,6 +12,7 @@ mod nvfp4_gemv;
 mod nvfp4_glu;
 mod nvfp4_matmul;
 mod qsa;
+mod qsa_decode;
 mod routed_lora;
 mod split_k;
 mod tune;
@@ -43,6 +44,7 @@ pub use qsa::{
     QsaScoreArgs, QsaWarmShape, QSA_ATTN_HEAD_DIM, QSA_INDEX_DIM, QSA_INDEX_HEADS,
     QSA_SCORE_TOKENS,
 };
+pub use qsa_decode::{try_cutile_qsa_decode, QsaDecodeArgs};
 pub use routed_lora::{
     cached_cutile_routed_lora_config, cutile_routed_lora_candidate_configs,
     selected_cutile_routed_lora_config, set_cutile_routed_lora_tuned_config,

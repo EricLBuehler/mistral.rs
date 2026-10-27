@@ -33,7 +33,6 @@ use crate::{
 };
 
 pub(crate) mod config;
-mod hyper;
 mod mtp;
 mod ple;
 mod qsa;

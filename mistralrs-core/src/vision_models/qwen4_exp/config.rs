@@ -182,6 +182,15 @@ impl PleConfig {
 }
 
 impl TextConfig {
+    pub(crate) fn gated_residual_config(&self) -> crate::layers::GatedResidualConfig {
+        crate::layers::GatedResidualConfig {
+            streams: self.hc_count,
+            hidden: self.hidden_size,
+            rank: self.hc_lowrank,
+            eps: self.rms_norm_eps,
+        }
+    }
+
     pub fn validate(&self) -> candle_core::Result<()> {
         if self.num_hidden_layers == 0 || self.max_position_embeddings == 0 {
             candle_core::bail!("Qwen4-Exp requires at least one layer and a positive context");

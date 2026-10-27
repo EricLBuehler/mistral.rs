@@ -1,0 +1,32 @@
+{
+  "command": [
+    "/home/ericbuehler/mistral.rs/target/release/mistralrs",
+    "serve",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "1234",
+    "--no-ui",
+    "--max-seqs",
+    "1",
+    "--max-model-len",
+    "16384",
+    "--prefix-cache-n",
+    "0",
+    "--max-num-batched-tokens",
+    "8192",
+    "--max-prefill-chunk-tokens",
+    "8192",
+    "--dtype",
+    "bf16",
+    "--kv-cache",
+    "16384tokens",
+    "-m",
+    "Qwen/Qwen3.8-Flash-Next",
+    "-f",
+    "/home/ericbuehler/qwen4exp_work/gguf/UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf;/home/ericbuehler/qwen4exp_work/gguf/UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00002-of-00004.gguf;/home/ericbuehler/qwen4exp_work/gguf/UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00003-of-00004.gguf;/home/ericbuehler/qwen4exp_work/gguf/UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL-00004-of-00004.gguf",
+    "--mmproj",
+    "/home/ericbuehler/qwen4exp_work/gguf/mmproj-BF16.gguf"
+  ],
+  "started": 1793116054.019669
+}

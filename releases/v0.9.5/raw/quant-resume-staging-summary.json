@@ -1,0 +1,94 @@
+{
+  "updated_utc": "2026-10-27T15:40:56.580195+00:00",
+  "status": "Production staging passed coordinated checks/tests and was measured in source464e5a6f; retained in the current measured source. See resumed-build-validation.json and paired-build-validation.json.",
+  "accepted_change": "Cooperative aligned asynchronous staging for cold C1 GGUF expert projections, using existing vecdot/activation/aggregation arithmetic",
+  "production_files": [
+    "mistralrs-quant/kernels/indexed_moe/moe_decode_prefetch.cu",
+    "mistralrs-quant/src/gguf/cuda.rs",
+    "mistralrs-quant/src/gguf/ffi.rs",
+    "mistralrs-quant/src/gguf/moe_sm121_tests.rs"
+  ],
+  "dispatch": {
+    "hardware": "SM121",
+    "tokens": 1,
+    "input_rows": "must equal batch",
+    "bank_bytes": "combined gate+up or down weight bank must exceed queried device L2 cache",
+    "formats": [
+      "Q4_0",
+      "Q4_1",
+      "Q5_0",
+      "Q5_1",
+      "Q8_0",
+      "Q8_1",
+      "Q2K",
+      "Q3K",
+      "Q4K",
+      "Q5K",
+      "Q6K"
+    ],
+    "row_tile": "8 rows for 16/8-byte copies; 16 rows for 4-byte copies",
+    "operand_cap_bytes": 24576,
+    "unsupported": "less than 4-byte alignment or operand footprint above the cap falls back to the existing kernel",
+    "batch2": "retained existing prefetch because staged down projection regressed 4-9% despite numerical correctness"
+  },
+  "actual_geometry_cold_measurements": [
+    {
+      "operation": "Q4K gate640x2560 top10",
+      "baseline_us": 88.265,
+      "staged_us": 81.501
+    },
+    {
+      "operation": "Q5_1 down2560x640 top10",
+      "baseline_us": 56.094,
+      "staged_us": 52.495
+    },
+    {
+      "operation": "Q4_1 down2560x640 top10",
+      "baseline_us": 47.367,
+      "staged_us": 42.704
+    },
+    {
+      "operation": "Q8_0 down2560x640 top10",
+      "baseline_us": 78.112,
+      "staged_us": 73.577
+    }
+  ],
+  "allformat_neighbor_evidence": {
+    "cases": 44,
+    "supported8rowcases": 42,
+    "cold_cases_at_least_parity": 39,
+    "exceptions_resolved": "Q3K gate and Q6K down cases with 4-byte copies use the measured 16-row tile. Larger panels fall back under the 24 KiB per-operand cap. Repeated Q8_1 small-down measurements were neutral."
+  },
+  "numerical_evidence": {
+    "staging_cases": 558,
+    "replays_per_case": 3,
+    "gate_outputs": "bitwise equal F32",
+    "max_down_relative_rms": 5.73457529e-08,
+    "includes": "11 formats, partial rows, changed activation/routing, 4/8/16-byte copies, shape/alignment fallback, batch2 overlap"
+  },
+  "artifacts": [
+    "gguf-moe-staging-first-summary.json",
+    "gguf-moe-staging-allformat-summary.json",
+    "gguf-moe-staging-narrow-copy-summary.json",
+    "gguf-moe-staging-batch2-summary.json"
+  ],
+  "rejected": {
+    "dense_staging": "~1%coldgain with materialhotregressions; no productionchange",
+    "small_long_row_prefetch": "8formatgeometrysweep mixed; no newdispatchguard",
+    "batch2_staging": "downprojection regressions4-9%; keep priorpath"
+  },
+  "hot_tradeoff": "Repeatedly resident selected expert weights show 20-27% down-projection regressions. A bank larger than L2 is a locality prediction, not a guarantee; end-to-end validation is still required.",
+  "new_tests": [
+    "staged_moe_preserves_cache_fitting_and_batched_dispatch",
+    "staged_moe_launches_all_formats_and_rejects_unsupported_geometry",
+    "sm121_staged_moe_large_banks_replay_matches_legacy"
+  ],
+  "source_validation": [
+    "rustfmt passed",
+    "clang-format passed",
+    "git diff --check passed",
+    "Independent read-only review by llama_baseline found no bounds, layout, or lifetime issue",
+    "CUDA/CPU cargo checks, release CLI build and all three added staging tests passed in coordinated validation."
+  ],
+  "end_to_end_gain": "Unmeasured; standalone weighted estimate is approximately 0.5 ms/token, not a claimed serving result."
+}

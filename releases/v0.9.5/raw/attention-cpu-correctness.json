@@ -1,0 +1,26 @@
+[
+  {
+    "command": [
+      "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+      "gguf::archive::tests::",
+      "--test-threads=1"
+    ],
+    "log": "/tmp/qwen38-broad/attention-cpu-gguf-archive-tests.log",
+    "seconds": 0.06094479560852051,
+    "exit_code": 0,
+    "passed": 14,
+    "ignored": 1
+  },
+  {
+    "command": [
+      "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+      "gguf::weight_source::tests::",
+      "--test-threads=1"
+    ],
+    "log": "/tmp/qwen38-broad/attention-cpu-gguf-weight_source-tests.log",
+    "seconds": 0.05152392387390137,
+    "exit_code": 0,
+    "passed": 8,
+    "ignored": 1
+  }
+]

@@ -1,0 +1,1008 @@
+{
+  "source_sha256": "24b72dc9f7a4bab0a215fbe87543ad0a7c23ad20b3bd856590d313d950c1ac77",
+  "binary_sha256": "6681778b528263db9c729a69c98f74c0f1a8327f4d337d04cd3c79a7485b7ec5",
+  "base_commit": "142bc95a506512eb21d9458bce73400e6ec9f335",
+  "status": "Complete: release build, CPU check, CUDA checks with and without optional cuTile, formatting/whitespace checks and95 distinct tests passed. Current24-request same-GGUF run and both fresh24-request llama controls completed. Uniform10% decode target achieved versus the best historical/fresh control at every length. Final source and release binary exactly match measured provenance.",
+  "build": [
+    {
+      "stage": "paired-format",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all"
+      ],
+      "started": 1793121190.1013372,
+      "seconds": 3.06123423576355,
+      "exit_code": 0,
+      "log": "/tmp/qwen38-broad/paired-format.log"
+    },
+    {
+      "stage": "paired-diff-check",
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "started": 1793121193.1627922,
+      "seconds": 0.043504953384399414,
+      "exit_code": 0,
+      "log": "/tmp/qwen38-broad/paired-diff-check.log"
+    },
+    {
+      "stage": "paired-cuda-check",
+      "command": [
+        "cargo",
+        "check",
+        "-p",
+        "mistralrs-cli",
+        "--features",
+        "cuda,flash-attn,cutile",
+        "-j10"
+      ],
+      "started": 1793121193.2064166,
+      "seconds": 89.88780045509338,
+      "exit_code": 0,
+      "log": "/tmp/qwen38-broad/paired-cuda-check.log"
+    },
+    {
+      "stage": "paired-cpu-check",
+      "command": [
+        "cargo",
+        "check",
+        "-p",
+        "mistralrs-core",
+        "-p",
+        "mistralrs-quant",
+        "--no-default-features",
+        "-j10"
+      ],
+      "started": 1793121283.094481,
+      "seconds": 4.2854578495025635,
+      "exit_code": 0,
+      "log": "/tmp/qwen38-broad/paired-cpu-check.log"
+    },
+    {
+      "stage": "paired-test-build",
+      "command": [
+        "cargo",
+        "test",
+        "-p",
+        "mistralrs-core",
+        "-p",
+        "mistralrs-quant",
+        "--lib",
+        "--features",
+        "cuda,flash-attn,cutile",
+        "--no-run",
+        "-j10"
+      ],
+      "started": 1793121287.3801694,
+      "seconds": 118.76526165008545,
+      "exit_code": 0,
+      "log": "/tmp/qwen38-broad/paired-test-build.log"
+    },
+    {
+      "stage": "paired-cuda-tests",
+      "command": [
+        "python3",
+        "/tmp/qwen38-broad/run_paired_cuda_correctness.py"
+      ],
+      "started": 1793121406.1456788,
+      "seconds": 44.856557846069336,
+      "exit_code": 0,
+      "log": "/tmp/qwen38-broad/paired-cuda-tests.log"
+    },
+    {
+      "stage": "paired-release-build",
+      "command": [
+        "cargo",
+        "--config",
+        "profile.release.package.candle-core.codegen-units=1",
+        "build",
+        "--release",
+        "-p",
+        "mistralrs-cli",
+        "--features",
+        "cuda,flash-attn,cutile",
+        "-j10"
+      ],
+      "started": 1793121451.002456,
+      "seconds": 167.03649067878723,
+      "exit_code": 0,
+      "log": "/tmp/qwen38-broad/paired-release-build.log"
+    },
+    {
+      "stage": "paired-cpu-gguf-archive-tests",
+      "command": [
+        "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+        "gguf::archive::tests::",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/paired-cpu-gguf-archive-tests.log",
+      "seconds": 0.0704658031463623,
+      "exit_code": 0
+    },
+    {
+      "stage": "paired-cpu-gguf-weight_source-tests",
+      "command": [
+        "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+        "gguf::weight_source::tests::",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/paired-cpu-gguf-weight_source-tests.log",
+      "seconds": 0.06642985343933105,
+      "exit_code": 0
+    },
+    {
+      "stage": "paired-final-checks",
+      "command": [
+        "python3",
+        "/tmp/qwen38-broad/validate_paired_final.py"
+      ],
+      "log": "/tmp/qwen38-broad/paired-final-checks.log",
+      "seconds": 16.09502100944519,
+      "exit_code": 0
+    },
+    {
+      "stage": "paired-source-snapshot",
+      "command": [
+        "python3",
+        "/tmp/qwen38-broad/snapshot_sources.py",
+        "--output",
+        "/tmp/qwen38-broad/paired-source-manifest.json"
+      ],
+      "log": "/tmp/qwen38-broad/paired-source-snapshot.log",
+      "seconds": 0.5960571765899658,
+      "exit_code": 0
+    }
+  ],
+  "targeted_passed_distinct": 72,
+  "additional_cpu_passed_distinct": 23,
+  "total_passed_distinct": 95,
+  "targeted_test_groups": [
+    {
+      "command": [
+        "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+        "gguf::fast_mmvq::mixed_pair_tests::",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/paired-test-gguf-fast_mmvq-mixed_pair_tests.log",
+      "tests": 3,
+      "exit_code": 0,
+      "seconds": 0.8885941505432129,
+      "test_results": [
+        [
+          "gguf::fast_mmvq::mixed_pair_tests::mixed_pair_declines_unsupported_tails_and_layouts",
+          "ok"
+        ],
+        [
+          "gguf::fast_mmvq::mixed_pair_tests::mixed_pair_formats_graph_preserve_inputs_and_output_order",
+          "ok"
+        ],
+        [
+          "gguf::fast_mmvq::mixed_pair_tests::mixed_pair_orders_secondary_stream_allocations",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+        "unquantized::stats_tests::",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/paired-test-unquantized-stats_tests.log",
+      "tests": 1,
+      "exit_code": 0,
+      "seconds": 1.3546092510223389,
+      "test_results": [
+        [
+          "unquantized::stats_tests::small_batch_gemv_records_each_forward_once",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+        "gemv::alignment_tests::",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/paired-test-gemv-alignment_tests.log",
+      "tests": 2,
+      "exit_code": 0,
+      "seconds": 1.2210850715637207,
+      "test_results": [
+        [
+          "gemv::alignment_tests::gemv_alignment_checks_use_compute_stream_during_graph_capture",
+          "ok"
+        ],
+        [
+          "gemv::alignment_tests::gemv_pair_alignment_preserves_offset_view_fallbacks",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+        "distributed::layers::tests::packed_",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/paired-test-distributed-layers-tests-packed_.log",
+      "tests": 10,
+      "exit_code": 0,
+      "seconds": 0.0625002384185791,
+      "test_results": [
+        [
+          "distributed::layers::tests::packed_blockwise_fp8_falls_back_on_unaligned_boundary",
+          "ok"
+        ],
+        [
+          "distributed::layers::tests::packed_blockwise_fp8_preserves_scale_rows_and_outputs",
+          "ok"
+        ],
+        [
+          "distributed::layers::tests::packed_blockwise_fp8_weight_scale_alias_falls_back",
+          "ok"
+        ],
+        [
+          "distributed::layers::tests::packed_column_shards_each_projection_before_concatenating",
+          "ok"
+        ],
+        [
+          "distributed::layers::tests::packed_dense_source_declines_before_loading_unsupported_member",
+          "ok"
+        ],
+        [
+          "distributed::layers::tests::packed_dense_sources_preserve_dtype_shards_and_output_layouts",
+          "ok"
+        ],
+        [
+          "distributed::layers::tests::packed_output_layout_falls_back_if_fp8_blocks_are_split",
+          "ok"
+        ],
+        [
+          "distributed::layers::tests::packed_output_layout_permutates_fp8_scale_blocks",
+          "ok"
+        ],
+        [
+          "distributed::layers::tests::packed_output_layout_stays_within_tp_shards_and_preserves_canonical_weights",
+          "ok"
+        ],
+        [
+          "distributed::layers::tests::packed_projection_missing_weights_falls_back",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+        "distributed::layers::tests::mixed_pair_preserves_runtime_output_layout",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/paired-test-distributed-layers-tests-mixed_pair_preserves_runtime_output_layout.log",
+      "tests": 1,
+      "exit_code": 0,
+      "seconds": 0.5138869285583496,
+      "test_results": [
+        [
+          "distributed::layers::tests::mixed_pair_preserves_runtime_output_layout",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+        "cutile::qsa_decode::tests::",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/paired-test-cutile-qsa_decode-tests.log",
+      "tests": 3,
+      "exit_code": 0,
+      "seconds": 20.7422091960907,
+      "test_results": [
+        [
+          "cutile::qsa_decode::tests::qsa_decode_graph_tracks_metadata_and_matches_independent_attention",
+          "ok"
+        ],
+        [
+          "cutile::qsa_decode::tests::qsa_decode_index_and_alignment_guards_reject_unsupported_views",
+          "ok"
+        ],
+        [
+          "cutile::qsa_decode::tests::qsa_decode_orders_secondary_stream_inputs_and_preserves_fallbacks",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+        "gguf::fast_mmvq::shared_tests::",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/paired-test-gguf-fast_mmvq-shared_tests.log",
+      "tests": 2,
+      "exit_code": 0,
+      "seconds": 0.8785593509674072,
+      "test_results": [
+        [
+          "gguf::fast_mmvq::shared_tests::shared_mmvq_preserves_projection_and_backend_capabilities",
+          "ok"
+        ],
+        [
+          "gguf::fast_mmvq::shared_tests::shared_mmvq_replays_same_and_mixed_formats_with_workspace_reuse",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+        "cuda_memory::tests::",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/paired-test-cuda_memory-tests.log",
+      "tests": 1,
+      "exit_code": 0,
+      "seconds": 0.4569971561431885,
+      "test_results": [
+        [
+          "cuda_memory::tests::mapped_prefault_rejects_capture_of_borrowed_memory",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+        "gguf::embedding_tests::",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/paired-test-gguf-embedding_tests.log",
+      "tests": 5,
+      "exit_code": 0,
+      "seconds": 0.5474021434783936,
+      "test_results": [
+        [
+          "gguf::embedding_tests::embedding_cpu_gathers_all_formats_from_unaligned_storage",
+          "ok"
+        ],
+        [
+          "gguf::embedding_tests::embedding_cuda_gathers_all_formats_resident_and_mapped",
+          "ok"
+        ],
+        [
+          "gguf::embedding_tests::embedding_cuda_graph_replay_tracks_changed_strided_ids",
+          "ok"
+        ],
+        [
+          "gguf::embedding_tests::embedding_rejects_big_endian_tensor_storage",
+          "ok"
+        ],
+        [
+          "gguf::embedding_tests::embedding_rejects_zero_width_rows",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+        "gguf::gated_mix::tests::",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/paired-test-gguf-gated_mix-tests.log",
+      "tests": 3,
+      "exit_code": 0,
+      "seconds": 1.0671610832214355,
+      "test_results": [
+        [
+          "gguf::gated_mix::tests::quantized_gated_mix_formats_and_shapes_match_reference",
+          "ok"
+        ],
+        [
+          "gguf::gated_mix::tests::quantized_gated_mix_graph_replay_matches_reference",
+          "ok"
+        ],
+        [
+          "gguf::gated_mix::tests::shared_quantized_pair_prefill_matches_independent_projections",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+        "gguf::fast_mmvq::sm121_tests::",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/paired-test-gguf-fast_mmvq-sm121_tests.log",
+      "tests": 1,
+      "exit_code": 0,
+      "seconds": 0.6902058124542236,
+      "test_results": [
+        [
+          "gguf::fast_mmvq::sm121_tests::prefetch_dispatch_graph_replay_matches_legacy_for_all_formats",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+        "gguf::cuda::moe_sm121_tests::",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/paired-test-gguf-cuda-moe_sm121_tests.log",
+      "tests": 5,
+      "exit_code": 0,
+      "seconds": 2.9413228034973145,
+      "test_results": [
+        [
+          "gguf::cuda::moe_sm121_tests::q8_1_experts_treat_block_sums_as_metadata",
+          "ok"
+        ],
+        [
+          "gguf::cuda::moe_sm121_tests::sm121_moe_graph_replay_matches_legacy_with_changing_routing",
+          "ok"
+        ],
+        [
+          "gguf::cuda::moe_sm121_tests::sm121_staged_moe_large_banks_replay_matches_legacy",
+          "ok"
+        ],
+        [
+          "gguf::cuda::moe_sm121_tests::staged_moe_launches_all_formats_and_rejects_unsupported_geometry",
+          "ok"
+        ],
+        [
+          "gguf::cuda::moe_sm121_tests::staged_moe_preserves_cache_fitting_and_batched_dispatch",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+        "gguf::fast_mmq::compact_mmq_tests::",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/paired-test-gguf-fast_mmq-compact_mmq_tests.log",
+      "tests": 2,
+      "exit_code": 0,
+      "seconds": 2.750683069229126,
+      "test_results": [
+        [
+          "gguf::fast_mmq::compact_mmq_tests::compact_mmq_graph_replay_rebuilds_routing_and_reuses_workspace",
+          "ok"
+        ],
+        [
+          "gguf::fast_mmq::compact_mmq_tests::compact_mmq_handles_partial_rows_and_multiple_expert_chunks",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+        "gguf::archive::tests::mapped_cuda_load_preserves_bytes_after_source_reclaim_and_unlink",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/paired-test-gguf-archive-tests-mapped_cuda_load_preserves_bytes_after_source_reclaim_and_unlink.log",
+      "tests": 1,
+      "exit_code": 0,
+      "seconds": 1.688612937927246,
+      "test_results": [
+        [
+          "gguf::archive::tests::mapped_cuda_load_preserves_bytes_after_source_reclaim_and_unlink",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+        "gguf::weight_source::tests::shared_binding_cache_release_preserves_uploaded_aliases_and_raw_neighbors",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/paired-test-gguf-weight_source-tests-shared_binding_cache_release_preserves_uploaded_aliases_and_raw_neighbors.log",
+      "tests": 1,
+      "exit_code": 0,
+      "seconds": 0.5094752311706543,
+      "test_results": [
+        [
+          "gguf::weight_source::tests::shared_binding_cache_release_preserves_uploaded_aliases_and_raw_neighbors",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_core-2dfd7f3c1634b658",
+        "ops::tests::merged_projection_",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/paired-test-ops-tests-merged_projection_.log",
+      "tests": 3,
+      "exit_code": 0,
+      "seconds": 0.07529807090759277,
+      "test_results": [
+        [
+          "ops::tests::merged_projection_keeps_multirow_gate_up_packed",
+          "ok"
+        ],
+        [
+          "ops::tests::merged_projection_records_constituent_stats",
+          "ok"
+        ],
+        [
+          "ops::tests::merged_projection_uses_dynamic_lora_constituents_when_active",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_core-2dfd7f3c1634b658",
+        "layers::gated_add::tests::",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/paired-test-layers-gated_add-tests.log",
+      "tests": 3,
+      "exit_code": 0,
+      "seconds": 1.288426399230957,
+      "test_results": [
+        [
+          "layers::gated_add::tests::shared_expert_gate_matches_f64_reference_on_graph_replay",
+          "ok"
+        ],
+        [
+          "layers::gated_add::tests::sigmoid_gated_add_preserves_dtype_rounding_and_broadcast_fallbacks",
+          "ok"
+        ],
+        [
+          "layers::gated_add::tests::sigmoid_gated_add_replays_offsets_and_strided_fallbacks",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_core-2dfd7f3c1634b658",
+        "cuda::qwen4_exp::selection_tests::",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/paired-test-cuda-qwen4_exp-selection_tests.log",
+      "tests": 2,
+      "exit_code": 0,
+      "seconds": 0.5622014999389648,
+      "test_results": [
+        [
+          "cuda::qwen4_exp::selection_tests::qsa_scoring_preserves_selection_with_changed_heads_pages_and_dtype",
+          "ok"
+        ],
+        [
+          "cuda::qwen4_exp::selection_tests::qsa_topk_preserves_float_order_and_boundary_ties_on_graph_replay",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_core-2dfd7f3c1634b658",
+        "layers::hyper_connection::tests::",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/paired-test-layers-hyper_connection-tests.log",
+      "tests": 7,
+      "exit_code": 0,
+      "seconds": 1.8126685619354248,
+      "test_results": [
+        [
+          "layers::hyper_connection::tests::fused_hyper_connection_kernels_match_reference",
+          "ok"
+        ],
+        [
+          "layers::hyper_connection::tests::fused_hyper_connection_projections_match_reference",
+          "ok"
+        ],
+        [
+          "layers::hyper_connection::tests::hyper_connection_consumes_offset_and_strided_projection_views",
+          "ok"
+        ],
+        [
+          "layers::hyper_connection::tests::hyper_connection_orders_cross_stream_inputs_and_outputs",
+          "ok"
+        ],
+        [
+          "layers::hyper_connection::tests::hyper_connection_vector_combine_replays_strided_views_and_fallbacks",
+          "ok"
+        ],
+        [
+          "layers::hyper_connection::tests::packed_hyper_connection_projections_match_reference",
+          "ok"
+        ],
+        [
+          "layers::hyper_connection::tests::quantized_hyper_connection_graph_replay_matches_reference",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_core-2dfd7f3c1634b658",
+        "layers::router::tests::",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/paired-test-layers-router-tests.log",
+      "tests": 3,
+      "exit_code": 0,
+      "seconds": 1.3695991039276123,
+      "test_results": [
+        [
+          "layers::router::tests::router_gemv_orders_cross_stream_weights_and_graph_replay",
+          "ok"
+        ],
+        [
+          "layers::router::tests::router_linear_matches_independent_logits_and_topk",
+          "ok"
+        ],
+        [
+          "layers::router::tests::router_linear_preserves_bias_rounding_and_view_fallbacks",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_core-2dfd7f3c1634b658",
+        "cuda::gdn::tests::mma_prefill_",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/paired-test-cuda-gdn-tests-mma_prefill_.log",
+      "tests": 4,
+      "exit_code": 0,
+      "seconds": 1.0118296146392822,
+      "test_results": [
+        [
+          "cuda::gdn::tests::mma_prefill_graph_replay_tracks_changed_pooled_slots",
+          "ok"
+        ],
+        [
+          "cuda::gdn::tests::mma_prefill_matches_sequential_recurrence",
+          "ok"
+        ],
+        [
+          "cuda::gdn::tests::mma_prefill_orders_cross_stream_state_updates",
+          "ok"
+        ],
+        [
+          "cuda::gdn::tests::mma_prefill_preserves_slow_decay_state_across_prompt_chunks",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_core-2dfd7f3c1634b658",
+        "vision_models::qwen4_exp::ple::tests::",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/paired-test-vision_models-qwen4_exp-ple-tests.log",
+      "tests": 5,
+      "exit_code": 0,
+      "seconds": 0.52691650390625,
+      "test_results": [
+        [
+          "vision_models::qwen4_exp::ple::tests::hashed_rows_match_reference",
+          "ok"
+        ],
+        [
+          "vision_models::qwen4_exp::ple::tests::iq4_nl_gather_matches_host_dequant",
+          "ok"
+        ],
+        [
+          "vision_models::qwen4_exp::ple::tests::mapped_quantization_preserves_shard_and_chunk_offsets",
+          "ok"
+        ],
+        [
+          "vision_models::qwen4_exp::ple::tests::planned_table_matches_checkpoint_rows",
+          "ok"
+        ],
+        [
+          "vision_models::qwen4_exp::ple::tests::resident_quantization_matches_host",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_core-2dfd7f3c1634b658",
+        "cuda::qwen4_exp::tests::",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/paired-test-cuda-qwen4_exp-tests.log",
+      "tests": 3,
+      "exit_code": 0,
+      "seconds": 1.3815722465515137,
+      "test_results": [
+        [
+          "cuda::qwen4_exp::tests::qsa_dense_graph_matches_identity_selection",
+          "ok"
+        ],
+        [
+          "cuda::qwen4_exp::tests::qsa_reopened_block_matches_fresh_prefill",
+          "ok"
+        ],
+        [
+          "cuda::qwen4_exp::tests::qsa_scored_topk_graph_ignores_poisoned_unused_pages_across_requests",
+          "ok"
+        ]
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_core-2dfd7f3c1634b658",
+        "ops::tests::cuda_top1_",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/paired-test-ops-tests-cuda_top1_.log",
+      "tests": 1,
+      "exit_code": 0,
+      "seconds": 0.4788217544555664,
+      "test_results": [
+        [
+          "ops::tests::cuda_top1_uses_first_maximum_across_lanes_and_chunks",
+          "ok"
+        ]
+      ]
+    }
+  ],
+  "additional_cpu_test_groups": [
+    {
+      "stage": "paired-cpu-gguf-archive-tests",
+      "command": [
+        "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+        "gguf::archive::tests::",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/paired-cpu-gguf-archive-tests.log",
+      "seconds": 0.0704658031463623,
+      "exit_code": 0,
+      "test_results": [
+        [
+          "gguf::archive::tests::archive_is_send_and_sync",
+          "ok"
+        ],
+        [
+          "gguf::archive::tests::catalogs_tensors_and_loads_supported_qtensor",
+          "ok"
+        ],
+        [
+          "gguf::archive::tests::mapped_cuda_load_preserves_bytes_after_source_reclaim_and_unlink",
+          "ignored"
+        ],
+        [
+          "gguf::archive::tests::merges_multiple_mmproj_components",
+          "ok"
+        ],
+        [
+          "gguf::archive::tests::merges_split_mmproj_component",
+          "ok"
+        ],
+        [
+          "gguf::archive::tests::opens_split_and_independent_mmproj_components",
+          "ok"
+        ],
+        [
+          "gguf::archive::tests::orders_and_validates_split_shards",
+          "ok"
+        ],
+        [
+          "gguf::archive::tests::rejects_conflicting_component_metadata_atomically",
+          "ok"
+        ],
+        [
+          "gguf::archive::tests::rejects_duplicate_split_tensor_names",
+          "ok"
+        ],
+        [
+          "gguf::archive::tests::rejects_incomplete_splits_and_wrong_total_count",
+          "ok"
+        ],
+        [
+          "gguf::archive::tests::rejects_invalid_or_duplicate_mmproj_components",
+          "ok"
+        ],
+        [
+          "gguf::archive::tests::rejects_truncated_storage_and_unaligned_offsets",
+          "ok"
+        ],
+        [
+          "gguf::archive::tests::retains_iq_and_future_dtype_codes",
+          "ok"
+        ],
+        [
+          "gguf::archive::tests::stages_unaligned_quantized_data",
+          "ok"
+        ],
+        [
+          "gguf::archive::tests::supported_dtype_catalog_matches_candle",
+          "ok"
+        ]
+      ],
+      "passed": 14
+    },
+    {
+      "stage": "paired-cpu-gguf-weight_source-tests",
+      "command": [
+        "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+        "gguf::weight_source::tests::",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/paired-cpu-gguf-weight_source-tests.log",
+      "seconds": 0.06642985343933105,
+      "exit_code": 0,
+      "test_results": [
+        [
+          "gguf::weight_source::tests::big_endian_archives_are_rejected_at_construction",
+          "ok"
+        ],
+        [
+          "gguf::weight_source::tests::dense_packing_capability_keeps_quantized_bindings_packed",
+          "ok"
+        ],
+        [
+          "gguf::weight_source::tests::direct_bindings_stay_packed_and_shard_before_loading",
+          "ok"
+        ],
+        [
+          "gguf::weight_source::tests::invalid_binding_shapes_are_rejected_at_construction",
+          "ok"
+        ],
+        [
+          "gguf::weight_source::tests::lazy_backend_materializes_bound_residuals",
+          "ok"
+        ],
+        [
+          "gguf::weight_source::tests::mxfp4_bindings_extract_repack_and_interleave_raw_bytes",
+          "ok"
+        ],
+        [
+          "gguf::weight_source::tests::rank_three_concat_preserves_layout_and_selects_expert_bias",
+          "ok"
+        ],
+        [
+          "gguf::weight_source::tests::shared_binding_cache_release_preserves_uploaded_aliases_and_raw_neighbors",
+          "ignored"
+        ],
+        [
+          "gguf::weight_source::tests::structural_bindings_stay_packed",
+          "ok"
+        ],
+        [
+          "gguf::weight_source::tests::unsupported_dtypes_are_rejected_at_construction",
+          "ok"
+        ]
+      ],
+      "passed": 9
+    }
+  ],
+  "excluded": "CUDA13.3 NVFP4 provider test is not compiled or counted on CUDA13.2. Earlier overlapping suites are not added.",
+  "canonical_result": "mrs-paired-8192-serving.json",
+  "final_compatibility_checks": [
+    {
+      "stage": "cuda-without-cutile",
+      "command": [
+        "cargo",
+        "check",
+        "-p",
+        "mistralrs-cli",
+        "--features",
+        "cuda,flash-attn",
+        "-j10"
+      ],
+      "seconds": 1379.3682556152344,
+      "exit_code": 0,
+      "log": "/tmp/qwen38-broad/paired-final-compatibility-cuda-without-cutile.log"
+    },
+    {
+      "stage": "format",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "seconds": 2.93804931640625,
+      "exit_code": 0,
+      "log": "/tmp/qwen38-broad/paired-final-compatibility-format.log"
+    },
+    {
+      "stage": "diff",
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "seconds": 0.04458808898925781,
+      "exit_code": 0,
+      "log": "/tmp/qwen38-broad/paired-final-compatibility-diff.log"
+    },
+    {
+      "stage": "source-snapshot",
+      "command": [
+        "python3",
+        "/tmp/qwen38-broad/snapshot_sources.py",
+        "--output",
+        "/tmp/qwen38-broad/final-source-manifest.json"
+      ],
+      "seconds": 0.9891383647918701,
+      "exit_code": 0,
+      "log": "/tmp/qwen38-broad/paired-final-compatibility-source-snapshot.log"
+    }
+  ],
+  "final_source_verification": {
+    "source_sha256": "24b72dc9f7a4bab0a215fbe87543ad0a7c23ad20b3bd856590d313d950c1ac77",
+    "binary_sha256": "6681778b528263db9c729a69c98f74c0f1a8327f4d337d04cd3c79a7485b7ec5",
+    "final_manifest_identical_to_canonical_manifest": true,
+    "canonical_manifest": "paired-source-manifest.json",
+    "final_manifest": "final-source-manifest.json",
+    "canonical_manifest_sha256": "4c6b7854852965210c47068cd424cb77cf0e8349eea27d47eee572f619803cb1",
+    "final_manifest_sha256": "4c6b7854852965210c47068cd424cb77cf0e8349eea27d47eee572f619803cb1",
+    "compatibility_checks": "paired-final-compatibility.json",
+    "all_compatibility_checks_passed": true
+  }
+}

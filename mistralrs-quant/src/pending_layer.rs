@@ -255,6 +255,10 @@ impl QuantMethod for PendingIsqLayer {
             .apply_isq(dtype, device, n_quantized, imatrix_weight, guard)
     }
 
+    fn unquant_forward_weight(&self) -> Option<Tensor> {
+        self.resolve().ok()?.unquant_forward_weight()
+    }
+
     fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
         self.resolve().ok()?.unquant_weight_bias()
     }

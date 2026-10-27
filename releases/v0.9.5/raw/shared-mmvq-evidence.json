@@ -1,0 +1,100 @@
+{
+  "status": "Integrated in the validated release and completed24-request same-GGUF canonical sweep; applicable repository tests passed. Standalone timings retain their prototype scope and do not isolate complete-model gains.",
+  "production_files": [
+    "mistralrs-quant/src/lib.rs",
+    "mistralrs-quant/src/gguf/fast_mmvq.rs",
+    "mistralrs-quant/src/gguf/shared_mmvq_tests.rs"
+  ],
+  "dispatch": {
+    "entrypoint": "try_forward_with_shared_quantized_activation",
+    "backend": "GGUF shared real Q8_1 input buffer; per-projection existing plain/prefetch CUDA kernels unchanged",
+    "formats": [
+      "Q4_0",
+      "Q4_1",
+      "Q5_0",
+      "Q5_1",
+      "Q8_0",
+      "Q2K",
+      "Q3K",
+      "Q4K",
+      "Q5K",
+      "Q6K"
+    ],
+    "mixed_formats_supported": true,
+    "tokens": "1..=8",
+    "activations": [
+      "BF16",
+      "F16",
+      "F32"
+    ],
+    "guards": [
+      "two or more projections",
+      "CUDA activations",
+      "no bias",
+      "no imatrix stats",
+      "no active dynamic LoRA",
+      "all projections expose supported QTensor capability",
+      "preserve packed affine preference at larger supported MMVQ batches"
+    ],
+    "explicit_fused_GLU_QKV_pair": "Preserved original scheme-based FP8/NVFP4 helper calls, so new shared-MMVQ path does not intercept existing fused kernels.",
+    "prefill": "No GGUF change beyond MMVQ batch limit."
+  },
+  "numeric": {
+    "graph_replay_comparisons": 792,
+    "max_error": 0,
+    "max_relative_rms": 0,
+    "input_changes": 3,
+    "small_shapes": "384/127 output rows with512input columns",
+    "large_shapes": [
+      "Q8_0 10240/6144rows,2560columns",
+      "Q4K3072/1536rows,4096columns"
+    ],
+    "scope": "Standalone copied backend uses the exact release CUDA launchers. Same/mixed formats, three activation dtypes, batches1/2/4/8; graph HTOD guard and output lifetimes retained."
+  },
+  "timing_artifacts": [
+    "gguf-shared-mmvq-sweep.jsonl",
+    "gguf-shared-mmvq-sweep-summary.json",
+    "gguf-shared-mmvq-repeat-local0.jsonl",
+    "gguf-shared-mmvq-repeat-local1.jsonl",
+    "gguf-shared-mmvq-larger-batch.jsonl",
+    "gguf-shared-mmvq-repeat-summary.json"
+  ],
+  "actual_cold_q8": {
+    "columns": 2560,
+    "rows": [
+      10240,
+      6144
+    ],
+    "batch": 1,
+    "saving_us_range": [
+      0.69,
+      0.741
+    ],
+    "estimated_36_layer_saving_ms": [
+      0.0248,
+      0.0267
+    ],
+    "full_model_effect": "Not yet measured."
+  },
+  "performance_limits": "Initial short sweep had several2-4% regressions. Longer actual-backend repeats removed them (worst -0.77%); same-workspace control still showed one2.66% hotQ4_0 batch2 negative. ColdQ8 savings consistent across controls; broad median pair savings0.6-0.9us. Do not claim every individual timing improved.",
+  "larger_batch": "All10cold-format cases improved at batches4and8; median savings0.885/0.899us.",
+  "rejected": "Unconditional fused concatenated pair regressed Q2K/Q3K14-25% andQ4K4-7% cold; no such route added.",
+  "new_repo_tests": [
+    "shared_mmvq_replays_same_and_mixed_formats_with_workspace_reuse",
+    "shared_mmvq_preserves_projection_and_backend_capabilities"
+  ],
+  "repo_tests_status": "Both tests passed in parent combined test run.",
+  "summary_source_artifact": "quant-shared-mmvq-final-summary.json",
+  "validated_release_source_sha256": "4ac5bbc7122f69a3391861b0208879e7aa45125ffe94db4b77703cac77c4040c",
+  "validated_release_binary_sha256": "2f66d0a61e4070e86a761fd01b59c98668837f868305e6b838fe1ff2035db23e",
+  "release_validation": "attention-build-validation.json",
+  "full_model_status": {
+    "complete": true,
+    "result": "mrs-attention-8192-serving.json",
+    "prewarm": "mrs-attention-8192-prewarm.json",
+    "requests": 24,
+    "request_errors": 0,
+    "uniform_10_percent_best_llama_decode_lead": false,
+    "comparison": "attention-comparison.json"
+  }
+}

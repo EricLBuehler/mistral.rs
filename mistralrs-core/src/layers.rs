@@ -39,6 +39,13 @@ use crate::{
 
 pub use mistralrs_quant::MatMul;
 
+mod hyper_connection;
+pub(crate) use hyper_connection::{grouped_rms_norm, GatedResidual, GatedResidualConfig};
+mod router;
+pub(crate) use router::router_linear;
+mod gated_add;
+pub(crate) use gated_add::sigmoid_gated_add;
+
 pub fn dense_embedding(
     in_size: usize,
     out_size: usize,

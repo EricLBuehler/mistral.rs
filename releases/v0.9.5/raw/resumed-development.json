@@ -1,0 +1,42 @@
+{
+  "status": "Release build/checks and63 distinct tests passed; fresh24-request same-GGUF8192 canonical run completed. Uniform10% decode goal remains unmet; work continues.",
+  "historical_source_sha256": "b55a21dbf070239b30336520810c85906eb2ab69a9e31c51742afd68d005a965",
+  "historical_binary_sha256": "eca4ba522dc65558ab91800341ae9459d53f0dc36115c4b685444f2a09898b93",
+  "canonical_cells_belong_to_historical_source": true,
+  "accepted_changes": {
+    "cache_reclamation": {
+      "operation": "Release uploaded GGUF source cache after successful model loading",
+      "files": [
+        "mistralrs-quant/src/gguf/archive.rs",
+        "mistralrs-quant/src/gguf/weight_source.rs",
+        "mistralrs-quant/src/lib.rs",
+        "mistralrs-core/src/pipeline/normal.rs",
+        "mistralrs-core/src/pipeline/multimodal.rs"
+      ],
+      "policy": "Track successful CUDA uploads by source tensor name, including recursive transformed/sharded bindings; retain original File handles; after context-wide synchronization release mapped PTEs and full interior file-cache pages. Untouched raw mapped tables are not marked uploaded. Optional embedding prefault follows reclamation.",
+      "platform": "CUDA on Linux; default trait hook is a no-op for other weight sources.",
+      "precision_change": false,
+      "repository_tests": [
+        "mapped_cuda_load_preserves_bytes_after_source_reclaim_and_unlink",
+        "shared_binding_cache_release_preserves_uploaded_aliases_and_raw_neighbors"
+      ],
+      "validation_status": "Both CUDA cache tests,22 CPU archive/binding tests and a fresh24-request same-GGUF8192 sweep passed."
+    },
+    "shared_router": "router-final-summary.json",
+    "async_moe_staging": "quant-resume-staging-summary.json"
+  },
+  "rejected_experiments": [
+    "cutile-gguf-summary.json",
+    "cutile-gatedmix-summary.json",
+    "pdl-summary.json",
+    "dense-panel-summary.json",
+    "gated-mix-parallel-summary.json",
+    "gated-mix-staged-summary.json"
+  ],
+  "standalone_results_are_not_full_model_gains": true,
+  "decode_target": "Current source exceeds best measured llama decode by8.47%,6.40%,12.20% at512/2048/8192 prompts; uniform>=10% lead remains unmet.",
+  "source_sha256": "464e5a6f7001b3d52d15548fca3a91d8e7f59a8d20c79fb70bbdbe1c0b81150a",
+  "binary_sha256": "81d1e23b618ef09bdd8b183c420b0b4a3999c164b1385832c288cbcfce36df65",
+  "build_validation": "resumed-build-validation.json",
+  "current_canonical_result": "mrs-resumed-8192-serving.json"
+}

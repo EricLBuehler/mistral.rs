@@ -8,13 +8,12 @@ use std::{
     },
 };
 
-use candle_core::{DType, Device, Module, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::Linear;
 use mistralrs_quant::{QuantMethod, QuantizedConfig, ReplicatedLayer, ShardedVarBuilder};
 
 use super::{
     config::{LayerType, QsaConfig, TextConfig},
-    hyper::GatedResidual,
     mtp::Qwen4ExpMtpHead,
     ple::{PleBatch, PleLayer, PleStash, PleState},
     qsa::{QsaAttention, QsaMode, QsaStep},
@@ -30,7 +29,7 @@ use crate::{
         HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
         RecurrentStateSpec,
     },
-    layers::{self, Qwen3VLRotaryEmbedding},
+    layers::{self, GatedResidual, Qwen3VLRotaryEmbedding},
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
@@ -153,7 +152,7 @@ impl SparseMoeBlock {
     pub(super) fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden_dim))?;
-        let router_logits = self.gate.forward(&xs_flat)?;
+        let router_logits = crate::layers::router_linear(&self.gate, &xs_flat)?;
         let topk = crate::ops::moe_router_topk(
             &router_logits,
             crate::ops::MoeRouterTopKConfig {
@@ -172,13 +171,10 @@ impl SparseMoeBlock {
             .experts
             .forward(xs, topk.values, &topk.indices)?
             .reshape((b_size, seq_len, hidden_dim))?;
-        let shared_gate = candle_nn::ops::sigmoid(&self.shared_expert_gate.forward(&xs_flat)?)?
+        let shared_gate = crate::layers::router_linear(&self.shared_expert_gate, &xs_flat)?
             .reshape((b_size, seq_len, 1))?;
-        let shared_out = self
-            .shared_expert
-            .forward(xs)?
-            .broadcast_mul(&shared_gate)?;
-        y + shared_out
+        let shared_out = self.shared_expert.forward(xs)?;
+        crate::layers::sigmoid_gated_add(&y, &shared_out, &shared_gate)
     }
 }
 
@@ -374,8 +370,18 @@ impl Qwen4ExpTextModel {
             Ok(DecoderLayer {
                 mixer,
                 ple,
-                attn_hc: GatedResidual::load(cfg, vb_plain.pp("attn_hyper_connection"), true)?,
-                mlp_hc: GatedResidual::load(cfg, vb_plain.pp("mlp_hyper_connection"), true)?,
+                attn_hc: GatedResidual::load(
+                    &cfg.gated_residual_config(),
+                    &cfg.quantization_config,
+                    vb_plain.pp("attn_hyper_connection"),
+                    true,
+                )?,
+                mlp_hc: GatedResidual::load(
+                    &cfg.gated_residual_config(),
+                    &cfg.quantization_config,
+                    vb_plain.pp("mlp_hyper_connection"),
+                    true,
+                )?,
                 moe,
             })
         })?;
@@ -404,7 +410,8 @@ impl Qwen4ExpTextModel {
             })
             .transpose()?;
         let final_mixer = GatedResidual::load(
-            cfg,
+            &cfg.gated_residual_config(),
+            &cfg.quantization_config,
             mapper.set_nm_device(vb_m.pp("hyper_connection_mixer"), false),
             false,
         )?;

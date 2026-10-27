@@ -1,0 +1,17 @@
+{
+  "command": [
+    "cargo",
+    "--config",
+    "profile.release.package.candle-core.codegen-units=1",
+    "build",
+    "--release",
+    "-p",
+    "mistralrs-cli",
+    "--features",
+    "cuda,flash-attn,cutile",
+    "-j10"
+  ],
+  "exit_code": 0,
+  "seconds": 892.8610718250275,
+  "compiler_workaround": "Candle-only single codegen unit avoids LLVM23 VPDerivedIVRecipe trap; O3/native/vectorization retained"
+}

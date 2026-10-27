@@ -1,0 +1,78 @@
+{
+  "status": "Complete: release build, CPU check, CUDA checks with and without optional cuTile, formatting/whitespace checks and95 distinct tests passed. Current24-request same-GGUF run and both fresh24-request llama controls completed. Uniform10% decode target achieved versus the best historical/fresh control at every length. Final source and release binary exactly match measured provenance.",
+  "new_gpu_tests": [
+    "gguf::fast_mmvq::mixed_pair_tests::mixed_pair_formats_graph_preserve_inputs_and_output_order",
+    "gguf::fast_mmvq::mixed_pair_tests::mixed_pair_declines_unsupported_tails_and_layouts",
+    "gguf::fast_mmvq::mixed_pair_tests::mixed_pair_orders_secondary_stream_allocations",
+    "distributed::layers::tests::mixed_pair_preserves_runtime_output_layout"
+  ],
+  "extended_gpu_test": "gguf::fast_mmvq::shared_tests capability fallback test now checks mixed pairs in both operand orders and guards both methods",
+  "production_scope": "Single-token CUDA paired projections: one supported GGUF matrix and one dense forward-layout matrix; BF16/F16/F32. Both operand orders are supported. Bias, statistics capture, active LoRA, nontrivial collective, odd quantized row count, incompatible vector alignment, unsupported geometry and existing standalone-prefetch cases retain established paths. No permanent duplicate weights or model-specific caller changes.",
+  "kernel_reuse": "Existing GEMV row arithmetic and GGUF vector-dot arithmetic are shared. One dense-first grid executes compatible projections. Prefetch applies only within eligible mixed pairs.",
+  "new_capability": "QuantMethod::unquant_forward_weight opts in forward-order storage separately from canonical unquant_weight_bias. UnquantLinear and RuntimeOutput/distributed/Pending/DynamicLoRA wrappers preserve this distinction; nontrivial collectives decline.",
+  "source_files": [
+    "mistralrs-quant/kernels/gemv/row.cuh",
+    "mistralrs-quant/kernels/gemv/gemv.cu",
+    "mistralrs-quant/kernels/mmvq_gguf/mmvq_gguf.cu",
+    "mistralrs-quant/src/gguf/fast_mmvq.rs",
+    "mistralrs-quant/src/gguf/ffi.rs",
+    "mistralrs-quant/src/gguf/mixed_pair_tests.rs",
+    "mistralrs-quant/src/lib.rs",
+    "mistralrs-quant/src/distributed/layers.rs",
+    "mistralrs-quant/src/unquantized/mod.rs",
+    "mistralrs-quant/src/pending_layer.rs",
+    "mistralrs-quant/src/lora/dynamic/linear.rs",
+    "mistralrs-quant/kernels/mmvq_gguf/prefetch_row.cuh",
+    "mistralrs-quant/kernels/mmvq_gguf/mmvq_prefetch.cu"
+  ],
+  "review": "Independent review caught canonical-versus-forward row order before compilation. An explicit forward-weight capability and a nonidentity-layout regression test resolve it. Final ordinary and prefetch kernel review found no further concrete issue.",
+  "prefetch_policy": {
+    "device": "SM121",
+    "minimum_weight_bytes_per_thread": 32,
+    "threads_per_quantized_row_cta": 256,
+    "minimum_quantized_rows": "device multiprocessor_count * (max_threads_per_multiprocessor /256)",
+    "row_threshold_on_tested_gpu": 288,
+    "standalone_gguf_policy_changed": false,
+    "fallback": "validated dense-first two-row mixed kernel",
+    "tradeoff": "Some cached paths are slower than plain mixed fusion; all selected measurements still beat original separate projections. Rotating weights improve at the intended long-row shapes."
+  },
+  "production_tests": "All ten formats and three dtypes, ordinary and geometry-derived prefetch-selected shapes, changed graph inputs, reversed operand order, scratch reuse, odd-tail and layout fallbacks, secondary-stream allocations, and nonidentity packed output order.",
+  "canonical_result": "mrs-paired-8192-serving.json",
+  "associated_changes": {
+    "dense_source_packing": "Common packed-projection factories may pack compatible F32/F16/BF16 GGUF source bindings through an explicit capability. Existing source transform, sharding, cache tracking and constituent-statistics paths remain available.",
+    "gemv_alignment": "Small GEMV eligibility checks vector2 input/weight alignment on the compute stream; unsupported views use the original matmul.",
+    "gemv_statistics": "UnquantLinear records activation statistics before the GEMV early return, exactly once per forward."
+  },
+  "planned_test_filters": {
+    "mistralrs_quant": [
+      "gguf::fast_mmvq::mixed_pair_tests::",
+      "unquantized::stats_tests::",
+      "gemv::alignment_tests::",
+      "distributed::layers::tests::packed_",
+      "distributed::layers::tests::mixed_pair_preserves_runtime_output_layout",
+      "cutile::qsa_decode::tests::",
+      "gguf::fast_mmvq::shared_tests::",
+      "cuda_memory::tests::",
+      "gguf::embedding_tests::",
+      "gguf::gated_mix::tests::",
+      "gguf::fast_mmvq::sm121_tests::",
+      "gguf::cuda::moe_sm121_tests::",
+      "gguf::fast_mmq::compact_mmq_tests::",
+      "gguf::archive::tests::mapped_cuda_load_preserves_bytes_after_source_reclaim_and_unlink",
+      "gguf::weight_source::tests::shared_binding_cache_release_preserves_uploaded_aliases_and_raw_neighbors"
+    ],
+    "mistralrs_core": [
+      "ops::tests::merged_projection_",
+      "layers::gated_add::tests::",
+      "cuda::qwen4_exp::selection_tests::",
+      "layers::hyper_connection::tests::",
+      "layers::router::tests::",
+      "cuda::gdn::tests::mma_prefill_",
+      "vision_models::qwen4_exp::ple::tests::",
+      "cuda::qwen4_exp::tests::",
+      "ops::tests::cuda_top1_"
+    ]
+  },
+  "source_sha256": "24b72dc9f7a4bab0a215fbe87543ad0a7c23ad20b3bd856590d313d950c1ac77",
+  "binary_sha256": "6681778b528263db9c729a69c98f74c0f1a8327f4d337d04cd3c79a7485b7ec5"
+}

@@ -1,0 +1,11 @@
+{
+  "source_sha256": "24b72dc9f7a4bab0a215fbe87543ad0a7c23ad20b3bd856590d313d950c1ac77",
+  "binary_sha256": "6681778b528263db9c729a69c98f74c0f1a8327f4d337d04cd3c79a7485b7ec5",
+  "final_manifest_identical_to_canonical_manifest": true,
+  "canonical_manifest": "paired-source-manifest.json",
+  "final_manifest": "final-source-manifest.json",
+  "canonical_manifest_sha256": "4c6b7854852965210c47068cd424cb77cf0e8349eea27d47eee572f619803cb1",
+  "final_manifest_sha256": "4c6b7854852965210c47068cd424cb77cf0e8349eea27d47eee572f619803cb1",
+  "compatibility_checks": "paired-final-compatibility.json",
+  "all_compatibility_checks_passed": true
+}

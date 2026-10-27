@@ -1,0 +1,104 @@
+{
+  "results": [
+    {
+      "n": 128,
+      "k": 4096,
+      "cold": "false",
+      "median_us": [
+        2.04744,
+        11.00456,
+        5.60952,
+        10.50328,
+        9.46824,
+        6.15112,
+        3.58336
+      ]
+    },
+    {
+      "n": 128,
+      "k": 4096,
+      "cold": "true",
+      "median_us": [
+        3.52146,
+        16.94258,
+        10.24277,
+        20.81452,
+        20.50649,
+        13.21973,
+        6.33941
+      ]
+    },
+    {
+      "n": 320,
+      "k": 10240,
+      "cold": "false",
+      "median_us": [
+        3.92568,
+        38.49312,
+        13.61864,
+        25.9728,
+        23.98832,
+        16.416,
+        9.47144
+      ]
+    },
+    {
+      "n": 320,
+      "k": 10240,
+      "cold": "true",
+      "median_us": [
+        17.65568,
+        53.0355,
+        30.70695,
+        53.97925,
+        59.83919,
+        44.68489,
+        31.69042
+      ]
+    },
+    {
+      "n": 1024,
+      "k": 2048,
+      "cold": "false",
+      "median_us": [
+        3.11128,
+        16.12496,
+        7.16712,
+        7.6176,
+        7.45072,
+        6.15592,
+        6.32264
+      ]
+    },
+    {
+      "n": 1024,
+      "k": 2048,
+      "cold": "true",
+      "median_us": [
+        10.49823,
+        24.66484,
+        14.17677,
+        16.97742,
+        18.84873,
+        18.21679,
+        17.5451
+      ]
+    }
+  ],
+  "version_config": [
+    "existing MMVQ",
+    "SIMT BN2 BG8 split1",
+    "SIMT BN4 BG16 split1",
+    "SIMT BN8 BG8 split1",
+    "integer MMA BN16 BG4 split4",
+    "integer MMA BN16 BG8 split4",
+    "integer MMA BN16 BG8 split8"
+  ],
+  "correctness_cases_passed": 48,
+  "weight_formats": [
+    "Q8_0",
+    "Q8_1"
+  ],
+  "timing_format": "Q8_0",
+  "precision": "Existing Q8_1 activations, original packed weight bytes/scales, integer block dot, F32 scaled accumulation, BF16 output. No weight requantization or BF16 weight dequantization."
+}

@@ -23,6 +23,8 @@ pub mod cublaslt;
 #[cfg(test)]
 #[path = "build_support/cuda_headers.rs"]
 mod cuda_headers;
+#[cfg(feature = "cuda")]
+pub mod cuda_memory;
 #[cfg(test)]
 #[path = "build_support/cuda_toolkit.rs"]
 mod cuda_toolkit;
@@ -79,6 +81,11 @@ pub trait QuantizedWeightSource: Send + Sync {
         shard: Shard,
     ) -> Result<Option<Arc<dyn QuantMethod>>>;
 
+    /// Whether this source loads an ordinary bias-free dense linear for this key.
+    fn supports_dense_packing(&self, _key: &str) -> Result<bool> {
+        Ok(false)
+    }
+
     fn load_optional_tensor(&self, name: &str, device: &Device) -> Result<Option<Tensor>>;
 
     fn shard_alignment(&self, key: &str) -> Result<usize>;
@@ -86,6 +93,11 @@ pub trait QuantizedWeightSource: Send + Sync {
     fn pack_factor(&self, dtype: DType) -> Result<usize>;
 
     fn pack_factor_for(&self, key: &str, dtype: DType) -> Result<Option<usize>>;
+
+    /// Reclaim copied source pages after uploads and shared weight bindings finish loading.
+    fn release_source_cache(&self) -> Result<()> {
+        Ok(())
+    }
 
     /// Exact resident bytes of the bound weights, when the source knows them; device mapping
     /// falls back to the pack-factor estimate otherwise.
@@ -115,6 +127,10 @@ impl<T: QuantizedWeightSource + ?Sized> QuantizedWeightSource for Arc<T> {
         (**self).load_linear(key, device, shard)
     }
 
+    fn supports_dense_packing(&self, key: &str) -> Result<bool> {
+        (**self).supports_dense_packing(key)
+    }
+
     fn load_optional_tensor(&self, name: &str, device: &Device) -> Result<Option<Tensor>> {
         (**self).load_optional_tensor(name, device)
     }
@@ -129,6 +145,10 @@ impl<T: QuantizedWeightSource + ?Sized> QuantizedWeightSource for Arc<T> {
 
     fn pack_factor_for(&self, key: &str, dtype: DType) -> Result<Option<usize>> {
         (**self).pack_factor_for(key, dtype)
+    }
+
+    fn release_source_cache(&self) -> Result<()> {
+        (**self).release_source_cache()
     }
 
     fn resident_layer_bytes(&self, dtype: DType) -> Result<Option<ResidentLayerBytes>> {
@@ -206,6 +226,7 @@ pub use gguf::cuda::{
     quantize_input_q8_1, IndexedMoeLoraDecode, IndexedMoeLoraWeights, IndexedMoeRouting,
     ACT_GELU_PYTORCH_TANH, ACT_SILU,
 };
+pub use gguf::embedding::GgufEmbedding;
 #[cfg(feature = "cuda")]
 #[doc(hidden)]
 pub use gguf::fast_mmq::grouped_from_glu_sorted_pair as grouped_moe_mmq_from_glu_sorted_pair;
@@ -215,6 +236,8 @@ pub use gguf::fast_mmq::{
     grouped_from_glu_pair as grouped_moe_mmq_from_glu_pair, grouped_pair as grouped_moe_mmq_pair,
     grouped_pair_packed as grouped_moe_mmq_pair_packed, supports as supports_mmq,
 };
+#[cfg(feature = "cuda")]
+pub use gguf::gated_mix::{try_fused_quantized_gated_mix, QuantizedInputTransform};
 pub use gguf::GgufMatMul;
 pub use gguf::{
     GgufBindingMap, GgufBindingResolver, GgufTensorBackend, GgufTensorBinding, GgufWeightSource,
@@ -1988,6 +2011,11 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         None
     }
 
+    /// Dense weights in forward output order, which may differ from the canonical checkpoint order.
+    fn unquant_forward_weight(&self) -> Option<Tensor> {
+        None
+    }
+
     fn is_dynamic_lora_active(&self) -> bool {
         false
     }
@@ -2031,6 +2059,46 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
 }
 
 pub fn try_forward_with_shared_quantized_activation(
+    a: &Tensor,
+    methods: &[&dyn QuantMethod],
+) -> Result<Option<Vec<Tensor>>> {
+    if let Some(outputs) = try_forward_with_shared_activation_scheme(a, methods)? {
+        return Ok(Some(outputs));
+    }
+    #[cfg(feature = "cuda")]
+    if methods.len() > 1 && a.device().is_cuda() && fused_projections_allowed(a, methods) {
+        let tokens = a.elem_count() / a.dim(candle_core::D::Minus1)?;
+        if !(1..=gguf::fast_mmvq::MMVQ_MAX_BATCH).contains(&tokens) {
+            return Ok(None);
+        }
+        let Some(weights) = methods
+            .iter()
+            .map(|method| method.get_qtensor())
+            .collect::<Option<Vec<_>>>()
+        else {
+            return Ok(None);
+        };
+        if weights
+            .iter()
+            .any(|weight| !gguf::fast_mmvq::supports(weight.dtype()))
+        {
+            return Ok(None);
+        }
+        #[cfg(has_marlin_kernels)]
+        if tokens >= gguf::GGUF_AFFINE_MIN_BATCH {
+            for method in methods {
+                if method.prepare_gguf_affine_raw(tokens, a.dtype(), a.device())? {
+                    return Ok(None);
+                }
+            }
+        }
+        let weights = weights.iter().map(AsRef::as_ref).collect::<Vec<_>>();
+        return gguf::fast_mmvq::shared_lhs(&weights, a).map(Some);
+    }
+    Ok(None)
+}
+
+fn try_forward_with_shared_activation_scheme(
     a: &Tensor,
     methods: &[&dyn QuantMethod],
 ) -> Result<Option<Vec<Tensor>>> {
@@ -2205,7 +2273,7 @@ pub fn try_fused_quantized_ffn(
         return Ok(None);
     }
 
-    if let Some(outputs) = try_forward_with_shared_quantized_activation(xs, &[gate, up])? {
+    if let Some(outputs) = try_forward_with_shared_activation_scheme(xs, &[gate, up])? {
         let [gate_out, up_out]: [Tensor; 2] = outputs.try_into().map_err(|_| {
             candle_core::Error::msg("shared gate/up projection returned the wrong output count")
         })?;
@@ -2310,7 +2378,7 @@ pub fn try_fused_quantized_gate_up(
         return Ok(None);
     }
 
-    if let Some(outputs) = try_forward_with_shared_quantized_activation(xs, &[gate, up])? {
+    if let Some(outputs) = try_forward_with_shared_activation_scheme(xs, &[gate, up])? {
         let [gate_out, up_out]: [Tensor; 2] = outputs.try_into().map_err(|_| {
             candle_core::Error::msg("shared gate/up projection returned the wrong output count")
         })?;
@@ -2406,17 +2474,45 @@ pub fn try_fused_quantized_pair(
     if !xs.device().is_cuda() || !fused_projections_allowed(xs, &[left, right]) {
         return Ok(None);
     }
+    if let Some(mut outputs) = try_forward_with_shared_activation_scheme(xs, &[left, right])? {
+        let right = outputs.pop().expect("two projections");
+        let left = outputs.pop().expect("two projections");
+        return Ok(Some((left, right)));
+    }
     let tokens = xs.elem_count() / xs.dim(candle_core::D::Minus1)?;
-    if tokens == 0 || tokens > gguf::fast_mmvq::MMVQ_MAX_BATCH {
+    #[cfg(has_marlin_kernels)]
+    if tokens >= gguf::GGUF_AFFINE_MIN_BATCH
+        && (left.prepare_gguf_affine_raw(tokens, xs.dtype(), xs.device())?
+            || right.prepare_gguf_affine_raw(tokens, xs.dtype(), xs.device())?)
+    {
         return Ok(None);
+    }
+    if tokens == 1 {
+        if let (Some(quant), Some(dense)) = (left.get_qtensor(), right.unquant_forward_weight()) {
+            return gguf::fast_mmvq::try_dense_pair(&quant, &dense, xs);
+        }
+        if let (Some(dense), Some(quant)) = (left.unquant_forward_weight(), right.get_qtensor()) {
+            return gguf::fast_mmvq::try_dense_pair(&quant, &dense, xs)
+                .map(|outputs| outputs.map(|(quant, dense)| (dense, quant)));
+        }
     }
     let (Some(left), Some(right)) = (left.get_qtensor(), right.get_qtensor()) else {
         return Ok(None);
     };
-    if left.dtype() != right.dtype() || !gguf::fast_mmvq::supports(left.dtype()) {
+    if tokens == 0 || left.dtype() != right.dtype() {
         return Ok(None);
     }
-    gguf::fast_mmvq::fused_pair(&left, &right, xs).map(Some)
+    if tokens <= gguf::fast_mmvq::MMVQ_MAX_BATCH {
+        if !gguf::fast_mmvq::supports(left.dtype()) {
+            return Ok(None);
+        }
+        gguf::fast_mmvq::fused_pair(&left, &right, xs).map(Some)
+    } else {
+        if !gguf::fast_mmq::supports(left.dtype()) {
+            return Ok(None);
+        }
+        gguf::fast_mmq::fused_pair(&left, &right, xs).map(Some)
+    }
 }
 
 #[cfg(feature = "cuda")]
@@ -2443,7 +2539,7 @@ pub fn try_fused_quantized_qkv(
         return Ok(None);
     }
 
-    if let Some(outputs) = try_forward_with_shared_quantized_activation(xs, &[q, k, v])? {
+    if let Some(outputs) = try_forward_with_shared_activation_scheme(xs, &[q, k, v])? {
         let [q_out, k_out, v_out]: [Tensor; 3] = outputs.try_into().map_err(|_| {
             candle_core::Error::msg("shared QKV projection returned the wrong output count")
         })?;

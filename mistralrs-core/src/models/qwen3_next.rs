@@ -471,7 +471,7 @@ impl SparseMoeBlock {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden_dim))?;
 
-        let router_logits = self.gate.forward(&xs_flat)?;
+        let router_logits = crate::layers::router_linear(&self.gate, &xs_flat)?;
         let router_logits = match &self.gate_lora {
             Some(site) => mistralrs_quant::apply_dynamic_lora_delta(site, &xs_flat, router_logits)?,
             None => router_logits,
@@ -497,17 +497,13 @@ impl SparseMoeBlock {
         // 3. Shared expert with sigmoid gating
         let shared_out = self.shared_expert.forward(xs)?;
 
-        let shared_gate = self.shared_expert_gate.forward(&xs_flat)?;
+        let shared_gate = crate::layers::router_linear(&self.shared_expert_gate, &xs_flat)?;
         let shared_gate = match &self.shared_expert_gate_lora {
             Some(site) => mistralrs_quant::apply_dynamic_lora_delta(site, &xs_flat, shared_gate)?,
             None => shared_gate,
         };
-        let shared_gate = candle_nn::ops::sigmoid(&shared_gate)?;
         let shared_gate = shared_gate.reshape((b_size, seq_len, 1))?;
-        let shared_out = shared_out.broadcast_mul(&shared_gate)?;
-
-        // 4. Combine
-        y + shared_out
+        crate::layers::sigmoid_gated_add(&y, &shared_out, &shared_gate)
     }
 }
 

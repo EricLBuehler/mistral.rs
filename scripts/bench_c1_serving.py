@@ -183,6 +183,14 @@ def main():
 
         tokenizer = Tokenizer.from_file(str(args.text_tokenizer))
     results = []
+    report = {
+        "url": args.url,
+        "model": args.model,
+        "prompt_transport": "text" if tokenizer else "token_ids",
+        "prompts_sha256": hashlib.sha256(args.prompts.read_bytes()).hexdigest(),
+        "complete": False,
+        "results": results,
+    }
     for length in args.lengths:
         cases = [p for p in prompts if p["length"] == length]
         for index, case in enumerate(cases[: args.repetitions + args.warmup]):
@@ -204,6 +212,8 @@ def main():
             )
             result.update(index=index, warmup=index < args.warmup)
             results.append(result)
+            if args.output:
+                args.output.write_text(json.dumps(report, indent=2) + "\n")
             print(
                 json.dumps(
                     {
@@ -226,14 +236,7 @@ def main():
                 "decode_tokens_per_second",
             )
         }
-    report = {
-        "url": args.url,
-        "model": args.model,
-        "prompt_transport": "text" if tokenizer else "token_ids",
-        "prompts_sha256": hashlib.sha256(args.prompts.read_bytes()).hexdigest(),
-        "results": results,
-        "median": summary,
-    }
+    report.update(complete=True, median=summary)
     if args.output:
         args.output.write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(summary, indent=2))

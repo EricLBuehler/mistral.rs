@@ -1,0 +1,241 @@
+{
+  "correctness": [
+    {
+      "test": "topk_changed_graph_inputs",
+      "cases": 490,
+      "status": "pass"
+    },
+    {
+      "test": "score_bitwise_graph_replay",
+      "dtype": "bf16",
+      "cases": 378,
+      "status": "pass"
+    },
+    {
+      "test": "score_bitwise_graph_replay",
+      "dtype": "f16",
+      "cases": 378,
+      "status": "pass"
+    }
+  ],
+  "score": [
+    {
+      "groups": 513,
+      "cold": false,
+      "reference128": 10.1810625,
+      "shared16": 6.72775,
+      "speedup_percent": 51.32938203708519
+    },
+    {
+      "groups": 513,
+      "cold": true,
+      "reference128": 12.049524000000002,
+      "shared16": 8.969333500000001,
+      "speedup_percent": 34.34135323432894
+    },
+    {
+      "groups": 527,
+      "cold": false,
+      "reference128": 10.1750625,
+      "shared16": 6.7311250000000005,
+      "speedup_percent": 51.16436702631431
+    },
+    {
+      "groups": 527,
+      "cold": true,
+      "reference128": 12.010774000000001,
+      "shared16": 8.980435,
+      "speedup_percent": 33.74378858039728
+    },
+    {
+      "groups": 544,
+      "cold": false,
+      "reference128": 10.1699375,
+      "shared16": 6.7308125,
+      "speedup_percent": 51.0952429591524
+    },
+    {
+      "groups": 544,
+      "cold": true,
+      "reference128": 12.021483,
+      "shared16": 8.9772295,
+      "speedup_percent": 33.91083518584437
+    },
+    {
+      "groups": 2048,
+      "cold": false,
+      "reference128": 10.2281875,
+      "shared16": 6.993875,
+      "speedup_percent": 46.24492859823774
+    },
+    {
+      "groups": 2048,
+      "cold": true,
+      "reference128": 12.5288125,
+      "shared16": 9.442499999999999,
+      "speedup_percent": 32.68533227429178
+    },
+    {
+      "groups": 4096,
+      "cold": false,
+      "reference128": 10.24975,
+      "shared16": 7.588375,
+      "speedup_percent": 35.071738020327146
+    },
+    {
+      "groups": 4096,
+      "cold": true,
+      "reference128": 14.091249999999999,
+      "shared16": 10.599875,
+      "speedup_percent": 32.937888418495476
+    }
+  ],
+  "topk": [
+    {
+      "groups": 513,
+      "pattern": 0,
+      "reference": 18.557,
+      "parallel_prefix": 4.0979375000000005,
+      "speedup_percent": 352.837555477603
+    },
+    {
+      "groups": 513,
+      "pattern": 1,
+      "reference": 22.324312499999998,
+      "parallel_prefix": 4.1978124999999995,
+      "speedup_percent": 431.80823345492445
+    },
+    {
+      "groups": 513,
+      "pattern": 2,
+      "reference": 22.2067495,
+      "parallel_prefix": 4.0834375000000005,
+      "speedup_percent": 443.8248901813729
+    },
+    {
+      "groups": 527,
+      "pattern": 0,
+      "reference": 12.206687500000001,
+      "parallel_prefix": 4.121874999999999,
+      "speedup_percent": 196.14404852160737
+    },
+    {
+      "groups": 527,
+      "pattern": 1,
+      "reference": 22.2458745,
+      "parallel_prefix": 4.1460625,
+      "speedup_percent": 436.55424876011875
+    },
+    {
+      "groups": 527,
+      "pattern": 2,
+      "reference": 22.2086865,
+      "parallel_prefix": 4.085375,
+      "speedup_percent": 443.6143928035982
+    },
+    {
+      "groups": 544,
+      "pattern": 0,
+      "reference": 16.045562500000003,
+      "parallel_prefix": 4.129875,
+      "speedup_percent": 288.52416840703415
+    },
+    {
+      "groups": 544,
+      "pattern": 1,
+      "reference": 18.221563,
+      "parallel_prefix": 4.2465,
+      "speedup_percent": 329.09603202637464
+    },
+    {
+      "groups": 544,
+      "pattern": 2,
+      "reference": 22.2061885,
+      "parallel_prefix": 4.0819375,
+      "speedup_percent": 444.0109874293763
+    },
+    {
+      "groups": 2048,
+      "pattern": 0,
+      "reference": 14.756250000000001,
+      "parallel_prefix": 4.95,
+      "speedup_percent": 198.10606060606065
+    },
+    {
+      "groups": 2048,
+      "pattern": 1,
+      "reference": 20.491251,
+      "parallel_prefix": 5.175625,
+      "speedup_percent": 295.9183866682767
+    },
+    {
+      "groups": 2048,
+      "pattern": 2,
+      "reference": 22.987749,
+      "parallel_prefix": 4.8646875000000005,
+      "speedup_percent": 372.5431798034303
+    },
+    {
+      "groups": 4096,
+      "pattern": 0,
+      "reference": 15.822750500000001,
+      "parallel_prefix": 6.1995000000000005,
+      "speedup_percent": 155.22623598677313
+    },
+    {
+      "groups": 4096,
+      "pattern": 1,
+      "reference": 21.339062499999997,
+      "parallel_prefix": 6.7125625,
+      "speedup_percent": 217.89741250081468
+    },
+    {
+      "groups": 4096,
+      "pattern": 2,
+      "reference": 24.243688499999998,
+      "parallel_prefix": 6.119937500000001,
+      "speedup_percent": 296.14274655582665
+    }
+  ],
+  "scope": {
+    "score": "one query, even key-row stride and aligned packed pairs; runtime index-head count and compression ratio; existing scoring fallback for other cases",
+    "dtypes": [
+      "BF16",
+      "F16"
+    ],
+    "topk": "F32 ordered-bit selection, all row lengths and top-k quotas supported by existing path; same boundary threshold/tie pool and atomic gather partitions",
+    "precision": "bitwise score equality to frozen reference; no weight or KV-cache quantization change",
+    "future_check": "confirm whole-model performance and generation correctness before updating canonical serving table"
+  },
+  "baseline_order_contract": "atomic gather does not guarantee order or particular boundary-tie IDs; exact threshold and eligible tie pool preserved",
+  "status": "integrated; two repository CUDA tests passed in attention batch; no serving claim is established by this standalone evidence",
+  "repository_cuda_tests": {
+    "passed": 2,
+    "failed": 0,
+    "log": "qsa-selection-cuda-tests.log"
+  },
+  "standalone_cases": {
+    "topk": 490,
+    "score_bf16": 378,
+    "score_f16": 378,
+    "total": 1246,
+    "counting": "distinct input scenarios, not repository test functions; repeated prototype and production checks are not added together"
+  },
+  "production_files": [
+    "mistralrs-core/src/cuda/qwen4_exp.cu",
+    "mistralrs-core/src/cuda/qwen4_exp_selection_tests.rs"
+  ],
+  "source_sha256": {
+    "mistralrs-core/src/cuda/qwen4_exp.cu": "414075248ab018b8d41ec4dcdfabf7218b83e3554fd1c0c97ac2ff69166e98b9",
+    "mistralrs-core/src/cuda/qwen4_exp_selection_tests.rs": "6d5cb8fadf2c335d1911dea7d418cbf024e6b0f7f1405fb6c1d709a946657832"
+  },
+  "raw_files": {
+    "qsa-selection-prototype-correctness.jsonl": "882f0b28990fab493c170011dfd74409d71201611724d50223bbc5f10fadfee9",
+    "qsa-selection-production-correctness.jsonl": "882f0b28990fab493c170011dfd74409d71201611724d50223bbc5f10fadfee9",
+    "qsa-selection-production-timing.jsonl": "4373e7a838529612f24113d4ce51d18dbcc5322b7ab33f3173863d550f1d5252",
+    "qsa-selection-prototype-timing.jsonl": "c839f76cfc52c70ad63cbe165cba6ddfad0209561a18c15f19762a1074706cd5",
+    "qsa-selection-prototype-timing-repeat.jsonl": "aaf4906354f7afc505100baaab67abc1ec64c2c787a0e06bf91821ba43ea7bb7",
+    "qsa-selection-production-sha256.txt": "2ef20a5815ccc9b7c50a9caea118e147c5dff34841f9f7b9f5c7ce2ecfa13713",
+    "qsa-selection-cuda-tests.log": "d1fd96700a64c37c5c3242451f12a65b2cd7b1e86d16c5b82e4e5736b57993c7"
+  }
+}

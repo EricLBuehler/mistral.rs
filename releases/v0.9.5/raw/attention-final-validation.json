@@ -1,0 +1,57 @@
+[
+  {
+    "stage": "format",
+    "command": [
+      "cargo",
+      "fmt",
+      "--all",
+      "--",
+      "--check"
+    ],
+    "log": "/tmp/qwen38-broad/attention-final-format.log",
+    "seconds": 2.8901524543762207,
+    "exit_code": 0
+  },
+  {
+    "stage": "diff",
+    "command": [
+      "git",
+      "diff",
+      "--check"
+    ],
+    "log": "/tmp/qwen38-broad/attention-final-diff.log",
+    "seconds": 0.037043094635009766,
+    "exit_code": 0
+  },
+  {
+    "stage": "cuda",
+    "command": [
+      "cargo",
+      "check",
+      "-p",
+      "mistralrs-cli",
+      "--features",
+      "cuda,flash-attn,cutile",
+      "-j10"
+    ],
+    "log": "/tmp/qwen38-broad/attention-final-cuda.log",
+    "seconds": 7.335816383361816,
+    "exit_code": 0
+  },
+  {
+    "stage": "cpu",
+    "command": [
+      "cargo",
+      "check",
+      "-p",
+      "mistralrs-core",
+      "-p",
+      "mistralrs-quant",
+      "--no-default-features",
+      "-j10"
+    ],
+    "log": "/tmp/qwen38-broad/attention-final-cpu.log",
+    "seconds": 4.3715410232543945,
+    "exit_code": 0
+  }
+]

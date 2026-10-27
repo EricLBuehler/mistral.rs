@@ -1,0 +1,281 @@
+{
+  "cuda_suite_passed": 33,
+  "shared_activation_cpu_tests_passed": 2,
+  "total_passed": 35,
+  "cuda_suite": [
+    {
+      "command": [
+        "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+        "cuda_memory::tests::",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/final-test-cuda_memory-tests.log",
+      "tests": 1,
+      "exit_code": 0,
+      "seconds": 0.5071063041687012,
+      "test_names": [
+        "cuda_memory::tests::mapped_prefault_rejects_capture_of_borrowed_memory"
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+        "gguf::embedding_tests::",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/final-test-gguf-embedding_tests.log",
+      "tests": 5,
+      "exit_code": 0,
+      "seconds": 0.5930306911468506,
+      "test_names": [
+        "gguf::embedding_tests::embedding_cpu_gathers_all_formats_from_unaligned_storage",
+        "gguf::embedding_tests::embedding_cuda_gathers_all_formats_resident_and_mapped",
+        "gguf::embedding_tests::embedding_cuda_graph_replay_tracks_changed_strided_ids",
+        "gguf::embedding_tests::embedding_rejects_big_endian_tensor_storage",
+        "gguf::embedding_tests::embedding_rejects_zero_width_rows"
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+        "gguf::gated_mix::tests::",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/final-test-gguf-gated_mix-tests.log",
+      "tests": 3,
+      "exit_code": 0,
+      "seconds": 1.3363876342773438,
+      "test_names": [
+        "gguf::gated_mix::tests::quantized_gated_mix_formats_and_shapes_match_reference",
+        "gguf::gated_mix::tests::quantized_gated_mix_graph_replay_matches_reference",
+        "gguf::gated_mix::tests::shared_quantized_pair_prefill_matches_independent_projections"
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+        "gguf::fast_mmvq::sm121_tests::",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/final-test-gguf-fast_mmvq-sm121_tests.log",
+      "tests": 1,
+      "exit_code": 0,
+      "seconds": 0.6870858669281006,
+      "test_names": [
+        "gguf::fast_mmvq::sm121_tests::prefetch_dispatch_graph_replay_matches_legacy_for_all_formats"
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+        "gguf::cuda::moe_sm121_tests::",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/final-test-gguf-cuda-moe_sm121_tests.log",
+      "tests": 2,
+      "exit_code": 0,
+      "seconds": 1.5284981727600098,
+      "test_names": [
+        "gguf::cuda::moe_sm121_tests::q8_1_experts_treat_block_sums_as_metadata",
+        "gguf::cuda::moe_sm121_tests::sm121_moe_graph_replay_matches_legacy_with_changing_routing"
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+        "gguf::fast_mmq::compact_mmq_tests::",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/final-test-gguf-fast_mmq-compact_mmq_tests.log",
+      "tests": 2,
+      "exit_code": 0,
+      "seconds": 2.7750961780548096,
+      "test_names": [
+        "gguf::fast_mmq::compact_mmq_tests::compact_mmq_graph_replay_rebuilds_routing_and_reuses_workspace",
+        "gguf::fast_mmq::compact_mmq_tests::compact_mmq_handles_partial_rows_and_multiple_expert_chunks"
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_core-2dfd7f3c1634b658",
+        "layers::hyper_connection::tests::",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/final-test-layers-hyper_connection-tests.log",
+      "tests": 6,
+      "exit_code": 0,
+      "seconds": 1.9612774848937988,
+      "test_names": [
+        "layers::hyper_connection::tests::fused_hyper_connection_kernels_match_reference",
+        "layers::hyper_connection::tests::fused_hyper_connection_projections_match_reference",
+        "layers::hyper_connection::tests::hyper_connection_consumes_offset_and_strided_projection_views",
+        "layers::hyper_connection::tests::hyper_connection_orders_cross_stream_inputs_and_outputs",
+        "layers::hyper_connection::tests::packed_hyper_connection_projections_match_reference",
+        "layers::hyper_connection::tests::quantized_hyper_connection_graph_replay_matches_reference"
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_core-2dfd7f3c1634b658",
+        "cuda::gdn::tests::mma_prefill_",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/final-test-cuda-gdn-tests-mma_prefill_.log",
+      "tests": 4,
+      "exit_code": 0,
+      "seconds": 1.053281307220459,
+      "test_names": [
+        "cuda::gdn::tests::mma_prefill_graph_replay_tracks_changed_pooled_slots",
+        "cuda::gdn::tests::mma_prefill_matches_sequential_recurrence",
+        "cuda::gdn::tests::mma_prefill_orders_cross_stream_state_updates",
+        "cuda::gdn::tests::mma_prefill_preserves_slow_decay_state_across_prompt_chunks"
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_core-2dfd7f3c1634b658",
+        "vision_models::qwen4_exp::ple::tests::",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/final-test-vision_models-qwen4_exp-ple-tests.log",
+      "tests": 5,
+      "exit_code": 0,
+      "seconds": 0.54388427734375,
+      "test_names": [
+        "vision_models::qwen4_exp::ple::tests::hashed_rows_match_reference",
+        "vision_models::qwen4_exp::ple::tests::iq4_nl_gather_matches_host_dequant",
+        "vision_models::qwen4_exp::ple::tests::mapped_quantization_preserves_shard_and_chunk_offsets",
+        "vision_models::qwen4_exp::ple::tests::planned_table_matches_checkpoint_rows",
+        "vision_models::qwen4_exp::ple::tests::resident_quantization_matches_host"
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_core-2dfd7f3c1634b658",
+        "cuda::qwen4_exp::tests::",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/final-test-cuda-qwen4_exp-tests.log",
+      "tests": 3,
+      "exit_code": 0,
+      "seconds": 1.4423439502716064,
+      "test_names": [
+        "cuda::qwen4_exp::tests::qsa_dense_graph_matches_identity_selection",
+        "cuda::qwen4_exp::tests::qsa_reopened_block_matches_fresh_prefill",
+        "cuda::qwen4_exp::tests::qsa_scored_topk_graph_ignores_poisoned_unused_pages_across_requests"
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_core-2dfd7f3c1634b658",
+        "ops::tests::cuda_top1_",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "log": "/tmp/qwen38-broad/final-test-ops-tests-cuda_top1_.log",
+      "tests": 1,
+      "exit_code": 0,
+      "seconds": 0.46919941902160645,
+      "test_names": [
+        "ops::tests::cuda_top1_uses_first_maximum_across_lanes_and_chunks"
+      ]
+    }
+  ],
+  "shared_activation": [
+    {
+      "command": [
+        "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+        "tests::shared_activation_",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "tests": 2,
+      "exit_code": 0,
+      "seconds": 0.07683324813842773,
+      "log": "/tmp/qwen38-broad/production-test-shared-activation.log",
+      "test_names": [
+        "tests::shared_activation_falls_back_for_unsupported_input_dtype",
+        "tests::shared_activation_requires_matching_global_calibration"
+      ]
+    },
+    {
+      "command": [
+        "target/debug/deps/mistralrs_quant-c7572436eb6688b8",
+        "native_loading_mutable_shared_scales_and_post_cast_bias_match_oracle",
+        "--include-ignored",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "tests": 0,
+      "exit_code": 0,
+      "seconds": 0.07221007347106934,
+      "log": "/tmp/qwen38-broad/production-test-nvfp4-shared-scales.log",
+      "selection_exit_code": 1,
+      "status": "not_compiled",
+      "reason": "Existing has_nvfp4_cutlass_sm121_kernels guard requires CUDA>=13.3; this build uses CUDA13.2. The test is absent and was not run.",
+      "test_names": []
+    }
+  ],
+  "full_model": {
+    "gguf_chunk512": {
+      "prewarm_requests": 12,
+      "measured_sweep_requests": 12,
+      "measurement_requests_excluding_per_length_warmup": 9,
+      "all_returned_128_tokens": true,
+      "all_text_chunks_equal_output_tokens": true,
+      "nan_or_request_errors": false
+    },
+    "gguf_chunk8192": {
+      "prewarm_requests": 12,
+      "measured_sweep_requests": 12,
+      "measurement_requests_excluding_per_length_warmup": 9,
+      "all_returned_128_tokens": true,
+      "all_text_chunks_equal_output_tokens": true,
+      "nan_or_request_errors": false,
+      "decoder_layers_on_cuda": 48
+    },
+    "native_quant4_chunk8192": {
+      "prewarm_requests": 12,
+      "measured_sweep_requests": 12,
+      "measurement_requests_excluding_per_length_warmup": 9,
+      "all_returned_128_tokens": true,
+      "all_text_chunks_equal_output_tokens": true,
+      "nan_or_request_errors": false,
+      "decoder_layers_on_cuda": 48,
+      "ple_quantization": "mapped symmetric Q4",
+      "different_quantization_from_gguf": true
+    }
+  },
+  "gdn_address_space_correction": {
+    "change": "Four ldmatrix instructions explicitly specify the .shared state space.",
+    "standalone_poison_result": "Both original and corrected kernels passed all 19 cases; causality for the earlier first-use NaN is unproven.",
+    "production_validation": "The diagnostic finite-stage probe was removed. Final release fresh-server prewarm and measured sweeps passed at GGUF 512, GGUF 8192 and native quant-4 8192: 72 requests."
+  },
+  "full_model_completed_requests": 72,
+  "measurement_generation": "historical",
+  "source_sha256": "b55a21dbf070239b30336520810c85906eb2ab69a9e31c51742afd68d005a965",
+  "binary_sha256": "eca4ba522dc65558ab91800341ae9459d53f0dc36115c4b685444f2a09898b93",
+  "current_source_validation": "Separate current-source batch passed 63 distinct tests, CUDA/CPU cargo checks and release CLI build; see resumed-build-validation.json. Historical counts are not additive."
+}

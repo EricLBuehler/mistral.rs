@@ -26,17 +26,9 @@ const MATRIX_ROW_PADDING: usize = 512;
 const MMQ_X_MAX: usize = 128;
 const MMQ_Y_MAX: usize = 128;
 const COMPACT_CAPABILITY: i32 = 1210;
-const COMPACT_EXPERTS: usize = 512;
-const COMPACT_TOKENS: usize = 512;
-const COMPACT_TOPK: usize = 10;
 const COMPACT_COLUMNS: usize = 16;
-const COMPACT_HIDDEN: usize = 2560;
-const COMPACT_INTERMEDIATE: usize = 640;
-const COMPACT_Q4_1_TYPE: i32 = 3;
-const COMPACT_Q5_1_TYPE: i32 = 7;
-const COMPACT_Q8_0_TYPE: i32 = 8;
-const COMPACT_Q4_K_TYPE: i32 = 12;
-const COMPACT_Q5_K_TYPE: i32 = 13;
+const COMPACT_WIDE_COLUMNS: i32 = 128;
+const COMPACT_MEDIUM_COLUMNS: i32 = 64;
 
 #[inline]
 fn pad(p: usize, q: usize) -> usize {
@@ -269,24 +261,27 @@ struct GroupedMmqLaunch {
 
 impl GroupedMmqLaunch {
     fn compact_type(&self) -> Option<i32> {
+        #[cfg(test)]
+        if compact_mmq_tests::FORCE_REGULAR.with(|flag| flag.get()) {
+            return None;
+        }
         let workspace_bytes = (self.assignments / COMPACT_COLUMNS + self.experts + 1)
             * std::mem::size_of::<[i32; 2]>();
         if self.device.cc != COMPACT_CAPABILITY
-            || self.experts != COMPACT_EXPERTS
-            || self.max_cols != COMPACT_TOKENS
-            || self.assignments != COMPACT_TOKENS * COMPACT_TOPK
+            || self.assignments / COMPACT_COLUMNS + self.experts > u16::MAX as usize
             || workspace_bytes
                 > self.device.nsm as usize * MMQ_X_MAX * MMQ_Y_MAX * std::mem::size_of::<f32>()
         {
             return None;
         }
-        match (self.dtype, self.input_cols, self.output_rows) {
-            (GgmlDType::Q4K, COMPACT_HIDDEN, COMPACT_INTERMEDIATE) => Some(COMPACT_Q4_K_TYPE),
-            (GgmlDType::Q5K, COMPACT_HIDDEN, COMPACT_INTERMEDIATE) => Some(COMPACT_Q5_K_TYPE),
-            (GgmlDType::Q4_1, COMPACT_INTERMEDIATE, COMPACT_HIDDEN) => Some(COMPACT_Q4_1_TYPE),
-            (GgmlDType::Q5_1, COMPACT_INTERMEDIATE, COMPACT_HIDDEN) => Some(COMPACT_Q5_1_TYPE),
-            (GgmlDType::Q8_0, COMPACT_INTERMEDIATE, COMPACT_HIDDEN) => Some(COMPACT_Q8_0_TYPE),
-            _ => None,
+        supports(self.dtype).then(|| super::ggml_dtype_to_uqff_code(self.dtype) as i32)
+    }
+
+    fn wide_columns(&self) -> i32 {
+        if self.input_cols >= self.output_rows {
+            COMPACT_WIDE_COLUMNS
+        } else {
+            COMPACT_MEDIUM_COLUMNS
         }
     }
 
@@ -295,7 +290,8 @@ impl GroupedMmqLaunch {
             ffi::launch_mmq_gguf_compact_prepare(
                 self.expert_bounds,
                 self.fixup,
-                quant_type,
+                self.experts as i32,
+                self.wide_columns(),
                 self.stream,
             );
             for &(weight, output) in projections {
@@ -311,6 +307,8 @@ impl GroupedMmqLaunch {
                         assignments: self.assignments as i32,
                         output_stride: self.output_stride as i32,
                         quant_type,
+                        experts: self.experts as i32,
+                        wide_columns: self.wide_columns(),
                     },
                     self.fixup,
                     self.stream,
@@ -867,6 +865,18 @@ fn down_from_glu(
 pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
     let mut outputs = shared_lhs(&[w], xs)?;
     Ok(outputs.pop().expect("one weight produces one output"))
+}
+
+/// Compute two projections with one activation quantization pass.
+pub(crate) fn fused_pair(
+    left_w: &QTensor,
+    right_w: &QTensor,
+    xs: &Tensor,
+) -> Result<(Tensor, Tensor)> {
+    let mut outputs = shared_lhs(&[left_w, right_w], xs)?;
+    let right = outputs.pop().expect("two weights produce two outputs");
+    let left = outputs.pop().expect("two weights produce two outputs");
+    Ok((left, right))
 }
 
 /// Compute Q, K, and V projections with one activation quantization pass.
@@ -1617,7 +1627,7 @@ pub fn grouped_pair(
 mod compact_mmq_tests;
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::gguf::fast_mmvq;
     use candle_core::quantized::GgmlDType;
@@ -1628,7 +1638,7 @@ mod tests {
     const INTERMEDIATE: usize = 512;
     const TOLERANCE: f32 = 5e-3;
 
-    pub(super) fn patterned(shape: impl Into<Shape>, salt: usize, scale: f32) -> Result<Tensor> {
+    pub(crate) fn patterned(shape: impl Into<Shape>, salt: usize, scale: f32) -> Result<Tensor> {
         let shape = shape.into();
         let values = (0..shape.elem_count())
             .map(|index| {

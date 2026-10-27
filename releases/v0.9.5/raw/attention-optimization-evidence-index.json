@@ -1,0 +1,68 @@
+{
+  "status": "Release build/checks,74 distinct tests and fresh24-request same-GGUF canonical sweep passed. Uniform10% best-llama decode target remains unmet.",
+  "summaries": [
+    "cutile-qsa-decode-evidence.json",
+    "hyper-vector-combine-evidence.json",
+    "shared-gate-evidence.json",
+    "shared-mmvq-evidence.json",
+    "qsa-selection-summary.json"
+  ],
+  "repository_validation_snapshot": [
+    {
+      "group": "cutile_qsa_decode",
+      "artifact": "attention-test-cutile-qsa_decode-tests.log",
+      "status": "ok",
+      "passed": 3,
+      "failed": 0,
+      "sha256": "535465f187037cd007d827fbc39aa32ab680878aec1d705f6634e1b54998627b"
+    },
+    {
+      "group": "shared_gate",
+      "artifact": "attention-test-layers-gated_add-tests.log",
+      "status": "ok",
+      "passed": 3,
+      "failed": 0,
+      "sha256": "0c4790938a6d738af69830f117831d55a89ed0ae9b9a0005c3ce316419d31bd6"
+    },
+    {
+      "group": "shared_mmvq",
+      "artifact": "attention-test-gguf-fast_mmvq-shared_tests.log",
+      "status": "ok",
+      "passed": 2,
+      "failed": 0,
+      "sha256": "8de695815a7d9b0661f35998664f53d23e37fc5c1398aa99cd6b0c803508500c"
+    },
+    {
+      "group": "hyper_connection",
+      "artifact": "attention-hc-retest.log",
+      "status": "ok",
+      "passed": 7,
+      "failed": 0,
+      "sha256": "1702df1e8721c301810bb963b271e75f71db8c6d4338f190e4ab8f415400324c",
+      "retest_reason": "CPU F32 reference replaced with independent FP64, unchanged tolerance and kernel."
+    }
+  ],
+  "interpretation": "Standalone microbenchmark improvements are not additive full-model gains. CUDA graph/cold-working-set controls differ by operation; each summary states its scope.",
+  "excluded_staging": "Optional dense-source packing remains only under/tmp and is not applied, compiled, benchmarked or included in production source.",
+  "prototype_vs_production": {
+    "qsa": "Prototype uses selected fixed split variants; production derives splits from SM count and exact-f32 scalar specializations, plus capability bounds.",
+    "hc": "Vector4 implementation retained; production selects its established thread policy with alignment, row-capacity and minimum-work fallbacks. Scalar-only prototypes remain rejected.",
+    "shared_gate": "BF16/F16 per-element sigmoid and F32 row-reuse implementation selected after C1 and17/512/8192 prefill controls. Exact Candle arithmetic references are independent of the replacement scalar GEMV reduction order.",
+    "shared_mmvq": "New Rust shared-activation helper reuses unchanged established per-weight CUDA kernels; source tests validate actual dispatch and fallback."
+  },
+  "distinct_repository_tests_passed": 74,
+  "test_count_note": "52 targeted plus22 additional CPU; do not add historical63 because test coverage overlaps.",
+  "validated_release_source_sha256": "4ac5bbc7122f69a3391861b0208879e7aa45125ffe94db4b77703cac77c4040c",
+  "validated_release_binary_sha256": "2f66d0a61e4070e86a761fd01b59c98668837f868305e6b838fe1ff2035db23e",
+  "release_validation": "attention-build-validation.json",
+  "full_model_status": {
+    "complete": true,
+    "result": "mrs-attention-8192-serving.json",
+    "prewarm": "mrs-attention-8192-prewarm.json",
+    "requests": 24,
+    "request_errors": 0,
+    "uniform_10_percent_best_llama_decode_lead": false,
+    "comparison": "attention-comparison.json"
+  },
+  "canonical_source_scope": "Current seventh canonical cell contains these changes; first six retain their earlier source/binary identifiers."
+}

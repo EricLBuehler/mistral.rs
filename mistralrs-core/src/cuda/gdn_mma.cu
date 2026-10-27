@@ -196,19 +196,19 @@ __device__ __forceinline__ T load(const matrix<R, C> &m, int row, int col,
   const uint32_t address = __cvta_generic_to_shared(packed + offset);
   if constexpr (TRANS && I == 16) {
     asm volatile(
-        "ldmatrix.sync.aligned.m8n8.x4.trans.b16 {%0, %1, %2, %3}, [%4];"
+        "ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0, %1, %2, %3}, [%4];"
         : "=r"(t.x[0]), "=r"(t.x[2]), "=r"(t.x[1]), "=r"(t.x[3])
         : "r"(address));
   } else if constexpr (TRANS) {
-    asm volatile("ldmatrix.sync.aligned.m8n8.x2.trans.b16 {%0, %1}, [%2];"
+    asm volatile("ldmatrix.sync.aligned.m8n8.x2.trans.shared.b16 {%0, %1}, [%2];"
                  : "=r"(t.x[0]), "=r"(t.x[1])
                  : "r"(address));
   } else if constexpr (I == 16) {
-    asm volatile("ldmatrix.sync.aligned.m8n8.x4.b16 {%0, %1, %2, %3}, [%4];"
+    asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0, %1, %2, %3}, [%4];"
                  : "=r"(t.x[0]), "=r"(t.x[1]), "=r"(t.x[2]), "=r"(t.x[3])
                  : "r"(address));
   } else {
-    asm volatile("ldmatrix.sync.aligned.m8n8.x2.b16 {%0, %1}, [%2];"
+    asm volatile("ldmatrix.sync.aligned.m8n8.x2.shared.b16 {%0, %1}, [%2];"
                  : "=r"(t.x[0]), "=r"(t.x[1])
                  : "r"(address));
   }
