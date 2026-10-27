@@ -16,6 +16,29 @@
 #define Q4_ATTN_WARPS 4
 #define Q4_ATTN_MAX_HEADS_PER_WARP 4
 #define Q4_ATTN_ITEMS 4
+#define Q4_HC_THREADS 128
+#define Q4_HC_WARP_SIZE 32
+#define Q4_HC_HIDDEN 2560
+#define Q4_HC_RANK 320
+#define Q4_HC_STREAMS 4
+#define Q4_HC_QUANT_GROUP 32
+#define Q4_HC_QUANT_THREADS 256
+
+struct Q4HcQ8Input {
+  __half2 ds;
+  int8_t qs[Q4_HC_QUANT_GROUP];
+};
+
+struct Q4HcQ8Weight {
+  __half d;
+  int8_t qs[Q4_HC_QUANT_GROUP];
+};
+
+struct Q4HcQ5Weight {
+  __half2 dm;
+  uint32_t high;
+  int8_t qs[Q4_HC_QUANT_GROUP / 2];
+};
 
 template <typename T> __device__ __forceinline__ float q4_f(T v) {
   return (float)v;
@@ -76,6 +99,166 @@ __device__ __forceinline__ void q4_load8(const T *__restrict__ p, float *out) {
 #pragma unroll
   for (int i = 0; i < 8; ++i) {
     out[i] = q4_f(vec.v[i]);
+  }
+}
+
+template <int FORMAT>
+__device__ __forceinline__ float q4_hc_weight(const void *weight, size_t i) {
+  if constexpr (FORMAT == 3) {
+    const unsigned char *block = (const unsigned char *)weight + (i / 32) * 24;
+    const int q = i % 32;
+    const unsigned int high = *(const unsigned int *)(block + 4);
+    const int value = ((block[8 + q % 16] >> (4 * (q / 16))) & 15) | (((high >> q) & 1) << 4);
+    return __half2float(*(const __half *)block) * value + __half2float(*(const __half *)(block + 2));
+  } else if constexpr (FORMAT == 2) {
+    const unsigned char *block = (const unsigned char *)weight + (i / 32) * 34;
+    return __half2float(*(const __half *)block) * (float)((const int8_t *)(block + 2))[i % 32];
+  } else if constexpr (FORMAT == 1) {
+    return __bfloat162float(((const __nv_bfloat16 *)weight)[i]);
+  } else {
+    return __half2float(((const __half *)weight)[i]);
+  }
+}
+
+template <typename T, int FORMAT>
+__global__ void q4_hc_up_mix_kernel(const T *__restrict__ lo, const void *up,
+                                   const T *__restrict__ xn, T *__restrict__ out,
+                                   int hidden, int rank, int hc) {
+  const int warp = threadIdx.x / Q4_HC_WARP_SIZE;
+  const int lane = threadIdx.x % Q4_HC_WARP_SIZE;
+  const int h = blockIdx.x * (Q4_HC_THREADS / Q4_HC_WARP_SIZE) + warp;
+  if (h >= hidden) {
+    return;
+  }
+  const int token = blockIdx.y;
+  const T *input = lo + (size_t)token * rank;
+  float mixed = 0.0f;
+  for (int stream = 0; stream < hc; ++stream) {
+    const int row = stream * hidden + h;
+    float sum = 0.0f;
+    for (int k = lane; k < rank; k += Q4_HC_WARP_SIZE) {
+      sum = fmaf(q4_f(input[k]), q4_hc_weight<FORMAT>(up, (size_t)row * rank + k), sum);
+    }
+    sum = q4_warp_sum(sum);
+    if (lane == 0) {
+      mixed += q4_f(xn[(size_t)token * hc * hidden + row]) * q4_sigmoid(q4_f(q4_t<T>(sum)));
+    }
+  }
+  if (lane == 0) {
+    out[(size_t)token * hidden + h] = q4_t<T>(mixed / hc);
+  }
+}
+
+template <typename T>
+__global__ void q4_hc_silu_kernel(const T *__restrict__ input, T *__restrict__ output,
+                                 size_t elements, int hc) {
+  const size_t i = (size_t)blockIdx.x * blockDim.x + threadIdx.x;
+  if (i < elements) {
+    const float scaled = q4_f(q4_t<T>(q4_f(input[i]) / hc));
+    output[i] = q4_t<T>(q4_silu(scaled));
+  }
+}
+
+template <typename T>
+__global__ void q4_hc_quantize_kernel(const T *input, Q4HcQ8Input *output) {
+  const int index = blockIdx.x * blockDim.x + threadIdx.x;
+  if (index >= Q4_HC_RANK) {
+    return;
+  }
+  const int lane = index % Q4_HC_QUANT_GROUP;
+  const float value = q4_f(input[index]);
+  float amax = fabsf(value);
+#pragma unroll
+  for (int shift = Q4_HC_WARP_SIZE / 2; shift > 0; shift >>= 1) {
+    amax = fmaxf(amax, __shfl_xor_sync(0xffffffff, amax, shift));
+  }
+  const float sum = q4_warp_sum(value);
+  const float scale = amax / 127.0f;
+  auto &block = output[index / Q4_HC_QUANT_GROUP];
+  block.qs[lane] =
+      amax == 0.0f ? 0 : static_cast<int8_t>(roundf(value / scale));
+  if (lane == 0) {
+    block.ds = __floats2half2_rn(scale, sum);
+  }
+}
+
+__device__ __forceinline__ int q4_hc_quant_int(const int8_t *values,
+                                               int index) {
+  const auto *halves =
+      reinterpret_cast<const uint16_t *>(values + sizeof(int) * index);
+  return halves[0] | (static_cast<int>(halves[1]) << 16);
+}
+
+template <int FORMAT>
+__device__ __forceinline__ float
+q4_hc_quant_dot(const void *weights, const Q4HcQ8Input *input, int row) {
+  constexpr int threads_per_group = FORMAT == 2 ? 4 : 2;
+  constexpr int blocks_per_row = Q4_HC_RANK / Q4_HC_QUANT_GROUP;
+  const int lane = threadIdx.x % Q4_HC_WARP_SIZE;
+  float total = 0.0f;
+  for (int block = lane / threads_per_group; block < blocks_per_row;
+       block += Q4_HC_WARP_SIZE / threads_per_group) {
+    const int part = 2 * (lane % threads_per_group);
+    const auto *activation = reinterpret_cast<const int *>(input[block].qs);
+    int sum = 0;
+    if constexpr (FORMAT == 2) {
+      const auto *weight = static_cast<const Q4HcQ8Weight *>(weights) +
+                           row * blocks_per_row + block;
+#pragma unroll
+      for (int i = 0; i < 2; ++i) {
+        sum = __dp4a(q4_hc_quant_int(weight->qs, part + i),
+                     activation[part + i], sum);
+      }
+      // Match the separately rounded warp partials of the Q8_1 MMVQ reduction.
+      const float scaled =
+          __fmul_rn(static_cast<float>(sum), __half2float(weight->d));
+      total = __fadd_rn(total, __fmul_rn(scaled, __low2float(input[block].ds)));
+    } else {
+      const auto *weight = static_cast<const Q4HcQ5Weight *>(weights) +
+                           row * blocks_per_row + block;
+#pragma unroll
+      for (int i = 0; i < 2; ++i) {
+        const int low_bits =
+            reinterpret_cast<const int *>(weight->qs)[part + i];
+        const int high_bits = weight->high >> (4 * (part + i));
+        const int low = (low_bits & 0x0f0f0f0f) | ((high_bits << 4) & 0x10) |
+                        ((high_bits << 11) & 0x1000) |
+                        ((high_bits << 18) & 0x100000) |
+                        ((high_bits << 25) & 0x10000000);
+        const int high =
+            ((low_bits >> 4) & 0x0f0f0f0f) | ((high_bits >> 12) & 0x10) |
+            ((high_bits >> 5) & 0x1000) | ((high_bits << 2) & 0x100000) |
+            ((high_bits << 9) & 0x10000000);
+        sum = __dp4a(low, activation[part + i], sum);
+        sum = __dp4a(high, activation[part + i + 4], sum);
+      }
+      const float2 dm = __half22float2(weight->dm);
+      const float2 ds = __half22float2(input[block].ds);
+      total += sum * (dm.x * ds.x) + (dm.y * ds.y) / 2;
+    }
+  }
+  return q4_warp_sum(total);
+}
+
+template <typename T, int FORMAT>
+__global__ void q4_hc_quant_up_mix_kernel(const Q4HcQ8Input *input,
+                                          const void *weights, const T *xn,
+                                          T *output) {
+  const int warp = threadIdx.x / Q4_HC_WARP_SIZE;
+  const int lane = threadIdx.x % Q4_HC_WARP_SIZE;
+  const int hidden = blockIdx.x * (Q4_HC_THREADS / Q4_HC_WARP_SIZE) + warp;
+  float value = 0.0f;
+#pragma unroll
+  for (int stream = 0; stream < Q4_HC_STREAMS; ++stream) {
+    const int row = stream * Q4_HC_HIDDEN + hidden;
+    const float gate =
+        q4_f(q4_t<T>(q4_hc_quant_dot<FORMAT>(weights, input, row)));
+    if (lane == 0) {
+      value = fmaf(q4_f(xn[row]), q4_sigmoid(gate), value);
+    }
+  }
+  if (lane == 0) {
+    output[hidden] = q4_t<T>(value / Q4_HC_STREAMS);
   }
 }
 
@@ -319,8 +502,45 @@ q4_ple_gather_kernel(const long long *__restrict__ rows, int n_lookups,
 #define Q4_PLE_FMT_Q4 1
 #define Q4_PLE_FMT_IQ4_NL 2
 #define Q4_IQ4_NL_BLOCK_BYTES 18
+#define Q4_PLE_QUANT_WARPS 8
 __constant__ signed char q4_kvalues_iq4nl[16] = {
     -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113};
+
+template <typename T>
+__global__ void q4_ple_quantize_table_kernel(
+    const T *__restrict__ source, unsigned char *__restrict__ data,
+    __half *__restrict__ scales, int groups, int bits) {
+  const int group = blockIdx.x * Q4_PLE_QUANT_WARPS + (threadIdx.x >> 5);
+  const int lane = threadIdx.x & 31;
+  if (group >= groups) {
+    return;
+  }
+  const float value = q4_f(source[(size_t)group * Q4_PLE_GROUP + lane]);
+  float amax = fabsf(value);
+#pragma unroll
+  for (int offset = Q4_PLE_GROUP / 2; offset > 0; offset >>= 1) {
+    amax = fmaxf(amax, __shfl_xor_sync(0xffffffff, amax, offset));
+  }
+  const float qmax = bits == 8 ? 127.0f : 7.0f;
+  const __half scale = __float2half_rn(__fdiv_rn(amax, qmax));
+  if (lane == 0) {
+    scales[group] = scale;
+  }
+  const float d = __half2float(scale);
+  const float inv = d > 0.0f ? __fdiv_rn(1.0f, d) : 0.0f;
+  // Match the host quantizer's ties away from zero and rounded f16 scale.
+  const int q = (int)fminf(qmax, fmaxf(-qmax, roundf(__fmul_rn(value, inv))));
+  if (bits == 8) {
+    data[(size_t)group * Q4_PLE_GROUP + lane] = (unsigned char)(signed char)q;
+  } else {
+    const int next = __shfl_down_sync(0xffffffff, q, 1);
+    if ((lane & 1) == 0) {
+      data[(size_t)group * (Q4_PLE_GROUP / 2) + lane / 2] =
+          (unsigned char)((q + 8) | ((next + 8) << 4));
+    }
+  }
+}
+
 __global__ void
 q4_ple_gather_quant_kernel(const long long *__restrict__ rows, int n_lookups,
                            const unsigned char *__restrict__ data,
@@ -795,10 +1015,14 @@ __global__ void __launch_bounds__(Q4_ATTN_WARPS * 32) q4_qsa_attention_kernel(
   int n_items = 0;
   int tail_start = 0;
   if (pos >= 0) {
-    const int nb = (pos + 1) / ratio;
-    n_block_items = n_selected[t] * ratio;
-    tail_start = nb * ratio;
-    n_items = n_block_items + (pos + 1 - tail_start);
+    if (selected == nullptr) {
+      n_items = pos + 1;
+    } else {
+      const int nb = (pos + 1) / ratio;
+      n_block_items = n_selected[t] * ratio;
+      tail_start = nb * ratio;
+      n_items = n_block_items + (pos + 1 - tail_start);
+    }
   }
   const int begin = split * items_per_split;
   const int end = min(n_items, begin + items_per_split);
@@ -1016,6 +1240,64 @@ static inline int q4_row_threads(int hidden) {
   return threads;
 }
 
+extern "C" void qwen4_hc_up_mix(const void *lo, const void *up, const void *xn,
+                                void *out, int tokens, int hidden, int rank,
+                                int hc, int format, int dtype, int64_t stream) {
+  const cudaStream_t s = (cudaStream_t)stream;
+  const dim3 grid((hidden + Q4_HC_THREADS / Q4_HC_WARP_SIZE - 1) /
+                      (Q4_HC_THREADS / Q4_HC_WARP_SIZE), tokens);
+#define Q4_HC_UP(FORMAT)                                                        \
+  q4_hc_up_mix_kernel<scalar_t, FORMAT><<<grid, Q4_HC_THREADS, 0, s>>>(            \
+      (const scalar_t *)lo, up, (const scalar_t *)xn, (scalar_t *)out, hidden,    \
+      rank, hc)
+  Q4_DISPATCH_HALF(dtype, {
+    if (format == 3) {
+      Q4_HC_UP(3);
+    } else if (format == 2) {
+      Q4_HC_UP(2);
+    } else if (format == 1) {
+      Q4_HC_UP(1);
+    } else {
+      Q4_HC_UP(0);
+    }
+  });
+#undef Q4_HC_UP
+}
+
+extern "C" void qwen4_hc_quant_up_mix(const void *lo, const void *up,
+                                      const void *xn, void *scratch, void *out,
+                                      int format, int dtype, int64_t stream) {
+  const cudaStream_t s =
+      static_cast<cudaStream_t>(reinterpret_cast<void *>(stream));
+  auto *quantized = static_cast<Q4HcQ8Input *>(scratch);
+  const int blocks =
+      (Q4_HC_RANK + Q4_HC_QUANT_THREADS - 1) / Q4_HC_QUANT_THREADS;
+  const int output_blocks = Q4_HC_HIDDEN / (Q4_HC_THREADS / Q4_HC_WARP_SIZE);
+  Q4_DISPATCH_HALF(dtype, {
+    q4_hc_quantize_kernel<scalar_t><<<blocks, Q4_HC_QUANT_THREADS, 0, s>>>(
+        static_cast<const scalar_t *>(lo), quantized);
+    if (format == 2) {
+      q4_hc_quant_up_mix_kernel<scalar_t, 2>
+          <<<output_blocks, Q4_HC_THREADS, 0, s>>>(
+              quantized, up, static_cast<const scalar_t *>(xn),
+              static_cast<scalar_t *>(out));
+    } else {
+      q4_hc_quant_up_mix_kernel<scalar_t, 3>
+          <<<output_blocks, Q4_HC_THREADS, 0, s>>>(
+              quantized, up, static_cast<const scalar_t *>(xn),
+              static_cast<scalar_t *>(out));
+    }
+  });
+}
+
+extern "C" void qwen4_hc_silu(const void *input, void *output, size_t elements,
+                              int hc, int dtype, int64_t stream) {
+  const int threads = 256;
+  Q4_DISPATCH(dtype, q4_hc_silu_kernel<scalar_t>
+              <<<(elements + threads - 1) / threads, threads, 0, (cudaStream_t)stream>>>(
+                  (const scalar_t *)input, (scalar_t *)output, elements, hc));
+}
+
 extern "C" void qwen4_hc_norm(const void *x, const float *weight, void *out,
                               int rows, int hc, int hidden, float eps,
                               int dtype, int64_t stream) {
@@ -1114,6 +1396,19 @@ extern "C" void qwen4_ple_gather_quant(const long long *rows, int n_lookups,
                                s>>>(rows, n_lookups, data,
                                     (const __half *)scales, head_dim, format,
                                     (__nv_bfloat16 *)out);
+}
+
+extern "C" void qwen4_ple_quantize_table(const void *source, unsigned char *data,
+                                         void *scales, int groups, int bits,
+                                         int dtype, int64_t stream) {
+  if (groups == 0) {
+    return;
+  }
+  const cudaStream_t s = (cudaStream_t)stream;
+  const int blocks = (groups + Q4_PLE_QUANT_WARPS - 1) / Q4_PLE_QUANT_WARPS;
+  Q4_DISPATCH(dtype, q4_ple_quantize_table_kernel<scalar_t>
+              <<<blocks, Q4_PLE_QUANT_WARPS * Q4_PLE_GROUP, 0, s>>>(
+                  (const scalar_t *)source, data, (__half *)scales, groups, bits));
 }
 
 extern "C" void qwen4_ple_gate(const void *key, const void *hidden_states,

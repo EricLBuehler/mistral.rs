@@ -25,6 +25,18 @@ const BLOCK_Q8_1_MMQ_SIZE: usize = 4 * QK8_1 + 4 * 4; // 128 qs + 16 scale bytes
 const MATRIX_ROW_PADDING: usize = 512;
 const MMQ_X_MAX: usize = 128;
 const MMQ_Y_MAX: usize = 128;
+const COMPACT_CAPABILITY: i32 = 1210;
+const COMPACT_EXPERTS: usize = 512;
+const COMPACT_TOKENS: usize = 512;
+const COMPACT_TOPK: usize = 10;
+const COMPACT_COLUMNS: usize = 16;
+const COMPACT_HIDDEN: usize = 2560;
+const COMPACT_INTERMEDIATE: usize = 640;
+const COMPACT_Q4_1_TYPE: i32 = 3;
+const COMPACT_Q5_1_TYPE: i32 = 7;
+const COMPACT_Q8_0_TYPE: i32 = 8;
+const COMPACT_Q4_K_TYPE: i32 = 12;
+const COMPACT_Q5_K_TYPE: i32 = 13;
 
 #[inline]
 fn pad(p: usize, q: usize) -> usize {
@@ -237,6 +249,99 @@ fn mmq_moe_launcher(dtype: GgmlDType) -> Option<MmqMoeLauncher> {
         _ => return None,
     };
     Some(f)
+}
+
+struct GroupedMmqLaunch {
+    dtype: GgmlDType,
+    activations: *const std::ffi::c_void,
+    ids_dst: *const i32,
+    expert_bounds: *const i32,
+    fixup: *mut std::ffi::c_void,
+    input_cols: usize,
+    output_rows: usize,
+    assignments: usize,
+    output_stride: usize,
+    experts: usize,
+    max_cols: usize,
+    device: DeviceInfo,
+    stream: *mut std::ffi::c_void,
+}
+
+impl GroupedMmqLaunch {
+    fn compact_type(&self) -> Option<i32> {
+        let workspace_bytes = (self.assignments / COMPACT_COLUMNS + self.experts + 1)
+            * std::mem::size_of::<[i32; 2]>();
+        if self.device.cc != COMPACT_CAPABILITY
+            || self.experts != COMPACT_EXPERTS
+            || self.max_cols != COMPACT_TOKENS
+            || self.assignments != COMPACT_TOKENS * COMPACT_TOPK
+            || workspace_bytes
+                > self.device.nsm as usize * MMQ_X_MAX * MMQ_Y_MAX * std::mem::size_of::<f32>()
+        {
+            return None;
+        }
+        match (self.dtype, self.input_cols, self.output_rows) {
+            (GgmlDType::Q4K, COMPACT_HIDDEN, COMPACT_INTERMEDIATE) => Some(COMPACT_Q4_K_TYPE),
+            (GgmlDType::Q5K, COMPACT_HIDDEN, COMPACT_INTERMEDIATE) => Some(COMPACT_Q5_K_TYPE),
+            (GgmlDType::Q4_1, COMPACT_INTERMEDIATE, COMPACT_HIDDEN) => Some(COMPACT_Q4_1_TYPE),
+            (GgmlDType::Q5_1, COMPACT_INTERMEDIATE, COMPACT_HIDDEN) => Some(COMPACT_Q5_1_TYPE),
+            (GgmlDType::Q8_0, COMPACT_INTERMEDIATE, COMPACT_HIDDEN) => Some(COMPACT_Q8_0_TYPE),
+            _ => None,
+        }
+    }
+
+    unsafe fn launch(&self, projections: &[(*const std::ffi::c_void, *mut std::ffi::c_void)]) {
+        if let Some(quant_type) = self.compact_type() {
+            ffi::launch_mmq_gguf_compact_prepare(
+                self.expert_bounds,
+                self.fixup,
+                quant_type,
+                self.stream,
+            );
+            for &(weight, output) in projections {
+                ffi::launch_mmq_gguf_compact(
+                    &ffi::CompactMmqArgs {
+                        weight,
+                        activations: self.activations,
+                        ids_dst: self.ids_dst,
+                        expert_bounds: self.expert_bounds,
+                        output: output.cast(),
+                        input_cols: self.input_cols as i32,
+                        output_rows: self.output_rows as i32,
+                        assignments: self.assignments as i32,
+                        output_stride: self.output_stride as i32,
+                        quant_type,
+                    },
+                    self.fixup,
+                    self.stream,
+                );
+            }
+        } else {
+            let launcher = mmq_moe_launcher(self.dtype).expect("supports() checked");
+            for &(weight, output) in projections {
+                launcher(
+                    self.fixup,
+                    weight,
+                    self.activations,
+                    self.ids_dst,
+                    self.expert_bounds,
+                    output,
+                    self.input_cols as i64,
+                    self.output_rows as i64,
+                    self.assignments as i64,
+                    (self.input_cols / qk_for(self.dtype)) as i64,
+                    self.output_stride as i64,
+                    self.experts as i64,
+                    self.max_cols as i64,
+                    self.device.cc,
+                    self.device.nsm,
+                    self.device.smpbo,
+                    self.device.warp_size,
+                    self.stream,
+                );
+            }
+        }
+    }
 }
 
 struct WorkspaceSlot {
@@ -899,12 +1004,9 @@ pub fn grouped(
     let out = unsafe { dev.alloc::<f32>(total_assignments * nrows)? };
 
     let weight_ptr = weight.device_ptr()? as *const std::ffi::c_void;
-    let stride_row_x = (k / qk) as i64;
-    let stride_col_dst = nrows as i64;
     let di = get_device_info(dev);
 
     let quantize = quantize_launcher(ds_layout_for(dtype));
-    let launcher = mmq_moe_launcher(dtype).expect("supports() checked");
 
     let (ids_src_ptr, _ids_src_guard) = slice_ptr(ids_src, 0);
     let (ids_dst_ptr, _ids_dst_guard) = slice_ptr(ids_dst, 0);
@@ -973,26 +1075,22 @@ pub fn grouped(
             _ => unreachable!(),
         }
 
-        launcher(
-            fixup_ptr,
-            weight_ptr,
-            scratch_ptr as *const std::ffi::c_void,
-            ids_dst_ptr as *const i32,
-            bounds_ptr as *const i32,
-            out_ptr as *mut std::ffi::c_void,
-            k as i64,
-            nrows as i64,
-            total_assignments as i64,
-            stride_row_x,
-            stride_col_dst,
-            num_experts as i64,
-            ncols_max as i64,
-            di.cc,
-            di.nsm,
-            di.smpbo,
-            di.warp_size,
-            stream_ptr,
-        );
+        GroupedMmqLaunch {
+            dtype,
+            activations: scratch_ptr,
+            ids_dst: ids_dst_ptr as *const i32,
+            expert_bounds: bounds_ptr as *const i32,
+            fixup: fixup_ptr,
+            input_cols: k,
+            output_rows: nrows,
+            assignments: total_assignments,
+            output_stride: nrows,
+            experts: num_experts,
+            max_cols: ncols_max,
+            device: di,
+            stream: stream_ptr,
+        }
+        .launch(&[(weight_ptr, out_ptr as *mut std::ffi::c_void)]);
     }
 
     drop(_out_guard);
@@ -1107,12 +1205,9 @@ fn grouped_from_glu(run: GroupedGluRun<'_>) -> Result<Tensor> {
     let out = unsafe { dev.alloc::<f32>(total_assignments * nrows)? };
 
     let weight_ptr = weight.device_ptr()? as *const std::ffi::c_void;
-    let stride_row_x = (k / qk) as i64;
-    let stride_col_dst = nrows as i64;
     let di = get_device_info(dev);
 
     let quantize = quantize_glu_f32_launcher(ds_layout_for(dtype));
-    let launcher = mmq_moe_launcher(dtype).expect("supports() checked");
 
     let gate_slice = gate_cuda.as_cuda_slice::<f32>()?;
     let up_slice = up_cuda.as_cuda_slice::<f32>()?;
@@ -1143,26 +1238,22 @@ fn grouped_from_glu(run: GroupedGluRun<'_>) -> Result<Tensor> {
             stream_ptr,
         );
 
-        launcher(
-            fixup_ptr,
-            weight_ptr,
-            scratch_ptr as *const std::ffi::c_void,
-            ids_dst_ptr as *const i32,
-            bounds_ptr as *const i32,
-            out_ptr as *mut std::ffi::c_void,
-            k as i64,
-            nrows as i64,
-            total_assignments as i64,
-            stride_row_x,
-            stride_col_dst,
-            num_experts as i64,
-            ncols_max as i64,
-            di.cc,
-            di.nsm,
-            di.smpbo,
-            di.warp_size,
-            stream_ptr,
-        );
+        GroupedMmqLaunch {
+            dtype,
+            activations: scratch_ptr,
+            ids_dst: ids_dst_ptr as *const i32,
+            expert_bounds: bounds_ptr as *const i32,
+            fixup: fixup_ptr,
+            input_cols: k,
+            output_rows: nrows,
+            assignments: total_assignments,
+            output_stride: nrows,
+            experts: num_experts,
+            max_cols: ncols_max,
+            device: di,
+            stream: stream_ptr,
+        }
+        .launch(&[(weight_ptr, out_ptr as *mut std::ffi::c_void)]);
     }
 
     drop(_out_guard);
@@ -1383,12 +1474,9 @@ pub fn grouped_pair_packed(
 
     let gate_ptr = gate.device_ptr()? as *const std::ffi::c_void;
     let up_ptr = up.device_ptr()? as *const std::ffi::c_void;
-    let stride_row_x = (k / qk) as i64;
-    let stride_col_dst = (2 * nrows) as i64;
     let di = get_device_info(dev);
 
     let quantize = quantize_launcher(ds_layout_for(dtype));
-    let launcher = mmq_moe_launcher(dtype).expect("supports() checked");
 
     let (ids_src_ptr, _ids_src_guard) = slice_ptr(ids_src, 0);
     let (ids_dst_ptr, _ids_dst_guard) = slice_ptr(ids_dst, 0);
@@ -1458,31 +1546,25 @@ pub fn grouped_pair_packed(
             _ => unreachable!(),
         }
 
-        for (weight_ptr, out_ptr) in [
+        GroupedMmqLaunch {
+            dtype,
+            activations: scratch_ptr,
+            ids_dst: ids_dst_ptr as *const i32,
+            expert_bounds: bounds_ptr as *const i32,
+            fixup: fixup_ptr,
+            input_cols: k,
+            output_rows: nrows,
+            assignments: total_assignments,
+            output_stride: 2 * nrows,
+            experts: num_experts,
+            max_cols: num_tokens,
+            device: di,
+            stream: stream_ptr,
+        }
+        .launch(&[
             (gate_ptr, gate_out_ptr as *mut std::ffi::c_void),
             (up_ptr, up_out_ptr as *mut std::ffi::c_void),
-        ] {
-            launcher(
-                fixup_ptr,
-                weight_ptr,
-                scratch_ptr as *const std::ffi::c_void,
-                ids_dst_ptr as *const i32,
-                bounds_ptr as *const i32,
-                out_ptr,
-                k as i64,
-                nrows as i64,
-                total_assignments as i64,
-                stride_row_x,
-                stride_col_dst,
-                num_experts as i64,
-                num_tokens as i64,
-                di.cc,
-                di.nsm,
-                di.smpbo,
-                di.warp_size,
-                stream_ptr,
-            );
-        }
+        ]);
     }
 
     drop(_gate_out_guard);
@@ -1531,6 +1613,10 @@ pub fn grouped_pair(
 }
 
 #[cfg(test)]
+#[path = "compact_mmq_tests.rs"]
+mod compact_mmq_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::gguf::fast_mmvq;
@@ -1542,7 +1628,7 @@ mod tests {
     const INTERMEDIATE: usize = 512;
     const TOLERANCE: f32 = 5e-3;
 
-    fn patterned(shape: impl Into<Shape>, salt: usize, scale: f32) -> Result<Tensor> {
+    pub(super) fn patterned(shape: impl Into<Shape>, salt: usize, scale: f32) -> Result<Tensor> {
         let shape = shape.into();
         let values = (0..shape.elem_count())
             .map(|index| {
@@ -1553,7 +1639,7 @@ mod tests {
         Tensor::from_vec(values, shape, &Device::Cpu)
     }
 
-    fn assert_close(actual: &Tensor, expected: &Tensor) -> Result<()> {
+    pub(super) fn assert_close(actual: &Tensor, expected: &Tensor) -> Result<()> {
         assert_eq!(actual.dims(), expected.dims());
         assert_eq!(actual.dtype(), expected.dtype());
         let actual = actual

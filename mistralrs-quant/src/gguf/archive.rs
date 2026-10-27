@@ -35,6 +35,10 @@ const GENERAL_TYPE: &str = "general.type";
 const GENERAL_PREFIX: &str = "general.";
 const SPLIT_PREFIX: &str = "split.";
 const MMPROJ_TYPE: &str = "mmproj";
+#[cfg(all(feature = "cuda", target_os = "linux"))]
+const MAPPED_UPLOAD_ADVICE_THRESHOLD_BYTES: usize = 32 << 20;
+#[cfg(all(feature = "cuda", target_os = "linux"))]
+const MAPPED_UPLOAD_PREFETCH_BYTES: usize = 64 << 20;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GgufEndian {
@@ -564,12 +568,45 @@ impl GgufArchive {
         if self.shards[info.shard_index].endian != GgufEndian::Little {
             candle_core::bail!("big-endian GGUF tensor loading is not supported");
         }
-        qtensor_from_gguf_data(
-            info.dtype.candle_dtype()?,
-            data.bytes(),
-            info.shape.clone(),
-            device,
-        )
+        let dtype = info.dtype.candle_dtype()?;
+        #[cfg(all(feature = "cuda", target_os = "linux"))]
+        let advise = device.is_cuda() && data.bytes().len() >= MAPPED_UPLOAD_ADVICE_THRESHOLD_BYTES;
+        #[cfg(all(feature = "cuda", target_os = "linux"))]
+        if advise {
+            // CPU prefault avoids serial GPU faults while uploading mapped weights on unified CUDA.
+            advise_mapped_upload(
+                data.bytes(),
+                libc::MADV_POPULATE_READ,
+                MAPPED_UPLOAD_PREFETCH_BYTES,
+            );
+        }
+        let result = qtensor_from_gguf_data(dtype, data.bytes(), info.shape.clone(), device);
+        #[cfg(all(feature = "cuda", target_os = "linux"))]
+        if advise {
+            // Drop copied source mappings so reclaim does not invalidate GPU translations page by page.
+            advise_mapped_upload(data.bytes(), libc::MADV_DONTNEED, data.bytes().len());
+        }
+        result
+    }
+}
+
+#[cfg(all(feature = "cuda", target_os = "linux"))]
+fn advise_mapped_upload(data: &[u8], advice: libc::c_int, chunk_bytes: usize) {
+    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if page <= 0 {
+        return;
+    }
+    let page = page as usize;
+    let start = (data.as_ptr() as usize).div_ceil(page) * page;
+    let end = (data.as_ptr() as usize + data.len()) / page * page;
+    for address in (start..end).step_by(chunk_bytes) {
+        unsafe {
+            libc::madvise(
+                address as *mut libc::c_void,
+                (end - address).min(chunk_bytes),
+                advice,
+            );
+        }
     }
 }
 
@@ -1475,6 +1512,60 @@ mod tests {
         let tensor = qtensor_from_gguf_data(GgmlDType::Q4_0, data, vec![32], &Device::Cpu)?;
         assert_eq!(tensor.dtype(), GgmlDType::Q4_0);
         assert_eq!(tensor.dequantize(&Device::Cpu)?.dims(), [32]);
+        Ok(())
+    }
+
+    #[cfg(all(feature = "cuda", target_os = "linux"))]
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn mapped_cuda_load_preserves_native_bytes_after_source_unmap() -> Result<()> {
+        const EXPERTS: usize = 48;
+        const ROWS: usize = 640;
+        const COLS: usize = 2560;
+        let device = Device::new_cuda(0)?;
+        for (raw, dtype, shape) in [
+            (12, GgmlDType::Q4K, vec![EXPERTS, ROWS, COLS]),
+            (7, GgmlDType::Q5_1, vec![EXPERTS, COLS, ROWS]),
+        ] {
+            let bytes = EXPERTS * ROWS * COLS / dtype.block_size() * dtype.type_size();
+            assert!(bytes >= MAPPED_UPLOAD_ADVICE_THRESHOLD_BYTES);
+            let tensors = [
+                TestTensor {
+                    name: "before",
+                    shape: vec![8],
+                    dtype: 0,
+                    data: vec![23; 32],
+                    offset: None,
+                },
+                TestTensor {
+                    name: "experts",
+                    shape: shape.iter().map(|&dim| dim as u64).collect(),
+                    dtype: raw,
+                    data: (0..bytes)
+                        .map(|i| ((i * 131 + i / 97) % 251) as u8)
+                        .collect(),
+                    offset: None,
+                },
+                TestTensor {
+                    name: "after",
+                    shape: vec![16],
+                    dtype: 30,
+                    data: vec![29; 32],
+                    offset: None,
+                },
+            ];
+            let file = write_test_gguf(&base_metadata(), &tensors, DEFAULT_ALIGNMENT);
+            let archive = GgufArchive::open_file(file.path())?;
+            for _ in 0..2 {
+                let tensor = archive.load_qtensor("experts", &device)?;
+                assert_eq!(tensor.shape().dims(), shape);
+                assert_eq!(tensor.dtype(), dtype);
+                assert_eq!(&*tensor.data()?, tensors[1].data.as_slice());
+            }
+            for tensor in &tensors {
+                assert_eq!(archive.tensor_data(tensor.name)?.bytes(), tensor.data);
+            }
+        }
         Ok(())
     }
 

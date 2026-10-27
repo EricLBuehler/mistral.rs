@@ -33,6 +33,8 @@ const RESIDENT_BITS: [usize; 2] = [8, 4];
 const PLANNED_RESIDENT_BITS: usize = 4;
 #[cfg(feature = "cuda")]
 const RESIDENT_COPY_ROWS: usize = 1 << 20;
+#[cfg(feature = "cuda")]
+const HOST_PREFAULT_STRIDE_BYTES: usize = 4096;
 
 #[cfg(feature = "cuda")]
 fn resident_bytes(rows: usize, head_dim: usize, bits: usize) -> usize {
@@ -214,13 +216,25 @@ enum TableSource {
         #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
         rows: usize,
     },
+    #[cfg(feature = "cuda")]
+    Packed {
+        map: memmap2::Mmap,
+        rows: usize,
+        data_bytes: usize,
+    },
+}
+
+#[cfg(feature = "cuda")]
+enum DeviceTableIndex {
+    Shards { pointers: Tensor, starts: Tensor },
+    Packed,
 }
 
 struct PleTable {
     source: TableSource,
     head_dim: usize,
     #[cfg(feature = "cuda")]
-    device_index: Option<(Tensor, Tensor)>,
+    device_index: Option<DeviceTableIndex>,
     #[cfg(feature = "cuda")]
     resident: Option<ResidentTable>,
 }
@@ -252,9 +266,22 @@ fn dequantize_iq4_nl_row(src: &[u8], out: &mut [f32]) {
 }
 
 impl PleTable {
+    #[cfg(feature = "cuda")]
+    fn reclaimable_weight_cache_bytes(&self) -> Option<usize> {
+        if self.resident.is_some() || !matches!(self.device_index, Some(DeviceTableIndex::Packed)) {
+            return None;
+        }
+        let bytes = match &self.source {
+            TableSource::Gguf { rows, .. } => rows * iq4_nl_row_bytes(self.head_dim),
+            TableSource::Packed { map, .. } => map.len(),
+            TableSource::Shards { .. } => return None,
+        };
+        Some(bytes + RESIDENT_RESERVE_BYTES)
+    }
+
     fn load(vb: &ShardedVarBuilder, head_dim: usize, device: &Device) -> Result<Self> {
         if let Some(archive) = vb.raw_gguf() {
-            return Self::load_gguf(archive, head_dim);
+            return Self::load_gguf(archive, head_dim, device);
         }
         let raw = vb.raw_safetensors().ok_or_else(|| {
             candle_core::Error::msg(
@@ -327,10 +354,10 @@ impl PleTable {
                 .collect::<Result<Vec<_>>>()?;
             let starts = starts.iter().map(|s| *s as i64).collect::<Vec<_>>();
             let n = ptrs.len();
-            table.device_index = Some((
-                Tensor::from_vec(ptrs, n, device)?,
-                Tensor::from_vec(starts, n, device)?,
-            ));
+            table.device_index = Some(DeviceTableIndex::Shards {
+                pointers: Tensor::from_vec(ptrs, n, device)?,
+                starts: Tensor::from_vec(starts, n, device)?,
+            });
             tracing::debug!("Qwen4-Exp PLE rows can be gathered through pageable memory access");
         }
         #[cfg(not(feature = "cuda"))]
@@ -338,7 +365,7 @@ impl PleTable {
         Ok(table)
     }
 
-    fn load_gguf(archive: Arc<GgufArchive>, head_dim: usize) -> Result<Self> {
+    fn load_gguf(archive: Arc<GgufArchive>, head_dim: usize, device: &Device) -> Result<Self> {
         let info = archive.tensor_info(GGUF_TABLE_NAME)?;
         if info.dtype().raw() != GGML_TYPE_IQ4_NL {
             candle_core::bail!(
@@ -356,11 +383,14 @@ impl PleTable {
             rows,
             "Qwen4-Exp PLE n-gram table is memory-mapped from GGUF"
         );
+        #[cfg(not(feature = "cuda"))]
+        let _ = device;
         Ok(Self {
             source: TableSource::Gguf { archive, rows },
             head_dim,
             #[cfg(feature = "cuda")]
-            device_index: None,
+            device_index: (device.is_cuda() && device_reads_pageable_memory(device)?)
+                .then_some(DeviceTableIndex::Packed),
             #[cfg(feature = "cuda")]
             resident: None,
         })
@@ -372,6 +402,7 @@ impl PleTable {
         match &self.source {
             TableSource::Shards { dtype, .. } => *dtype,
             TableSource::Gguf { .. } => DType::U8,
+            TableSource::Packed { .. } => DType::U8,
         }
     }
 
@@ -385,22 +416,27 @@ impl PleTable {
                 Ok(starts[last] + raw.get(&names[last])?.shape()[0])
             }
             TableSource::Gguf { rows, .. } => Ok(*rows),
+            TableSource::Packed { rows, .. } => Ok(*rows),
         }
     }
 
     #[cfg(feature = "cuda")]
     fn fallback_path(&self) -> &'static str {
         if self.device_index.is_some() {
-            "the GPU reads rows from the memory map (slow)"
+            if self.head_dim.is_multiple_of(RESIDENT_GROUP) {
+                "prompt rows are gathered on the CPU; decode uses mapped GPU access"
+            } else {
+                "the GPU gathers rows from mapped host storage"
+            }
         } else {
-            "rows are gathered on the host every step (slow)"
+            "rows are gathered on the host"
         }
     }
 
     /// Move the whole table into device memory when it fits beside a working reserve: GGUF IQ4_NL rows
     /// are copied as is, safetensors rows are quantized to 8 or 4 bits.
     #[cfg(feature = "cuda")]
-    fn make_resident(&mut self, device: &Device) -> Result<()> {
+    fn make_resident(&mut self, device: &Device, budget: usize) -> Result<()> {
         if !self.head_dim.is_multiple_of(RESIDENT_GROUP) {
             tracing::warn!(
                 head_dim = self.head_dim,
@@ -410,7 +446,7 @@ impl PleTable {
             return Ok(());
         }
         let rows = self.total_rows()?;
-        let available = crate::MemoryUsage.query(device)?.available();
+        let available = crate::MemoryUsage.query(device)?.available().min(budget);
         let footprint = |bits: usize| resident_bytes(rows, self.head_dim, bits);
         let Some(bits) = RESIDENT_BITS
             .into_iter()
@@ -444,6 +480,7 @@ impl PleTable {
                 bits,
                 device,
             })?,
+            TableSource::Packed { .. } => unreachable!("table preparation runs once"),
         };
         tracing::info!(
             format = ?resident.format,
@@ -466,12 +503,13 @@ impl PleTable {
         let bytes = archive.tensor_data(GGUF_TABLE_NAME)?.bytes();
         let data = unsafe { Tensor::empty((rows, row_bytes), DType::U8, device)? };
         for (chunk, src) in bytes.chunks(RESIDENT_COPY_ROWS * row_bytes).enumerate() {
+            prefault_source_pages(src);
             data.slice_set(
                 &Tensor::from_slice(src, (src.len() / row_bytes, row_bytes), device)?,
                 0,
                 chunk * RESIDENT_COPY_ROWS,
             )?;
-            evict_page_cache(src);
+            release_source_pages(src);
         }
         Ok(ResidentTable {
             data,
@@ -482,7 +520,6 @@ impl PleTable {
 
     #[cfg(feature = "cuda")]
     fn quantize_shards(&self, args: QuantizeShards<'_>) -> Result<ResidentTable> {
-        use rayon::prelude::*;
         let QuantizeShards {
             raw,
             names,
@@ -496,56 +533,27 @@ impl PleTable {
         let row_bytes = self.head_dim * bits / 8;
         let data = unsafe { Tensor::empty((rows, row_bytes), DType::U8, device)? };
         let scales = unsafe { Tensor::empty((rows, groups), DType::F16, device)? };
-        let head_dim = self.head_dim;
-        let decode = match dtype {
-            DType::F16 => |b: [u8; 2]| half::f16::from_le_bytes(b).to_f32(),
-            _ => |b: [u8; 2]| half::bf16::from_le_bytes(b).to_f32(),
-        };
+        let source_row_bytes = self.head_dim * dtype.size_in_bytes();
         for (shard, name) in names.iter().enumerate() {
             let view = raw.get(name)?;
-            let shard_rows = view.shape()[0];
-            let src = view.data();
-            let mut q = vec![0u8; shard_rows * row_bytes];
-            let mut sc = vec![half::f16::ZERO; shard_rows * groups];
-            q.par_chunks_mut(row_bytes)
-                .zip(sc.par_chunks_mut(groups))
+            for (chunk, src) in view
+                .data()
+                .chunks(RESIDENT_COPY_ROWS * source_row_bytes)
                 .enumerate()
-                .for_each(|(row, (q_row, sc_row))| {
-                    let base = row * head_dim * 2;
-                    let value = |i: usize| decode([src[base + 2 * i], src[base + 2 * i + 1]]);
-                    let q_max = if bits == 8 { 127.0 } else { 7.0 };
-                    for (g, scale) in sc_row.iter_mut().enumerate() {
-                        let range = g * RESIDENT_GROUP..(g + 1) * RESIDENT_GROUP;
-                        let amax = range.clone().map(|i| value(i).abs()).fold(0f32, f32::max);
-                        let s = half::f16::from_f32(amax / q_max);
-                        *scale = s;
-                        let inv = if s.to_f32() > 0.0 {
-                            1.0 / s.to_f32()
-                        } else {
-                            0.0
-                        };
-                        for i in range {
-                            let v = (value(i) * inv).round().clamp(-q_max, q_max) as i32;
-                            if bits == 8 {
-                                q_row[i] = v as i8 as u8;
-                            } else {
-                                q_row[i / 2] |= ((v + 8) as u8) << (4 * (i % 2));
-                            }
-                        }
-                    }
-                });
-            let start_row = starts[shard];
-            data.slice_set(
-                &Tensor::from_vec(q, (shard_rows, row_bytes), device)?,
-                0,
-                start_row,
-            )?;
-            scales.slice_set(
-                &Tensor::from_vec(sc, (shard_rows, groups), device)?,
-                0,
-                start_row,
-            )?;
-            evict_page_cache(src);
+            {
+                let chunk_rows = src.len() / source_row_bytes;
+                let start_row = starts[shard] + chunk * RESIDENT_COPY_ROWS;
+                prefault_source_pages(src);
+                let source =
+                    Tensor::from_raw_buffer(src, dtype, &[chunk_rows, self.head_dim], device)?;
+                crate::cuda::qwen4_exp::ple_quantize_table(
+                    &source,
+                    &data.narrow(0, start_row, chunk_rows)?,
+                    &scales.narrow(0, start_row, chunk_rows)?,
+                    bits,
+                )?;
+                release_source_pages(src);
+            }
         }
         Ok(ResidentTable {
             data,
@@ -556,6 +564,157 @@ impl PleTable {
                 crate::cuda::qwen4_exp::PleTableFormat::Q4
             },
         })
+    }
+
+    #[cfg(feature = "cuda")]
+    fn prepare_mapped(&mut self, device: &Device, chunk_rows: usize) -> Result<()> {
+        use std::io::{Seek, SeekFrom, Write};
+
+        if let TableSource::Gguf { archive, .. } = &self.source {
+            if matches!(self.device_index, Some(DeviceTableIndex::Packed)) {
+                let started = std::time::Instant::now();
+                let bytes = archive.tensor_data(GGUF_TABLE_NAME)?.bytes();
+                for byte in bytes.iter().step_by(HOST_PREFAULT_STRIDE_BYTES) {
+                    std::hint::black_box(*byte);
+                }
+                if let Some(byte) = bytes.last() {
+                    std::hint::black_box(*byte);
+                }
+                tracing::info!(
+                    size_gb = bytes.len() >> 30,
+                    elapsed_s = started.elapsed().as_secs(),
+                    "Qwen4-Exp GGUF PLE table prefaulted in reclaimable memory-mapped storage"
+                );
+            }
+            return Ok(());
+        }
+        let TableSource::Shards {
+            raw,
+            names,
+            starts,
+            dtype,
+        } = &self.source
+        else {
+            return Ok(());
+        };
+        if !self.head_dim.is_multiple_of(RESIDENT_GROUP) {
+            return Ok(());
+        }
+        let started = std::time::Instant::now();
+        let rows = self.total_rows()?;
+        let row_bytes = self.head_dim * PLANNED_RESIDENT_BITS / 8;
+        let scale_row_bytes = self.head_dim / RESIDENT_GROUP * DType::F16.size_in_bytes();
+        let source_row_bytes = self.head_dim * dtype.size_in_bytes();
+        let data_bytes = rows * row_bytes;
+        // /tmp can be tmpfs; the packed table needs reclaimable file-backed pages.
+        let cache_dir = dirs::cache_dir()
+            .unwrap_or_else(std::env::temp_dir)
+            .join("mistralrs")
+            .join("ple");
+        std::fs::create_dir_all(&cache_dir).map_err(candle_core::Error::wrap)?;
+        let mut file = tempfile::tempfile_in(cache_dir).map_err(candle_core::Error::wrap)?;
+        file.set_len((data_bytes + rows * scale_row_bytes) as u64)
+            .map_err(candle_core::Error::wrap)?;
+        for (shard, name) in names.iter().enumerate() {
+            let view = raw.get(name)?;
+            for (chunk, src) in view
+                .data()
+                .chunks(chunk_rows * source_row_bytes)
+                .enumerate()
+            {
+                let first = starts[shard] + chunk * chunk_rows;
+                let chunk_rows = src.len() / source_row_bytes;
+                prefault_source_pages(src);
+                let source =
+                    Tensor::from_raw_buffer(src, *dtype, &[chunk_rows, self.head_dim], device)?;
+                let data = unsafe { Tensor::empty((chunk_rows, row_bytes), DType::U8, device)? };
+                let scales = unsafe {
+                    Tensor::empty(
+                        (chunk_rows, self.head_dim / RESIDENT_GROUP),
+                        DType::F16,
+                        device,
+                    )?
+                };
+                crate::cuda::qwen4_exp::ple_quantize_table(
+                    &source,
+                    &data,
+                    &scales,
+                    PLANNED_RESIDENT_BITS,
+                )?;
+                let data = data.flatten_all()?.to_vec1::<u8>()?;
+                let scales = scales.flatten_all()?.to_vec1::<half::f16>()?;
+                file.seek(SeekFrom::Start((first * row_bytes) as u64))
+                    .and_then(|_| file.write_all(&data))
+                    .map_err(candle_core::Error::wrap)?;
+                file.seek(SeekFrom::Start(
+                    (data_bytes + first * scale_row_bytes) as u64,
+                ))
+                .and_then(|_| file.write_all(bytemuck::cast_slice(&scales)))
+                .and_then(|_| file.sync_data())
+                .map_err(candle_core::Error::wrap)?;
+                release_source_pages(src);
+                evict_file_cache(&file, first * row_bytes, data.len());
+                evict_file_cache(
+                    &file,
+                    data_bytes + first * scale_row_bytes,
+                    scales.len() * 2,
+                );
+            }
+        }
+        let map = unsafe { memmap2::MmapOptions::new().populate().map(&file) }
+            .map_err(candle_core::Error::wrap)?;
+        self.source = TableSource::Packed {
+            map,
+            rows,
+            data_bytes,
+        };
+        self.device_index =
+            device_reads_pageable_memory(device)?.then_some(DeviceTableIndex::Packed);
+        tracing::info!(
+            size_gb = resident_bytes(rows, self.head_dim, PLANNED_RESIDENT_BITS) >> 30,
+            elapsed_s = started.elapsed().as_secs(),
+            "Qwen4-Exp PLE table quantized into reclaimable memory-mapped storage"
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    fn gather_mapped(
+        &self,
+        rows: &Tensor,
+        layout: &crate::cuda::qwen4_exp::TokenLayout,
+    ) -> Result<Tensor> {
+        if layout.kv_lens.is_some() {
+            // CPU gathers avoid first-touch stalls from scattered GPU reads of the mapped table.
+            let (tokens, heads) = rows.dims2()?;
+            let host_rows = rows
+                .flatten_all()?
+                .to_vec1::<i64>()?
+                .into_iter()
+                .map(|row| row as u64)
+                .collect::<Vec<_>>();
+            return self
+                .gather_host(&host_rows, &Device::Cpu)?
+                .to_dtype(DType::BF16)?
+                .reshape((tokens, heads * self.head_dim))?
+                .to_device(rows.device());
+        }
+        let (data, scales, format) = match &self.source {
+            TableSource::Gguf { archive, .. } => (
+                archive.tensor_data(GGUF_TABLE_NAME)?.bytes(),
+                None,
+                crate::cuda::qwen4_exp::PleTableFormat::Iq4Nl,
+            ),
+            TableSource::Packed {
+                map, data_bytes, ..
+            } => (
+                &map[..*data_bytes],
+                Some(&map[*data_bytes..]),
+                crate::cuda::qwen4_exp::PleTableFormat::Q4,
+            ),
+            TableSource::Shards { .. } => unreachable!("packed device table index"),
+        };
+        crate::cuda::qwen4_exp::ple_gather_quant_mapped(rows, data, scales, self.head_dim, format)
     }
 
     /// Host gather of `rows` into a `[rows.len(), head_dim]` tensor on `device`.
@@ -599,8 +758,52 @@ impl PleTable {
                 }
                 Tensor::from_vec(out, (rows.len(), self.head_dim), device)
             }
+            #[cfg(feature = "cuda")]
+            TableSource::Packed {
+                map, data_bytes, ..
+            } => {
+                let row_bytes = self.head_dim / 2;
+                let scale_row_bytes = self.head_dim / RESIDENT_GROUP * 2;
+                let mut out = vec![0f32; rows.len() * self.head_dim];
+                for (dst, &row) in out.chunks_exact_mut(self.head_dim).zip(rows) {
+                    let offset = row as usize * row_bytes;
+                    let src = map
+                        .get(offset..offset + row_bytes)
+                        .ok_or_else(|| outside(row))?;
+                    let scale_offset = data_bytes + row as usize * scale_row_bytes;
+                    let scales = map
+                        .get(scale_offset..scale_offset + scale_row_bytes)
+                        .ok_or_else(|| outside(row))?;
+                    for (i, value) in dst.iter_mut().enumerate() {
+                        let scale = 2 * (i / RESIDENT_GROUP);
+                        let scale =
+                            half::f16::from_le_bytes([scales[scale], scales[scale + 1]]).to_f32();
+                        let q = (src[i / 2] >> (4 * (i % 2))) & 15;
+                        *value = (i32::from(q) - 8) as f32 * scale;
+                    }
+                }
+                Tensor::from_vec(out, (rows.len(), self.head_dim), device)
+            }
         }
     }
+}
+
+#[cfg(feature = "cuda")]
+fn evict_file_cache(file: &std::fs::File, offset: usize, len: usize) {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        unsafe {
+            libc::posix_fadvise(
+                file.as_raw_fd(),
+                offset as libc::off_t,
+                len as libc::off_t,
+                libc::POSIX_FADV_DONTNEED,
+            );
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = (file, offset, len);
 }
 
 #[cfg(feature = "cuda")]
@@ -614,20 +817,38 @@ struct QuantizeShards<'a> {
     device: &'a Device,
 }
 
-/// Drop the page cache behind a mapped range; on unified memory the allocator can't reclaim it.
 #[cfg(feature = "cuda")]
-fn evict_page_cache(data: &[u8]) {
+fn prefault_source_pages(data: &[u8]) {
     #[cfg(target_os = "linux")]
-    {
-        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) }.max(1) as usize;
-        let start = data.as_ptr() as usize / page * page;
-        let len = data.as_ptr() as usize + data.len() - start;
-        unsafe {
-            libc::madvise(start as *mut libc::c_void, len, libc::MADV_PAGEOUT);
-        }
-    }
+    // Faulting on the CPU avoids serial GPU faults during pageable H2D copies on unified CUDA.
+    advise_source_pages(data, libc::MADV_POPULATE_READ);
     #[cfg(not(target_os = "linux"))]
     let _ = data;
+}
+
+#[cfg(feature = "cuda")]
+fn release_source_pages(data: &[u8]) {
+    #[cfg(target_os = "linux")]
+    // Batch-unmap copied source pages; PAGEOUT forces costly per-page SMMU invalidation.
+    advise_source_pages(data, libc::MADV_DONTNEED);
+    #[cfg(not(target_os = "linux"))]
+    let _ = data;
+}
+
+#[cfg(all(feature = "cuda", target_os = "linux"))]
+fn advise_source_pages(data: &[u8], advice: libc::c_int) {
+    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if page <= 0 {
+        return;
+    }
+    let page = page as usize;
+    let start = (data.as_ptr() as usize).div_ceil(page) * page;
+    let end = (data.as_ptr() as usize + data.len()) / page * page;
+    if end > start {
+        unsafe {
+            libc::madvise(start as *mut libc::c_void, end - start, advice);
+        }
+    }
 }
 
 #[cfg(feature = "cuda")]
@@ -741,6 +962,8 @@ pub(super) struct PleBatch<'a> {
 /// Hashed n-gram embedding injected into every hyper-connection stream (HF `Qwen4ExpTextPLELayer`).
 pub(super) struct PleLayer {
     table: PleTable,
+    #[cfg(feature = "cuda")]
+    pub(super) allow_resident_table: bool,
     hash: PleHash,
     #[cfg(feature = "cuda")]
     hash_ffi: crate::cuda::qwen4_exp::Q4PleHashParams,
@@ -782,6 +1005,8 @@ impl PleLayer {
             #[cfg(feature = "cuda")]
             hash_ffi: hash.ffi()?,
             table,
+            #[cfg(feature = "cuda")]
+            allow_resident_table: true,
             hash,
             key_proj: ReplicatedLayer::new(
                 ple.embed_dim,
@@ -813,13 +1038,28 @@ impl PleLayer {
         self.table.resident.is_some() || self.table.device_index.is_some()
     }
 
-    /// Quantize the n-gram table into device memory if it fits; call once the rest of the model is loaded.
-    pub(super) fn make_table_resident(&mut self, device: &Device) -> Result<()> {
-        #[cfg(feature = "cuda")]
+    #[cfg(feature = "cuda")]
+    pub(super) fn reclaimable_weight_cache_bytes(&self) -> Option<(Device, usize)> {
+        self.table
+            .reclaimable_weight_cache_bytes()
+            .map(|bytes| (self.conv_weight.device().clone(), bytes))
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(super) fn prepare_table(
+        &mut self,
+        budget: &dyn Fn(&Device) -> Result<usize>,
+    ) -> Result<()> {
+        let device = self.conv_weight.device();
         if device.is_cuda() {
-            return self.table.make_resident(device);
+            if self.allow_resident_table {
+                self.table.make_resident(device, budget(device)?)?;
+            }
+            if self.table.resident.is_none() {
+                self.table.prepare_mapped(device, RESIDENT_COPY_ROWS)?;
+            }
+            return Ok(());
         }
-        let _ = device;
         tracing::info!("Qwen4-Exp PLE rows are gathered from the memory-mapped table on the host");
         Ok(())
     }
@@ -855,13 +1095,18 @@ impl PleLayer {
                     self.table.head_dim,
                     resident.format,
                 )?,
-                (None, Some((ptrs, starts))) => crate::cuda::qwen4_exp::ple_gather(
-                    &rows,
-                    ptrs,
-                    starts,
-                    self.table.head_dim,
-                    self.table.shard_dtype(),
-                )?,
+                (None, Some(DeviceTableIndex::Shards { pointers, starts })) => {
+                    crate::cuda::qwen4_exp::ple_gather(
+                        &rows,
+                        pointers,
+                        starts,
+                        self.table.head_dim,
+                        self.table.shard_dtype(),
+                    )?
+                }
+                (None, Some(DeviceTableIndex::Packed)) => {
+                    self.table.gather_mapped(&rows, layout)?
+                }
                 (None, None) => unreachable!("checked by gathers_on_device"),
             }
             .to_dtype(flat.dtype())?;
@@ -1054,6 +1299,276 @@ fn verify_hash_buffers(raw: &MmapedSafetensors, prefix: &str, hash: &PleHash) ->
 mod tests {
     use super::*;
     use crate::vision_models::qwen4_exp::config::tests::flash_next_text_config;
+    #[cfg(feature = "cuda")]
+    const GGUF_TEST_ALIGNMENT: usize = 32;
+
+    #[cfg(feature = "cuda")]
+    fn mapped_bytes(bytes: &[u8]) -> Result<memmap2::Mmap> {
+        use std::io::Write;
+        let mut file = tempfile::tempfile().map_err(candle_core::Error::wrap)?;
+        file.write_all(bytes).map_err(candle_core::Error::wrap)?;
+        unsafe { memmap2::MmapOptions::new().map(&file) }.map_err(candle_core::Error::wrap)
+    }
+
+    #[cfg(feature = "cuda")]
+    fn mapped_iq4_table(
+        data: &[u8],
+        rows: usize,
+        head_dim: usize,
+        device: &Device,
+    ) -> Result<PleTable> {
+        use std::io::Write;
+        let mut bytes = b"GGUF".to_vec();
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        bytes.extend_from_slice(&1u64.to_le_bytes());
+        bytes.extend_from_slice(&0u64.to_le_bytes());
+        bytes.extend_from_slice(&(GGUF_TABLE_NAME.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(GGUF_TABLE_NAME.as_bytes());
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&(head_dim as u64).to_le_bytes());
+        bytes.extend_from_slice(&(rows as u64).to_le_bytes());
+        bytes.extend_from_slice(&GGML_TYPE_IQ4_NL.to_le_bytes());
+        bytes.extend_from_slice(&0u64.to_le_bytes());
+        bytes.resize(
+            bytes.len().div_ceil(GGUF_TEST_ALIGNMENT) * GGUF_TEST_ALIGNMENT,
+            0,
+        );
+        bytes.extend_from_slice(data);
+        bytes.resize(
+            bytes.len().div_ceil(GGUF_TEST_ALIGNMENT) * GGUF_TEST_ALIGNMENT,
+            0,
+        );
+        let mut file = tempfile::NamedTempFile::new().map_err(candle_core::Error::wrap)?;
+        file.write_all(&bytes).map_err(candle_core::Error::wrap)?;
+        let archive = Arc::new(GgufArchive::open_file(file.path())?);
+        PleTable::load_gguf(archive, head_dim, device)
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn resident_quantization_matches_host() -> Result<()> {
+        const HEAD_DIM: usize = 160;
+        const ROWS: usize = 37;
+        const CHUNK_ROWS: usize = 11;
+        const GUARD_BYTE: u8 = 0xa5;
+        let device = Device::new_cuda(0)?;
+        for dtype in [DType::F16, DType::BF16] {
+            for bits in RESIDENT_BITS {
+                let qmax = if bits == 8 { 127.0 } else { 7.0 };
+                let row_bytes = HEAD_DIM * bits / 8;
+                let groups = HEAD_DIM / RESIDENT_GROUP;
+                let values = (0..ROWS * HEAD_DIM)
+                    .map(|i| match i / RESIDENT_GROUP {
+                        0 => 0.0,
+                        1 => match i % RESIDENT_GROUP {
+                            0 => qmax,
+                            1 => -qmax,
+                            j => (j % 8) as f32 / 2.0 - 1.5,
+                        },
+                        2 => (i as f32 - 80.0) * 1e-9,
+                        _ => {
+                            let scale = [1e-5, 1e-2, 1.0, 128.0][i / RESIDENT_GROUP % 4];
+                            ((splitmix64(i as u64) >> 40) as f32 / (1u64 << 24) as f32 - 0.5)
+                                * scale
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let source =
+                    Tensor::from_vec(values, (ROWS, HEAD_DIM), &Device::Cpu)?.to_dtype(dtype)?;
+                let values = source
+                    .to_dtype(DType::F32)?
+                    .flatten_all()?
+                    .to_vec1::<f32>()?;
+                let source = source.to_device(&device)?;
+                let data = Tensor::from_vec(
+                    vec![GUARD_BYTE; (ROWS + 2) * row_bytes],
+                    (ROWS + 2, row_bytes),
+                    &device,
+                )?;
+                let scales = Tensor::zeros((ROWS + 2, groups), DType::F16, &device)?;
+                for first in (0..ROWS).step_by(CHUNK_ROWS) {
+                    let count = CHUNK_ROWS.min(ROWS - first);
+                    crate::cuda::qwen4_exp::ple_quantize_table(
+                        &source.narrow(0, first, count)?,
+                        &data.narrow(0, first + 1, count)?,
+                        &scales.narrow(0, first + 1, count)?,
+                        bits,
+                    )?;
+                }
+                let got = data.flatten_all()?.to_vec1::<u8>()?;
+                let got_scales = scales.flatten_all()?.to_vec1::<half::f16>()?;
+                assert!(got[..row_bytes].iter().all(|v| *v == GUARD_BYTE));
+                assert!(got[(ROWS + 1) * row_bytes..]
+                    .iter()
+                    .all(|v| *v == GUARD_BYTE));
+                assert!(got_scales[..groups].iter().all(|v| *v == half::f16::ZERO));
+                assert!(got_scales[(ROWS + 1) * groups..]
+                    .iter()
+                    .all(|v| *v == half::f16::ZERO));
+                let mut expected = vec![0u8; ROWS * row_bytes];
+                for (g, values) in values.chunks_exact(RESIDENT_GROUP).enumerate() {
+                    let amax = values.iter().map(|v| v.abs()).fold(0.0f32, f32::max);
+                    let scale = half::f16::from_f32(amax / qmax);
+                    assert_eq!(got_scales[groups + g], scale, "{dtype:?} Q{bits} group {g}");
+                    let inv = if scale.to_f32() > 0.0 {
+                        1.0 / scale.to_f32()
+                    } else {
+                        0.0
+                    };
+                    for (j, value) in values.iter().enumerate() {
+                        let q = (value * inv).round().clamp(-qmax, qmax) as i32;
+                        let i = g * RESIDENT_GROUP + j;
+                        if bits == 8 {
+                            expected[i] = q as i8 as u8;
+                        } else {
+                            expected[i / 2] |= ((q + 8) as u8) << (4 * (i % 2));
+                        }
+                    }
+                }
+                assert_eq!(
+                    &got[row_bytes..(ROWS + 1) * row_bytes],
+                    &expected,
+                    "{dtype:?} Q{bits}"
+                );
+                if device_reads_pageable_memory(&device)? {
+                    let mapped_data = mapped_bytes(&got)?;
+                    let mapped_scales = mapped_bytes(bytemuck::cast_slice(&got_scales))?;
+                    let rows = Tensor::from_slice(&[0i64, 36, 5, 5, 17, 1], (2, 3), &device)?;
+                    let format = if bits == 8 {
+                        crate::cuda::qwen4_exp::PleTableFormat::Q8
+                    } else {
+                        crate::cuda::qwen4_exp::PleTableFormat::Q4
+                    };
+                    let expected = crate::cuda::qwen4_exp::ple_gather_quant(
+                        &rows,
+                        &data.narrow(0, 1, ROWS)?,
+                        Some(&scales.narrow(0, 1, ROWS)?),
+                        HEAD_DIM,
+                        format,
+                    )?
+                    .flatten_all()?
+                    .to_vec1::<half::bf16>()?;
+                    let actual = crate::cuda::qwen4_exp::ple_gather_quant_mapped(
+                        &rows,
+                        &mapped_data[row_bytes..(ROWS + 1) * row_bytes],
+                        Some(&mapped_scales[groups * 2..(ROWS + 1) * groups * 2]),
+                        HEAD_DIM,
+                        format,
+                    )?
+                    .flatten_all()?
+                    .to_vec1::<half::bf16>()?;
+                    assert_eq!(actual, expected, "mapped {dtype:?} Q{bits}");
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn mapped_quantization_preserves_shard_and_chunk_offsets() -> Result<()> {
+        const HEAD_DIM: usize = 160;
+        const ROWS: usize = 37;
+        const FIRST_SHARD_ROWS: usize = 19;
+        const CHUNK_ROWS: usize = 11;
+        let device = Device::new_cuda(0)?;
+        for dtype in [DType::F16, DType::BF16] {
+            let source = Tensor::from_vec(
+                (0..ROWS * HEAD_DIM)
+                    .map(|i| (i as f32 * 0.3).sin())
+                    .collect::<Vec<_>>(),
+                (ROWS, HEAD_DIM),
+                &Device::Cpu,
+            )?
+            .to_dtype(dtype)?;
+            let names = vec!["shard_0.weight".to_string(), "shard_1.weight".to_string()];
+            let starts = vec![0, FIRST_SHARD_ROWS];
+            let file = tempfile::NamedTempFile::new().map_err(candle_core::Error::wrap)?;
+            candle_core::safetensors::save(
+                &std::collections::HashMap::from([
+                    (
+                        names[0].clone(),
+                        source.narrow(0, 0, FIRST_SHARD_ROWS)?.force_contiguous()?,
+                    ),
+                    (
+                        names[1].clone(),
+                        source
+                            .narrow(0, FIRST_SHARD_ROWS, ROWS - FIRST_SHARD_ROWS)?
+                            .force_contiguous()?,
+                    ),
+                ]),
+                file.path(),
+            )?;
+            let raw = Arc::new(unsafe { MmapedSafetensors::new(file.path())? });
+            let mut table = PleTable {
+                source: TableSource::Shards {
+                    raw,
+                    names,
+                    starts,
+                    dtype,
+                },
+                head_dim: HEAD_DIM,
+                device_index: None,
+                resident: None,
+            };
+            table.make_resident(&device, 0)?;
+            assert!(table.resident.is_none());
+            table.prepare_mapped(&device, CHUNK_ROWS)?;
+            let TableSource::Packed {
+                map, data_bytes, ..
+            } = &table.source
+            else {
+                unreachable!()
+            };
+            let row_bytes = HEAD_DIM / 2;
+            let groups = HEAD_DIM / RESIDENT_GROUP;
+            let data = Tensor::zeros((ROWS, row_bytes), DType::U8, &device)?;
+            let scales = Tensor::zeros((ROWS, groups), DType::F16, &device)?;
+            crate::cuda::qwen4_exp::ple_quantize_table(
+                &source.to_device(&device)?,
+                &data,
+                &scales,
+                PLANNED_RESIDENT_BITS,
+            )?;
+            assert_eq!(&map[..*data_bytes], data.flatten_all()?.to_vec1::<u8>()?);
+            assert_eq!(
+                &map[*data_bytes..],
+                bytemuck::cast_slice::<_, u8>(&scales.flatten_all()?.to_vec1::<half::f16>()?)
+            );
+            let lookups = [0u64, 36, 18, 19, 10, 11];
+            let host = table
+                .gather_host(&lookups, &Device::Cpu)?
+                .to_dtype(DType::BF16)?
+                .flatten_all()?
+                .to_vec1::<half::bf16>()?;
+            if device_reads_pageable_memory(&device)? {
+                let rows = Tensor::from_slice(&lookups.map(|row| row as i64), (2, 3), &device)?;
+                for layout in [
+                    crate::cuda::qwen4_exp::TokenLayout::rectangular(2, 1),
+                    crate::cuda::qwen4_exp::TokenLayout::from_host(&[(0, 2)], &[2], 2, &device)?,
+                ] {
+                    let actual = table.gather_mapped(&rows, &layout)?;
+                    assert!(actual.device().same_device(&device));
+                    assert_eq!(actual.dims(), &[2, 3 * HEAD_DIM]);
+                    assert_eq!(actual.flatten_all()?.to_vec1::<half::bf16>()?, host);
+                }
+                assert_eq!(
+                    table.reclaimable_weight_cache_bytes(),
+                    Some(
+                        resident_bytes(ROWS, HEAD_DIM, PLANNED_RESIDENT_BITS)
+                            + RESIDENT_RESERVE_BYTES
+                    )
+                );
+            }
+            table.resident = Some(ResidentTable {
+                data,
+                scales: Some(scales),
+                format: crate::cuda::qwen4_exp::PleTableFormat::Q4,
+            });
+            assert_eq!(table.reclaimable_weight_cache_bytes(), None);
+        }
+        Ok(())
+    }
 
     #[cfg(feature = "cuda")]
     #[test]
@@ -1099,6 +1614,36 @@ mod tests {
         }
         for (g, e) in got.iter().zip(&expected) {
             assert_eq!(*g, half::bf16::from_f32(*e).to_f32());
+        }
+        if device_reads_pageable_memory(&device)? {
+            let map = mapped_bytes(&table)?;
+            let actual = crate::cuda::qwen4_exp::ple_gather_quant_mapped(
+                &rows,
+                &map,
+                None,
+                HEAD_DIM,
+                crate::cuda::qwen4_exp::PleTableFormat::Iq4Nl,
+            )?
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+            assert_eq!(actual, got);
+            let table = mapped_iq4_table(&table, ROWS, HEAD_DIM, &device)?;
+            for layout in [
+                crate::cuda::qwen4_exp::TokenLayout::rectangular(2, 1),
+                crate::cuda::qwen4_exp::TokenLayout::from_host(&[(0, 2)], &[2], 2, &device)?,
+            ] {
+                let actual = table.gather_mapped(&rows, &layout)?;
+                assert!(actual.device().same_device(&device));
+                assert_eq!(actual.dims(), &[2, 4 * HEAD_DIM]);
+                assert_eq!(
+                    actual
+                        .to_dtype(DType::F32)?
+                        .flatten_all()?
+                        .to_vec1::<f32>()?,
+                    got
+                );
+            }
         }
         Ok(())
     }

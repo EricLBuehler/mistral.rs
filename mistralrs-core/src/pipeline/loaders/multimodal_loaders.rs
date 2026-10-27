@@ -140,6 +140,17 @@ pub trait MultimodalModel:
         false
     }
     #[cfg(feature = "cuda")]
+    fn prepare_optional_weights(
+        &mut self,
+        _budget: &dyn Fn(&Device) -> candle_core::Result<usize>,
+    ) -> candle_core::Result<()> {
+        Ok(())
+    }
+    #[cfg(feature = "cuda")]
+    fn reclaimable_weight_cache_bytes(&self) -> Vec<(Device, usize)> {
+        Vec::new()
+    }
+    #[cfg(feature = "cuda")]
     fn supports_cuda_decode_graphs_for_args(&self, _model_specific_args: &dyn Any) -> bool {
         self.supports_cuda_decode_graphs()
     }
@@ -11109,6 +11120,55 @@ mod tests {
             )?,
             QWEN4_Q4K_NON_MAPPED_BYTES + QWEN4_Q4K_MTP_BYTES
         );
+        Ok(())
+    }
+
+    #[test]
+    fn qwen4_exp_topology_only_sizes_keep_unlisted_weights_dense() -> Result<()> {
+        const EXPERT_DOWN_ELEMENTS: usize = 512 * 2560 * 640;
+        const Q8_BLOCK_ELEMENTS: usize = 32;
+        const Q8_BLOCK_BYTES: usize = 34;
+        let topology = crate::Topology::from_str(
+            r"'/^model\.language_model\.layers\.0\.mlp\.experts\.down_proj\.weight$/':
+  isq: Q8_0
+",
+        )?;
+        let quantization = AutoDeviceMapQuantization::isq(None, Some(&topology));
+        let config = qwen4_sizing_config().to_string();
+        let pack_factor = quantization.conservative_pack_factor(DType::BF16, 1);
+        assert_eq!(pack_factor, 1);
+        for loader in [
+            &Qwen4ExpLoader as &dyn DeviceMappedModelLoader,
+            &AutoMultimodalLoader,
+        ] {
+            let sizes = loader.layer_sizes_in_bytes_with_quantization(
+                &config,
+                DType::BF16,
+                pack_factor,
+                Some(&quantization),
+                None,
+            )?;
+            assert_eq!(
+                sizes,
+                [
+                    QWEN4_DENSE_LINEAR_BYTES - EXPERT_DOWN_ELEMENTS * DType::BF16.size_in_bytes()
+                        + EXPERT_DOWN_ELEMENTS / Q8_BLOCK_ELEMENTS * Q8_BLOCK_BYTES,
+                    QWEN4_DENSE_LINEAR_BYTES,
+                    QWEN4_DENSE_LINEAR_BYTES,
+                    QWEN4_DENSE_ATTENTION_BYTES,
+                ]
+            );
+            assert_eq!(
+                loader.non_mapped_size_in_bytes(
+                    &config,
+                    DType::BF16,
+                    pack_factor,
+                    Some(&quantization),
+                    None,
+                )?,
+                QWEN4_DENSE_NON_MAPPED_BYTES
+            );
+        }
         Ok(())
     }
 

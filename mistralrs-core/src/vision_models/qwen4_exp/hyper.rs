@@ -71,9 +71,39 @@ impl GatedResidual {
 
     /// The block input: mean over streams of `xn * sigmoid(up(silu(down(xn) / hc)))`.
     pub(super) fn mix(&self, xn: &Tensor) -> Result<Tensor> {
+        self.mix_lowrank(xn, &self.down_silu(xn)?)
+    }
+
+    pub(super) fn mix_and_inject(&self, xn: &Tensor) -> Result<(Tensor, Tensor)> {
+        #[cfg(feature = "cuda")]
+        if let Some((down, inject)) = mistralrs_quant::try_fused_quantized_pair(
+            xn,
+            &*self.down,
+            self.inject.as_deref().expect("block mixer has injection"),
+        )? {
+            let lo = crate::cuda::qwen4_exp::hc_silu(&down, self.hc)?;
+            return Ok((self.mix_lowrank(xn, &lo)?, inject));
+        }
+        Ok((self.mix(xn)?, self.inject(xn)?))
+    }
+
+    fn down_silu(&self, xn: &Tensor) -> Result<Tensor> {
         let lo = self.down.forward(xn)?;
-        let lo = candle_nn::ops::silu(&(lo / self.hc as f64)?)?;
-        let gate = self.up.forward(&lo)?;
+        #[cfg(feature = "cuda")]
+        if xn.device().is_cuda() {
+            return crate::cuda::qwen4_exp::hc_silu(&lo, self.hc);
+        }
+        candle_nn::ops::silu(&(lo / self.hc as f64)?)
+    }
+
+    fn mix_lowrank(&self, xn: &Tensor, lo: &Tensor) -> Result<Tensor> {
+        #[cfg(feature = "cuda")]
+        if crate::cuda::qwen4_exp::hc_up_mix_supported(xn, lo, self.hc)? {
+            if let Some(up) = crate::cuda::qwen4_exp::HcWeight::from_projection(&*self.up) {
+                return crate::cuda::qwen4_exp::hc_up_mix(xn, lo, &up, self.hc);
+            }
+        }
+        let gate = self.up.forward(lo)?;
         #[cfg(feature = "cuda")]
         if xn.device().is_cuda() {
             return crate::cuda::qwen4_exp::hc_mix(xn, &gate, self.hc);
@@ -162,9 +192,18 @@ pub(super) fn grouped_rms_norm(
 
 #[cfg(all(test, feature = "cuda"))]
 mod tests {
-    use candle_core::{DType, Device, Result, Tensor};
+    use std::sync::Arc;
 
-    use super::grouped_rms_norm;
+    use candle_core::quantized::{GgmlDType, QTensor};
+    use candle_core::{DType, Device, Result, Tensor, Var};
+    use mistralrs_quant::{GgufMatMul, QuantMethod, QuantMethodConfig, UnquantLinear};
+
+    use super::{grouped_rms_norm, GatedResidual};
+
+    const TEST_HC: usize = 4;
+    const TEST_HIDDEN: usize = 2560;
+    const TEST_RANK: usize = 320;
+    const TEST_TOLERANCE: f32 = 0.016;
 
     fn max_diff(a: &Tensor, b: &Tensor) -> Result<f32> {
         (a.to_dtype(DType::F32)? - b.to_dtype(DType::F32)?)?
@@ -210,6 +249,166 @@ mod tests {
         assert!(max_diff(&combined, &reference)? < 0.05);
         let next_reference = grouped_rms_norm(&combined, &weight, hc, eps)?;
         assert!(max_diff(&next.unwrap(), &next_reference)? < 0.05);
+        Ok(())
+    }
+
+    #[test]
+    fn fused_hyper_connection_projections_match_reference() -> Result<()> {
+        let device = Device::new_cuda(0)?;
+        let width = TEST_HC * TEST_HIDDEN;
+        for dtype in [DType::BF16, DType::F16] {
+            for quant in [None, Some(GgmlDType::Q8_0), Some(GgmlDType::Q6K)] {
+                let projection = |rows: usize,
+                                  cols: usize,
+                                  salt: f32,
+                                  quant: Option<GgmlDType>|
+                 -> Result<Arc<dyn QuantMethod>> {
+                    let values = (0..rows * cols)
+                        .map(|i| ((i as f32 * 0.17 + salt).sin()) / (cols as f32).sqrt())
+                        .collect::<Vec<_>>();
+                    let weight = Tensor::from_vec(values, (rows, cols), &Device::Cpu)?;
+                    match quant {
+                        Some(quant) => Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+                            q_weight: Arc::new(QTensor::quantize_onto(&weight, quant, &device)?),
+                            b: None,
+                        })?)),
+                        None => Ok(Arc::new(UnquantLinear::new(
+                            QuantMethodConfig::Unquantized(candle_nn::Linear::new(
+                                weight.to_dtype(dtype)?.to_device(&device)?,
+                                None,
+                            )),
+                        )?)),
+                    }
+                };
+                let up_quant = quant.map(|quant| {
+                    if quant == GgmlDType::Q6K {
+                        GgmlDType::Q5_1
+                    } else {
+                        quant
+                    }
+                });
+                let hc = GatedResidual {
+                    norm_weight: Tensor::ones(width, DType::F32, &device)?,
+                    down: projection(TEST_RANK, width, 0.2, quant)?,
+                    up: projection(width, TEST_RANK, 0.8, up_quant)?,
+                    inject: Some(projection(TEST_HC, width, 1.3, quant)?),
+                    hc: TEST_HC,
+                    hidden: TEST_HIDDEN,
+                    eps: 1e-6,
+                };
+                for tokens in [1, 2, 9] {
+                    let values = (0..tokens * width)
+                        .map(|i| (i as f32 * 0.03).cos())
+                        .collect::<Vec<_>>();
+                    let input =
+                        Tensor::from_vec(values, (1, tokens, width), &device)?.to_dtype(dtype)?;
+                    let down = hc.down.forward(&input)?;
+                    let lo = candle_nn::ops::silu(&(down / TEST_HC as f64)?)?;
+                    let gate = hc.up.forward(&lo)?;
+                    let expected = crate::cuda::qwen4_exp::hc_mix(&input, &gate, TEST_HC)?;
+                    let (actual, injection) = hc.mix_and_inject(&input)?;
+                    assert!(
+                        max_diff(&actual, &expected)? < TEST_TOLERANCE,
+                        "{dtype:?} {quant:?} tokens={tokens}"
+                    );
+                    assert!(max_diff(&injection, &hc.inject(&input)?)? < TEST_TOLERANCE);
+
+                    if tokens == 1 {
+                        let weight = hc.up.dequantize_w()?.to_dtype(DType::F32)?;
+                        let exact_gate = lo
+                            .to_dtype(DType::F32)?
+                            .reshape((tokens, TEST_RANK))?
+                            .matmul(&weight.t()?)?
+                            .reshape((1, tokens, width))?
+                            .to_dtype(dtype)?;
+                        let exact = crate::cuda::qwen4_exp::hc_mix(&input, &exact_gate, TEST_HC)?;
+                        let fused = hc.mix_lowrank(&input, &lo)?;
+                        assert!(max_diff(&fused, &exact)? < TEST_TOLERANCE);
+                        if quant.is_some() {
+                            assert_eq!(max_diff(&fused, &expected)?, 0.0);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn quantized_hyper_connection_graph_replay_matches_reference() -> Result<()> {
+        use candle_core::cuda::cudarc::driver::sys;
+
+        use crate::cuda::qwen4_exp::{hc_mix, hc_up_mix, hc_up_mix_supported, HcWeight};
+
+        let device = Device::new_cuda_with_stream(0)?;
+        let cuda = device.as_cuda_device()?;
+        let _htod_cache_guard = cuda.enable_cuda_graph_htod_cache();
+        let width = TEST_HC * TEST_HIDDEN;
+        for dtype in [DType::BF16, DType::F16] {
+            let input = Var::zeros((1, 1, width), dtype, &device)?;
+            let lowrank = Var::zeros((1, 1, TEST_RANK), dtype, &device)?;
+            if !hc_up_mix_supported(&input, &lowrank, TEST_HC)? {
+                return Ok(());
+            }
+            for quant in [GgmlDType::Q8_0, GgmlDType::Q5_1] {
+                let values = (0..width * TEST_RANK)
+                    .map(|i| (i as f32 * 0.17 + 0.8).sin() / (TEST_RANK as f32).sqrt())
+                    .collect::<Vec<_>>();
+                let weight = Tensor::from_vec(values, (width, TEST_RANK), &Device::Cpu)?;
+                let projection = GgufMatMul::new(QuantMethodConfig::Gguf {
+                    q_weight: Arc::new(QTensor::quantize_onto(&weight, quant, &device)?),
+                    b: None,
+                })?;
+                let weight = HcWeight::from_projection(&projection).unwrap();
+                let _ = hc_up_mix(&input, &lowrank, &weight, TEST_HC)?;
+                device.synchronize()?;
+                let stream = cuda.cuda_stream();
+                let tracking = stream.context().is_event_tracking();
+                if tracking {
+                    unsafe { stream.context().disable_event_tracking() };
+                }
+                if let Err(error) =
+                    stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+                {
+                    if tracking {
+                        unsafe { stream.context().enable_event_tracking() };
+                    }
+                    return Err(candle_core::Error::msg(error));
+                }
+                let output = hc_up_mix(&input, &lowrank, &weight, TEST_HC);
+                let graph = stream.end_capture(
+                    sys::CUgraphInstantiate_flags::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH,
+                );
+                if tracking {
+                    unsafe { stream.context().enable_event_tracking() };
+                }
+                let output = output?;
+                let graph = graph
+                    .map_err(candle_core::Error::msg)?
+                    .ok_or_else(|| candle_core::Error::msg("HC capture returned no graph"))?;
+                for scale in [0.0f32, 0.15, 1.25, -3.0, 0.15] {
+                    let values = (0..width)
+                        .map(|i| (i as f32 * 0.03 + scale).cos())
+                        .collect::<Vec<_>>();
+                    input
+                        .set(&Tensor::from_vec(values, (1, 1, width), &device)?.to_dtype(dtype)?)?;
+                    let values = (0..TEST_RANK)
+                        .map(|i| (i as f32 * 0.13).sin() * scale)
+                        .collect::<Vec<_>>();
+                    lowrank.set(
+                        &Tensor::from_vec(values, (1, 1, TEST_RANK), &device)?.to_dtype(dtype)?,
+                    )?;
+                    graph.launch().map_err(candle_core::Error::msg)?;
+                    device.synchronize()?;
+                    let expected = hc_mix(&input, &projection.forward(&lowrank)?, TEST_HC)?;
+                    assert_eq!(
+                        max_diff(&output, &expected)?,
+                        0.0,
+                        "{dtype:?} {quant:?} {scale}"
+                    );
+                }
+            }
+        }
         Ok(())
     }
 }

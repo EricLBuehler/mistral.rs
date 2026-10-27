@@ -3679,6 +3679,7 @@ dependencies = [
  "libc",
  "llguidance",
  "lrtable",
+ "memmap2",
  "metrics",
  "mime_guess",
  "minijinja",

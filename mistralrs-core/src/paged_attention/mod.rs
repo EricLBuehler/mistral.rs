@@ -55,6 +55,7 @@ use crate::MemoryUsage;
 use tracing::info;
 
 pub const DEFAULT_PAGED_ATTENTION_BLOCK_SIZE: usize = 32;
+const MIN_CACHE_BLOCKS: usize = 2;
 #[cfg(feature = "metal")]
 const GPU_RESERVE_FRACTION: f64 = 0.02;
 #[cfg(feature = "metal")]
@@ -89,6 +90,8 @@ pub(crate) fn block_aligned_sliding_window_start(
 
 #[cfg(test)]
 mod tests {
+    use candle_core::{DType, Device};
+
     use super::{
         block_aligned_sliding_window_start, cache_prefix_capacity, kv_layer_buffer_bytes_per_block,
         max_cache_blocks, requested_cache_blocks, HybridPagedKvCacheConfig, KvCacheLayout,
@@ -168,6 +171,109 @@ mod tests {
             4 * 1024 * 1024 * 1024 + 512 * 1024 * 1024
         );
         assert_eq!(reservations.secondary_device_bytes, 256 * 1024 * 1024);
+        Ok(())
+    }
+
+    #[test]
+    fn reclaimable_weights_limit_physical_cache_budget_without_double_counting_headroom(
+    ) -> anyhow::Result<()> {
+        use crate::utils::memory_usage::DeviceMemory;
+        const GIB: usize = 1 << 30;
+        let snapshot = DeviceMemory::Unified {
+            total: 128 * GIB,
+            available: 44 * GIB,
+            allocated: 84 * GIB,
+            working_set_limit: 128 * GIB,
+        };
+        for goal in [
+            MemoryGoal::Auto,
+            MemoryGoal::KvTokens(16_384),
+            MemoryGoal::Utilization(0.75),
+        ] {
+            let mut config = PagedAttentionConfig::new(None, goal, PagedCacheType::Auto)?;
+            let policy = config.allocation_budget(&Device::Cpu, snapshot)?;
+            config.reserve_reclaimable_weight_cache(&Device::Cpu, 28 * GIB)?;
+            config.reserve_reclaimable_weight_cache(&Device::Cpu, 2 * GIB)?;
+            assert_eq!(
+                config.allocation_budget(&Device::Cpu, snapshot)?,
+                policy.min(14 * GIB)
+            );
+            let after_cache = DeviceMemory::Unified {
+                total: 128 * GIB,
+                available: 36 * GIB,
+                allocated: 92 * GIB,
+                working_set_limit: 128 * GIB,
+            };
+            assert_eq!(
+                config.allocation_budget(&Device::Cpu, after_cache)?,
+                policy.saturating_sub(8 * GIB).min(6 * GIB)
+            );
+            let discrete = DeviceMemory::Discrete {
+                total: 128 * GIB,
+                free: 44 * GIB,
+            };
+            assert_eq!(
+                config.allocation_budget(&Device::Cpu, discrete)?,
+                crate::memory_plan::device_memory_budget(goal, discrete)?
+            );
+            let low_memory = DeviceMemory::Unified {
+                total: 128 * GIB,
+                available: 29 * GIB,
+                allocated: 99 * GIB,
+                working_set_limit: 128 * GIB,
+            };
+            assert_eq!(config.allocation_budget(&Device::Cpu, low_memory)?, 0);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn optional_weights_leave_requested_cache_and_prefix_workspace_available() -> anyhow::Result<()>
+    {
+        let model = ModelConfigMetadata {
+            max_seq_len: 4096,
+            num_layers: 2,
+            hidden_size: 16,
+            num_kv_heads: 2,
+            num_attn_heads: 2,
+            sliding_window: None,
+            k_head_dim: 4,
+            v_head_dim: 6,
+            kv_cache_layout: KvCacheLayout::Standard,
+        };
+        let block_bytes = 2 * 2 * (4 + 6) * 2 * 32;
+        for (goal, blocks) in [
+            (MemoryGoal::Auto, 2),
+            (MemoryGoal::KvTokens(100), 5),
+            (MemoryGoal::KvBytes(block_bytes * 4 + 100), 4),
+        ] {
+            let mut config = PagedAttentionConfig::new(Some(32), goal, PagedCacheType::Auto)?
+                .with_base_device_memory_reservation(200)?;
+            config.reserve_activation_memory(100, 80);
+            let reservation = super::optional_weight_reservation(
+                &config,
+                super::CacheConfigRequest {
+                    memory_reservations: config.memory_reservations()?,
+                    dtype: DType::BF16,
+                    model: &model,
+                    device: &Device::Cpu,
+                    layer_devices: &[],
+                    capacity_activation_estimate: &|tokens| {
+                        Ok(crate::pipeline::ActivationMemoryEstimate {
+                            non_mapped_bytes: 100 + tokens * 8,
+                            mapped_bytes: 80,
+                            ..Default::default()
+                        })
+                    },
+                    silent: true,
+                },
+                &Device::Cpu,
+            )?;
+            assert_eq!(
+                reservation,
+                300 + blocks * block_bytes + (blocks - 1) * 32 * 8
+            );
+        }
         Ok(())
     }
 
@@ -332,6 +438,7 @@ pub struct PagedAttentionConfig {
     pub(crate) recurrent_checkpoint_lanes_auto: bool,
     pub(crate) recurrent_prefix_capacity: usize,
     pub(crate) memory_budget: Option<std::sync::Arc<crate::resource_plan::ModelMemoryBudget>>,
+    reclaimable_weight_cache_bytes: std::collections::HashMap<candle_core::DeviceLocation, usize>,
     pub(crate) execution_limits: ExecutionMemoryLimits,
     pub(crate) planned_query_tokens: usize,
     pub(crate) logits_bytes_per_query_token: usize,
@@ -374,6 +481,7 @@ impl PagedAttentionConfig {
             recurrent_checkpoint_lanes_auto: false,
             recurrent_prefix_capacity: 0,
             memory_budget: None,
+            reclaimable_weight_cache_bytes: std::collections::HashMap::new(),
             execution_limits: ExecutionMemoryLimits::default(),
             planned_query_tokens: 0,
             logits_bytes_per_query_token: 0,
@@ -403,10 +511,37 @@ impl PagedAttentionConfig {
         device: &Device,
         snapshot: crate::utils::memory_usage::DeviceMemory,
     ) -> anyhow::Result<usize> {
-        match &self.memory_budget {
+        let policy_budget = match &self.memory_budget {
             Some(budget) => budget.allocation_budget(device.location(), snapshot),
             None => crate::memory_plan::device_memory_budget(self.memory_goal, snapshot),
+        }?;
+        if snapshot.is_unified() {
+            let cached = self
+                .reclaimable_weight_cache_bytes
+                .get(&device.location())
+                .copied()
+                .unwrap_or_default();
+            // Clean weight pages count as available RAM but must survive persistent KV allocations.
+            Ok(policy_budget.min(snapshot.physical_available().saturating_sub(cached)))
+        } else {
+            Ok(policy_budget)
         }
+    }
+
+    #[cfg(any(feature = "cuda", test))]
+    pub(crate) fn reserve_reclaimable_weight_cache(
+        &mut self,
+        device: &Device,
+        bytes: usize,
+    ) -> anyhow::Result<()> {
+        let cached = self
+            .reclaimable_weight_cache_bytes
+            .entry(device.location())
+            .or_default();
+        *cached = cached
+            .checked_add(bytes)
+            .ok_or_else(|| anyhow::anyhow!("reclaimable weight cache reservation overflow"))?;
+        Ok(())
     }
 
     pub fn with_memory_goal(mut self, goal: MemoryGoal) -> anyhow::Result<Self> {
@@ -740,6 +875,114 @@ pub struct CacheConfigRequest<'a> {
     pub silent: bool,
 }
 
+fn total_cache_allocation_bytes(
+    devices: &[CacheDeviceAllocation<'_>],
+    blocks: usize,
+) -> anyhow::Result<usize> {
+    devices.iter().try_fold(0usize, |total, allocation| {
+        total
+            .checked_add(allocation.allocation_bytes(blocks)?)
+            .ok_or_else(|| anyhow::anyhow!("KV allocation size overflow"))
+    })
+}
+
+fn requested_device_cache_blocks(
+    goal: MemoryGoal,
+    block_size: usize,
+    devices: &[CacheDeviceAllocation<'_>],
+    total_bytes_per_block: usize,
+) -> anyhow::Result<Option<usize>> {
+    let blocks = requested_cache_blocks(goal, block_size, total_bytes_per_block)?;
+    match (goal, blocks) {
+        (MemoryGoal::KvBytes(bytes), Some(upper)) => {
+            Ok(Some(max_cache_blocks(upper, bytes, |blocks| {
+                total_cache_allocation_bytes(devices, blocks)
+            })?))
+        }
+        (_, blocks) => Ok(blocks),
+    }
+}
+
+#[cfg(any(feature = "cuda", test))]
+fn optional_weight_reservation(
+    paged_config: &PagedAttentionConfig,
+    request: CacheConfigRequest<'_>,
+    device: &Device,
+) -> anyhow::Result<usize> {
+    let block_size = paged_config
+        .block_size
+        .unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE);
+    let devices = cache_device_allocations(
+        request.model,
+        paged_config.cache_type.to_dtype(request.dtype),
+        block_size,
+        request.device,
+        request.layer_devices,
+    )?;
+    let bytes_per_block = devices.iter().try_fold(0usize, |total, allocation| {
+        total
+            .checked_add(allocation.bytes_per_block)
+            .ok_or_else(|| anyhow::anyhow!("KV block size overflow"))
+    })?;
+    let blocks = requested_device_cache_blocks(
+        paged_config.memory_goal,
+        block_size,
+        &devices,
+        bytes_per_block,
+    )?
+    .unwrap_or(MIN_CACHE_BLOCKS);
+    let cache_bytes = devices
+        .iter()
+        .find(|allocation| allocation.device.same_device(device))
+        .map_or(Ok(0), |allocation| allocation.allocation_bytes(blocks))?;
+    let capacity = cache_prefix_capacity(blocks, block_size, request.model.max_seq_len());
+    let activation = (request.capacity_activation_estimate)(capacity)?;
+    let primary = device.same_device(request.device);
+    let (runtime, extra_activation) = if primary {
+        (
+            request.memory_reservations.primary_device_bytes,
+            activation
+                .non_mapped_bytes
+                .max(activation.mapped_bytes)
+                .saturating_sub(paged_config.primary_activation_memory_reservation_bytes),
+        )
+    } else {
+        (
+            request.memory_reservations.secondary_device_bytes,
+            activation
+                .mapped_bytes
+                .saturating_sub(paged_config.mapped_activation_memory_reservation_bytes),
+        )
+    };
+    let pending_weights = if device.is_cuda() {
+        mistralrs_quant::gguf_affine_budget_bytes(device, request.dtype)
+    } else {
+        0
+    };
+    [runtime, extra_activation, cache_bytes, pending_weights]
+        .into_iter()
+        .try_fold(0usize, |total, bytes| total.checked_add(bytes))
+        .ok_or_else(|| anyhow::anyhow!("optional weight runtime reservation overflow"))
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn optional_weight_budget(
+    paged_config: &PagedAttentionConfig,
+    request: CacheConfigRequest<'_>,
+    device: &Device,
+) -> anyhow::Result<usize> {
+    device.synchronize()?;
+    if device.is_cuda() {
+        MemoryUsage.synchronize_cuda_context(device)?;
+        trim_cuda_mempool(device)?;
+    }
+    let reservation = optional_weight_reservation(paged_config, request, device)?;
+    let memory = MemoryUsage.query(device)?;
+    Ok(paged_config
+        .allocation_budget(device, memory)?
+        .saturating_sub(reservation))
+}
+
 pub fn calculate_cache_config(
     paged_config: &mut PagedAttentionConfig,
     request: CacheConfigRequest<'_>,
@@ -776,22 +1019,8 @@ pub fn calculate_cache_config(
     if total_bytes_per_block == 0 {
         anyhow::bail!("The model has no paged KV cache storage");
     }
-    let total_allocation_bytes = |blocks| {
-        devices.iter().try_fold(0usize, |total, allocation| {
-            total
-                .checked_add(allocation.allocation_bytes(blocks)?)
-                .ok_or_else(|| anyhow::anyhow!("KV allocation size overflow"))
-        })
-    };
-    let requested_blocks = match (
-        goal,
-        requested_cache_blocks(goal, block_size, total_bytes_per_block)?,
-    ) {
-        (MemoryGoal::KvBytes(bytes), Some(upper)) => {
-            Some(max_cache_blocks(upper, bytes, total_allocation_bytes)?)
-        }
-        (_, blocks) => blocks,
-    };
+    let requested_blocks =
+        requested_device_cache_blocks(goal, block_size, &devices, total_bytes_per_block)?;
     let activation_for_blocks = |blocks: usize| {
         let tokens = cache_prefix_capacity(blocks, block_size, config.max_seq_len());
         capacity_activation_estimate(tokens)
@@ -861,10 +1090,15 @@ pub fn calculate_cache_config(
         if requested_blocks.is_some_and(|requested| requested > blocks) {
             let requested = requested_blocks.unwrap();
             anyhow::bail!(
-                "Memory goal ({goal}) needs {} MiB of KV cache and {} MiB of additional prefix workspace on {:?}, but only {} MiB remains after model and baseline runtime reservations",
+                "Memory goal ({goal}) needs {} MiB of KV cache and {} MiB of additional prefix workspace on {:?}, but only {} MiB remains after model and baseline runtime reservations ({} MiB allocated, {} MiB physically available, {} MiB policy budget, {} MiB runtime reservations, {} MiB pending weights)",
                 allocation.allocation_bytes(requested)?.div_ceil(SIZE_IN_MB),
                 extra_activation(requested, primary)?.div_ceil(SIZE_IN_MB),
                 cache_device.location(), available / SIZE_IN_MB,
+                memory.allocated() / SIZE_IN_MB,
+                memory.physical_available() / SIZE_IN_MB,
+                allocation_budget / SIZE_IN_MB,
+                reserved.div_ceil(SIZE_IN_MB),
+                affine.div_ceil(SIZE_IN_MB),
             );
         }
         available_blocks = available_blocks.min(blocks);
@@ -877,7 +1111,7 @@ pub fn calculate_cache_config(
         ));
     }
     let num_gpu_blocks = requested_blocks.unwrap_or(available_blocks);
-    if num_gpu_blocks < 2 {
+    if num_gpu_blocks < MIN_CACHE_BLOCKS {
         anyhow::bail!("Insufficient memory for a usable KV cache after weights and runtime reservations. Reduce concurrency or prefill work, change device placement, or disable paged attention.");
     }
     let cache_bytes = num_gpu_blocks
@@ -902,7 +1136,7 @@ pub fn calculate_cache_config(
                 reserved.saturating_add(extra).div_ceil(SIZE_IN_MB), available.saturating_sub(extra) / SIZE_IN_MB,
             );
         }
-        let allocated_bytes = total_allocation_bytes(num_gpu_blocks)?;
+        let allocated_bytes = total_cache_allocation_bytes(&devices, num_gpu_blocks)?;
         info!("Allocating {} MiB logical shared {cache_dtype:?} KV cache (estimated allocation {} MiB): {tokens} usable tokens, {num_gpu_blocks} blocks of {block_size} tokens", cache_bytes.div_ceil(SIZE_IN_MB), allocated_bytes.div_ceil(SIZE_IN_MB));
     }
     crate::pipeline::apply_model_activation_memory(paged_config, final_activation);

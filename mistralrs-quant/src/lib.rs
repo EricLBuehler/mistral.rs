@@ -2398,6 +2398,28 @@ pub fn try_fused_gemv_shared_lhs_cpu(
 }
 
 #[cfg(feature = "cuda")]
+pub fn try_fused_quantized_pair(
+    xs: &Tensor,
+    left: &dyn QuantMethod,
+    right: &dyn QuantMethod,
+) -> Result<Option<(Tensor, Tensor)>> {
+    if !xs.device().is_cuda() || !fused_projections_allowed(xs, &[left, right]) {
+        return Ok(None);
+    }
+    let tokens = xs.elem_count() / xs.dim(candle_core::D::Minus1)?;
+    if tokens == 0 || tokens > gguf::fast_mmvq::MMVQ_MAX_BATCH {
+        return Ok(None);
+    }
+    let (Some(left), Some(right)) = (left.get_qtensor(), right.get_qtensor()) else {
+        return Ok(None);
+    };
+    if left.dtype() != right.dtype() || !gguf::fast_mmvq::supports(left.dtype()) {
+        return Ok(None);
+    }
+    gguf::fast_mmvq::fused_pair(&left, &right, xs).map(Some)
+}
+
+#[cfg(feature = "cuda")]
 pub fn try_fused_quantized_qkv(
     xs: &Tensor,
     q: &dyn QuantMethod,

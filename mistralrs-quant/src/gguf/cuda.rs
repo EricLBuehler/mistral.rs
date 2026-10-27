@@ -25,6 +25,10 @@ const MOE_REDUCE_THREADS: usize = 256;
 const MOE_OUTPUT_F32: i32 = 0;
 const MOE_OUTPUT_F16: i32 = 1;
 const MOE_OUTPUT_BF16: i32 = 2;
+const DECODE_SM121_HIDDEN: usize = 2560;
+const DECODE_SM121_INTERMEDIATE: usize = 640;
+const DECODE_SM121_EXPERTS: usize = 512;
+const DECODE_SM121_TOPK: usize = 10;
 
 // Captured CUDA graphs keep the pointers they saw, so a superseded workspace is retired, never freed
 struct DispatchWorkspaceSlot {
@@ -1471,8 +1475,8 @@ pub unsafe fn indexed_moe_fused_decode(
     assert!(up_qt.dtype() == gate_up_dtype);
     let down_dtype = down_qt.dtype();
 
-    let (_, n_gate, k_gate) = gate_qt.shape().dims3()?;
-    let (_, n_down, k_down) = down_qt.shape().dims3()?;
+    let (gate_experts, n_gate, k_gate) = gate_qt.shape().dims3()?;
+    let (down_experts, n_down, k_down) = down_qt.shape().dims3()?;
 
     // gate and up: [E, intermediate, hidden], down: [E, hidden, intermediate]
     let hidden_size = k_gate;
@@ -1483,6 +1487,16 @@ pub unsafe fn indexed_moe_fused_decode(
     let xs_contig = xs_flat.contiguous()?;
     let input_rows = xs_contig.dim(0)?;
     let k = xs_contig.dim(1)?;
+    let specialized = batch == 1
+        && input_rows == 1
+        && k == DECODE_SM121_HIDDEN
+        && topk == DECODE_SM121_TOPK
+        && gate_experts == DECODE_SM121_EXPERTS
+        && down_experts == DECODE_SM121_EXPERTS
+        && k_gate == DECODE_SM121_HIDDEN
+        && n_gate == DECODE_SM121_INTERMEDIATE
+        && act_type == ACT_SILU
+        && super::fast_mmvq::is_sm121(dev)?;
     let k_padded = pad(k, MATRIX_ROW_PADDING);
     let input_q8_bytes = q8_1_bytes(input_rows, k_padded);
     let intermediate_rows = batch * topk;
@@ -1536,7 +1550,9 @@ pub unsafe fn indexed_moe_fused_decode(
             GgmlDType::Q8_1 => ffi::launch_moe_gemv_fused_gate_up_q8_1_q8_1,
             GgmlDType::Q2K => ffi::launch_moe_gemv_fused_gate_up_q2k_q8_1,
             GgmlDType::Q3K => ffi::launch_moe_gemv_fused_gate_up_q3k_q8_1,
+            GgmlDType::Q4K if specialized => ffi::launch_moe_gemv_fused_gate_up_q4k_sm121,
             GgmlDType::Q4K => ffi::launch_moe_gemv_fused_gate_up_q4k_q8_1,
+            GgmlDType::Q5K if specialized => ffi::launch_moe_gemv_fused_gate_up_q5k_sm121,
             GgmlDType::Q5K => ffi::launch_moe_gemv_fused_gate_up_q5k_q8_1,
             GgmlDType::Q6K => ffi::launch_moe_gemv_fused_gate_up_q6k_q8_1,
             _ => candle_core::bail!("unsupported dtype for fused MoE decode: {gate_up_dtype:?}"),
@@ -1596,10 +1612,13 @@ pub unsafe fn indexed_moe_fused_decode(
         );
 
         let launch_fn: DownAggregateFn = match down_dtype {
+            GgmlDType::Q8_0 if specialized => ffi::launch_moe_gemv_down_aggregate_q8_0_sm121,
             GgmlDType::Q8_0 => ffi::launch_moe_gemv_down_aggregate_q8_0_q8_1,
             GgmlDType::Q4_0 => ffi::launch_moe_gemv_down_aggregate_q4_0_q8_1,
+            GgmlDType::Q4_1 if specialized => ffi::launch_moe_gemv_down_aggregate_q4_1_sm121,
             GgmlDType::Q4_1 => ffi::launch_moe_gemv_down_aggregate_q4_1_q8_1,
             GgmlDType::Q5_0 => ffi::launch_moe_gemv_down_aggregate_q5_0_q8_1,
+            GgmlDType::Q5_1 if specialized => ffi::launch_moe_gemv_down_aggregate_q5_1_sm121,
             GgmlDType::Q5_1 => ffi::launch_moe_gemv_down_aggregate_q5_1_q8_1,
             GgmlDType::Q8_1 => ffi::launch_moe_gemv_down_aggregate_q8_1_q8_1,
             GgmlDType::Q2K => ffi::launch_moe_gemv_down_aggregate_q2k_q8_1,
@@ -1633,3 +1652,7 @@ pub unsafe fn indexed_moe_fused_decode(
         out_shape,
     )))
 }
+
+#[cfg(test)]
+#[path = "moe_sm121_tests.rs"]
+mod moe_sm121_tests;

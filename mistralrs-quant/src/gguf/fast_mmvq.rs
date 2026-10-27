@@ -19,6 +19,9 @@ use crate::{
 const Q8_1_BLOCK_SIZE: usize = 32;
 const Q8_1_TYPE_SIZE: usize = 36; // 2 halves (4 bytes) + QK8_1 int8 = 4 + 32 = 36
 const MATRIX_ROW_PADDING: usize = 512;
+const SM121_Q8_MIN_COLS: usize = 2560;
+const SM121_Q8_MIN_WEIGHT_ELEMENTS: usize = 15 * 1024 * 1024;
+const SM121_CAPABILITY: (i32, i32) = (12, 1);
 
 #[inline]
 fn pad(p: usize, q: usize) -> usize {
@@ -78,6 +81,30 @@ struct WorkspaceKey {
 type WsMap = Mutex<HashMap<WorkspaceKey, &'static Mutex<WorkspaceSlot>>>;
 
 static WORKSPACE: OnceLock<WsMap> = OnceLock::new();
+static SM121_DEVICES: OnceLock<Mutex<HashMap<candle_core::cuda::DeviceId, bool>>> = OnceLock::new();
+
+pub(super) fn is_sm121(dev: &CudaDevice) -> Result<bool> {
+    use candle_core::cuda::cudarc::driver::sys::CUdevice_attribute;
+
+    let mut devices = SM121_DEVICES
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap();
+    if let Some(&supported) = devices.get(&dev.id()) {
+        return Ok(supported);
+    }
+    let stream = dev.cuda_stream();
+    let context = stream.context();
+    let major = context
+        .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR)
+        .map_err(candle_core::Error::wrap)?;
+    let minor = context
+        .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR)
+        .map_err(candle_core::Error::wrap)?;
+    let supported = (major, minor) == SM121_CAPABILITY;
+    devices.insert(dev.id(), supported);
+    Ok(supported)
+}
 
 fn workspace_ensure<'a>(
     dev: &CudaDevice,
@@ -297,6 +324,10 @@ fn fused_qkv_launcher(input_ty: DType, dtype: GgmlDType) -> Option<FusedQkvLaunc
 ///
 /// The output dtype matches the input dtype (BF16 → BF16, F16 → F16, F32 → F32).
 pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
+    plain_impl(w, xs, true)
+}
+
+fn plain_impl(w: &QTensor, xs: &Tensor, allow_sm121: bool) -> Result<Tensor> {
     let dtype = w.dtype();
     if !supports(dtype) {
         candle_core::bail!("fast_mmvq: unsupported quant dtype {dtype:?}");
@@ -327,6 +358,12 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
     if !matches!(input_ty, DType::BF16 | DType::F16 | DType::F32) {
         candle_core::bail!("fast_mmvq: input dtype must be BF16, F16, or F32, got {input_ty:?}");
     }
+    let sm121_q8 = allow_sm121
+        && dtype == GgmlDType::Q8_0
+        && b_size == 1
+        && ncols >= SM121_Q8_MIN_COLS
+        && nrows * ncols >= SM121_Q8_MIN_WEIGHT_ELEMENTS
+        && is_sm121(&dev)?;
 
     let stream = dev.cuda_stream();
     let xs = xs.contiguous()?;
@@ -368,7 +405,11 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
                         b_size as i32,
                         stream_ptr,
                     );
-                    let launcher = plain_launcher_bf16(dtype).expect("supports() checked");
+                    let launcher = if sm121_q8 {
+                        ffi::launch_mmvq_gguf_q8_0_bf16_sm121 as PlainLauncher
+                    } else {
+                        plain_launcher_bf16(dtype).expect("supports() checked")
+                    };
                     launcher(
                         weight_ptr,
                         scratch_ptr as *const std::ffi::c_void,
@@ -406,7 +447,11 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
                         b_size as i32,
                         stream_ptr,
                     );
-                    let launcher = plain_launcher_f16(dtype).expect("supports() checked");
+                    let launcher = if sm121_q8 {
+                        ffi::launch_mmvq_gguf_q8_0_f16_sm121 as PlainLauncher
+                    } else {
+                        plain_launcher_f16(dtype).expect("supports() checked")
+                    };
                     launcher(
                         weight_ptr,
                         scratch_ptr as *const std::ffi::c_void,
@@ -444,7 +489,11 @@ pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
                         b_size as i32,
                         stream_ptr,
                     );
-                    let launcher = plain_launcher_f32(dtype).expect("supports() checked");
+                    let launcher = if sm121_q8 {
+                        ffi::launch_mmvq_gguf_q8_0_f32_sm121 as PlainLauncher
+                    } else {
+                        plain_launcher_f32(dtype).expect("supports() checked")
+                    };
                     launcher(
                         weight_ptr,
                         scratch_ptr as *const std::ffi::c_void,
@@ -685,6 +734,22 @@ pub fn fused_qkv(
     v_w: &QTensor,
     xs: &Tensor,
 ) -> Result<(Tensor, Tensor, Tensor)> {
+    fused_qkv_optional(q_w, k_w, Some(v_w), xs)
+}
+
+pub fn fused_pair(left: &QTensor, right: &QTensor, xs: &Tensor) -> Result<(Tensor, Tensor)> {
+    let (left, right, _) = fused_qkv_optional(left, right, None, xs)?;
+    Ok((left, right))
+}
+
+fn fused_qkv_optional(
+    q_w: &QTensor,
+    k_w: &QTensor,
+    v_w: Option<&QTensor>,
+    xs: &Tensor,
+) -> Result<(Tensor, Tensor, Tensor)> {
+    let has_v = v_w.is_some();
+    let v_w = v_w.unwrap_or(q_w);
     let dtype = q_w.dtype();
     if dtype != k_w.dtype() || dtype != v_w.dtype() {
         candle_core::bail!(
@@ -717,6 +782,7 @@ pub fn fused_qkv(
     let (q_nrows, ncols) = q_w.shape().dims2()?;
     let (k_nrows, k_ncols) = k_w.shape().dims2()?;
     let (v_nrows, v_ncols) = v_w.shape().dims2()?;
+    let v_nrows = if has_v { v_nrows } else { 0 };
     if ncols != k_ncols || ncols != v_ncols {
         candle_core::bail!(
             "fast_mmvq fused_qkv: q/k/v ncols mismatch {ncols}, {k_ncols}, {v_ncols}"
@@ -774,7 +840,7 @@ pub fn fused_qkv(
             let slice = xs_cuda.as_cuda_slice::<half::bf16>()?;
             let mut q_out = unsafe { dev.alloc::<half::bf16>(q_nrows * b_size)? };
             let mut k_out = unsafe { dev.alloc::<half::bf16>(k_nrows * b_size)? };
-            let mut v_out = unsafe { dev.alloc::<half::bf16>(v_nrows * b_size)? };
+            let mut v_out = unsafe { dev.alloc::<half::bf16>((v_nrows * b_size).max(1))? };
 
             {
                 let (xs_ptr, _xs_guard) = slice_ptr_on_stream(slice, xs_offset, &stream);
@@ -829,7 +895,7 @@ pub fn fused_qkv(
             let slice = xs_cuda.as_cuda_slice::<half::f16>()?;
             let mut q_out = unsafe { dev.alloc::<half::f16>(q_nrows * b_size)? };
             let mut k_out = unsafe { dev.alloc::<half::f16>(k_nrows * b_size)? };
-            let mut v_out = unsafe { dev.alloc::<half::f16>(v_nrows * b_size)? };
+            let mut v_out = unsafe { dev.alloc::<half::f16>((v_nrows * b_size).max(1))? };
 
             {
                 let (xs_ptr, _xs_guard) = slice_ptr_on_stream(slice, xs_offset, &stream);
@@ -884,7 +950,7 @@ pub fn fused_qkv(
             let slice = xs_cuda.as_cuda_slice::<f32>()?;
             let mut q_out = unsafe { dev.alloc::<f32>(q_nrows * b_size)? };
             let mut k_out = unsafe { dev.alloc::<f32>(k_nrows * b_size)? };
-            let mut v_out = unsafe { dev.alloc::<f32>(v_nrows * b_size)? };
+            let mut v_out = unsafe { dev.alloc::<f32>((v_nrows * b_size).max(1))? };
 
             {
                 let (xs_ptr, _xs_guard) = slice_ptr_on_stream(slice, xs_offset, &stream);
@@ -938,3 +1004,7 @@ pub fn fused_qkv(
         _ => unreachable!(),
     }
 }
+
+#[cfg(test)]
+#[path = "mmvq_sm121_tests.rs"]
+mod sm121_tests;

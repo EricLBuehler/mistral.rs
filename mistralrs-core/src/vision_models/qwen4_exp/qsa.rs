@@ -42,6 +42,21 @@ impl QsaMode {
             }
         }
     }
+
+    #[cfg(any(feature = "cuda", test))]
+    fn with_table_capacity(self, qsa: &QsaConfig, capacity: usize) -> Self {
+        match self {
+            Self::Dense => Self::Dense,
+            Self::Sparse { max_blocks } => {
+                let max_blocks = max_blocks.min(capacity / qsa.compress_ratio);
+                if max_blocks <= qsa.block_topk() {
+                    Self::Dense
+                } else {
+                    Self::Sparse { max_blocks }
+                }
+            }
+        }
+    }
 }
 
 /// Per-forward state shared by every QSA layer.
@@ -246,7 +261,6 @@ impl QsaAttention {
             self.qsa.n_heads,
             self.qsa.head_dim,
         ))?;
-        let index_q = self.index_query(&index_q, &cos_sin)?;
         let raw_key = index_qk.narrow(D::Minus1, index_q_dim, self.qsa.head_dim)?;
 
         let y = match (&self.paged_attn, metadata) {
@@ -452,7 +466,11 @@ impl QsaAttention {
                 shape: &shape,
                 eps: self.eps,
             })?;
-            let QsaMode::Sparse { max_blocks } = step.mode else {
+            // Table capacity is part of the graph key; live context lengths can change during replay.
+            let mode = step
+                .mode
+                .with_table_capacity(&self.qsa, block_tables.dim(1)? * block_size);
+            if matches!(mode, QsaMode::Dense) && layout.kv_lens.is_some() {
                 let y = paged_attn.forward(
                     q,
                     k,
@@ -465,7 +483,7 @@ impl QsaAttention {
                     Some(flash_params),
                 )?;
                 return y.transpose(1, 2)?.reshape((b_sz, seq_len, ()));
-            };
+            }
             let mut key_cache = key_cache.clone();
             let mut value_cache = value_cache.clone();
             paged_attn.write_cache(
@@ -475,24 +493,34 @@ impl QsaAttention {
                 &mut value_cache,
                 metadata,
             )?;
-            let index_q = index_q.reshape((n_tokens, self.qsa.n_heads, self.qsa.head_dim))?;
-            let (selected, n_selected) = match kernels::qsa_select_cutile(
-                &index_q,
-                &aux.block_keys,
-                layout,
-                &paged,
-                &shape,
-                max_blocks,
-            )? {
-                Some(selection) => selection,
-                None => kernels::qsa_select(
-                    &index_q,
-                    &aux.block_keys,
-                    layout,
-                    &paged,
-                    &shape,
-                    max_blocks,
-                )?,
+            let selection = if let QsaMode::Sparse { max_blocks } = mode {
+                let index_q = self.index_query(index_q, cos_sin)?.reshape((
+                    n_tokens,
+                    self.qsa.n_heads,
+                    self.qsa.head_dim,
+                ))?;
+                Some(
+                    match kernels::qsa_select_cutile(
+                        &index_q,
+                        &aux.block_keys,
+                        layout,
+                        &paged,
+                        &shape,
+                        max_blocks,
+                    )? {
+                        Some(selection) => selection,
+                        None => kernels::qsa_select(
+                            &index_q,
+                            &aux.block_keys,
+                            layout,
+                            &paged,
+                            &shape,
+                            max_blocks,
+                        )?,
+                    },
+                )
+            } else {
+                None
             };
             let q_tokens = q.transpose(1, 2)?.contiguous()?.reshape((
                 n_tokens,
@@ -505,8 +533,9 @@ impl QsaAttention {
                 value_cache: &value_cache,
                 layout,
                 paged: &paged,
-                selected: &selected,
-                n_selected: &n_selected,
+                selection: selection
+                    .as_ref()
+                    .map(|(selected, counts)| (selected, counts)),
                 shape: &shape,
                 n_kv_heads: self.num_kv_heads,
                 scale: self.sdpa_params.softmax_scale,
@@ -567,7 +596,8 @@ impl QsaAttention {
                 &self.sdpa_params,
             )?,
             QsaMode::Sparse { .. } => {
-                let mask = self.selection_mask(index_q, &aux, step, b_sz, seq_len, q.dtype())?;
+                let index_q = self.index_query(index_q, cos_sin)?;
+                let mask = self.selection_mask(&index_q, &aux, step, b_sz, seq_len, q.dtype())?;
                 Sdpa.run_attention_noflash(
                     q,
                     &keys,
@@ -760,6 +790,17 @@ mod tests {
         assert_eq!(
             QsaMode::for_max_kv_len(&qsa, 2052),
             QsaMode::Sparse { max_blocks: 513 }
+        );
+        let decode = QsaMode::Sparse { max_blocks: 65536 };
+        assert_eq!(decode.with_table_capacity(&qsa, 2048), QsaMode::Dense);
+        assert_eq!(decode.with_table_capacity(&qsa, 2051), QsaMode::Dense);
+        assert_eq!(
+            decode.with_table_capacity(&qsa, 2080),
+            QsaMode::Sparse { max_blocks: 520 }
+        );
+        assert_eq!(
+            QsaMode::Dense.with_table_capacity(&qsa, 16384),
+            QsaMode::Dense
         );
     }
 }

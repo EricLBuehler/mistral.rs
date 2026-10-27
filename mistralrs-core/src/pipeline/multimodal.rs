@@ -937,12 +937,14 @@ impl Loader for MultimodalLoader {
                                         quantization
                                             .conservative_pack_factor(dtype, weight_pack_factor)
                                     });
-                            let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
-                                &config,
-                                dtype,
-                                weight_pack_factor,
-                                matformer_slicing_config.as_ref(),
-                            )?;
+                            let layer_sizes_in_bytes =
+                                self.inner.layer_sizes_in_bytes_with_quantization(
+                                    &config,
+                                    dtype,
+                                    weight_pack_factor,
+                                    quantization.as_ref(),
+                                    matformer_slicing_config.as_ref(),
+                                )?;
                             let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
                                 &config,
                                 dtype,
@@ -1458,6 +1460,8 @@ impl Loader for MultimodalLoader {
                 module.ct.resolve()?;
             }
         }
+        #[cfg(feature = "cuda")]
+        let mut model = model;
         let model_metadata = crate::paged_attention::with_attention_features(
             model.model_config(),
             self.inner
@@ -1524,41 +1528,58 @@ impl Loader for MultimodalLoader {
             super::prepare_cuda_runtime(&device, pipeline_mapper.as_ref())?;
         }
 
-        let (cache_config, cache_engine) =
-            if let Some(paged_attn_config) = paged_attn_config.as_mut() {
-                let paged_snapshot = paged_attn_config.clone();
-                let capacity_activation_estimate = |usable_tokens| {
-                    super::loaders::estimate_model_activation_memory(
-                        self.inner.as_ref(),
-                        &runtime_config,
-                        super::loaders::ActivationMemoryContext {
-                            params: &activation_params,
-                            limits: paged_snapshot.execution_limits,
-                            dtype,
-                            device: &device,
-                            paged: &paged_snapshot,
-                            cache_capacity_tokens: Some(usable_tokens),
-                        },
-                    )
-                };
-                let memory_reservations =
-                    paged_attention_memory_reservations(model.cache(), paged_attn_config, &device)?;
-                let (cache_config, cache_engine) = allocate_cache(
-                    paged_attn_config,
-                    CacheConfigRequest {
-                        memory_reservations,
+        let (cache_config, cache_engine) = if let Some(paged_attn_config) =
+            paged_attn_config.as_mut()
+        {
+            let paged_snapshot = paged_attn_config.clone();
+            let capacity_activation_estimate = |usable_tokens| {
+                super::loaders::estimate_model_activation_memory(
+                    self.inner.as_ref(),
+                    &runtime_config,
+                    super::loaders::ActivationMemoryContext {
+                        params: &activation_params,
+                        limits: paged_snapshot.execution_limits,
                         dtype,
-                        model: model_metadata.as_ref(),
                         device: &device,
-                        layer_devices: &layer_devices,
-                        capacity_activation_estimate: &capacity_activation_estimate,
-                        silent,
+                        paged: &paged_snapshot,
+                        cache_capacity_tokens: Some(usable_tokens),
                     },
-                )?;
-                (Some(cache_config), Some(cache_engine))
-            } else {
-                (None, None)
+                )
             };
+            let memory_reservations =
+                paged_attention_memory_reservations(model.cache(), paged_attn_config, &device)?;
+            let cache_request = CacheConfigRequest {
+                memory_reservations,
+                dtype,
+                model: model_metadata.as_ref(),
+                device: &device,
+                layer_devices: &layer_devices,
+                capacity_activation_estimate: &capacity_activation_estimate,
+                silent,
+            };
+            #[cfg(feature = "cuda")]
+            {
+                model.prepare_optional_weights(&|device| {
+                    crate::paged_attention::optional_weight_budget(
+                        paged_attn_config,
+                        cache_request,
+                        device,
+                    )
+                    .map_err(candle_core::Error::msg)
+                })?;
+                for (device, bytes) in model.reclaimable_weight_cache_bytes() {
+                    paged_attn_config.reserve_reclaimable_weight_cache(&device, bytes)?;
+                }
+            }
+            let (cache_config, cache_engine) = allocate_cache(paged_attn_config, cache_request)?;
+            (Some(cache_config), Some(cache_engine))
+        } else {
+            #[cfg(feature = "cuda")]
+            model.prepare_optional_weights(&|device| {
+                Ok(crate::MemoryUsage.query(device)?.available())
+            })?;
+            (None, None)
+        };
 
         let max_seq_len = model.max_seq_len();
         let num_hidden_layers = match model.cache() {

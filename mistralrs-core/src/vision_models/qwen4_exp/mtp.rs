@@ -222,8 +222,7 @@ impl Qwen4ExpMtpHead {
         };
 
         let xn = self.attn_hc.norm(&res)?;
-        let h = self.attn_hc.mix(&xn)?;
-        let inject = self.attn_hc.inject(&xn)?;
+        let (h, inject) = self.attn_hc.mix_and_inject(&xn)?;
         let out = self.attn.forward(
             &h,
             attention.attention_mask,
@@ -240,8 +239,7 @@ impl Qwen4ExpMtpHead {
             Some(xn) => xn,
             None => self.mlp_hc.norm(&res)?,
         };
-        let h = self.mlp_hc.mix(&xn)?;
-        let inject = self.mlp_hc.inject(&xn)?;
+        let (h, inject) = self.mlp_hc.mix_and_inject(&xn)?;
         let out = self.moe.forward(&h)?;
         let (res, xn) = self
             .mlp_hc

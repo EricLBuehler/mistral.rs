@@ -236,6 +236,27 @@ fn text_model_vb(vb: &ShardedVarBuilder) -> ShardedVarBuilder {
 }
 
 impl Qwen4ExpTextModel {
+    #[cfg(feature = "cuda")]
+    pub(super) fn prepare_optional_weights(
+        &mut self,
+        budget: &dyn Fn(&Device) -> Result<usize>,
+    ) -> Result<()> {
+        for layer in &mut self.layers {
+            if let Some(ple) = layer.ple.as_mut() {
+                ple.prepare_table(budget)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(super) fn reclaimable_weight_cache_bytes(&self) -> Vec<(Device, usize)> {
+        self.layers
+            .iter()
+            .filter_map(|layer| layer.ple.as_ref()?.reclaimable_weight_cache_bytes())
+            .collect()
+    }
+
     pub fn new(
         cfg: &TextConfig,
         vb: ShardedVarBuilder,
@@ -359,17 +380,13 @@ impl Qwen4ExpTextModel {
             })
         })?;
 
+        #[cfg(feature = "cuda")]
         let mut layers = layers;
+        #[cfg(feature = "cuda")]
         for (layer_idx, layer) in layers.iter_mut().enumerate() {
             if let Some(ple) = layer.ple.as_mut() {
-                if mapper.uses_host_memory_for_optional_allocations(layer_idx) {
-                    tracing::info!(
-                        "Qwen4-Exp PLE table remains memory-mapped to respect the device memory budget"
-                    );
-                    continue;
-                }
-                let device = mapper.device_for(layer_idx, false).unwrap_or(&real_device);
-                ple.make_table_resident(device)?;
+                ple.allow_resident_table =
+                    !mapper.uses_host_memory_for_optional_allocations(layer_idx);
             }
         }
         let mtp = mtp
@@ -939,8 +956,7 @@ impl Qwen4ExpTextModel {
                 Some(xn) if xn.device().same_device(res.device()) => xn,
                 _ => layer.attn_hc.norm(&res)?,
             };
-            let h = layer.attn_hc.mix(&xn)?;
-            let inject = layer.attn_hc.inject(&xn)?;
+            let (h, inject) = layer.attn_hc.mix_and_inject(&xn)?;
             let out = match &layer.mixer {
                 Mixer::Attention(attn) => {
                     let Some(HybridLayerCache::Attention(kv_cache)) = hybrid_cache.get_mut(i)
@@ -1032,8 +1048,7 @@ impl Qwen4ExpTextModel {
                 Some(xn) => xn,
                 None => layer.mlp_hc.norm(&res)?,
             };
-            let h = layer.mlp_hc.mix(&xn)?;
-            let inject = layer.mlp_hc.inject(&xn)?;
+            let (h, inject) = layer.mlp_hc.mix_and_inject(&xn)?;
             let out = layer.moe.forward(&h)?;
             let next = match self.layers.get(i + 1) {
                 Some(next) if next.ple.is_none() => Some(&next.attn_hc),

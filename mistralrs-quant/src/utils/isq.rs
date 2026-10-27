@@ -351,7 +351,7 @@ macro_rules! generate_isq {
         // Quantize from a CPU copy: byte extraction from a device-resident QTensor races
         // in-flight device work, and quantization is CPU-bound anyway.
         let cpu_src = $tensor.to_device(&candle_core::Device::Cpu)?;
-        let initial = candle_core::quantized::QTensor::quantize(&cpu_src, dtype)?;
+        let initial = $crate::gguf::quantize::quantize_cpu(&cpu_src, dtype, None)?;
         let data = initial.data()?;
 
         let _acquired_quantize_guard = $guard.acquire(&$device);
@@ -397,9 +397,9 @@ macro_rules! generate_isq_imatrix {
             dtype,
             GgmlDType::Q2K | GgmlDType::Q3K | GgmlDType::Q4K | GgmlDType::Q5K | GgmlDType::Q6K
         ) {
-            candle_core::quantized::QTensor::quantize_imatrix(&cpu_src, &$imatrix, dtype)?
+            $crate::gguf::quantize::quantize_cpu(&cpu_src, dtype, Some(&$imatrix))?
         } else {
-            candle_core::quantized::QTensor::quantize(&cpu_src, dtype)?
+            $crate::gguf::quantize::quantize_cpu(&cpu_src, dtype, None)?
         };
         let data = initial.data()?;
 

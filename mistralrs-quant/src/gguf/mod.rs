@@ -10,6 +10,7 @@ pub mod fast_mmvq;
 mod ffi;
 #[cfg(all(feature = "cuda", has_marlin_kernels))]
 mod packed_affine;
+pub(crate) mod quantize;
 mod weight_source;
 
 pub use weight_source::{
@@ -243,10 +244,10 @@ impl GgufMatMul {
             }
         }
 
-        let mut bytes = Vec::new();
+        let mut bytes =
+            Vec::with_capacity(stack.elem_count() / dtype.block_size() * dtype.type_size());
         for e in 0..num_experts {
-            // expert views share storage with an offset; quantize reads raw storage
-            let slab = stack.get(e)?.force_contiguous()?;
+            let slab = stack.get(e)?;
             let vector = imatrix.and_then(|v| {
                 if v.len() == in_dim {
                     Some(v)
@@ -258,9 +259,9 @@ impl GgufMatMul {
             });
             let qt = match vector {
                 Some(v) if imatrix_capable && v.iter().any(|x| *x != 0.0) => {
-                    candle_core::quantized::QTensor::quantize_imatrix(&slab, v, dtype)?
+                    quantize::quantize_cpu(&slab, dtype, Some(v))?
                 }
-                _ => candle_core::quantized::QTensor::quantize(&slab, dtype)?,
+                _ => quantize::quantize_cpu(&slab, dtype, None)?,
             };
             bytes.extend_from_slice(&qt.data()?);
         }

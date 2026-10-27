@@ -162,9 +162,12 @@ pub(crate) fn build_qwen4exp_bindings(archive: &GgufArchive) -> Result<GgufBindi
                 GgufTensorBinding::tensor(&conv).reshape(vec![channels, 1, kernel]),
             );
         }
-        if inventory.contains(&format!("{source}.attn_qkv.weight")) {
+        if inventory.contains(&format!("{source}.attn_qkv.weight"))
+            || inventory.contains(&format!("{source}.attn_qkv_gate.weight"))
+        {
             bind_gdn(&inventory, &native, &source, gdn, &mut bindings)?;
         }
+        bind_merged_projections(archive, &inventory, &native, &source, &mut bindings)?;
         bind_experts(&inventory, &native, &source, &mut bindings);
         bind_shared_expert(&inventory, &native, &source, &mut bindings)?;
     }
@@ -179,6 +182,90 @@ pub(crate) fn build_qwen4exp_bindings(archive: &GgufArchive) -> Result<GgufBindi
         bind_qwen3_vision(&inventory, deepstack.as_deref(), &mut bindings)?;
     }
     Ok(bindings)
+}
+
+fn bind_merged_projections(
+    archive: &GgufArchive,
+    inventory: &TensorInventory,
+    native: &str,
+    source: &str,
+    bindings: &mut GgufBindingMap,
+) -> Result<()> {
+    let size = |name: &str| metadata_usize(archive, &format!("{ARCHITECTURE}.{name}"));
+    for (module, role) in [
+        ("attn_hyper_connection", "hc_attn_down_inject.weight"),
+        ("mlp_hyper_connection", "hc_ffn_down_inject.weight"),
+    ] {
+        let merged = format!("{source}.{role}");
+        if inventory.contains(&merged) {
+            bind_projection_slices(
+                inventory,
+                bindings,
+                &format!("{native}.{module}"),
+                &merged,
+                [
+                    (
+                        "input_mix_weight_down.weight",
+                        size("hyper_connection.low_rank")?,
+                    ),
+                    (
+                        "block_inject_weight.weight",
+                        size("hyper_connection.count")?,
+                    ),
+                ],
+            )?;
+        }
+    }
+    let merged = format!("{source}.attn_qkv_gate.weight");
+    if inventory.contains(&merged) {
+        let value_dim = size("ssm.inner_size")?;
+        let key_dim = size("ssm.group_count")? * size("ssm.state_size")?;
+        bind_projection_slices(
+            inventory,
+            bindings,
+            &format!("{native}.linear_attn"),
+            &merged,
+            [
+                ("in_proj_qkv.weight", 2 * key_dim + value_dim),
+                ("in_proj_z.weight", value_dim),
+            ],
+        )?;
+    }
+    let merged = format!("{source}.ssm_beta_alpha.weight");
+    if inventory.contains(&merged) {
+        let heads = size("ssm.time_step_rank")?;
+        bind_projection_slices(
+            inventory,
+            bindings,
+            &format!("{native}.linear_attn"),
+            &merged,
+            [("in_proj_b.weight", heads), ("in_proj_a.weight", heads)],
+        )?;
+    }
+    Ok(())
+}
+
+fn bind_projection_slices(
+    inventory: &TensorInventory,
+    bindings: &mut GgufBindingMap,
+    native: &str,
+    source: &str,
+    parts: [(&str, usize); 2],
+) -> Result<()> {
+    let shape = inventory.shape(source)?;
+    let rows = parts.iter().map(|(_, rows)| rows).sum::<usize>();
+    if !matches!(shape, [actual, _] if *actual == rows) {
+        bail!("Qwen4-Exp merged projection `{source}` has shape {shape:?}, expected [{rows}, _]");
+    }
+    let mut start = 0;
+    for (target, len) in parts {
+        bindings.insert(
+            format!("{native}.{target}"),
+            GgufTensorBinding::tensor(source).slice(0, start, len),
+        );
+        start += len;
+    }
+    Ok(())
 }
 
 fn bind_shifted_norm(
@@ -514,10 +601,147 @@ fn token_id(archive: &GgufArchive, token: &str) -> Result<usize> {
 
 #[cfg(test)]
 mod tests {
+    use std::{io::Write, sync::Arc};
+
+    use candle_core::{
+        quantized::{gguf_file, GgmlDType, QTensor},
+        DType, Device, Tensor,
+    };
+    use mistralrs_quant::{GgufWeightSource, QuantizedWeightSource, Shard};
+    use tempfile::NamedTempFile;
+
     use super::*;
 
     const GGUF_DIR_ENV: &str = "MISTRALRS_TEST_QWEN4EXP_GGUF_DIR";
     const PROJECTOR_ENV: &str = "MISTRALRS_TEST_QWEN4EXP_PROJECTOR";
+
+    #[test]
+    fn merged_projections_preserve_quantized_rows() -> Result<()> {
+        const HIDDEN: usize = 256;
+        const HC_COUNT: usize = 2;
+        const HC_LOWRANK: usize = 4;
+        const KEY_HEADS: usize = 2;
+        const KEY_DIM: usize = 8;
+        const VALUE_HEADS: usize = 4;
+        const VALUE_DIM: usize = 32;
+        const QKV_DIM: usize = 2 * KEY_HEADS * KEY_DIM + VALUE_DIM;
+        let metadata = [
+            ("general.architecture", Value::String(ARCHITECTURE.into())),
+            ("qwen4exp.block_count", Value::U32(1)),
+            (
+                "qwen4exp.hyper_connection.count",
+                Value::U32(HC_COUNT as u32),
+            ),
+            (
+                "qwen4exp.hyper_connection.low_rank",
+                Value::U32(HC_LOWRANK as u32),
+            ),
+            ("qwen4exp.ssm.group_count", Value::U32(KEY_HEADS as u32)),
+            ("qwen4exp.ssm.state_size", Value::U32(KEY_DIM as u32)),
+            (
+                "qwen4exp.ssm.time_step_rank",
+                Value::U32(VALUE_HEADS as u32),
+            ),
+            ("qwen4exp.ssm.inner_size", Value::U32(VALUE_DIM as u32)),
+        ];
+        for dtype in [GgmlDType::Q4K, GgmlDType::Q8_0] {
+            let specifications = [
+                (
+                    "blk.0.hc_attn_down_inject.weight",
+                    HC_LOWRANK + HC_COUNT,
+                    HC_COUNT * HIDDEN,
+                ),
+                (
+                    "blk.0.hc_ffn_down_inject.weight",
+                    HC_LOWRANK + HC_COUNT,
+                    HC_COUNT * HIDDEN,
+                ),
+                ("blk.0.attn_qkv_gate.weight", QKV_DIM + VALUE_DIM, HIDDEN),
+                ("blk.0.ssm_beta_alpha.weight", VALUE_HEADS * 2, HIDDEN),
+            ];
+            let tensors = specifications
+                .iter()
+                .enumerate()
+                .map(|(index, (_, rows, cols))| {
+                    let data = (0..rows * cols)
+                        .map(|i| ((i * 17 + index * 7) % 101) as f32 / 50.0 - 1.0)
+                        .collect::<Vec<_>>();
+                    QTensor::quantize(
+                        &Tensor::from_vec(data, (*rows, *cols), &Device::Cpu)?,
+                        dtype,
+                    )
+                })
+                .collect::<candle_core::Result<Vec<_>>>()?;
+            let mut file = NamedTempFile::new()?;
+            gguf_file::write(
+                file.as_file_mut(),
+                &metadata
+                    .iter()
+                    .map(|(key, value)| (*key, value))
+                    .collect::<Vec<_>>(),
+                &specifications
+                    .iter()
+                    .zip(&tensors)
+                    .map(|((name, _, _), tensor)| (*name, tensor))
+                    .collect::<Vec<_>>(),
+            )?;
+            file.as_file_mut().flush()?;
+            let archive = Arc::new(GgufArchive::open_file(file.path())?);
+            let bindings = build_qwen4exp_bindings(&archive)?;
+            let source = GgufWeightSource::new(archive, &bindings, DType::F32)?;
+            for (target, tensor, start, rows) in [
+                (
+                    "attn_hyper_connection.input_mix_weight_down",
+                    0,
+                    0,
+                    HC_LOWRANK,
+                ),
+                (
+                    "attn_hyper_connection.block_inject_weight",
+                    0,
+                    HC_LOWRANK,
+                    HC_COUNT,
+                ),
+                (
+                    "mlp_hyper_connection.input_mix_weight_down",
+                    1,
+                    0,
+                    HC_LOWRANK,
+                ),
+                (
+                    "mlp_hyper_connection.block_inject_weight",
+                    1,
+                    HC_LOWRANK,
+                    HC_COUNT,
+                ),
+                ("linear_attn.in_proj_qkv", 2, 0, QKV_DIM),
+                ("linear_attn.in_proj_z", 2, QKV_DIM, VALUE_DIM),
+                ("linear_attn.in_proj_b", 3, 0, VALUE_HEADS),
+                ("linear_attn.in_proj_a", 3, VALUE_HEADS, VALUE_HEADS),
+            ] {
+                let layer = source
+                    .load_linear(
+                        &format!("{NATIVE_ROOT}.layers.0.{target}"),
+                        &Device::Cpu,
+                        Shard::default(),
+                    )?
+                    .context("merged projection has no native binding")?;
+                let weight = layer
+                    .get_qtensor()
+                    .context("merged projection was dequantized")?;
+                let cols = specifications[tensor].2;
+                let row_bytes = cols / dtype.block_size() * dtype.type_size();
+                assert_eq!(weight.dtype(), dtype);
+                assert_eq!(weight.shape().dims(), &[rows, cols]);
+                assert_eq!(
+                    &*weight.data()?,
+                    &tensors[tensor].data()?[start * row_bytes..(start + rows) * row_bytes],
+                    "{target} {dtype:?}"
+                );
+            }
+        }
+        Ok(())
+    }
 
     fn source_names<'a>(binding: &'a GgufTensorBinding, out: &mut Vec<&'a str>) {
         match binding {

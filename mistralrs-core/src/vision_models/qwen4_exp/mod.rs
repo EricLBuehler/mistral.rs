@@ -408,6 +408,19 @@ impl Qwen4ExpModel {
 impl crate::block_diffusion::BlockDiffusionMixin for Qwen4ExpModel {}
 
 impl MultimodalModel for Qwen4ExpModel {
+    #[cfg(feature = "cuda")]
+    fn prepare_optional_weights(
+        &mut self,
+        budget: &dyn Fn(&Device) -> Result<usize>,
+    ) -> Result<()> {
+        self.text.prepare_optional_weights(budget)
+    }
+
+    #[cfg(feature = "cuda")]
+    fn reclaimable_weight_cache_bytes(&self) -> Vec<(Device, usize)> {
+        self.text.reclaimable_weight_cache_bytes()
+    }
+
     fn supports_packed_prefill(&self) -> bool {
         true
     }

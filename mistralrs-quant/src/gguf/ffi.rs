@@ -8,6 +8,20 @@
 
 use std::ffi::c_void;
 
+#[repr(C)]
+pub struct CompactMmqArgs {
+    pub weight: *const c_void,
+    pub activations: *const c_void,
+    pub ids_dst: *const i32,
+    pub expert_bounds: *const i32,
+    pub output: *mut f32,
+    pub input_cols: i32,
+    pub output_rows: i32,
+    pub assignments: i32,
+    pub output_stride: i32,
+    pub quant_type: i32,
+}
+
 macro_rules! declare_mmvq_fused_qkv {
     ($fn_name:ident) => {
         pub fn $fn_name(
@@ -82,6 +96,17 @@ macro_rules! declare_mmvq_fused_glu {
 }
 
 extern "C" {
+    pub fn launch_mmq_gguf_compact_prepare(
+        bounds: *const i32,
+        workspace: *mut c_void,
+        quant_type: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmq_gguf_compact(
+        args: *const CompactMmqArgs,
+        workspace: *mut c_void,
+        stream: *mut c_void,
+    );
     /// Launch Q8_1 quantization kernel
     /// Quantizes f32 input to Q8_1 format for use with quantized matmul kernels.
     pub fn launch_quantize_q8_1(
@@ -524,6 +549,74 @@ extern "C" {
 
     // ============== Fused MoE decode kernels ==============
 
+    pub fn launch_moe_gemv_fused_gate_up_q4k_sm121(
+        gate_weights: *const c_void,
+        up_weights: *const c_void,
+        all_inputs: *const c_void,
+        indices: *const u32,
+        all_outputs: *mut f32,
+        n: i32,
+        k: i32,
+        batch: i32,
+        topk: i32,
+        k_padded: i32,
+        act_type: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_moe_gemv_fused_gate_up_q5k_sm121(
+        gate_weights: *const c_void,
+        up_weights: *const c_void,
+        all_inputs: *const c_void,
+        indices: *const u32,
+        all_outputs: *mut f32,
+        n: i32,
+        k: i32,
+        batch: i32,
+        topk: i32,
+        k_padded: i32,
+        act_type: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_moe_gemv_down_aggregate_q5_1_sm121(
+        all_weights: *const c_void,
+        all_inputs: *const c_void,
+        indices: *const u32,
+        topk_weights: *const f32,
+        all_outputs: *mut f32,
+        n: i32,
+        k: i32,
+        batch: i32,
+        topk: i32,
+        k_padded: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_moe_gemv_down_aggregate_q4_1_sm121(
+        all_weights: *const c_void,
+        all_inputs: *const c_void,
+        indices: *const u32,
+        topk_weights: *const f32,
+        all_outputs: *mut f32,
+        n: i32,
+        k: i32,
+        batch: i32,
+        topk: i32,
+        k_padded: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_moe_gemv_down_aggregate_q8_0_sm121(
+        all_weights: *const c_void,
+        all_inputs: *const c_void,
+        indices: *const u32,
+        topk_weights: *const f32,
+        all_outputs: *mut f32,
+        n: i32,
+        k: i32,
+        batch: i32,
+        topk: i32,
+        k_padded: i32,
+        stream: *mut c_void,
+    );
+
     // Fused gate+up+activation+multiply launchers
     // All share the same signature: (gate_weights, up_weights, inputs_q8_1,
     //   indices, outputs, n, k, batch, topk, k_padded, act_type, stream)
@@ -923,6 +1016,39 @@ extern "C" {
         stream: *mut c_void,
     );
     pub fn launch_mmvq_gguf_q8_0_bf16_plain(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q8_0_bf16_sm121(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q8_0_f16_sm121(
+        vx: *const c_void,
+        vy: *const c_void,
+        dst: *mut c_void,
+        ncols_x: i32,
+        nrows_x: i32,
+        stride_col_y: i32,
+        stride_col_dst: i32,
+        b_size: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmvq_gguf_q8_0_f32_sm121(
         vx: *const c_void,
         vy: *const c_void,
         dst: *mut c_void,
