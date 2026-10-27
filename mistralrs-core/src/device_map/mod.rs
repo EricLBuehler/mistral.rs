@@ -15,6 +15,7 @@ use mistralrs_quant::log::once_log_info;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
+use mappers::OptionalHostDeviceMapper;
 use peer::CudaPeerAccess;
 
 type MapperBox = Box<dyn DeviceMapper + Send + Sync>;
@@ -45,6 +46,8 @@ pub enum DeviceMapSetting {
 pub struct DeviceMapMetadata {
     device_layers: Option<Vec<DeviceLayerMapMetadata>>,
     host_layers: Option<usize>,
+    #[serde(skip)]
+    optional_host_layers: Vec<usize>,
 }
 
 impl DeviceMapMetadata {
@@ -52,6 +55,7 @@ impl DeviceMapMetadata {
         Self {
             device_layers: Some(device_layers),
             host_layers: None,
+            optional_host_layers: Vec::new(),
         }
     }
     /// A device mapper to not map device.
@@ -59,6 +63,7 @@ impl DeviceMapMetadata {
         Self {
             device_layers: None,
             host_layers: None,
+            optional_host_layers: Vec::new(),
         }
     }
 
@@ -68,6 +73,11 @@ impl DeviceMapMetadata {
 
     pub fn host_layers(&self) -> Option<usize> {
         self.host_layers
+    }
+
+    pub(crate) fn with_optional_host_layers(mut self, layers: Vec<usize>) -> Self {
+        self.optional_host_layers = layers;
+        self
     }
 
     pub fn to_cli_spec(&self) -> Option<String> {
@@ -85,6 +95,23 @@ impl DeviceMapMetadata {
     }
 
     fn build_mapper(
+        &self,
+        model_layers: usize,
+        device: &Device,
+        topology: Option<&Topology>,
+        all_devices: &[Device],
+    ) -> Result<MapperBox> {
+        let mapper = self.build_inner_mapper(model_layers, device, topology, all_devices)?;
+        if self.optional_host_layers.is_empty() {
+            return Ok(mapper);
+        }
+        Ok(Box::new(OptionalHostDeviceMapper::new(
+            mapper,
+            self.optional_host_layers.clone(),
+        )))
+    }
+
+    fn build_inner_mapper(
         &self,
         model_layers: usize,
         device: &Device,
@@ -363,4 +390,61 @@ pub fn get_all_similar_devices(base: &Device) -> Result<Vec<Device>> {
         }
     }
     Ok(devices)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::topology::LayerTopology;
+
+    const MODEL_LAYERS: usize = 2;
+    const OPTIONAL_HOST_LAYER: usize = 1;
+
+    #[test]
+    fn optional_host_allocations_reach_manual_dummy_and_topology_mappers() -> Result<()> {
+        let empty_topology = Topology::with_capacity(MODEL_LAYERS);
+        let mapped_topology = Topology::empty().with_range(
+            0..MODEL_LAYERS,
+            LayerTopology {
+                isq: None,
+                device: Some(Device::Cpu),
+            },
+        );
+
+        for metadata in [
+            DeviceMapMetadata::dummy(),
+            DeviceMapMetadata::from_num_device_layers(vec![DeviceLayerMapMetadata {
+                ordinal: 0,
+                layers: MODEL_LAYERS,
+            }]),
+        ] {
+            for topology in [None, Some(&empty_topology), Some(&mapped_topology)] {
+                for use_host in [false, true] {
+                    let metadata = if use_host {
+                        metadata
+                            .clone()
+                            .with_optional_host_layers(vec![OPTIONAL_HOST_LAYER])
+                    } else {
+                        metadata.clone()
+                    };
+                    let mapper = DeviceMapSetting::Map(metadata).into_mapper(
+                        MODEL_LAYERS,
+                        &Device::Cpu,
+                        topology,
+                        &[Device::Cpu],
+                    )?;
+                    assert_eq!(
+                        mapper.uses_host_memory_for_optional_allocations(OPTIONAL_HOST_LAYER),
+                        use_host
+                    );
+                    assert!(!mapper.uses_host_memory_for_optional_allocations(0));
+                    assert!(mapper
+                        .device_for(OPTIONAL_HOST_LAYER, false)
+                        .unwrap()
+                        .is_cpu());
+                }
+            }
+        }
+        Ok(())
+    }
 }

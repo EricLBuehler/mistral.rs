@@ -223,9 +223,9 @@ pub use gptq::GptqLayer;
 pub use hqq::{HqqAxis, HqqBits, HqqConfig, HqqLayer};
 pub use imatrix::{CollectedImatrixData, ImatrixLayerStats};
 pub use isq_executor::{
-    conservative_plan, elem_count, estimate_output_bytes, ggml_output_bytes, plan_weight_isq,
-    tensor_bytes, IsqConsumer, IsqExecutor, IsqExecutorConfig, IsqJobOutput, IsqKernelKind,
-    IsqPlanParams, IsqRequest, IsqResourceEstimate,
+    conservative_plan, elem_count, estimate_isq_weight_bytes, estimate_output_bytes,
+    ggml_output_bytes, plan_weight_isq, tensor_bytes, IsqConsumer, IsqExecutor, IsqExecutorConfig,
+    IsqJobOutput, IsqKernelKind, IsqPlanParams, IsqRequest, IsqResourceEstimate,
 };
 pub use lora::{
     add_expert_delta_reference, apply_dynamic_lora_delta, has_active_lora_execution,

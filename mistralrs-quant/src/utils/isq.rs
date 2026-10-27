@@ -261,11 +261,27 @@ fn get_fallback(dtype: GgmlDType) -> QuantizationBehavior {
     }
 }
 
-/// Check if the tensor can be quantized with the given dtype.
-fn can_quantize(tensor: &Tensor, dtype: GgmlDType) -> bool {
-    let dims = tensor.shape().dims();
-    // The tensor must not be empty and the last dimension must be a multiple of the block size.
-    !dims.is_empty() && dims[dims.len() - 1].is_multiple_of(dtype.block_size())
+pub(crate) fn get_quantization_behaviour_for_shape(
+    shape: &[usize],
+    dtype: GgmlDType,
+) -> QuantizationBehavior {
+    if dtype == GgmlDType::F32 {
+        return QuantizationBehavior::Skip;
+    }
+
+    if shape
+        .last()
+        .is_some_and(|dim| dim.is_multiple_of(dtype.block_size()))
+    {
+        return QuantizationBehavior::Quantize(dtype);
+    }
+    let fallback = get_fallback(dtype);
+    match fallback {
+        QuantizationBehavior::Skip => fallback,
+        QuantizationBehavior::Quantize(new_dtype) => {
+            get_quantization_behaviour_for_shape(shape, new_dtype)
+        }
+    }
 }
 
 /// Check if we should quantize the tensor and if so, with which dtype.
@@ -273,18 +289,7 @@ pub(crate) fn get_quantization_behaviour(
     tensor: &Tensor,
     dtype: GgmlDType,
 ) -> QuantizationBehavior {
-    if dtype == GgmlDType::F32 {
-        return QuantizationBehavior::Skip;
-    }
-
-    if can_quantize(tensor, dtype) {
-        return QuantizationBehavior::Quantize(dtype);
-    }
-    let fallback = get_fallback(dtype);
-    match fallback {
-        QuantizationBehavior::Skip => fallback,
-        QuantizationBehavior::Quantize(new_dtype) => get_quantization_behaviour(tensor, new_dtype),
-    }
+    get_quantization_behaviour_for_shape(tensor.dims(), dtype)
 }
 
 pub(crate) fn warn_skip_quantization(

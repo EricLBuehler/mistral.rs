@@ -362,6 +362,12 @@ impl Qwen4ExpTextModel {
         let mut layers = layers;
         for (layer_idx, layer) in layers.iter_mut().enumerate() {
             if let Some(ple) = layer.ple.as_mut() {
+                if mapper.uses_host_memory_for_optional_allocations(layer_idx) {
+                    tracing::info!(
+                        "Qwen4-Exp PLE table remains memory-mapped to respect the device memory budget"
+                    );
+                    continue;
+                }
                 let device = mapper.device_for(layer_idx, false).unwrap_or(&real_device);
                 ple.make_table_resident(device)?;
             }

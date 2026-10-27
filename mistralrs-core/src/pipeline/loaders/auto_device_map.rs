@@ -198,24 +198,77 @@ macro_rules! b_to_mb {
     };
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    clippy::cast_possible_truncation,
-    clippy::cast_precision_loss
-)]
+struct DeviceMappingContext<'a> {
+    loader: &'a dyn DeviceMappedModelLoader,
+    config: &'a str,
+    num_layers: usize,
+    non_mapped_size_in_bytes: usize,
+    devices: &'a [Device],
+    dtype: DType,
+    params: &'a AutoDeviceMapParams,
+}
+
+fn remove_optional_layer_bytes(
+    layer_sizes: &mut [usize],
+    total_model_size: usize,
+    optional: &[(usize, usize)],
+) -> usize {
+    optional
+        .iter()
+        .fold(total_model_size, |total, &(layer, bytes)| {
+            layer_sizes[layer] -= bytes;
+            total - bytes
+        })
+}
+
+#[allow(clippy::too_many_arguments)]
 /// Core logic for automatic device mapping
 pub fn get_device_layers(
     loader: &dyn DeviceMappedModelLoader,
     config: &str,
     num_layers: usize,
-    mut layer_sizes_in_bytes: Vec<usize>,
+    layer_sizes_in_bytes: Vec<usize>,
     non_mapped_size_in_bytes: usize,
     total_model_size_in_bytes: usize,
     devices: &[Device],
     dtype: DType,
     params: &AutoDeviceMapParams,
-    mut paged_attn_config: Option<&mut PagedAttentionConfig>,
+    paged_attn_config: Option<&mut PagedAttentionConfig>,
 ) -> Result<DeviceMapMetadata> {
+    get_device_layers_attempt(
+        DeviceMappingContext {
+            loader,
+            config,
+            num_layers,
+            non_mapped_size_in_bytes,
+            devices,
+            dtype,
+            params,
+        },
+        layer_sizes_in_bytes,
+        total_model_size_in_bytes,
+        paged_attn_config,
+        true,
+    )
+}
+
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn get_device_layers_attempt(
+    context: DeviceMappingContext<'_>,
+    mut layer_sizes_in_bytes: Vec<usize>,
+    total_model_size_in_bytes: usize,
+    mut paged_attn_config: Option<&mut PagedAttentionConfig>,
+    allow_optional_retry: bool,
+) -> Result<DeviceMapMetadata> {
+    let DeviceMappingContext {
+        loader,
+        config,
+        num_layers,
+        non_mapped_size_in_bytes,
+        devices,
+        dtype,
+        params,
+    } = context;
     let (mapped_max, non_mapped_max) = if let Some(cfg) = paged_attn_config.as_deref_mut() {
         let estimate = super::reserve_model_activation_memory(
             loader,
@@ -242,7 +295,13 @@ pub fn get_device_layers(
         .as_ref()
         .map_or(MemoryGoal::Auto, |cfg| cfg.memory_goal);
 
-    let mut layer_sizes_backup = if paged_attn_config.is_some() {
+    let optional_layer_bytes = if allow_optional_retry {
+        loader.optional_layer_bytes(config)?
+    } else {
+        Vec::new()
+    };
+    let has_optional_bytes = optional_layer_bytes.iter().any(|(_, bytes)| *bytes > 0);
+    let mut layer_sizes_backup = if paged_attn_config.is_some() || has_optional_bytes {
         Some(layer_sizes_in_bytes.clone())
     } else {
         None
@@ -446,12 +505,39 @@ pub fn get_device_layers(
         }
         layer += layers_on_dev;
     }
+    if has_optional_bytes && (remaining > 0 || includes_cpu) {
+        let mut original_layers = layer_sizes_backup
+            .take()
+            .expect("layer sizes backup missing for optional allocation fallback");
+        let required_model_bytes = remove_optional_layer_bytes(
+            &mut original_layers,
+            total_model_size_in_bytes,
+            &optional_layer_bytes,
+        );
+        info!(
+                optional_mib = b_to_mb!(total_model_size_in_bytes - required_model_bytes),
+                "Retrying automatic device mapping with optional layer allocations accessed from host memory"
+            );
+        let metadata = get_device_layers_attempt(
+            context,
+            original_layers,
+            required_model_bytes,
+            paged_attn_config,
+            false,
+        )?;
+        return Ok(metadata.with_optional_host_layers(
+            optional_layer_bytes
+                .iter()
+                .filter_map(|&(layer, bytes)| (bytes > 0).then_some(layer))
+                .collect(),
+        ));
+    }
     if remaining > 0 {
-        let over = b_to_mb!(remaining);
+        let unplaced_mib = b_to_mb!(remaining);
         anyhow::bail!(
-            "This model does not fit on the devices {:?}, and exceeds total capacity by {}MB. Auto device mapping params: {params}",
-            avail_copy.iter().rev().map(|(a, d)| format!("{} (avail: {}MB)", d.device_pretty_repr(), b_to_mb!(a))).collect::<Vec<_>>(),
-            over
+            "This model does not fit on the devices {:?}: {} MiB of model data could not be placed after memory reservations. Auto device mapping params: {params}",
+            avail_copy.iter().rev().map(|(a, d)| format!("{} (avail: {} MiB)", d.device_pretty_repr(), b_to_mb!(a))).collect::<Vec<_>>(),
+            unplaced_mib
         );
     }
     if has_paged_attn && includes_cpu {
@@ -465,17 +551,12 @@ pub fn get_device_layers(
             .expect("layer sizes backup missing for paged attention fallback");
         // The original vector was in forward order, but `get_device_layers` handles
         // reversing internally, so we can pass it along unchanged.
-        return get_device_layers(
-            loader,
-            config,
-            num_layers,
+        return get_device_layers_attempt(
+            context,
             original_layers,
-            non_mapped_size_in_bytes,
             total_model_size_in_bytes,
-            devices,
-            dtype,
-            params,
             None,
+            allow_optional_retry,
         );
     }
     Ok(DeviceMapMetadata::from_num_device_layers(mappings))
@@ -483,12 +564,130 @@ pub fn get_device_layers(
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use super::*;
+    use crate::matformer::MatformerSliceConfig;
     use crate::paged_attention::{KvCacheLayout, ModelConfigMetadata, PagedCacheType};
+    use crate::pipeline::loaders::{ActivationModelConfig, AutoDeviceMapQuantization};
     use crate::vision_models::qwen4_exp::{
         config::{LayerType, QsaConfig},
         Qwen4ExpPagedConfig,
     };
+
+    const TEST_LAYERS: usize = 3;
+    const TEST_OPTIONAL_LAYER: usize = 1;
+    const TEST_OPTIONAL_BYTES: usize = usize::MAX / 4;
+    const TEST_REQUIRED_BYTES: usize = 1;
+    const TEST_FIXED_BYTES: usize = 7;
+
+    struct OptionalAllocationLoader {
+        optional_bytes: usize,
+        optional_queries: Cell<usize>,
+        attempts: Cell<usize>,
+    }
+
+    impl DeviceMappedModelLoader for OptionalAllocationLoader {
+        fn activation_model_config(&self, _config: &str) -> Result<ActivationModelConfig> {
+            Ok(ActivationModelConfig::default())
+        }
+
+        fn non_mapped_max_act_size_elems(
+            &self,
+            _config: &str,
+            _params: &AutoDeviceMapParams,
+        ) -> Result<usize> {
+            Ok(0)
+        }
+
+        fn mapped_max_act_size_elems(
+            &self,
+            _config: &str,
+            _params: &AutoDeviceMapParams,
+        ) -> Result<usize> {
+            Ok(0)
+        }
+
+        fn non_mapped_size_in_bytes(
+            &self,
+            _config: &str,
+            _dtype: DType,
+            _weight_pack_factor: usize,
+            _quantization: Option<&AutoDeviceMapQuantization<'_>>,
+            _matformer_config: Option<&MatformerSliceConfig>,
+        ) -> Result<usize> {
+            unreachable!()
+        }
+
+        fn layer_sizes_in_bytes(
+            &self,
+            _config: &str,
+            _dtype: DType,
+            _weight_pack_factor: usize,
+            _matformer_config: Option<&MatformerSliceConfig>,
+        ) -> Result<Vec<usize>> {
+            unreachable!()
+        }
+
+        fn num_layers(&self, _config: &str) -> Result<usize> {
+            Ok(TEST_LAYERS)
+        }
+
+        fn optional_layer_bytes(&self, _config: &str) -> Result<Vec<(usize, usize)>> {
+            self.optional_queries.set(self.optional_queries.get() + 1);
+            Ok(vec![(TEST_OPTIONAL_LAYER, self.optional_bytes)])
+        }
+
+        fn model_config(&self, _config: &str) -> Result<Box<dyn ModelConfigLike>> {
+            self.attempts.set(self.attempts.get() + 1);
+            let mut model = cache_test_model();
+            model.num_layers = TEST_LAYERS;
+            Ok(Box::new(model))
+        }
+    }
+
+    #[test]
+    fn device_mapping_retries_only_optional_allocations_once() {
+        for (required_bytes, optional_bytes, fits, attempts) in [
+            (TEST_REQUIRED_BYTES, TEST_OPTIONAL_BYTES, true, 2),
+            (TEST_REQUIRED_BYTES, 0, false, 1),
+            (TEST_OPTIONAL_BYTES, TEST_OPTIONAL_BYTES, false, 2),
+        ] {
+            let loader = OptionalAllocationLoader {
+                optional_bytes,
+                optional_queries: Cell::new(0),
+                attempts: Cell::new(0),
+            };
+            let mut layers = vec![TEST_REQUIRED_BYTES; TEST_LAYERS];
+            layers[TEST_OPTIONAL_LAYER] = required_bytes + TEST_OPTIONAL_BYTES;
+            let total = layers.iter().sum::<usize>() + TEST_FIXED_BYTES;
+            let result = get_device_layers(
+                &loader,
+                "",
+                TEST_LAYERS,
+                layers,
+                TEST_FIXED_BYTES,
+                total,
+                &[Device::Cpu],
+                DType::BF16,
+                &AutoDeviceMapParams::Text {
+                    max_seq_len: 1,
+                    max_batch_size: 1,
+                },
+                None,
+            );
+            assert_eq!(result.is_ok(), fits, "{result:?}");
+            assert_eq!(loader.optional_queries.get(), 1);
+            assert_eq!(loader.attempts.get(), attempts);
+            if let Ok(metadata) = result {
+                let mapper = crate::DeviceMapSetting::Map(metadata)
+                    .into_mapper(TEST_LAYERS, &Device::Cpu, None, &[Device::Cpu])
+                    .unwrap();
+                assert!(mapper.uses_host_memory_for_optional_allocations(TEST_OPTIONAL_LAYER));
+                assert!(!mapper.uses_host_memory_for_optional_allocations(0));
+            }
+        }
+    }
 
     #[test]
     fn paged_reservations_include_aux_buffers_and_cache_dtype() -> Result<()> {

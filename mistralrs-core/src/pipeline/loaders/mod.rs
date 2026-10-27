@@ -672,6 +672,61 @@ impl<'a> AutoDeviceMapQuantization<'a> {
         self.pack_factor_for_candidates(&[name], dtype, fallback, true)
     }
 
+    pub fn tensor_size_in_bytes(
+        &self,
+        name: &str,
+        shape: &[usize],
+        dtype: DType,
+        fallback: usize,
+        promote_default: bool,
+    ) -> Result<usize> {
+        self.tensor_size_in_bytes_for_candidates(&[name], shape, dtype, fallback, promote_default)
+    }
+
+    pub(crate) fn tensor_size_in_bytes_for_candidates(
+        &self,
+        names: &[&str],
+        shape: &[usize],
+        dtype: DType,
+        fallback: usize,
+        promote_default: bool,
+    ) -> Result<usize> {
+        if let AutoDeviceMapQuantizationSource::Isq(default) = self.source {
+            let ty = names
+                .iter()
+                .find_map(|name| {
+                    let topology = self.topology?;
+                    topology
+                        .patterns
+                        .iter()
+                        .rev()
+                        .find(|(pattern, entry)| {
+                            (entry.isq.is_some() || entry.device.is_some())
+                                && pattern.is_match(name)
+                        })
+                        .map(|(_, entry)| entry)
+                        .or_else(|| {
+                            topology.layer_for(mistralrs_quant::layer_index_from_prefix(name)?)
+                        })
+                        .and_then(|entry| entry.isq)
+                })
+                .or_else(|| {
+                    default.map(|ty| {
+                        if promote_default {
+                            ty.promote_for_sensitive_tensor()
+                        } else {
+                            ty
+                        }
+                    })
+                });
+            if let Some(ty) = ty {
+                return Ok(mistralrs_quant::estimate_isq_weight_bytes(shape, dtype, ty));
+            }
+        }
+        let factor = self.pack_factor_for_candidates(names, dtype, fallback, promote_default)?;
+        Ok(shape.iter().product::<usize>() * dtype.size_in_bytes() / factor)
+    }
+
     pub fn conservative_pack_factor(&self, dtype: DType, fallback: usize) -> usize {
         let topology_pack_factors = self.topology.into_iter().flat_map(|topology| {
             topology
@@ -849,6 +904,16 @@ pub trait DeviceMappedModelLoader {
         weight_pack_factor: usize,
         matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<Vec<usize>>;
+    fn layer_sizes_in_bytes_with_quantization(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _quantization: Option<&AutoDeviceMapQuantization<'_>>,
+        matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        self.layer_sizes_in_bytes(config, dtype, weight_pack_factor, matformer_config)
+    }
     fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
         None
     }
@@ -862,6 +927,11 @@ pub trait DeviceMappedModelLoader {
 
     /// Device bytes a layer holds outside its weight bindings, as `(layer, bytes)`.
     fn unbound_layer_bytes(&self, _config: &str) -> Result<Vec<(usize, usize)>> {
+        Ok(Vec::new())
+    }
+
+    /// Layer allocations that can fall back to host access when device placement fails.
+    fn optional_layer_bytes(&self, _config: &str) -> Result<Vec<(usize, usize)>> {
         Ok(Vec::new())
     }
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>>;
@@ -1310,6 +1380,23 @@ mod auto_device_map_quantization_tests {
             quantization.conservative_pack_factor(dtype, IsqType::Q2K.pack_factor(dtype)),
             IsqType::Q8_0.pack_factor(dtype)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn tensor_size_estimates_follow_layer_and_pattern_topology_precedence() -> Result<()> {
+        let topology = Topology::from_str(
+            "'0-3':\n  isq: Q8_0\n'/^model\\.layers\\.1\\./':\n  isq: Q6K\n'/^model\\.layers\\.2\\./':\n  device: cpu\n",
+        )?;
+        let quantization = AutoDeviceMapQuantization::isq(Some(IsqType::Q4K), Some(&topology));
+        for (layer, expected) in [(0, 544), (1, 420), (2, 288), (3, 288)] {
+            let name = format!("model.layers.{layer}.mlp.up_proj.weight");
+            assert_eq!(
+                quantization.tensor_size_in_bytes(&name, &[2, 256], DType::BF16, 1, false)?,
+                expected,
+                "{name}"
+            );
+        }
         Ok(())
     }
 
