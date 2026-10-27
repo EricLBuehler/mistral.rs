@@ -18,7 +18,7 @@ use super::tune::{
     buckets_from_breakpoints, config, cutile_error, tune, Bucket, Prepared, Space, TuneMode,
     TuneRequest, TunedTable, TUNE_WEIGHT_SETS,
 };
-use super::warmup::CutileKernel;
+use super::warmup::{CutileKernel, WarmupProgress};
 use super::{catch_cutile_panic, context, device_multiprocessor_count, jit_available};
 use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
 use crate::Fp8WeightScaleLayout;
@@ -805,7 +805,7 @@ impl GemmTuner {
 }
 
 impl CutileKernel for Fp8W8A16Kernel {
-    fn warm(&self, _dev: &CudaDevice) -> Result<()> {
+    fn warm(&self, _dev: &CudaDevice, silent: bool) -> Result<()> {
         let shapes = std::mem::take(
             &mut *SHAPES
                 .get_or_init(|| Mutex::new(Vec::new()))
@@ -837,7 +837,13 @@ impl CutileKernel for Fp8W8A16Kernel {
             });
             TUNED.set(key, &tuned, Fp8W8A16Config::from_config);
         }
-        tracing::info!("Warming {} cuTile W8A16 GEMM kernels.", shapes.len());
+        let total = shapes
+            .iter()
+            .filter(|sets| sets[0].weight.device().is_cuda())
+            .count()
+            * buckets.len();
+        tracing::info!("Warming {total} cuTile W8A16 GEMM variants.");
+        let progress = WarmupProgress::new("W8A16 GEMM variants", total, silent);
         for sets in &shapes {
             let key = sets[0].key;
             let Device::Cuda(dev) = sets[0].weight.device() else {
@@ -845,21 +851,24 @@ impl CutileKernel for Fp8W8A16Kernel {
             };
             let device = Device::Cuda(dev.clone());
             for bucket in &buckets {
-                let result = (|| -> Result<()> {
-                    let dtype = match key.dtype {
-                        ActivationDType::Bf16 => DType::BF16,
-                        ActivationDType::F16 => DType::F16,
-                    };
-                    let activation = Tensor::zeros((bucket.probe, key.k), dtype, &device)?;
-                    let operands = GemmOperands {
-                        activation: &activation,
-                        weight: &sets[0].weight,
-                        weight_scales: &sets[0].scales,
-                        scale_layout: key.scales,
-                    };
-                    launch(&operands, gemm_config(key, bucket.probe), true)?;
-                    Ok(())
-                })();
+                let result = progress.run(
+                    format!("n={} k={} rows={}", key.n, key.k, bucket.probe),
+                    || -> Result<()> {
+                        let dtype = match key.dtype {
+                            ActivationDType::Bf16 => DType::BF16,
+                            ActivationDType::F16 => DType::F16,
+                        };
+                        let activation = Tensor::zeros((bucket.probe, key.k), dtype, &device)?;
+                        let operands = GemmOperands {
+                            activation: &activation,
+                            weight: &sets[0].weight,
+                            weight_scales: &sets[0].scales,
+                            scale_layout: key.scales,
+                        };
+                        launch(&operands, gemm_config(key, bucket.probe), true)?;
+                        Ok(())
+                    },
+                );
                 if let Err(error) = result {
                     tracing::warn!(
                         "cuTile W8A16 warmup failed (n={} k={} rows={}): {error}",

@@ -2,6 +2,8 @@
 mod memory_budget;
 pub(crate) use memory_budget::ModelMemoryBudget;
 #[cfg(any(feature = "cuda", test))]
+pub(crate) use memory_budget::RecurrentPrefixReservation;
+#[cfg(any(feature = "cuda", test))]
 pub use memory_budget::RuntimeMemoryReservation;
 
 use std::sync::Arc;
@@ -138,7 +140,7 @@ mod tests {
             .memory_budget
             .as_ref()
             .unwrap()
-            .reserve_runtime(std::collections::HashMap::new());
+            .reserve_runtime(std::collections::HashMap::new(), None);
         assert!(!runtime.capture_ready());
         Ok(())
     }

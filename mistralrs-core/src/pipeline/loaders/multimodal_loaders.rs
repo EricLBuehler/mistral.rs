@@ -142,7 +142,10 @@ pub trait MultimodalModel:
     #[cfg(feature = "cuda")]
     fn prepare_optional_weights(
         &mut self,
-        _budget: &dyn Fn(&Device) -> candle_core::Result<usize>,
+        _budget: &dyn Fn(
+            &Device,
+        )
+            -> candle_core::Result<crate::memory_plan::WeightAllocationBudget>,
     ) -> candle_core::Result<()> {
         Ok(())
     }

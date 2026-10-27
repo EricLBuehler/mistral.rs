@@ -428,6 +428,7 @@ impl Loader for EmbeddingLoader {
                 dtype,
                 &params,
                 paged_attn_config.as_mut(),
+                auto_device_map::OptionalAllocationBacking::Owned,
             )?;
             mapper = DeviceMapSetting::Map(new);
         }

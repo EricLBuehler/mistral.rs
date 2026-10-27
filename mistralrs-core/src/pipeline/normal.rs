@@ -251,25 +251,38 @@ pub(crate) fn build_normal_pipeline(
     }
 
     let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config.as_mut() {
+        #[cfg(feature = "cuda")]
+        let reserve_decode_graphs = device.is_cuda()
+            && model.supports_cuda_decode_graphs()
+            && cuda_decode_graphs_enabled()
+            && cuda_decode_graph_supported_for_model(Some(model_metadata.as_ref()));
+        #[cfg(not(feature = "cuda"))]
+        let reserve_decode_graphs = false;
         let paged_snapshot = paged_attn_config.clone();
         let estimate_for_capacity =
             |usable_tokens| capacity_activation_estimate(&paged_snapshot, usable_tokens);
-        let memory_reservations =
-            paged_attention_memory_reservations(model.cache(), paged_attn_config, &device)?;
-        let (cache_config, cache_engine) = allocate_cache(
+        let memory_reservations = paged_attn_config.memory_reservations()?;
+        let layer_devices = (0..model_metadata.num_layers())
+            .map(|layer| mapper.device_for(layer, false).cloned())
+            .collect::<Vec<_>>();
+        let mut cache_request = CacheConfigRequest {
+            memory_reservations,
+            dtype,
+            model: model_metadata.as_ref(),
+            device: &device,
+            layer_devices: &layer_devices,
+            capacity_activation_estimate: &estimate_for_capacity,
+            reserve_decode_graphs,
+            silent,
+        };
+        super::configure_automatic_recurrent_prefix_capacity(
+            model.cache(),
             paged_attn_config,
-            CacheConfigRequest {
-                memory_reservations,
-                dtype,
-                model: model_metadata.as_ref(),
-                device: &device,
-                layer_devices: &(0..model_metadata.num_layers())
-                    .map(|layer| mapper.device_for(layer, false).cloned())
-                    .collect::<Vec<_>>(),
-                capacity_activation_estimate: &estimate_for_capacity,
-                silent,
-            },
+            cache_request,
         )?;
+        cache_request.memory_reservations =
+            paged_attention_memory_reservations(model.cache(), paged_attn_config, &device)?;
+        let (cache_config, cache_engine) = allocate_cache(paged_attn_config, cache_request)?;
         (Some(cache_config), Some(cache_engine))
     } else {
         (None, None)
@@ -281,6 +294,13 @@ pub(crate) fn build_normal_pipeline(
         .and_then(GenerationConfig::generation_defaults);
     let eos = calculate_eos_tokens(&chat_template, generation_config.as_ref(), &tokenizer);
     let sliding_window = model.config().sliding_window;
+    #[cfg(feature = "cuda")]
+    let runtime_memory_reservation = super::paged_attention_runtime_memory_reservation(
+        model.cache(),
+        paged_attn_config.as_ref(),
+        &device,
+        &mapper.get_unique_devices(),
+    )?;
 
     Ok(Arc::new(Mutex::new(NormalPipeline {
         model,
@@ -309,9 +329,7 @@ pub(crate) fn build_normal_pipeline(
                 .as_ref()
                 .map(|config| config.runtime_memory_plan()),
             #[cfg(feature = "cuda")]
-            runtime_memory_reservation: paged_attn_config.as_ref().and_then(|config| {
-                config.runtime_memory_reservation(&device, &mapper.get_unique_devices())
-            }),
+            runtime_memory_reservation,
             model_metadata: Some(model_metadata),
             modalities: Modalities {
                 input: vec![SupportedModality::Text],
@@ -972,6 +990,7 @@ impl Loader for NormalLoader {
                 dtype,
                 &params,
                 paged_attn_config.as_mut(),
+                auto_device_map::OptionalAllocationBacking::Owned,
             )?;
             mapper = DeviceMapSetting::Map(new);
         }

@@ -49,7 +49,10 @@ pub use scheduler::{
     PagedAttentionScheduler, PagedAttentionSchedulerConfig, PagedAttentionSchedulerOutput,
 };
 
-use crate::memory_plan::{resolve_device_budget, ExecutionMemoryLimits, RuntimeMemoryPlan};
+use crate::memory_plan::{
+    allocation_budget_with_reservations, resolve_device_budget, resolve_forward_budget,
+    ExecutionMemoryLimits, RuntimeMemoryPlan,
+};
 pub use crate::MemoryGoal;
 use crate::MemoryUsage;
 use tracing::info;
@@ -93,9 +96,10 @@ mod tests {
     use candle_core::{DType, Device};
 
     use super::{
-        block_aligned_sliding_window_start, cache_prefix_capacity, kv_layer_buffer_bytes_per_block,
-        max_cache_blocks, requested_cache_blocks, HybridPagedKvCacheConfig, KvCacheLayout,
-        MemoryGoal, ModelConfigMetadata, PagedAttentionConfig, PagedCacheType,
+        allocation_budget_with_reservations, block_aligned_sliding_window_start,
+        cache_prefix_capacity, kv_layer_buffer_bytes_per_block, max_cache_blocks,
+        requested_cache_blocks, HybridPagedKvCacheConfig, KvCacheLayout, MemoryGoal,
+        ModelConfigMetadata, PagedAttentionConfig, PagedCacheType,
     };
 
     #[test]
@@ -248,7 +252,12 @@ mod tests {
             (MemoryGoal::KvBytes(block_bytes * 4 + 100), 4),
         ] {
             let mut config = PagedAttentionConfig::new(Some(32), goal, PagedCacheType::Auto)?
-                .with_base_device_memory_reservation(200)?;
+                .with_base_device_memory_reservation(200)?
+                .with_execution_limits(crate::ExecutionMemoryLimits {
+                    max_num_seqs: 1,
+                    max_num_batched_tokens: 32,
+                    max_prefill_chunk_tokens: 32,
+                })?;
             config.reserve_activation_memory(100, 80);
             let reservation = super::optional_weight_reservation(
                 &config,
@@ -265,14 +274,146 @@ mod tests {
                             ..Default::default()
                         })
                     },
+                    reserve_decode_graphs: false,
                     silent: true,
                 },
                 &Device::Cpu,
             )?;
             assert_eq!(
                 reservation,
-                300 + blocks * block_bytes + (blocks - 1) * 32 * 8
+                (200 + blocks * block_bytes, 100 + (blocks - 1) * 32 * 8)
             );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn growing_prefix_workspace_uses_headroom_before_reducing_kv() -> anyhow::Result<()> {
+        const POLICY: usize = 80;
+        const EXECUTION: usize = 100;
+        const PERSISTENT: usize = 10;
+        const BASELINE: usize = 5;
+        let available =
+            allocation_budget_with_reservations(POLICY, EXECUTION, PERSISTENT, BASELINE)?;
+        let credit = EXECUTION - PERSISTENT - BASELINE - available;
+        for (workspace_divisor, expected) in [(8, 70), (2, 57)] {
+            let blocks = max_cache_blocks(available, available, |blocks| {
+                Ok(blocks + (blocks / workspace_divisor).saturating_sub(credit))
+            })?;
+            assert_eq!(blocks, expected);
+            assert!(blocks + PERSISTENT <= POLICY);
+            assert!(blocks + PERSISTENT + BASELINE + blocks / workspace_divisor <= EXECUTION);
+            let next = blocks + 1;
+            assert!(
+                next + PERSISTENT > POLICY
+                    || next + PERSISTENT + BASELINE + next / workspace_divisor > EXECUTION
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn automatic_runtime_allowance_preserves_workload_kv() {
+        for (activation, available, workload, expected) in [
+            (20, 100usize, 20, 20),
+            (80, 100, 20, 80),
+            (80, 100, 40, 60),
+            (80, 3, 2, 1),
+            (80, 1, 2, 0),
+            (80, 0, 2, 0),
+            (0, 100, 20, 0),
+        ] {
+            let above_workload = available.saturating_sub(workload);
+            let allowance = super::automatic_runtime_allowance(true, activation, above_workload);
+            assert_eq!(allowance, expected);
+            assert!(allowance <= activation);
+            assert!(available - allowance >= available.min(workload));
+            assert_eq!(
+                super::automatic_runtime_allowance(false, activation, above_workload),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn runtime_allowance_does_not_expand_activation_headroom() -> anyhow::Result<()> {
+        const POLICY: usize = 80;
+        const EXECUTION: usize = 100;
+        const PERSISTENT: usize = 10;
+        const BASELINE: usize = 20;
+        let available =
+            allocation_budget_with_reservations(POLICY, EXECUTION, PERSISTENT, BASELINE)?;
+        let credit = EXECUTION - PERSISTENT - BASELINE - available;
+        let allowance = super::automatic_runtime_allowance(true, BASELINE, available - 10);
+        let kv_budget = available - allowance;
+        let blocks = max_cache_blocks(kv_budget, kv_budget, |blocks| {
+            Ok(blocks + (blocks / 2).saturating_sub(credit))
+        })?;
+        assert_eq!(allowance, 20);
+        assert_eq!(blocks, 33);
+        assert!(blocks + PERSISTENT + allowance <= POLICY);
+        assert!(blocks + PERSISTENT + allowance + BASELINE + blocks / 2 <= EXECUTION);
+        Ok(())
+    }
+
+    #[test]
+    fn workload_kv_floor_counts_partial_sequences_and_reserved_block() -> anyhow::Result<()> {
+        for (sequences, tokens, max_context, expected) in [
+            (1, 4096, 262_144, 129),
+            (4, 128, 4096, 8),
+            (4, 1, 4096, 5),
+            (4, 128, 16, 5),
+            (1, 4096, 64, 3),
+            (1, 1, 1, 2),
+        ] {
+            assert_eq!(
+                super::workload_cache_blocks(
+                    crate::ExecutionMemoryLimits {
+                        max_num_seqs: sequences,
+                        max_num_batched_tokens: tokens,
+                        max_prefill_chunk_tokens: 32,
+                    },
+                    max_context,
+                    32,
+                )?,
+                expected,
+            );
+        }
+        assert!(super::workload_cache_blocks(
+            crate::ExecutionMemoryLimits {
+                max_num_seqs: 2,
+                ..Default::default()
+            },
+            usize::MAX,
+            32,
+        )
+        .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_allowance_preserves_workload_prefix_workspace() -> anyhow::Result<()> {
+        const POLICY: usize = 120;
+        const PERSISTENT: usize = 10;
+        const BASELINE: usize = 20;
+        const WORKLOAD_BLOCKS: usize = 40;
+        for execution in [90, 110, 150] {
+            let available =
+                allocation_budget_with_reservations(POLICY, execution, PERSISTENT, BASELINE)?;
+            let credit = execution - PERSISTENT - BASELINE - available;
+            let workload = WORKLOAD_BLOCKS + (WORKLOAD_BLOCKS / 2).saturating_sub(credit);
+            let allowance = super::automatic_runtime_allowance(
+                true,
+                BASELINE,
+                available.saturating_sub(workload),
+            );
+            let remaining = available - allowance;
+            let blocks = max_cache_blocks(remaining, remaining, |blocks| {
+                Ok(blocks + (blocks / 2).saturating_sub(credit))
+            })?;
+            assert!(blocks >= WORKLOAD_BLOCKS);
+            assert!(blocks + PERSISTENT + allowance <= POLICY);
+            assert!(blocks + PERSISTENT + allowance + BASELINE + blocks / 2 <= execution);
         }
         Ok(())
     }
@@ -325,6 +466,7 @@ mod tests {
                         device: &candle_core::Device::Cpu,
                         layer_devices: &[],
                         capacity_activation_estimate: &|_| Ok(Default::default()),
+                        reserve_decode_graphs: false,
                         silent: true,
                     },
                 )?;
@@ -437,6 +579,7 @@ pub struct PagedAttentionConfig {
     pub(crate) recurrent_checkpoint_lanes: usize,
     pub(crate) recurrent_checkpoint_lanes_auto: bool,
     pub(crate) recurrent_prefix_capacity: usize,
+    pub(crate) recurrent_prefix_capacity_auto: bool,
     pub(crate) memory_budget: Option<std::sync::Arc<crate::resource_plan::ModelMemoryBudget>>,
     reclaimable_weight_cache_bytes: std::collections::HashMap<candle_core::DeviceLocation, usize>,
     pub(crate) execution_limits: ExecutionMemoryLimits,
@@ -453,6 +596,8 @@ pub struct PagedAttentionConfig {
 pub struct CacheMemoryReservations {
     pub primary_device_bytes: usize,
     pub secondary_device_bytes: usize,
+    pub primary_staging_bytes: usize,
+    pub secondary_staging_bytes: usize,
 }
 
 impl PagedAttentionConfig {
@@ -480,6 +625,7 @@ impl PagedAttentionConfig {
             recurrent_checkpoint_lanes: 1,
             recurrent_checkpoint_lanes_auto: false,
             recurrent_prefix_capacity: 0,
+            recurrent_prefix_capacity_auto: false,
             memory_budget: None,
             reclaimable_weight_cache_bytes: std::collections::HashMap::new(),
             execution_limits: ExecutionMemoryLimits::default(),
@@ -528,6 +674,41 @@ impl PagedAttentionConfig {
         }
     }
 
+    pub(crate) fn execution_budget(
+        &self,
+        device: &Device,
+        snapshot: crate::utils::memory_usage::DeviceMemory,
+    ) -> anyhow::Result<usize> {
+        let budget = match &self.memory_budget {
+            Some(budget) => budget.execution_budget(device.location(), snapshot)?,
+            None => resolve_forward_budget(self.memory_goal, snapshot)?.allocatable_bytes,
+        };
+        let cached = if snapshot.is_unified() {
+            self.reclaimable_weight_cache_bytes
+                .get(&device.location())
+                .copied()
+                .unwrap_or_default()
+        } else {
+            0
+        };
+        Ok(budget.min(snapshot.physical_available().saturating_sub(cached)))
+    }
+
+    pub(crate) fn allocation_budget_with_reservations(
+        &self,
+        device: &Device,
+        snapshot: crate::utils::memory_usage::DeviceMemory,
+        persistent: usize,
+        transient: usize,
+    ) -> anyhow::Result<usize> {
+        allocation_budget_with_reservations(
+            self.allocation_budget(device, snapshot)?,
+            self.execution_budget(device, snapshot)?,
+            persistent,
+            transient,
+        )
+    }
+
     #[cfg(any(feature = "cuda", test))]
     pub(crate) fn reserve_reclaimable_weight_cache(
         &mut self,
@@ -565,6 +746,7 @@ impl PagedAttentionConfig {
         RuntimeMemoryPlan {
             memory_goal: self.allocation_memory_goal(),
             limits: self.execution_limits,
+            recurrent_prefix_capacity: self.recurrent_prefix_capacity,
             primary_activation_bytes: self.primary_activation_memory_reservation_bytes,
             mapped_activation_bytes: self.mapped_activation_memory_reservation_bytes,
             primary_non_attention_bytes: self.primary_non_attention_memory_reservation_bytes,
@@ -582,8 +764,11 @@ impl PagedAttentionConfig {
         &self,
         primary: &Device,
         devices: &[Device],
+        prefix: Option<crate::resource_plan::RecurrentPrefixReservation>,
     ) -> Option<std::sync::Arc<crate::resource_plan::RuntimeMemoryReservation>> {
-        let budget = self.memory_budget.as_ref()?;
+        let Some(budget) = self.memory_budget.as_ref() else {
+            return prefix.map(crate::resource_plan::RuntimeMemoryReservation::standalone);
+        };
         let mut bytes = devices
             .iter()
             .map(|device| {
@@ -597,7 +782,7 @@ impl PagedAttentionConfig {
             primary.location(),
             self.primary_activation_memory_reservation_bytes,
         );
-        Some(budget.reserve_runtime(bytes))
+        Some(budget.reserve_runtime(bytes, prefix))
     }
 
     pub fn with_serving_capacity(mut self, serving_capacity: usize) -> anyhow::Result<Self> {
@@ -629,6 +814,13 @@ impl PagedAttentionConfig {
 
     pub fn with_recurrent_prefix_capacity(mut self, capacity: usize) -> Self {
         self.recurrent_prefix_capacity = capacity;
+        self.recurrent_prefix_capacity_auto = false;
+        self
+    }
+
+    pub fn with_automatic_recurrent_prefix_capacity(mut self, capacity: usize) -> Self {
+        self.recurrent_prefix_capacity = capacity;
+        self.recurrent_prefix_capacity_auto = true;
         self
     }
 
@@ -653,6 +845,7 @@ impl PagedAttentionConfig {
         Ok(CacheMemoryReservations {
             primary_device_bytes,
             secondary_device_bytes: self.mapped_activation_memory_reservation_bytes,
+            ..Default::default()
         })
     }
 }
@@ -872,7 +1065,46 @@ pub struct CacheConfigRequest<'a> {
     pub layer_devices: &'a [Option<Device>],
     pub capacity_activation_estimate:
         &'a dyn Fn(usize) -> anyhow::Result<crate::pipeline::ActivationMemoryEstimate>,
+    pub reserve_decode_graphs: bool,
     pub silent: bool,
+}
+
+pub(crate) fn automatic_runtime_allowance(
+    enabled: bool,
+    activation_bytes: usize,
+    available_above_workload: usize,
+) -> usize {
+    if enabled {
+        activation_bytes.min(available_above_workload)
+    } else {
+        0
+    }
+}
+
+fn workload_cache_blocks(
+    limits: ExecutionMemoryLimits,
+    max_context: usize,
+    block_size: usize,
+) -> anyhow::Result<usize> {
+    let max_tokens = max_context
+        .checked_mul(limits.max_num_seqs)
+        .ok_or_else(|| anyhow::anyhow!("workload KV token capacity overflow"))?;
+    let tokens = limits
+        .max_num_batched_tokens
+        .max(limits.max_num_seqs)
+        .min(max_tokens);
+    let sequences = limits.max_num_seqs.min(tokens);
+    let context_blocks = max_context
+        .div_ceil(block_size)
+        .checked_mul(sequences)
+        .ok_or_else(|| anyhow::anyhow!("workload KV block capacity overflow"))?;
+    // Each sequence can leave a partially occupied block.
+    sequences
+        .checked_add(tokens.saturating_sub(sequences) / block_size)
+        .map(|blocks| blocks.min(context_blocks))
+        .and_then(|blocks| blocks.checked_add(1))
+        .map(|blocks| blocks.max(MIN_CACHE_BLOCKS))
+        .ok_or_else(|| anyhow::anyhow!("workload KV block capacity overflow"))
 }
 
 fn total_cache_allocation_bytes(
@@ -903,12 +1135,11 @@ fn requested_device_cache_blocks(
     }
 }
 
-#[cfg(any(feature = "cuda", test))]
-fn optional_weight_reservation(
+pub(crate) fn optional_weight_reservation(
     paged_config: &PagedAttentionConfig,
     request: CacheConfigRequest<'_>,
     device: &Device,
-) -> anyhow::Result<usize> {
+) -> anyhow::Result<(usize, usize)> {
     let block_size = paged_config
         .block_size
         .unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE);
@@ -924,13 +1155,19 @@ fn optional_weight_reservation(
             .checked_add(allocation.bytes_per_block)
             .ok_or_else(|| anyhow::anyhow!("KV block size overflow"))
     })?;
-    let blocks = requested_device_cache_blocks(
+    let blocks = match requested_device_cache_blocks(
         paged_config.memory_goal,
         block_size,
         &devices,
         bytes_per_block,
-    )?
-    .unwrap_or(MIN_CACHE_BLOCKS);
+    )? {
+        Some(blocks) => blocks,
+        None => workload_cache_blocks(
+            paged_config.execution_limits,
+            request.model.max_seq_len(),
+            block_size,
+        )?,
+    };
     let cache_bytes = devices
         .iter()
         .find(|allocation| allocation.device.same_device(device))
@@ -938,20 +1175,19 @@ fn optional_weight_reservation(
     let capacity = cache_prefix_capacity(blocks, block_size, request.model.max_seq_len());
     let activation = (request.capacity_activation_estimate)(capacity)?;
     let primary = device.same_device(request.device);
-    let (runtime, extra_activation) = if primary {
+    let (runtime, baseline_activation, activation, staging) = if primary {
         (
             request.memory_reservations.primary_device_bytes,
-            activation
-                .non_mapped_bytes
-                .max(activation.mapped_bytes)
-                .saturating_sub(paged_config.primary_activation_memory_reservation_bytes),
+            paged_config.primary_activation_memory_reservation_bytes,
+            activation.non_mapped_bytes.max(activation.mapped_bytes),
+            request.memory_reservations.primary_staging_bytes,
         )
     } else {
         (
             request.memory_reservations.secondary_device_bytes,
-            activation
-                .mapped_bytes
-                .saturating_sub(paged_config.mapped_activation_memory_reservation_bytes),
+            paged_config.mapped_activation_memory_reservation_bytes,
+            activation.mapped_bytes,
+            request.memory_reservations.secondary_staging_bytes,
         )
     };
     let pending_weights = if device.is_cuda() {
@@ -959,10 +1195,21 @@ fn optional_weight_reservation(
     } else {
         0
     };
-    [runtime, extra_activation, cache_bytes, pending_weights]
-        .into_iter()
-        .try_fold(0usize, |total, bytes| total.checked_add(bytes))
-        .ok_or_else(|| anyhow::anyhow!("optional weight runtime reservation overflow"))
+    let persistent = [
+        runtime
+            .saturating_sub(baseline_activation)
+            .saturating_sub(staging),
+        cache_bytes,
+        pending_weights,
+    ]
+    .into_iter()
+    .try_fold(0usize, |total, bytes| total.checked_add(bytes))
+    .ok_or_else(|| anyhow::anyhow!("optional weight runtime reservation overflow"))?;
+    let transient = baseline_activation
+        .max(activation)
+        .checked_add(staging)
+        .ok_or_else(|| anyhow::anyhow!("optional weight staging reservation overflow"))?;
+    Ok((persistent, transient))
 }
 
 #[cfg(feature = "cuda")]
@@ -970,17 +1217,19 @@ pub(crate) fn optional_weight_budget(
     paged_config: &PagedAttentionConfig,
     request: CacheConfigRequest<'_>,
     device: &Device,
-) -> anyhow::Result<usize> {
+) -> anyhow::Result<crate::memory_plan::WeightAllocationBudget> {
     device.synchronize()?;
     if device.is_cuda() {
         MemoryUsage.synchronize_cuda_context(device)?;
         trim_cuda_mempool(device)?;
     }
-    let reservation = optional_weight_reservation(paged_config, request, device)?;
+    let (persistent, transient) = optional_weight_reservation(paged_config, request, device)?;
     let memory = MemoryUsage.query(device)?;
-    Ok(paged_config
-        .allocation_budget(device, memory)?
-        .saturating_sub(reservation))
+    Ok(crate::memory_plan::WeightAllocationBudget {
+        persistent_bytes: paged_config
+            .allocation_budget_with_reservations(device, memory, persistent, transient)?,
+        execution_bytes: paged_config.execution_budget(device, memory)?,
+    })
 }
 
 pub fn calculate_cache_config(
@@ -994,6 +1243,7 @@ pub fn calculate_cache_config(
         device,
         layer_devices,
         capacity_activation_estimate,
+        reserve_decode_graphs,
         silent,
     } = request;
     let goal = paged_config.memory_goal;
@@ -1021,6 +1271,14 @@ pub fn calculate_cache_config(
     }
     let requested_blocks =
         requested_device_cache_blocks(goal, block_size, &devices, total_bytes_per_block)?;
+    let workload_blocks = match requested_blocks {
+        Some(blocks) => blocks,
+        None => workload_cache_blocks(
+            paged_config.execution_limits,
+            config.max_seq_len(),
+            block_size,
+        )?,
+    };
     let activation_for_blocks = |blocks: usize| {
         let tokens = cache_prefix_capacity(blocks, block_size, config.max_seq_len());
         capacity_activation_estimate(tokens)
@@ -1063,28 +1321,57 @@ pub fn calculate_cache_config(
             0
         };
         let allocation_budget = paged_config.allocation_budget(cache_device, memory)?;
-        let available = allocation_budget
-            .checked_sub(reserved)
-            .and_then(|remaining| remaining.checked_sub(affine))
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "After loading on {:?}, runtime reservations need {} MiB and pending weights need {} MiB, but only {} MiB remains usable under the memory goal ({} MiB allocated, {} MiB physically available, {} MiB engine limit)",
-                    cache_device.location(),
-                    reserved.div_ceil(SIZE_IN_MB),
-                    affine.div_ceil(SIZE_IN_MB),
-                    allocation_budget / SIZE_IN_MB,
-                    budget.occupied_bytes / SIZE_IN_MB,
-                    memory.physical_available() / SIZE_IN_MB,
-                    budget.engine_limit_bytes / SIZE_IN_MB,
-                )
-            })?;
+        let execution_budget = paged_config.execution_budget(cache_device, memory)?;
+        let baseline_activation = if primary {
+            baseline_primary
+        } else {
+            baseline_mapped
+        };
+        let staging = if primary {
+            memory_reservations.primary_staging_bytes
+        } else {
+            memory_reservations.secondary_staging_bytes
+        };
+        let baseline_transient = baseline_activation
+            .checked_add(staging)
+            .ok_or_else(|| anyhow::anyhow!("cache staging reservation overflow"))?;
+        let persistent = reserved
+            .saturating_sub(baseline_transient)
+            .checked_add(affine)
+            .ok_or_else(|| anyhow::anyhow!("persistent cache reservation overflow"))?;
+        let available = allocation_budget_with_reservations(
+            allocation_budget,
+            execution_budget,
+            persistent,
+            baseline_transient,
+        )?;
+        let workspace_credit = execution_budget
+            .saturating_sub(persistent)
+            .saturating_sub(baseline_transient)
+            .saturating_sub(available);
+        let runtime_allowance = automatic_runtime_allowance(
+            reserve_decode_graphs && cache_device.is_cuda() && requested_blocks.is_none(),
+            baseline_activation,
+            available.saturating_sub(
+                allocation
+                    .allocation_bytes(workload_blocks)?
+                    .checked_add(
+                        extra_activation(workload_blocks, primary)?
+                            .saturating_sub(workspace_credit),
+                    )
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("workload KV and activation reservation overflow")
+                    })?,
+            ),
+        );
+        let available = available - runtime_allowance;
         let upper = available
             .checked_div(allocation.bytes_per_block)
             .unwrap_or(usize::MAX);
         let blocks = max_cache_blocks(upper, available, |blocks| {
             allocation
                 .allocation_bytes(blocks)?
-                .checked_add(extra_activation(blocks, primary)?)
+                .checked_add(extra_activation(blocks, primary)?.saturating_sub(workspace_credit))
                 .ok_or_else(|| anyhow::anyhow!("KV and activation reservation overflow"))
         })?;
         if requested_blocks.is_some_and(|requested| requested > blocks) {
@@ -1108,6 +1395,8 @@ pub fn calculate_cache_config(
             available,
             memory.physical_available(),
             allocation_budget,
+            workspace_credit,
+            runtime_allowance,
         ));
     }
     let num_gpu_blocks = requested_blocks.unwrap_or(available_blocks);
@@ -1123,17 +1412,28 @@ pub fn calculate_cache_config(
         .ok_or_else(|| anyhow::anyhow!("KV token capacity overflow"))?;
     let final_activation = activation_for_blocks(num_gpu_blocks)?;
     if !silent {
-        for (allocation, (budget, reserved, available, physical_available, allocation_budget)) in
-            devices.iter().zip(budgets)
+        for (
+            allocation,
+            (
+                budget,
+                reserved,
+                available,
+                physical_available,
+                allocation_budget,
+                workspace_credit,
+                runtime_allowance,
+            ),
+        ) in devices.iter().zip(budgets)
         {
             let extra = extra_activation(num_gpu_blocks, allocation.device.same_device(device))?;
             info!(
-                "Memory plan {:?}: physical {} MiB, engine limit {} MiB, existing occupancy {} MiB, physically available {} MiB, live allocation budget {} MiB, model allocation budget {} MiB, runtime reservation {} MiB, KV budget {} MiB ({goal})",
+                "Memory plan {:?}: physical {} MiB, engine limit {} MiB, existing occupancy {} MiB, physically available {} MiB, live allocation budget {} MiB, model allocation budget {} MiB, runtime reservation {} MiB, runtime initialization allowance {} MiB, KV budget {} MiB ({goal})",
                 allocation.device.location(), budget.physical_bytes / SIZE_IN_MB,
                 budget.engine_limit_bytes / SIZE_IN_MB, budget.occupied_bytes / SIZE_IN_MB,
                 physical_available / SIZE_IN_MB, budget.allocatable_bytes / SIZE_IN_MB,
                 allocation_budget / SIZE_IN_MB,
-                reserved.saturating_add(extra).div_ceil(SIZE_IN_MB), available.saturating_sub(extra) / SIZE_IN_MB,
+                reserved.saturating_add(extra).div_ceil(SIZE_IN_MB), runtime_allowance / SIZE_IN_MB,
+                available.saturating_sub(extra.saturating_sub(workspace_credit)) / SIZE_IN_MB,
             );
         }
         let allocated_bytes = total_cache_allocation_bytes(&devices, num_gpu_blocks)?;

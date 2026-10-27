@@ -187,6 +187,7 @@ mod tests {
         RuntimeMemoryPlan {
             memory_goal: MemoryGoal::Utilization(0.8),
             limits: Default::default(),
+            recurrent_prefix_capacity: 0,
             primary_activation_bytes: 10 * GIB,
             mapped_activation_bytes: 8 * GIB,
             primary_non_attention_bytes: 8 * GIB,

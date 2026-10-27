@@ -235,7 +235,7 @@ impl Qwen4ExpTextModel {
     #[cfg(feature = "cuda")]
     pub(super) fn prepare_optional_weights(
         &mut self,
-        budget: &dyn Fn(&Device) -> Result<usize>,
+        budget: &dyn Fn(&Device) -> Result<crate::memory_plan::WeightAllocationBudget>,
     ) -> Result<()> {
         for layer in &mut self.layers {
             if let Some(ple) = layer.ple.as_mut() {

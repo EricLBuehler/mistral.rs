@@ -8,6 +8,7 @@ use cutile::{
 };
 use half::{bf16, f16};
 
+use super::warmup::WarmupProgress;
 use super::{
     catch_cutile_panic, context, device_multiprocessor_count, jit_available, QsaPaged, QsaWarmShape,
 };
@@ -17,6 +18,7 @@ const ITEM_TILE: usize = 64;
 const HEAD_TILE: usize = 16;
 const PROBABILITY_COMPONENTS: usize = 3;
 const SUPPORTED_HEAD_DIMS: &[usize] = &[128, 256];
+const WARMUP_DTYPES: &[DType] = &[DType::BF16, DType::F16];
 const MAX_INDEXED_ELEMENTS: usize = i32::MAX as usize;
 const MAX_EXACT_FLOAT_INTEGER: usize = 1 << 24;
 const POINTER_ALIGNMENT: usize = 16;
@@ -700,7 +702,15 @@ where
     )))
 }
 
-pub(super) fn warm_decode(shape: QsaWarmShape, dev: &CudaDevice) -> Result<()> {
+pub(super) fn decode_warmup_steps() -> usize {
+    SUPPORTED_HEAD_DIMS.len() * WARMUP_DTYPES.len()
+}
+
+pub(super) fn warm_decode(
+    shape: QsaWarmShape,
+    dev: &CudaDevice,
+    progress: &WarmupProgress,
+) -> Result<()> {
     let device = Device::Cuda(dev.clone());
     let tables = Tensor::zeros((1, 1), DType::I32, &device)?;
     let kv_lens = Tensor::ones(1, DType::U32, &device)?;
@@ -711,33 +721,35 @@ pub(super) fn warm_decode(shape: QsaWarmShape, dev: &CudaDevice) -> Result<()> {
         max_blocks_per_seq: 1,
         block_size: shape.block_size,
     };
-    for (head_dim, dtype) in SUPPORTED_HEAD_DIMS.iter().copied().flat_map(|dim| {
-        [DType::BF16, DType::F16]
-            .into_iter()
-            .map(move |dtype| (dim, dtype))
-    }) {
+    for (head_dim, dtype) in SUPPORTED_HEAD_DIMS
+        .iter()
+        .copied()
+        .flat_map(|dim| WARMUP_DTYPES.iter().copied().map(move |dtype| (dim, dtype)))
+    {
         let cache = Tensor::zeros(
             (1, shape.n_kv_heads, shape.block_size, head_dim),
             dtype,
             &device,
         )?;
-        decode_launch(
-            &QsaDecodeArgs {
-                q: &Tensor::zeros((1, shape.n_q_heads, head_dim), dtype, &device)?,
-                key_cache: &cache,
-                value_cache: &cache,
-                paged: &paged,
-                kv_lens: &kv_lens,
-                selection: Some((&selected, &counts)),
-                q_len: 1,
-                n_kv_heads: shape.n_kv_heads,
-                ratio: shape.ratio,
-                topk: shape.topk,
-                scale: 1.0,
-            },
-            dev,
-            true,
-        )?;
+        progress.run(format!("decode {dtype:?} head_dim={head_dim}"), || {
+            decode_launch(
+                &QsaDecodeArgs {
+                    q: &Tensor::zeros((1, shape.n_q_heads, head_dim), dtype, &device)?,
+                    key_cache: &cache,
+                    value_cache: &cache,
+                    paged: &paged,
+                    kv_lens: &kv_lens,
+                    selection: Some((&selected, &counts)),
+                    q_len: 1,
+                    n_kv_heads: shape.n_kv_heads,
+                    ratio: shape.ratio,
+                    topk: shape.topk,
+                    scale: 1.0,
+                },
+                dev,
+                true,
+            )
+        })?;
     }
     Ok(())
 }

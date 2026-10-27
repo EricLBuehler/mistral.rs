@@ -52,6 +52,7 @@ pub struct GgufModelBuilder {
     pub(crate) no_kv_cache: bool,
     pub(crate) with_logging: bool,
     pub(crate) prefix_cache_n: Option<usize>,
+    pub(crate) prefix_cache_n_explicit: bool,
     pub(crate) code_exec_config: Option<mistralrs_core::CodeExecutionConfig>,
     pub(crate) shell_config: Option<mistralrs_core::ShellConfig>,
     pub(crate) lora_adapters: Option<Vec<LoraAdapterSpec>>,
@@ -83,7 +84,8 @@ impl GgufModelBuilder {
             no_paged_attn: false,
             max_num_seqs: mistralrs_core::memory_plan::DEFAULT_MAX_NUM_SEQS,
             no_kv_cache: false,
-            prefix_cache_n: Some(16),
+            prefix_cache_n: Some(mistralrs_core::DEFAULT_PREFIX_CACHE_N),
+            prefix_cache_n_explicit: false,
             with_logging: false,
             topology: None,
             topology_path: None,
@@ -437,6 +439,7 @@ impl GgufModelBuilder {
     /// Set the number of sequences to hold in the prefix cache. Set to `None` to disable the prefix cacher.
     pub fn with_prefix_cache_n(mut self, n_seqs: Option<usize>) -> Self {
         self.prefix_cache_n = n_seqs;
+        self.prefix_cache_n_explicit = true;
         self
     }
 

@@ -343,7 +343,7 @@ fn nvfp4_medium_decode_warmup_supports_offset_views_and_graph_replay() -> Result
             activation_global_scale: Some(&activation_global),
         };
         register_nvfp4_shape(args, dtype)?;
-        warmup_moe_kernels(&device)?;
+        warmup_moe_kernels(&device, true)?;
         let warmed_count = cutile::tile_kernel::jit_compile_count();
         let expected = fixture.reference_columns(true, ACTIVATION_GLOBAL, &columns);
         let _htod_cache_guard = device.as_cuda_device()?.enable_cuda_graph_htod_cache();
@@ -455,7 +455,7 @@ fn nvfp4_grouped_prefill_warmup_supports_graph_replay() -> Result<()> {
         activation_global_scale: Some(&activation_global),
     };
     register_nvfp4_shape(args, DType::BF16)?;
-    warmup_moe_kernels(&device)?;
+    warmup_moe_kernels(&device, true)?;
     let _htod_cache_guard = device.as_cuda_device()?.enable_cuda_graph_htod_cache();
     x.slice_set(&source, 0, 0)?;
     device.synchronize()?;
@@ -757,7 +757,7 @@ fn nvfp4_warmup_supports_cuda_graph_replay() -> Result<()> {
         };
         register_nvfp4_shape(dense, DType::BF16)?;
         register_nvfp4_shape(routed, DType::BF16)?;
-        warmup_moe_kernels(&device)?;
+        warmup_moe_kernels(&device, true)?;
         let _htod_cache_guard = device.as_cuda_device()?.enable_cuda_graph_htod_cache();
         for rows in [1, GRAPH_ROWS, GRAPH_ROWS * GRAPH_TOPK] {
             Tensor::zeros((rows, GRAPH_N.next_power_of_two()), DType::BF16, &device)?
@@ -934,7 +934,7 @@ fn nvfp4_merged_views_and_shared_activation_support_graph_replay() -> Result<()>
                 ShardedSafeTensors::wrap(tensors, dtype, device.clone()),
             )?
             .expect("compatible projections should merge");
-            warmup_moe_kernels(&device)?;
+            warmup_moe_kernels(&device, true)?;
             let _htod_cache_guard = device.as_cuda_device()?.enable_cuda_graph_htod_cache();
             x.slice_set(&source, 0, 0)?;
             device.synchronize()?;

@@ -348,6 +348,7 @@ fn qsa_decode_graph_tracks_metadata_and_matches_independent_attention() -> Resul
                 block_size: case.block_size,
             },
             cuda,
+            &WarmupProgress::new("QSA decode kernels", decode_warmup_steps(), true),
         )?;
         for dtype in [DType::BF16, DType::F16] {
             let mut inputs = Inputs::new(case, dtype, &device, &device)?;

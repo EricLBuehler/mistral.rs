@@ -607,10 +607,10 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub no_kv_cache: bool,
 
-    /// Number of prefix caches to hold (0 to disable)
-    #[arg(long, default_value_t = 16)]
-    #[serde(default = "default_prefix_cache_n")]
-    pub prefix_cache_n: usize,
+    /// Number of prefix caches to hold (0 to disable; defaults to up to 16 within the memory budget)
+    #[arg(long)]
+    #[serde(default)]
+    pub prefix_cache_n: Option<usize>,
 
     /// Custom chat template file (.json or .jinja)
     #[arg(long, short)]
@@ -1002,7 +1002,7 @@ impl Default for RuntimeOptions {
             max_prefill_chunk_tokens: default_max_prefill_chunk_tokens(),
             max_decode_steps_before_prefill: default_max_decode_steps_before_prefill(),
             no_kv_cache: false,
-            prefix_cache_n: 16,
+            prefix_cache_n: None,
             chat_template: None,
             jinja_explicit: None,
             matformer_config_path: None,
@@ -1058,15 +1058,40 @@ fn default_max_decode_steps_before_prefill() -> NonZeroUsize {
     NonZeroUsize::new(DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL).unwrap()
 }
 
-fn default_prefix_cache_n() -> usize {
-    16
-}
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::{fs, path::Path};
 
-    use super::*;
+    #[test]
+    fn prefix_cache_defaults_preserve_explicit_counts() {
+        for command in ["run", "serve"] {
+            for explicit in [None, Some(0), Some(4), Some(16)] {
+                let mut args = vec!["mistralrs".to_owned(), command.to_owned()];
+                if let Some(capacity) = explicit {
+                    args.extend(["--prefix-cache-n".to_owned(), capacity.to_string()]);
+                }
+                let runtime = match Cli::try_parse_from(args).unwrap().command {
+                    Command::Run { runtime, .. } | Command::Serve { runtime, .. } => runtime,
+                    _ => unreachable!(),
+                };
+                assert_eq!(runtime.prefix_cache_n, explicit);
+            }
+        }
+        assert_eq!(RuntimeOptions::default().prefix_cache_n, None);
+        for (config, expected) in [
+            ("", None),
+            ("prefix_cache_n = 0", Some(0)),
+            ("prefix_cache_n = 16", Some(16)),
+        ] {
+            assert_eq!(
+                toml::from_str::<RuntimeOptions>(config)
+                    .unwrap()
+                    .prefix_cache_n,
+                expected
+            );
+        }
+    }
 
     #[test]
     fn sequence_defaults_follow_command_and_preserve_explicit_limits() {

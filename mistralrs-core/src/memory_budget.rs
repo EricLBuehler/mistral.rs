@@ -1,3 +1,5 @@
+#[cfg(any(feature = "cuda", test))]
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -7,7 +9,9 @@ use anyhow::Result;
 use candle_core::{Device, DeviceLocation};
 
 use crate::{
-    memory_plan::device_memory_budget, utils::memory_usage::DeviceMemory, MemoryGoal, MemoryUsage,
+    memory_plan::{device_memory_budget, resolve_forward_budget},
+    utils::memory_usage::DeviceMemory,
+    MemoryGoal, MemoryUsage,
 };
 
 #[cfg(any(feature = "cuda", test))]
@@ -20,15 +24,84 @@ struct RuntimeBudgetState {
 
 #[cfg(any(feature = "cuda", test))]
 #[derive(Debug)]
+pub(crate) struct RecurrentPrefixReservation {
+    snapshot_bytes: HashMap<DeviceLocation, usize>,
+    capacity: usize,
+    retained: AtomicUsize,
+}
+
+#[cfg(any(feature = "cuda", test))]
+impl RecurrentPrefixReservation {
+    pub(crate) fn new(snapshot_bytes: HashMap<DeviceLocation, usize>, capacity: usize) -> Self {
+        Self {
+            snapshot_bytes,
+            capacity,
+            retained: AtomicUsize::new(0),
+        }
+    }
+
+    fn pending_bytes(&self, device: DeviceLocation) -> Result<usize> {
+        self.capacity
+            .saturating_sub(self.retained.load(Ordering::Acquire))
+            .checked_mul(
+                self.snapshot_bytes
+                    .get(&device)
+                    .copied()
+                    .unwrap_or_default(),
+            )
+            .ok_or_else(|| anyhow::anyhow!("pending recurrent prefix reservation overflow"))
+    }
+}
+
+#[cfg(any(feature = "cuda", test))]
+#[derive(Debug)]
 pub struct RuntimeMemoryReservation {
-    owner: Arc<ModelMemoryBudget>,
+    owner: Option<Arc<ModelMemoryBudget>>,
     bytes: HashMap<DeviceLocation, usize>,
+    prefix: Option<RecurrentPrefixReservation>,
+    revision: AtomicU64,
 }
 
 #[cfg(any(feature = "cuda", test))]
 impl RuntimeMemoryReservation {
+    pub(crate) fn standalone(prefix: RecurrentPrefixReservation) -> Arc<Self> {
+        Arc::new(Self {
+            owner: None,
+            bytes: HashMap::new(),
+            prefix: Some(prefix),
+            revision: AtomicU64::new(0),
+        })
+    }
+
+    pub(crate) fn pending_prefix_bytes(&self, device: DeviceLocation) -> Result<usize> {
+        self.prefix
+            .as_ref()
+            .map_or(Ok(0), |prefix| prefix.pending_bytes(device))
+    }
+
+    pub(crate) fn set_retained_prefix_snapshots(&self, count: usize) {
+        if let Some(prefix) = &self.prefix {
+            if prefix.retained.swap(count, Ordering::AcqRel) != count {
+                self.revision_counter().fetch_add(1, Ordering::Release);
+            }
+        }
+    }
+
+    fn revision_counter(&self) -> &AtomicU64 {
+        self.owner
+            .as_ref()
+            .map_or(&self.revision, |owner| &owner.group.runtime_revision)
+    }
+
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision_counter().load(Ordering::Acquire)
+    }
+
     pub(crate) fn capture_ready(&self) -> bool {
-        let mut runtime = self.owner.group.runtime.lock().unwrap();
+        let Some(owner) = &self.owner else {
+            return true;
+        };
+        let mut runtime = owner.group.runtime.lock().unwrap();
         runtime
             .members
             .retain(|(member, _)| member.strong_count() > 0);
@@ -36,8 +109,10 @@ impl RuntimeMemoryReservation {
     }
 
     pub(crate) fn other_workspace_bytes(&self, device: DeviceLocation) -> Result<usize> {
-        let reservations = self
-            .owner
+        let Some(owner) = &self.owner else {
+            return Ok(0);
+        };
+        let reservations = owner
             .group
             .runtime
             .lock()
@@ -50,8 +125,10 @@ impl RuntimeMemoryReservation {
             .iter()
             .filter(|reservation| !std::ptr::eq(reservation.as_ref(), self))
             .try_fold(0usize, |total, reservation| {
+                let pending = reservation.pending_prefix_bytes(device)?;
                 total
                     .checked_add(reservation.bytes.get(&device).copied().unwrap_or_default())
+                    .and_then(|bytes| bytes.checked_add(pending))
                     .ok_or_else(|| anyhow::anyhow!("group runtime reservation overflow"))
             })
     }
@@ -60,13 +137,17 @@ impl RuntimeMemoryReservation {
 #[cfg(any(feature = "cuda", test))]
 impl Drop for RuntimeMemoryReservation {
     fn drop(&mut self) {
-        self.owner
+        let Some(owner) = &self.owner else {
+            return;
+        };
+        owner
             .group
             .runtime
             .lock()
             .unwrap()
             .reservations
             .retain(|reservation| !std::ptr::eq(reservation.as_ptr(), self));
+        owner.group.runtime_revision.fetch_add(1, Ordering::Release);
     }
 }
 
@@ -76,6 +157,8 @@ pub(crate) struct MemoryBudgetGroup {
     snapshots: Mutex<HashMap<DeviceLocation, DeviceMemory>>,
     #[cfg(any(feature = "cuda", test))]
     runtime: Mutex<RuntimeBudgetState>,
+    #[cfg(any(feature = "cuda", test))]
+    runtime_revision: AtomicU64,
 }
 
 impl MemoryBudgetGroup {
@@ -85,6 +168,8 @@ impl MemoryBudgetGroup {
             snapshots: Mutex::default(),
             #[cfg(any(feature = "cuda", test))]
             runtime: Mutex::default(),
+            #[cfg(any(feature = "cuda", test))]
+            runtime_revision: AtomicU64::new(0),
         }
     }
 
@@ -143,10 +228,13 @@ impl ModelMemoryBudget {
     pub(crate) fn reserve_runtime(
         self: &Arc<Self>,
         bytes: HashMap<DeviceLocation, usize>,
+        prefix: Option<RecurrentPrefixReservation>,
     ) -> Arc<RuntimeMemoryReservation> {
         let reservation = Arc::new(RuntimeMemoryReservation {
-            owner: self.clone(),
+            owner: Some(self.clone()),
             bytes,
+            prefix,
+            revision: AtomicU64::new(0),
         });
         let mut runtime = self.group.runtime.lock().unwrap();
         for (member, pending) in &mut runtime.members {
@@ -155,6 +243,7 @@ impl ModelMemoryBudget {
             }
         }
         runtime.reservations.push(Arc::downgrade(&reservation));
+        self.group.runtime_revision.fetch_add(1, Ordering::Release);
         reservation
     }
 
@@ -193,6 +282,25 @@ impl ModelMemoryBudget {
         location: DeviceLocation,
         snapshot: DeviceMemory,
     ) -> Result<usize> {
+        self.budget(location, snapshot, device_memory_budget)
+    }
+
+    pub(crate) fn execution_budget(
+        &self,
+        location: DeviceLocation,
+        snapshot: DeviceMemory,
+    ) -> Result<usize> {
+        self.budget(location, snapshot, |goal, memory| {
+            Ok(resolve_forward_budget(goal, memory)?.allocatable_bytes)
+        })
+    }
+
+    fn budget(
+        &self,
+        location: DeviceLocation,
+        snapshot: DeviceMemory,
+        available: fn(MemoryGoal, DeviceMemory) -> Result<usize>,
+    ) -> Result<usize> {
         let initial = *self
             .group
             .snapshots
@@ -206,12 +314,12 @@ impl ModelMemoryBudget {
             .unwrap()
             .entry(location)
             .or_insert(snapshot.allocated());
-        let initial_available = device_memory_budget(self.group.goal, initial)?;
+        let initial_available = available(self.group.goal, initial)?;
         #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
         let quota = ((initial_available as f64 * self.share) as usize).min(initial_available);
         let loaded_bytes = snapshot.allocated().saturating_sub(baseline);
         let quota_remaining = quota.saturating_sub(loaded_bytes);
-        let live_policy_budget = device_memory_budget(self.group.goal, snapshot)?;
+        let live_policy_budget = available(self.group.goal, snapshot)?;
         let allocation_budget = quota_remaining.min(live_policy_budget);
         tracing::debug!(
             device = ?location,
@@ -306,14 +414,53 @@ mod tests {
     }
 
     #[test]
+    fn execution_headroom_is_shared_without_increasing_persistent_quotas() -> Result<()> {
+        let memory = |occupied| DeviceMemory::Unified {
+            total: 128 * GIB,
+            available: 128 * GIB - occupied,
+            allocated: occupied,
+            working_set_limit: 128 * GIB,
+        };
+        let group = Arc::new(MemoryBudgetGroup::default());
+        let first = ModelMemoryBudget::new(group.clone(), 0.5);
+        let second = ModelMemoryBudget::new(group, 0.5);
+        first.begin_device_load(CUDA, memory(0));
+        assert_eq!(first.allocation_budget(CUDA, memory(40 * GIB))?, 16 * GIB);
+        assert_eq!(first.execution_budget(CUDA, memory(40 * GIB))?, 24 * GIB);
+        second.begin_device_load(CUDA, memory(56 * GIB));
+        assert_eq!(second.allocation_budget(CUDA, memory(96 * GIB))?, 16 * GIB);
+        assert_eq!(second.execution_budget(CUDA, memory(96 * GIB))?, 24 * GIB);
+        assert_eq!(second.execution_budget(CUDA, memory(120 * GIB))?, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn utilization_has_no_extra_execution_quota() -> Result<()> {
+        let model = ModelMemoryBudget::new(
+            Arc::new(MemoryBudgetGroup::new(MemoryGoal::Utilization(0.8))),
+            0.5,
+        );
+        model.begin_device_load(CUDA, discrete(0));
+        for occupied in [0, WEIGHTS, 80 * GIB, TOTAL] {
+            assert_eq!(
+                model.execution_budget(CUDA, discrete(occupied))?,
+                model.allocation_budget(CUDA, discrete(occupied))?
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn runtime_reservations_follow_loaded_models_and_device_placement() -> Result<()> {
         let group = Arc::new(MemoryBudgetGroup::default());
         let first = Arc::new(ModelMemoryBudget::new(group.clone(), 0.5));
         let second = Arc::new(ModelMemoryBudget::new(group.clone(), 0.5));
-        let first_runtime = first.reserve_runtime(HashMap::from([(CUDA, 2 * GIB)]));
+        let first_runtime = first.reserve_runtime(HashMap::from([(CUDA, 2 * GIB)]), None);
         assert!(!first_runtime.capture_ready());
-        let second_runtime =
-            second.reserve_runtime(HashMap::from([(CUDA, 3 * GIB), (OTHER_CUDA, 4 * GIB)]));
+        let second_runtime = second.reserve_runtime(
+            HashMap::from([(CUDA, 3 * GIB), (OTHER_CUDA, 4 * GIB)]),
+            None,
+        );
         assert!(first_runtime.capture_ready());
         assert_eq!(first_runtime.other_workspace_bytes(CUDA)?, 3 * GIB);
         assert_eq!(first_runtime.other_workspace_bytes(OTHER_CUDA)?, 4 * GIB);
@@ -337,17 +484,148 @@ mod tests {
         let first = Arc::new(ModelMemoryBudget::new(group.clone(), 0.4));
         let second = Arc::new(ModelMemoryBudget::new(group.clone(), 0.4));
         let third = Arc::new(ModelMemoryBudget::new(group, 0.2));
-        let first_runtime = first.reserve_runtime(HashMap::from([(CUDA, 2)]));
-        let second_runtime = second.reserve_runtime(HashMap::from([(CUDA, 3)]));
-        let third_runtime = third.reserve_runtime(HashMap::from([(CUDA, 5)]));
+        let first_runtime = first.reserve_runtime(HashMap::from([(CUDA, 2)]), None);
+        let second_runtime = second.reserve_runtime(HashMap::from([(CUDA, 3)]), None);
+        let third_runtime = third.reserve_runtime(HashMap::from([(CUDA, 5)]), None);
         assert_eq!(first_runtime.other_workspace_bytes(CUDA)?, 8);
         drop(third_runtime);
-        let third_runtime = third.reserve_runtime(HashMap::from([(CUDA, usize::MAX)]));
+        let third_runtime = third.reserve_runtime(HashMap::from([(CUDA, usize::MAX)]), None);
         assert!(first_runtime.other_workspace_bytes(CUDA).is_err());
         drop(second_runtime);
         assert_eq!(first_runtime.other_workspace_bytes(CUDA)?, usize::MAX);
         drop(third_runtime);
         assert_eq!(first_runtime.other_workspace_bytes(CUDA)?, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn pending_prefix_reservations_track_physical_snapshots_per_device() -> Result<()> {
+        let reservation = RuntimeMemoryReservation::standalone(RecurrentPrefixReservation::new(
+            HashMap::from([(CUDA, 100), (OTHER_CUDA, 40)]),
+            3,
+        ));
+        assert!(reservation.capture_ready());
+        assert_eq!(reservation.other_workspace_bytes(CUDA)?, 0);
+        assert_eq!(reservation.pending_prefix_bytes(CUDA)?, 300);
+        assert_eq!(reservation.pending_prefix_bytes(OTHER_CUDA)?, 120);
+        assert_eq!(reservation.pending_prefix_bytes(DeviceLocation::Cpu)?, 0);
+        reservation.set_retained_prefix_snapshots(1);
+        assert_eq!(reservation.pending_prefix_bytes(CUDA)?, 200);
+        assert_eq!(reservation.pending_prefix_bytes(OTHER_CUDA)?, 80);
+        reservation.set_retained_prefix_snapshots(3);
+        assert_eq!(reservation.pending_prefix_bytes(CUDA)?, 0);
+        reservation.set_retained_prefix_snapshots(0);
+        assert_eq!(reservation.pending_prefix_bytes(CUDA)?, 300);
+
+        let zero = RuntimeMemoryReservation::standalone(RecurrentPrefixReservation::new(
+            HashMap::from([(CUDA, usize::MAX)]),
+            0,
+        ));
+        assert_eq!(zero.pending_prefix_bytes(CUDA)?, 0);
+        let overflow = RuntimeMemoryReservation::standalone(RecurrentPrefixReservation::new(
+            HashMap::from([(CUDA, usize::MAX)]),
+            2,
+        ));
+        assert!(overflow.pending_prefix_bytes(CUDA).is_err());
+        overflow.set_retained_prefix_snapshots(1);
+        assert_eq!(overflow.pending_prefix_bytes(CUDA)?, usize::MAX);
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_reservations_include_other_models_pending_prefixes() -> Result<()> {
+        let group = Arc::new(MemoryBudgetGroup::default());
+        let first = Arc::new(ModelMemoryBudget::new(group.clone(), 0.5));
+        let second = Arc::new(ModelMemoryBudget::new(group, 0.5));
+        let first_runtime = first.reserve_runtime(HashMap::from([(CUDA, 100)]), None);
+        let second_runtime = second.reserve_runtime(
+            HashMap::from([(CUDA, 200)]),
+            Some(RecurrentPrefixReservation::new(
+                HashMap::from([(CUDA, 10), (OTHER_CUDA, 20)]),
+                3,
+            )),
+        );
+        assert!(first_runtime.capture_ready());
+        assert_eq!(first_runtime.pending_prefix_bytes(CUDA)?, 0);
+        assert_eq!(first_runtime.other_workspace_bytes(CUDA)?, 230);
+        assert_eq!(first_runtime.other_workspace_bytes(OTHER_CUDA)?, 60);
+        second_runtime.set_retained_prefix_snapshots(2);
+        assert_eq!(first_runtime.other_workspace_bytes(CUDA)?, 210);
+        assert_eq!(first_runtime.other_workspace_bytes(OTHER_CUDA)?, 20);
+        assert_eq!(second_runtime.other_workspace_bytes(CUDA)?, 100);
+        drop(second_runtime);
+        assert_eq!(first_runtime.other_workspace_bytes(CUDA)?, 0);
+
+        let second_runtime = second.reserve_runtime(
+            HashMap::from([(CUDA, 1)]),
+            Some(RecurrentPrefixReservation::new(
+                HashMap::from([(CUDA, usize::MAX)]),
+                1,
+            )),
+        );
+        assert!(first_runtime.other_workspace_bytes(CUDA).is_err());
+        second_runtime.set_retained_prefix_snapshots(1);
+        assert_eq!(first_runtime.other_workspace_bytes(CUDA)?, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_revision_detects_eviction_between_pending_and_memory_reads() -> Result<()> {
+        use std::sync::mpsc;
+
+        let group = Arc::new(MemoryBudgetGroup::default());
+        let first = Arc::new(ModelMemoryBudget::new(group.clone(), 0.5));
+        let second = Arc::new(ModelMemoryBudget::new(group, 0.5));
+        let reader = first.reserve_runtime(HashMap::new(), None);
+        let writer = second.reserve_runtime(
+            HashMap::new(),
+            Some(RecurrentPrefixReservation::new(
+                HashMap::from([(CUDA, 100)]),
+                1,
+            )),
+        );
+        writer.set_retained_prefix_snapshots(1);
+        let allocated = Arc::new(AtomicUsize::new(100));
+        let (read_pending_tx, read_pending_rx) = mpsc::channel();
+        let (released_tx, released_rx) = mpsc::channel();
+        let (replace_tx, replace_rx) = mpsc::channel();
+        let writer_allocated = allocated.clone();
+        let writer_thread = std::thread::spawn(move || {
+            read_pending_rx.recv().unwrap();
+            writer.set_retained_prefix_snapshots(0);
+            writer_allocated.store(0, Ordering::Release);
+            released_tx.send(()).unwrap();
+            replace_rx.recv().unwrap();
+            writer_allocated.store(100, Ordering::Release);
+            writer.set_retained_prefix_snapshots(1);
+            writer
+        });
+        let before = reader.revision();
+        assert_eq!(reader.other_workspace_bytes(CUDA)?, 0);
+        read_pending_tx.send(())?;
+        released_rx.recv()?;
+        assert_eq!(allocated.load(Ordering::Acquire), 0);
+        assert_ne!(reader.revision(), before);
+        assert_eq!(reader.other_workspace_bytes(CUDA)?, 100);
+        replace_tx.send(())?;
+        let writer = writer_thread.join().unwrap();
+        assert_eq!(reader.other_workspace_bytes(CUDA)?, 0);
+        assert_ne!(reader.revision(), before);
+        let after = reader.revision();
+        writer.set_retained_prefix_snapshots(1);
+        assert_eq!(reader.revision(), after);
+        drop(writer);
+        assert_ne!(reader.revision(), after);
+
+        let standalone = RuntimeMemoryReservation::standalone(RecurrentPrefixReservation::new(
+            HashMap::from([(CUDA, 100)]),
+            1,
+        ));
+        let before = standalone.revision();
+        standalone.set_retained_prefix_snapshots(1);
+        standalone.set_retained_prefix_snapshots(0);
+        assert_eq!(standalone.pending_prefix_bytes(CUDA)?, 100);
+        assert_ne!(standalone.revision(), before);
         Ok(())
     }
 }

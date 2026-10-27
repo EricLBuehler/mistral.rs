@@ -973,6 +973,15 @@ impl Loader for MultimodalLoader {
                 dtype,
                 &params,
                 paged_attn_config.as_mut(),
+                if self
+                    .prepared_source
+                    .as_ref()
+                    .is_some_and(|source| source.weights.raw_gguf().is_some())
+                {
+                    auto_device_map::OptionalAllocationBacking::FileMapped
+                } else {
+                    auto_device_map::OptionalAllocationBacking::Owned
+                },
             )?;
             mapper = DeviceMapSetting::Map(new);
         }
@@ -1537,6 +1546,13 @@ impl Loader for MultimodalLoader {
         let (cache_config, cache_engine) = if let Some(paged_attn_config) =
             paged_attn_config.as_mut()
         {
+            #[cfg(feature = "cuda")]
+            let reserve_decode_graphs = device.is_cuda()
+                && model.supports_cuda_decode_graphs()
+                && cuda_decode_graphs_enabled()
+                && cuda_decode_graph_supported_for_model(Some(model_metadata.as_ref()));
+            #[cfg(not(feature = "cuda"))]
+            let reserve_decode_graphs = false;
             let paged_snapshot = paged_attn_config.clone();
             let capacity_activation_estimate = |usable_tokens| {
                 super::loaders::estimate_model_activation_memory(
@@ -1552,15 +1568,19 @@ impl Loader for MultimodalLoader {
                     },
                 )
             };
-            let memory_reservations =
-                paged_attention_memory_reservations(model.cache(), paged_attn_config, &device)?;
-            let cache_request = CacheConfigRequest {
+            let memory_reservations = if paged_attn_config.recurrent_prefix_capacity_auto {
+                paged_attn_config.memory_reservations()?
+            } else {
+                paged_attention_memory_reservations(model.cache(), paged_attn_config, &device)?
+            };
+            let mut cache_request = CacheConfigRequest {
                 memory_reservations,
                 dtype,
                 model: model_metadata.as_ref(),
                 device: &device,
                 layer_devices: &layer_devices,
                 capacity_activation_estimate: &capacity_activation_estimate,
+                reserve_decode_graphs,
                 silent,
             };
             #[cfg(feature = "cuda")]
@@ -1577,12 +1597,23 @@ impl Loader for MultimodalLoader {
                     paged_attn_config.reserve_reclaimable_weight_cache(&device, bytes)?;
                 }
             }
+            super::configure_automatic_recurrent_prefix_capacity(
+                model.cache(),
+                paged_attn_config,
+                cache_request,
+            )?;
+            cache_request.memory_reservations =
+                paged_attention_memory_reservations(model.cache(), paged_attn_config, &device)?;
             let (cache_config, cache_engine) = allocate_cache(paged_attn_config, cache_request)?;
             (Some(cache_config), Some(cache_engine))
         } else {
             #[cfg(feature = "cuda")]
             model.prepare_optional_weights(&|device| {
-                Ok(crate::MemoryUsage.query(device)?.available())
+                let available = crate::MemoryUsage.query(device)?.available();
+                Ok(crate::memory_plan::WeightAllocationBudget {
+                    persistent_bytes: available,
+                    execution_bytes: available,
+                })
             })?;
             (None, None)
         };
@@ -1606,6 +1637,13 @@ impl Loader for MultimodalLoader {
         }
         let eos = calculate_eos_tokens(&chat_template, gen_conf.as_ref(), &tokenizer);
         let sliding_window = model.config().sliding_window;
+        #[cfg(feature = "cuda")]
+        let runtime_memory_reservation = super::paged_attention_runtime_memory_reservation(
+            model.cache(),
+            paged_attn_config.as_ref(),
+            &device,
+            &pipeline_mapper.get_unique_devices(),
+        )?;
         let tracked_modules = tracker.get().clone();
         // rank-sliced layers re-slice at source read; inexpressible slices fall back per layer
         let source_weight_files = match self.prepared_source.as_ref() {
@@ -1636,10 +1674,7 @@ impl Loader for MultimodalLoader {
                     .as_ref()
                     .map(|config| config.runtime_memory_plan()),
                 #[cfg(feature = "cuda")]
-                runtime_memory_reservation: paged_attn_config.as_ref().and_then(|config| {
-                    config
-                        .runtime_memory_reservation(&device, &pipeline_mapper.get_unique_devices())
-                }),
+                runtime_memory_reservation,
                 model_metadata: Some(model_metadata),
                 modalities,
                 loaded_for_uqff_write: self.config.write_uqff.is_some(),

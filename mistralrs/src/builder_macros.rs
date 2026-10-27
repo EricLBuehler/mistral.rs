@@ -219,6 +219,7 @@ macro_rules! common_builder_methods {
         /// Set the number of sequences to hold in the prefix cache. Set to `None` to disable the prefix cacher.
         pub fn with_prefix_cache_n(mut self, n_seqs: Option<usize>) -> Self {
             self.prefix_cache_n = n_seqs;
+            self.prefix_cache_n_explicit = true;
             self
         }
 

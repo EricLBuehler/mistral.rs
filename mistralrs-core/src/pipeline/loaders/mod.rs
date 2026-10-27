@@ -971,6 +971,7 @@ pub trait DeviceMappedModelLoader {
             dtype,
             params,
             paged_attn_config,
+            auto_device_map::OptionalAllocationBacking::Owned,
         )
     }
 }

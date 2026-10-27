@@ -1011,7 +1011,7 @@ mod tests {
                 bias: Some(bias.clone()),
                 dtype,
             })?;
-            crate::cutile::warmup_moe_kernels(&device)?;
+            crate::cutile::warmup_moe_kernels(&device, true)?;
             let data: Vec<f32> = (0..ROWS * COLUMNS * 2)
                 .map(|index| ((index * 37 + 11) % 257) as f32 / 17.0 - 7.5)
                 .collect();
@@ -1189,7 +1189,7 @@ mod tests {
                 ),
                 dtype,
             })?;
-            crate::cutile::warmup_moe_kernels(&device)?;
+            crate::cutile::warmup_moe_kernels(&device, true)?;
             let (gate_source, value_source) = fixture(ROWS, COLUMNS, 0, 0, dtype, &device)?;
             let gate_source = gate_source.contiguous()?;
             let value_source = value_source.contiguous()?;

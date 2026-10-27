@@ -1,12 +1,62 @@
 //! cuTile JIT warmup driver for registered inference kernels.
 
 use candle_core::{CudaDevice, Device, DeviceLocation, Result};
+use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
+
+const PROGRESS_TICK: Duration = Duration::from_millis(100);
+
+pub(super) struct WarmupProgress {
+    bar: ProgressBar,
+}
+
+impl WarmupProgress {
+    pub(super) fn new(family: &str, total: usize, silent: bool) -> Self {
+        let bar = if silent {
+            ProgressBar::hidden()
+        } else {
+            ProgressBar::new(total as u64)
+        };
+        bar.set_length(total as u64);
+        bar.set_prefix(family.to_owned());
+        bar.set_style(
+            ProgressStyle::default_bar()
+                .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} warming cuTile {prefix} ({eta}) {msg}")
+                .unwrap()
+                .progress_chars("#>-"),
+        );
+        if !silent {
+            bar.enable_steady_tick(PROGRESS_TICK);
+        }
+        Self { bar }
+    }
+
+    pub(super) fn run<T>(
+        &self,
+        stage: impl Into<String>,
+        compile: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
+        self.bar.set_message(stage.into());
+        self.bar.tick();
+        let result = compile();
+        if result.is_ok() {
+            self.bar.inc(1);
+        }
+        result
+    }
+}
+
+impl Drop for WarmupProgress {
+    fn drop(&mut self) {
+        self.bar.finish_and_clear();
+    }
+}
 
 /// A cuTile kernel that can pre-compile every JIT key it will hit at inference.
 pub(super) trait CutileKernel {
-    fn warm(&self, dev: &CudaDevice) -> Result<()>;
+    fn warm(&self, dev: &CudaDevice, silent: bool) -> Result<()>;
 }
 
 /// Every cuTile kernel to warm; add a line per new kernel.
@@ -32,7 +82,7 @@ pub(super) fn mark_dirty() {
 }
 
 /// Warm every registered cuTile kernel once per device.
-pub fn warmup_moe_kernels(device: &Device) -> Result<()> {
+pub fn warmup_moe_kernels(device: &Device, silent: bool) -> Result<()> {
     let Device::Cuda(dev) = device else {
         return Ok(());
     };
@@ -47,7 +97,7 @@ pub fn warmup_moe_kernels(device: &Device) -> Result<()> {
         }
     }
     for kernel in registered() {
-        if let Err(err) = kernel.warm(dev) {
+        if let Err(err) = kernel.warm(dev, silent) {
             WARMED_LOCATIONS
                 .get_or_init(|| Mutex::new(HashSet::new()))
                 .lock()
@@ -57,4 +107,55 @@ pub fn warmup_moe_kernels(device: &Device) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn progress_counts_successful_steps_and_sets_stage_before_work() -> Result<()> {
+        let progress = WarmupProgress::new("test", 2, true);
+        assert!(progress.bar.is_hidden());
+        assert_eq!(progress.bar.length(), Some(2));
+        let value = progress.run("first compile", || {
+            assert_eq!(progress.bar.message(), "first compile");
+            assert_eq!(progress.bar.position(), 0);
+            Ok(42)
+        })?;
+        assert_eq!(value, 42);
+        assert_eq!(progress.bar.position(), 1);
+        progress.run("second compile", || Ok(()))?;
+        assert_eq!(progress.bar.position(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn progress_clears_on_error_without_counting_failed_work() {
+        let progress = WarmupProgress::new("test", 2, true);
+        let bar = progress.bar.clone();
+        let error = progress
+            .run("failed compile", || -> Result<()> {
+                candle_core::bail!("compile failed")
+            })
+            .unwrap_err();
+        assert_eq!(error.to_string(), "compile failed");
+        assert_eq!(bar.position(), 0);
+        assert_eq!(bar.message(), "failed compile");
+        drop(progress);
+        assert!(bar.is_finished());
+    }
+
+    #[test]
+    fn progress_clears_when_compilation_panics() {
+        let progress = WarmupProgress::new("test", 1, true);
+        let bar = progress.bar.clone();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let _ = progress.run("panicking compile", || -> Result<()> {
+                panic!("compile panic")
+            });
+        }));
+        assert!(result.is_err());
+        assert!(bar.is_finished());
+    }
 }

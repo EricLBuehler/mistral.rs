@@ -410,7 +410,7 @@ impl MultimodalModel for Qwen4ExpModel {
     #[cfg(feature = "cuda")]
     fn prepare_optional_weights(
         &mut self,
-        budget: &dyn Fn(&Device) -> Result<usize>,
+        budget: &dyn Fn(&Device) -> Result<crate::memory_plan::WeightAllocationBudget>,
     ) -> Result<()> {
         self.text.prepare_optional_weights(budget)
     }

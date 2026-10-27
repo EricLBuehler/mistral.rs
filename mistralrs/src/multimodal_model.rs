@@ -59,6 +59,7 @@ pub struct MultimodalModelBuilder {
     pub(crate) max_num_seqs: usize,
     pub(crate) with_logging: bool,
     pub(crate) prefix_cache_n: Option<usize>,
+    pub(crate) prefix_cache_n_explicit: bool,
 }
 
 impl MultimodalModelBuilder {
@@ -108,6 +109,7 @@ impl MultimodalModelBuilder {
             organization: IsqOrganization::Default,
             encoder_cache_memory_bytes: None,
             prefix_cache_n: None,
+            prefix_cache_n_explicit: false,
         }
     }
 

@@ -10,6 +10,8 @@ use mistralrs_quant::{
 
 use super::config::{PleConfig, TextConfig};
 use crate::layers::grouped_rms_norm;
+#[cfg(feature = "cuda")]
+use crate::memory_plan::WeightAllocationBudget;
 
 const SPLITMIX_GAMMA: u64 = 0x9E37_79B9_7F4A_7C15;
 const SPLITMIX_M1: u64 = 0xBF58_476D_1CE4_E5B9;
@@ -32,8 +34,59 @@ const RESIDENT_COPY_ROWS: usize = 1 << 20;
 const HOST_PREFAULT_STRIDE_BYTES: usize = 4096;
 
 #[cfg(feature = "cuda")]
+struct TableProgress {
+    bar: indicatif::ProgressBar,
+}
+
+#[cfg(feature = "cuda")]
+impl Drop for TableProgress {
+    fn drop(&mut self) {
+        self.bar.finish_and_clear();
+    }
+}
+
+#[cfg(feature = "cuda")]
+fn table_progress(message: &'static str, bytes: usize) -> TableProgress {
+    let bar = indicatif::ProgressBar::new(bytes as u64);
+    crate::utils::progress::configure_progress_bar(&bar);
+    bar.set_style(
+        indicatif::ProgressStyle::default_bar()
+            .template(
+                "{msg}: [{elapsed_precise}] [{bar:40.blue/blue}] {bytes}/{total_bytes} ({eta})",
+            )
+            .unwrap()
+            .progress_chars("#>-"),
+    );
+    bar.set_message(message);
+    bar.tick();
+    TableProgress { bar }
+}
+
+#[cfg(feature = "cuda")]
 fn resident_bytes(rows: usize, head_dim: usize, bits: usize) -> usize {
     rows * (head_dim * bits / 8 + head_dim / RESIDENT_GROUP * 2)
+}
+
+#[cfg(feature = "cuda")]
+fn preparation_chunk_rows(
+    requested: usize,
+    source_row_bytes: usize,
+    packed_row_bytes: usize,
+    device_workspace_budget: usize,
+) -> Result<usize> {
+    let device_bytes = source_row_bytes + packed_row_bytes;
+    // Include source pagecache and transient host copies returned by to_vec1.
+    let workspace_bytes = 2 * source_row_bytes + 3 * packed_row_bytes;
+    let rows = requested
+        .min(RESIDENT_RESERVE_BYTES / workspace_bytes)
+        .min(device_workspace_budget / device_bytes);
+    if rows == 0 {
+        candle_core::bail!(
+            "Embedding preparation needs {device_bytes} device bytes and {workspace_bytes} total \
+             workspace bytes per row, but the device workspace budget is {device_workspace_budget} bytes"
+        );
+    }
+    Ok(rows)
 }
 
 /// Device bytes of the resident n-gram table at the precision the device map plans for.
@@ -248,8 +301,7 @@ impl PleTable {
         }
         let bytes = match &self.source {
             TableSource::Gguf(table) => table.rows() * table.row_bytes(),
-            TableSource::Packed { map, .. } => map.len(),
-            TableSource::Shards { .. } => return None,
+            TableSource::Packed { .. } | TableSource::Shards { .. } => return None,
         };
         Some(bytes + RESIDENT_RESERVE_BYTES)
     }
@@ -407,10 +459,8 @@ impl PleTable {
         }
     }
 
-    /// Move the whole table into device memory when it fits beside a working reserve: GGUF rows
-    /// are copied as is, safetensors rows are quantized to 8 or 4 bits.
     #[cfg(feature = "cuda")]
-    fn make_resident(&mut self, device: &Device, budget: usize) -> Result<()> {
+    fn make_resident(&mut self, device: &Device, budget: WeightAllocationBudget) -> Result<()> {
         if !self.head_dim.is_multiple_of(RESIDENT_GROUP) {
             tracing::warn!(
                 head_dim = self.head_dim,
@@ -420,7 +470,12 @@ impl PleTable {
             return Ok(());
         }
         let rows = self.total_rows()?;
-        let available = crate::MemoryUsage.query(device)?.available().min(budget);
+        let budget = WeightAllocationBudget {
+            execution_bytes: budget
+                .execution_bytes
+                .min(crate::MemoryUsage.query(device)?.available()),
+            ..budget
+        };
         let footprint = |bits: usize| match &self.source {
             TableSource::Gguf(table) => table.rows() * table.row_bytes(),
             _ => resident_bytes(rows, self.head_dim, bits),
@@ -430,11 +485,13 @@ impl PleTable {
             .filter(|bits| {
                 *bits == PLANNED_RESIDENT_BITS || matches!(self.source, TableSource::Shards { .. })
             })
-            .find(|bits| footprint(*bits) + RESIDENT_RESERVE_BYTES <= available)
+            .find(|bits| budget.fits(footprint(*bits), RESIDENT_RESERVE_BYTES))
         else {
             tracing::warn!(
-                available_gb = available >> 30,
-                needed_gb = (footprint(PLANNED_RESIDENT_BITS) + RESIDENT_RESERVE_BYTES) >> 30,
+                persistent_budget_bytes = budget.persistent_bytes,
+                execution_budget_bytes = budget.execution_bytes,
+                table_bytes = footprint(PLANNED_RESIDENT_BITS),
+                preparation_bytes = RESIDENT_RESERVE_BYTES,
                 "Qwen4-Exp PLE table does not fit in device memory; {}",
                 self.fallback_path()
             );
@@ -477,16 +534,21 @@ impl PleTable {
     ) -> Result<ResidentTable> {
         let row_bytes = table.row_bytes();
         let bytes = table.bytes()?;
+        let copy_rows =
+            preparation_chunk_rows(RESIDENT_COPY_ROWS, row_bytes, 0, RESIDENT_RESERVE_BYTES)?;
+        let progress = table_progress("Copying embedding table to device memory", bytes.len());
         let data = unsafe { Tensor::empty((rows, row_bytes), DType::U8, device)? };
-        for (chunk, src) in bytes.chunks(RESIDENT_COPY_ROWS * row_bytes).enumerate() {
+        for (chunk, src) in bytes.chunks(copy_rows * row_bytes).enumerate() {
             prefault_source_pages(src);
             data.slice_set(
                 &Tensor::from_slice(src, (src.len() / row_bytes, row_bytes), device)?,
                 0,
-                chunk * RESIDENT_COPY_ROWS,
+                chunk * copy_rows,
             )?;
             release_source_pages(src);
+            progress.bar.inc(src.len() as u64);
         }
+        progress.bar.finish_and_clear();
         Ok(ResidentTable::Gguf(data))
     }
 
@@ -503,18 +565,25 @@ impl PleTable {
         } = args;
         let groups = self.head_dim / RESIDENT_GROUP;
         let row_bytes = self.head_dim * bits / 8;
+        let source_row_bytes = self.head_dim * dtype.size_in_bytes();
+        let packed_row_bytes = row_bytes + groups * DType::F16.size_in_bytes();
+        let copy_rows = preparation_chunk_rows(
+            RESIDENT_COPY_ROWS,
+            source_row_bytes,
+            packed_row_bytes,
+            RESIDENT_RESERVE_BYTES,
+        )?;
+        let progress = table_progress(
+            "Quantizing embedding table into device memory",
+            rows * packed_row_bytes,
+        );
         let data = unsafe { Tensor::empty((rows, row_bytes), DType::U8, device)? };
         let scales = unsafe { Tensor::empty((rows, groups), DType::F16, device)? };
-        let source_row_bytes = self.head_dim * dtype.size_in_bytes();
         for (shard, name) in names.iter().enumerate() {
             let view = raw.get(name)?;
-            for (chunk, src) in view
-                .data()
-                .chunks(RESIDENT_COPY_ROWS * source_row_bytes)
-                .enumerate()
-            {
+            for (chunk, src) in view.data().chunks(copy_rows * source_row_bytes).enumerate() {
                 let chunk_rows = src.len() / source_row_bytes;
-                let start_row = starts[shard] + chunk * RESIDENT_COPY_ROWS;
+                let start_row = starts[shard] + chunk * copy_rows;
                 prefault_source_pages(src);
                 let source =
                     Tensor::from_raw_buffer(src, dtype, &[chunk_rows, self.head_dim], device)?;
@@ -525,8 +594,10 @@ impl PleTable {
                     bits,
                 )?;
                 release_source_pages(src);
+                progress.bar.inc((chunk_rows * packed_row_bytes) as u64);
             }
         }
+        progress.bar.finish_and_clear();
         Ok(ResidentTable::Native {
             data,
             scales: Some(scales),
@@ -539,9 +610,7 @@ impl PleTable {
     }
 
     #[cfg(feature = "cuda")]
-    fn prepare_mapped(&mut self, device: &Device, chunk_rows: usize) -> Result<()> {
-        use std::io::{Seek, SeekFrom, Write};
-
+    fn prepare_mapped(&mut self, device: &Device, chunk_rows: usize, budget: usize) -> Result<()> {
         if let TableSource::Gguf(table) = &self.source {
             if matches!(self.device_index, Some(DeviceTableIndex::Packed)) {
                 let started = std::time::Instant::now();
@@ -583,15 +652,30 @@ impl PleTable {
         let scale_row_bytes = self.head_dim / RESIDENT_GROUP * DType::F16.size_in_bytes();
         let source_row_bytes = self.head_dim * dtype.size_in_bytes();
         let data_bytes = rows * row_bytes;
-        // /tmp can be tmpfs; the packed table needs reclaimable file-backed pages.
-        let cache_dir = dirs::cache_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join("mistralrs")
-            .join("ple");
-        std::fs::create_dir_all(&cache_dir).map_err(candle_core::Error::wrap)?;
-        let mut file = tempfile::tempfile_in(cache_dir).map_err(candle_core::Error::wrap)?;
-        file.set_len((data_bytes + rows * scale_row_bytes) as u64)
-            .map_err(candle_core::Error::wrap)?;
+        let packed_bytes = data_bytes + rows * scale_row_bytes;
+        let required = packed_bytes + RESIDENT_RESERVE_BYTES;
+        if required > budget {
+            candle_core::bail!(
+                "Packed embedding table requires {packed_bytes} bytes of host RAM plus \
+                 {RESIDENT_RESERVE_BYTES} bytes of preparation reserve, but only {budget} bytes are available"
+            );
+        }
+        let device_workspace_budget = crate::MemoryUsage.query(device)?.available();
+        let chunk_rows = preparation_chunk_rows(
+            chunk_rows,
+            source_row_bytes,
+            row_bytes + scale_row_bytes,
+            device_workspace_budget,
+        )?;
+        let mut map = memmap2::MmapOptions::new()
+            .len(packed_bytes)
+            .map_anon()
+            .map_err(|error| {
+                candle_core::Error::msg(format!(
+                    "Failed to allocate {packed_bytes} bytes of anonymous RAM for packed embedding table: {error}"
+                ))
+            })?;
+        let progress = table_progress("Packing embedding table into host RAM", packed_bytes);
         for (shard, name) in names.iter().enumerate() {
             let view = raw.get(name)?;
             for (chunk, src) in view
@@ -620,26 +704,25 @@ impl PleTable {
                 )?;
                 let data = data.flatten_all()?.to_vec1::<u8>()?;
                 let scales = scales.flatten_all()?.to_vec1::<half::f16>()?;
-                file.seek(SeekFrom::Start((first * row_bytes) as u64))
-                    .and_then(|_| file.write_all(&data))
-                    .map_err(candle_core::Error::wrap)?;
-                file.seek(SeekFrom::Start(
-                    (data_bytes + first * scale_row_bytes) as u64,
-                ))
-                .and_then(|_| file.write_all(bytemuck::cast_slice(&scales)))
-                .and_then(|_| file.sync_data())
-                .map_err(candle_core::Error::wrap)?;
+                let data_offset = first * row_bytes;
+                map[data_offset..data_offset + data.len()].copy_from_slice(&data);
+                let scales = bytemuck::cast_slice::<_, u8>(&scales);
+                let scale_offset = data_bytes + first * scale_row_bytes;
+                map[scale_offset..scale_offset + scales.len()].copy_from_slice(scales);
                 release_source_pages(src);
-                evict_file_cache(&file, first * row_bytes, data.len());
-                evict_file_cache(
-                    &file,
-                    data_bytes + first * scale_row_bytes,
-                    scales.len() * 2,
-                );
+                progress.bar.inc((data.len() + scales.len()) as u64);
             }
         }
-        let map = unsafe { memmap2::MmapOptions::new().populate().map(&file) }
-            .map_err(candle_core::Error::wrap)?;
+        progress.bar.finish_and_clear();
+        let map = map.make_read_only().map_err(|error| {
+            candle_core::Error::msg(format!(
+                "Failed to finalize {packed_bytes}-byte packed embedding table in anonymous RAM: {error}"
+            ))
+        })?;
+        tracing::info!(
+            packed_bytes,
+            "Preparing CUDA access to packed embedding table in host RAM"
+        );
         let gpu_prefault = mistralrs_quant::cuda_memory::prefault_mapped_memory(&map, device)?;
         self.source = TableSource::Packed {
             map,
@@ -652,7 +735,7 @@ impl PleTable {
             size_gb = resident_bytes(rows, self.head_dim, PLANNED_RESIDENT_BITS) >> 30,
             elapsed_s = started.elapsed().as_secs(),
             gpu_prefault,
-            "Qwen4-Exp PLE table quantized into reclaimable memory-mapped storage"
+            "Qwen4-Exp PLE table quantized into anonymous host RAM"
         );
         Ok(())
     }
@@ -754,24 +837,6 @@ impl PleTable {
             }
         }
     }
-}
-
-#[cfg(feature = "cuda")]
-fn evict_file_cache(file: &std::fs::File, offset: usize, len: usize) {
-    #[cfg(target_os = "linux")]
-    {
-        use std::os::fd::AsRawFd;
-        unsafe {
-            libc::posix_fadvise(
-                file.as_raw_fd(),
-                offset as libc::off_t,
-                len as libc::off_t,
-                libc::POSIX_FADV_DONTNEED,
-            );
-        }
-    }
-    #[cfg(not(target_os = "linux"))]
-    let _ = (file, offset, len);
 }
 
 #[cfg(feature = "cuda")]
@@ -1016,15 +1081,44 @@ impl PleLayer {
     #[cfg(feature = "cuda")]
     pub(super) fn prepare_table(
         &mut self,
-        budget: &dyn Fn(&Device) -> Result<usize>,
+        budget: &dyn Fn(&Device) -> Result<WeightAllocationBudget>,
     ) -> Result<()> {
         let device = self.conv_weight.device();
         if device.is_cuda() {
-            if self.allow_resident_table {
-                self.table.make_resident(device, budget(device)?)?;
-            }
+            let unified = crate::utils::normal::is_integrated_gpu(device);
+            let device_budget = if self.allow_resident_table || unified {
+                let available = budget(device)?;
+                self.table.make_resident(device, available)?;
+                available
+            } else {
+                WeightAllocationBudget {
+                    persistent_bytes: 0,
+                    execution_bytes: 0,
+                }
+            };
             if self.table.resident.is_none() {
-                self.table.prepare_mapped(device, RESIDENT_COPY_ROWS)?;
+                let native = matches!(self.table.source, TableSource::Shards { .. });
+                if unified && native && self.table.head_dim.is_multiple_of(RESIDENT_GROUP) {
+                    let required = resident_bytes(
+                        self.table.total_rows()?,
+                        self.table.head_dim,
+                        PLANNED_RESIDENT_BITS,
+                    );
+                    candle_core::bail!(
+                        "Packed embedding table requires {required} persistent bytes of unified RAM \
+                         and {RESIDENT_RESERVE_BYTES} temporary preparation bytes, but its persistent \
+                         budget is {} bytes and execution budget is {} bytes; host RAM shares the same capacity",
+                        device_budget.persistent_bytes,
+                        device_budget.execution_bytes,
+                    );
+                }
+                let host_budget = if native {
+                    crate::MemoryUsage.query(&Device::Cpu)?.available()
+                } else {
+                    0
+                };
+                self.table
+                    .prepare_mapped(device, RESIDENT_COPY_ROWS, host_budget)?;
             }
             return Ok(());
         }

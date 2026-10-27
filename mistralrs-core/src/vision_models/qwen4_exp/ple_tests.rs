@@ -1,18 +1,24 @@
 use super::*;
 use crate::vision_models::qwen4_exp::config::tests::flash_next_text_config;
 
+#[cfg(feature = "cuda")]
 const GGML_TYPE_IQ4_NL: u32 = 20;
+#[cfg(feature = "cuda")]
 const IQ4_NL_BLOCK: usize = 32;
+#[cfg(feature = "cuda")]
 const IQ4_NL_BLOCK_BYTES: usize = 18;
+#[cfg(feature = "cuda")]
 const KVALUES_IQ4_NL: [i8; 16] = [
     -127, -104, -83, -65, -49, -35, -22, -10, 1, 13, 25, 38, 53, 69, 89, 113,
 ];
 
+#[cfg(feature = "cuda")]
 fn iq4_nl_row_bytes(head_dim: usize) -> usize {
     head_dim / IQ4_NL_BLOCK * IQ4_NL_BLOCK_BYTES
 }
 
 /// ggml `dequantize_row_iq4_nl` for one row.
+#[cfg(feature = "cuda")]
 fn dequantize_iq4_nl_row(src: &[u8], out: &mut [f32]) {
     let (blocks, _) = src.as_chunks::<IQ4_NL_BLOCK_BYTES>();
     let (dsts, _) = out.as_chunks_mut::<IQ4_NL_BLOCK>();
@@ -197,7 +203,7 @@ fn mapped_quantization_preserves_shard_and_chunk_offsets() -> Result<()> {
     const ROWS: usize = 37;
     const FIRST_SHARD_ROWS: usize = 19;
     const CHUNK_ROWS: usize = 11;
-    let device = Device::new_cuda(0)?;
+    let device = Device::new_cuda_with_stream(0)?;
     for dtype in [DType::F16, DType::BF16] {
         let source = Tensor::from_vec(
             (0..ROWS * HEAD_DIM)
@@ -226,6 +232,17 @@ fn mapped_quantization_preserves_shard_and_chunk_offsets() -> Result<()> {
             file.path(),
         )?;
         let raw = Arc::new(unsafe { MmapedSafetensors::new(file.path())? });
+        let mut resident_table = PleTable {
+            source: TableSource::Shards {
+                raw: raw.clone(),
+                names: names.clone(),
+                starts: starts.clone(),
+                dtype,
+            },
+            head_dim: HEAD_DIM,
+            device_index: None,
+            resident: None,
+        };
         let mut table = PleTable {
             source: TableSource::Shards {
                 raw,
@@ -237,9 +254,54 @@ fn mapped_quantization_preserves_shard_and_chunk_offsets() -> Result<()> {
             device_index: None,
             resident: None,
         };
-        table.make_resident(&device, 0)?;
+        table.make_resident(
+            &device,
+            WeightAllocationBudget {
+                persistent_bytes: 0,
+                execution_bytes: 0,
+            },
+        )?;
         assert!(table.resident.is_none());
-        table.prepare_mapped(&device, CHUNK_ROWS)?;
+        assert!(table.prepare_mapped(&device, CHUNK_ROWS, 0).is_err());
+        assert!(matches!(table.source, TableSource::Shards { .. }));
+        assert!(table.resident.is_none());
+        let host_budget =
+            resident_bytes(ROWS, HEAD_DIM, PLANNED_RESIDENT_BITS) + RESIDENT_RESERVE_BYTES;
+        let resident_budget = WeightAllocationBudget {
+            persistent_bytes: host_budget - RESIDENT_RESERVE_BYTES,
+            execution_bytes: host_budget,
+        };
+        resident_table.make_resident(
+            &device,
+            WeightAllocationBudget {
+                persistent_bytes: resident_budget.persistent_bytes - 1,
+                ..resident_budget
+            },
+        )?;
+        assert!(resident_table.resident.is_none());
+        resident_table.make_resident(
+            &device,
+            WeightAllocationBudget {
+                execution_bytes: resident_budget.execution_bytes - 1,
+                ..resident_budget
+            },
+        )?;
+        assert!(resident_table.resident.is_none());
+        resident_table.make_resident(&device, resident_budget)?;
+        assert!(matches!(
+            resident_table.resident,
+            Some(ResidentTable::Native {
+                format: crate::cuda::qwen4_exp::PleTableFormat::Q4,
+                ..
+            })
+        ));
+        assert!(table
+            .prepare_mapped(&device, CHUNK_ROWS, host_budget - 1)
+            .is_err());
+        assert!(matches!(table.source, TableSource::Shards { .. }));
+        assert!(table.device_index.is_none());
+        table.prepare_mapped(&device, CHUNK_ROWS, host_budget)?;
+        file.close().map_err(candle_core::Error::wrap)?;
         let TableSource::Packed {
             map, data_bytes, ..
         } = &table.source
@@ -261,6 +323,22 @@ fn mapped_quantization_preserves_shard_and_chunk_offsets() -> Result<()> {
             &map[*data_bytes..],
             bytemuck::cast_slice::<_, u8>(&scales.flatten_all()?.to_vec1::<half::f16>()?)
         );
+        let Some(ResidentTable::Native {
+            data: resident_data,
+            scales: Some(resident_scales),
+            ..
+        }) = &resident_table.resident
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            resident_data.flatten_all()?.to_vec1::<u8>()?,
+            data.flatten_all()?.to_vec1::<u8>()?,
+        );
+        assert_eq!(
+            resident_scales.flatten_all()?.to_vec1::<half::f16>()?,
+            scales.flatten_all()?.to_vec1::<half::f16>()?,
+        );
         let lookups = [0u64, 36, 18, 19, 10, 11];
         let host = table
             .gather_host(&lookups, &Device::Cpu)?
@@ -278,19 +356,133 @@ fn mapped_quantization_preserves_shard_and_chunk_offsets() -> Result<()> {
                 assert_eq!(actual.dims(), &[2, 3 * HEAD_DIM]);
                 assert_eq!(actual.flatten_all()?.to_vec1::<half::bf16>()?, host);
             }
-            assert_eq!(
-                table.reclaimable_weight_cache_bytes(),
-                Some(
-                    resident_bytes(ROWS, HEAD_DIM, PLANNED_RESIDENT_BITS) + RESIDENT_RESERVE_BYTES
-                )
-            );
+            assert_mapped_graph_replay(&table, &data, &scales, &device)?;
         }
+        assert_eq!(table.reclaimable_weight_cache_bytes(), None);
         table.resident = Some(ResidentTable::Native {
             data,
             scales: Some(scales),
             format: crate::cuda::qwen4_exp::PleTableFormat::Q4,
         });
         assert_eq!(table.reclaimable_weight_cache_bytes(), None);
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn preparation_chunks_respect_host_and_device_workspace() -> Result<()> {
+    const WIDTHS: [usize; 2] = [160, 576];
+    const LIMITED_ROWS: usize = 7;
+    for head_dim in WIDTHS {
+        let source_row_bytes = head_dim * DType::BF16.size_in_bytes();
+        let packed_row_bytes = resident_bytes(1, head_dim, PLANNED_RESIDENT_BITS);
+        let host_row_bytes = 2 * source_row_bytes + 3 * packed_row_bytes;
+        let device_row_bytes = source_row_bytes + packed_row_bytes;
+        let rows = preparation_chunk_rows(
+            RESIDENT_COPY_ROWS,
+            source_row_bytes,
+            packed_row_bytes,
+            RESIDENT_RESERVE_BYTES,
+        )?;
+        assert!(rows > 0 && rows <= RESIDENT_COPY_ROWS);
+        assert!(rows * host_row_bytes <= RESIDENT_RESERVE_BYTES);
+        assert!(rows * device_row_bytes <= RESIDENT_RESERVE_BYTES);
+        if head_dim == WIDTHS[0] {
+            assert_eq!(rows, RESIDENT_COPY_ROWS);
+        } else {
+            assert!(rows < RESIDENT_COPY_ROWS);
+        }
+        assert_eq!(
+            preparation_chunk_rows(
+                RESIDENT_COPY_ROWS,
+                source_row_bytes,
+                packed_row_bytes,
+                LIMITED_ROWS * device_row_bytes,
+            )?,
+            LIMITED_ROWS
+        );
+        assert!(preparation_chunk_rows(
+            RESIDENT_COPY_ROWS,
+            source_row_bytes,
+            packed_row_bytes,
+            device_row_bytes - 1,
+        )
+        .is_err());
+        assert!(
+            preparation_chunk_rows(RESIDENT_COPY_ROWS, source_row_bytes, packed_row_bytes, 0,)
+                .is_err()
+        );
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+fn assert_mapped_graph_replay(
+    table: &PleTable,
+    data: &Tensor,
+    scales: &Tensor,
+    device: &Device,
+) -> Result<()> {
+    use candle_core::{cuda::cudarc::driver::sys, Var};
+
+    const IDS: [[i64; 6]; 4] = [
+        [0, 36, 18, 19, 10, 11],
+        [36, 0, 19, 18, 11, 10],
+        [5, 5, 0, 0, 36, 36],
+        [0, 36, 18, 19, 10, 11],
+    ];
+    let cuda = device.as_cuda_device()?;
+    let _htod_cache_guard = cuda.enable_cuda_graph_htod_cache();
+    let rows = Var::zeros((2, 3), DType::I64, device)?;
+    let layout = crate::cuda::qwen4_exp::TokenLayout::rectangular(2, 1);
+    let gather = || table.gather_mapped(&rows, &layout);
+    let _ = gather()?;
+    device.synchronize()?;
+    let stream = cuda.cuda_stream();
+    let tracking = stream.context().is_event_tracking();
+    if tracking {
+        unsafe { stream.context().disable_event_tracking() };
+    }
+    if let Err(error) =
+        stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+    {
+        if tracking {
+            unsafe { stream.context().enable_event_tracking() };
+        }
+        return Err(candle_core::Error::wrap(error));
+    }
+    let output = gather();
+    let graph = stream.end_capture(
+        sys::CUgraphInstantiate_flags::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH,
+    );
+    if tracking {
+        unsafe { stream.context().enable_event_tracking() };
+    }
+    let output = output?;
+    let graph = graph
+        .map_err(candle_core::Error::wrap)?
+        .ok_or_else(|| candle_core::Error::msg("PLE capture returned no graph"))?;
+    for ids in IDS {
+        rows.set(&Tensor::from_slice(&ids, (2, 3), device)?)?;
+        graph.launch().map_err(candle_core::Error::wrap)?;
+        let expected = crate::cuda::qwen4_exp::ple_gather_quant(
+            &rows,
+            data,
+            Some(scales),
+            table.head_dim,
+            crate::cuda::qwen4_exp::PleTableFormat::Q4,
+        )?;
+        for dtype in [DType::BF16, DType::F16] {
+            let values = |tensor: &Tensor| {
+                tensor
+                    .to_dtype(dtype)?
+                    .to_dtype(DType::F32)?
+                    .flatten_all()?
+                    .to_vec1::<f32>()
+            };
+            assert_eq!(values(&output)?, values(&expected)?, "{dtype:?}: {ids:?}");
+        }
     }
     Ok(())
 }

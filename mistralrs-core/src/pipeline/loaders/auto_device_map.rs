@@ -1,10 +1,13 @@
 use std::fmt::{self, Display};
 
-use crate::memory_plan::{device_memory_budget, MemoryGoal};
+use crate::memory_plan::{
+    allocation_budget_with_reservations, device_memory_budget, resolve_forward_budget, MemoryGoal,
+};
 use crate::paged_attention::{
     requested_cache_blocks, CacheConfig, ModelConfigLike, DEFAULT_PAGED_ATTENTION_BLOCK_SIZE,
 };
 use crate::utils::debug::DeviceRepr;
+use crate::utils::memory_usage::DeviceMemory;
 use crate::{DeviceLayerMapMetadata, DeviceMapMetadata, MemoryUsage, PagedAttentionConfig};
 use anyhow::{Context, Result};
 use candle_core::{DType, Device};
@@ -14,6 +17,12 @@ use tracing::{info, warn};
 use super::DeviceMappedModelLoader;
 
 const MIN_MAPPING_CACHE_BLOCKS: usize = 2;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OptionalAllocationBacking {
+    Owned,
+    FileMapped,
+}
 
 fn checked_memory_sum<const N: usize>(parts: [usize; N]) -> Option<usize> {
     parts
@@ -206,6 +215,8 @@ struct DeviceMappingContext<'a> {
     devices: &'a [Device],
     dtype: DType,
     params: &'a AutoDeviceMapParams,
+    optional_backing: OptionalAllocationBacking,
+    memory_query: &'a dyn Fn(&Device) -> Result<DeviceMemory>,
 }
 
 fn remove_optional_layer_bytes(
@@ -234,6 +245,7 @@ pub fn get_device_layers(
     dtype: DType,
     params: &AutoDeviceMapParams,
     paged_attn_config: Option<&mut PagedAttentionConfig>,
+    optional_backing: OptionalAllocationBacking,
 ) -> Result<DeviceMapMetadata> {
     get_device_layers_attempt(
         DeviceMappingContext {
@@ -244,6 +256,8 @@ pub fn get_device_layers(
             devices,
             dtype,
             params,
+            optional_backing,
+            memory_query: &|device| Ok(MemoryUsage.query(device)?),
         },
         layer_sizes_in_bytes,
         total_model_size_in_bytes,
@@ -268,6 +282,8 @@ fn get_device_layers_attempt(
         devices,
         dtype,
         params,
+        optional_backing,
+        memory_query,
     } = context;
     let (mapped_max, non_mapped_max) = if let Some(cfg) = paged_attn_config.as_deref_mut() {
         let estimate = super::reserve_model_activation_memory(
@@ -353,12 +369,11 @@ fn get_device_layers_attempt(
         .try_fold(0usize, |total, bytes| total.checked_add(bytes))
         .context("extra-layer KV cache size overflow")?;
 
-    // prepare available memory per device, CPU fallback last (unless unified memory)
-    let has_unified_memory = devices.iter().any(crate::utils::normal::is_integrated_gpu);
-
+    let mut has_unified_memory = false;
     let mut avail = Vec::new();
     for dev in devices {
-        let memory = MemoryUsage.query(dev)?;
+        let memory = memory_query(dev)?;
+        has_unified_memory |= memory.is_unified();
         let capacity = if dev.is_cpu() {
             memory.available()
         } else if let Some(config) = paged_attn_config.as_ref() {
@@ -366,13 +381,13 @@ fn get_device_layers_attempt(
         } else {
             device_memory_budget(goal, memory)?
         };
-        avail.push((capacity, dev.clone()));
+        avail.push((capacity, memory, dev.clone()));
     }
     // On unified memory systems (iGPUs), GPU and CPU share the same physical RAM.
     // Don't add CPU as a fallback device since it would double-count memory.
     if !has_unified_memory {
-        let a = MemoryUsage.query(&Device::Cpu)?.available();
-        avail.push((a, Device::Cpu));
+        let memory = memory_query(&Device::Cpu)?;
+        avail.push((memory.available(), memory, Device::Cpu));
     }
 
     avail.reverse();
@@ -390,7 +405,7 @@ fn get_device_layers_attempt(
         info!("Using automatic device mapping parameters: {params}.");
     }
     if let Some(subs) = loader.non_mapped_sub_models_for_config(config)? {
-        let (_, last) = avail.last().unwrap();
+        let (_, _, last) = avail.last().unwrap();
         info!(
             "The following sub-models will not be device mapped and will be loaded on {}: {}",
             last.device_pretty_repr(),
@@ -403,28 +418,41 @@ fn get_device_layers_attempt(
     let avail_copy = avail.clone();
     let mut includes_cpu = false;
     while remaining > 0 && !avail.is_empty() {
-        let (avail_bytes, dev) = avail
+        let (avail_bytes, memory, dev) = avail
             .pop()
             .context("No more devices to map to. The model does not fit on this system.")?;
 
-        let cap = avail_bytes;
-        if ordinal == 0 {
-            let activations = non_mapped_max.max(mapped_max);
-            let required = checked_memory_sum([
+        let activations = if ordinal == 0 {
+            non_mapped_max.max(mapped_max)
+        } else {
+            mapped_max
+        };
+        let persistent = if ordinal == 0 {
+            base_device_memory_reservation_bytes
+        } else {
+            0
+        };
+        let cap = if dev.is_cpu() {
+            allocation_budget_with_reservations(avail_bytes, avail_bytes, persistent, activations)?
+        } else if let Some(config) = paged_attn_config.as_ref() {
+            config.allocation_budget_with_reservations(&dev, memory, persistent, activations)?
+        } else {
+            allocation_budget_with_reservations(
+                avail_bytes,
+                resolve_forward_budget(goal, memory)?.allocatable_bytes,
+                persistent,
                 activations,
-                non_mapped_size_in_bytes,
-                base_device_memory_reservation_bytes,
-            ])
-            .context("primary device reservation overflow")?;
+            )?
+        };
+        if ordinal == 0 {
             anyhow::ensure!(
-                required <= cap,
-                "Primary device {} needs {} MiB ({} MiB of fixed model components, {} MiB of activations, {} MiB of post-load reservations), but only {} MiB is usable under the memory goal.",
+                non_mapped_size_in_bytes <= cap,
+                "Primary device {} needs {} MiB of fixed model components, but only {} MiB is usable for model and KV allocations after accounting for {} MiB of activations and {} MiB of post-load reservations.",
                 dev.device_pretty_repr(),
-                b_to_mb!(required),
                 b_to_mb!(non_mapped_size_in_bytes),
-                b_to_mb!(activations),
-                b_to_mb!(base_device_memory_reservation_bytes),
                 b_to_mb!(cap),
+                b_to_mb!(activations),
+                b_to_mb!(persistent),
             );
         }
 
@@ -439,32 +467,32 @@ fn get_device_layers_attempt(
             .try_fold(0usize, |total, bytes| total.checked_add(bytes))
             .context("mapped KV cache size overflow")?;
         let required_whole_capacity = if ordinal == 0 {
-            checked_memory_sum([
-                remaining,
-                non_mapped_max.max(mapped_max),
-                remaining_kv_bytes,
-                extra_kv_bytes,
-                base_device_memory_reservation_bytes,
-            ])
+            checked_memory_sum([remaining, remaining_kv_bytes, extra_kv_bytes])
         } else {
-            checked_memory_sum([remaining, mapped_max, remaining_kv_bytes])
+            checked_memory_sum([remaining, remaining_kv_bytes])
         };
 
         let layers_on_dev = if required_whole_capacity.is_some_and(|required| cap >= required) {
             remaining = 0;
             num_layers - layer
         } else {
-            let mut used = mapped_max;
+            if has_unified_memory {
+                warn!(
+                    device = %dev.device_pretty_repr(),
+                    model_mib = b_to_mb!(remaining),
+                    activation_mib = b_to_mb!(activations),
+                    kv_mib = b_to_mb!(remaining_kv_bytes.saturating_add(extra_kv_bytes)),
+                    post_load_mib = b_to_mb!(persistent),
+                    usable_mib = b_to_mb!(cap),
+                    "Model and KV allocations exceed the unified memory budget after runtime reservations"
+                );
+            }
+            let mut used = 0usize;
             let mut used_weight_bytes = 0usize;
             let mut count = 0;
             if ordinal == 0 {
-                used = checked_memory_sum([
-                    used.max(non_mapped_max),
-                    non_mapped_size_in_bytes,
-                    extra_kv_bytes,
-                    base_device_memory_reservation_bytes,
-                ])
-                .unwrap_or(usize::MAX);
+                used = checked_memory_sum([non_mapped_size_in_bytes, extra_kv_bytes])
+                    .unwrap_or(usize::MAX);
                 used_weight_bytes = used_weight_bytes.saturating_add(non_mapped_size_in_bytes);
             }
             while let Some(&sz) = layer_sizes_in_bytes.last() {
@@ -505,7 +533,10 @@ fn get_device_layers_attempt(
         }
         layer += layers_on_dev;
     }
-    if has_optional_bytes && (remaining > 0 || includes_cpu) {
+    // Owned host allocations consume the same capacity on unified memory devices.
+    let can_use_host =
+        !has_unified_memory || optional_backing == OptionalAllocationBacking::FileMapped;
+    if has_optional_bytes && can_use_host && (remaining > 0 || includes_cpu) {
         let mut original_layers = layer_sizes_backup
             .take()
             .expect("layer sizes backup missing for optional allocation fallback");
@@ -514,10 +545,17 @@ fn get_device_layers_attempt(
             total_model_size_in_bytes,
             &optional_layer_bytes,
         );
-        info!(
-                optional_mib = b_to_mb!(total_model_size_in_bytes - required_model_bytes),
+        let optional_mib = b_to_mb!(total_model_size_in_bytes - required_model_bytes);
+        match optional_backing {
+            OptionalAllocationBacking::Owned => info!(
+                optional_mib,
                 "Retrying automatic device mapping with optional layer allocations accessed from host memory"
-            );
+            ),
+            OptionalAllocationBacking::FileMapped => info!(
+                optional_mib,
+                "Retrying automatic device mapping with optional layer allocations kept in existing file mappings"
+            ),
+        }
         let metadata = get_device_layers_attempt(
             context,
             original_layers,
@@ -536,7 +574,7 @@ fn get_device_layers_attempt(
         let unplaced_mib = b_to_mb!(remaining);
         anyhow::bail!(
             "This model does not fit on the devices {:?}: {} MiB of model data could not be placed after memory reservations. Auto device mapping params: {params}",
-            avail_copy.iter().rev().map(|(a, d)| format!("{} (avail: {} MiB)", d.device_pretty_repr(), b_to_mb!(a))).collect::<Vec<_>>(),
+            avail_copy.iter().rev().map(|(a, _, d)| format!("{} (avail: {} MiB)", d.device_pretty_repr(), b_to_mb!(a))).collect::<Vec<_>>(),
             unplaced_mib
         );
     }
@@ -580,6 +618,9 @@ mod tests {
     const TEST_OPTIONAL_BYTES: usize = usize::MAX / 4;
     const TEST_REQUIRED_BYTES: usize = 1;
     const TEST_FIXED_BYTES: usize = 7;
+    const MIB: usize = 1024 * 1024;
+    const TEST_OWNED_OPTIONAL_BYTES: usize = 32 * MIB;
+    const TEST_OWNED_MODEL_BYTES: usize = 42 * MIB;
 
     struct OptionalAllocationLoader {
         optional_bytes: usize,
@@ -675,6 +716,7 @@ mod tests {
                     max_batch_size: 1,
                 },
                 None,
+                OptionalAllocationBacking::Owned,
             );
             assert_eq!(result.is_ok(), fits, "{result:?}");
             assert_eq!(loader.optional_queries.get(), 1);
@@ -687,6 +729,108 @@ mod tests {
                 assert!(!mapper.uses_host_memory_for_optional_allocations(0));
             }
         }
+    }
+
+    #[test]
+    fn unified_mapping_keeps_host_backed_allocations_in_its_capacity() -> Result<()> {
+        let model = cache_test_model();
+        let cache_bytes = (0..TEST_LAYERS)
+            .map(|layer| model.layer_kv_cache_elements_per_token(layer).unwrap_or(0))
+            .sum::<usize>()
+            * DType::BF16.size_in_bytes();
+        let required_capacity = TEST_OWNED_MODEL_BYTES + cache_bytes;
+        for (unified, backing, available, fits, attempts) in [
+            (
+                true,
+                OptionalAllocationBacking::Owned,
+                required_capacity,
+                true,
+                1,
+            ),
+            (
+                true,
+                OptionalAllocationBacking::Owned,
+                required_capacity - MIB,
+                false,
+                1,
+            ),
+            (
+                false,
+                OptionalAllocationBacking::Owned,
+                required_capacity - MIB,
+                true,
+                2,
+            ),
+            (
+                true,
+                OptionalAllocationBacking::FileMapped,
+                required_capacity - MIB,
+                true,
+                2,
+            ),
+        ] {
+            let loader = OptionalAllocationLoader {
+                optional_bytes: TEST_OWNED_OPTIONAL_BYTES,
+                optional_queries: Cell::new(0),
+                attempts: Cell::new(0),
+            };
+            let queries = Cell::new(0);
+            let memory_query = |_: &Device| {
+                queries.set(queries.get() + 1);
+                Ok(if unified {
+                    DeviceMemory::Unified {
+                        total: 64 * MIB,
+                        available,
+                        allocated: 64 * MIB - available,
+                        working_set_limit: 64 * MIB,
+                    }
+                } else {
+                    DeviceMemory::Discrete {
+                        total: 64 * MIB,
+                        free: available,
+                    }
+                })
+            };
+            let result = get_device_layers_attempt(
+                DeviceMappingContext {
+                    loader: &loader,
+                    config: "",
+                    num_layers: TEST_LAYERS,
+                    non_mapped_size_in_bytes: 7 * MIB,
+                    devices: &[Device::Cpu],
+                    dtype: DType::BF16,
+                    params: &AutoDeviceMapParams::Text {
+                        max_seq_len: 1,
+                        max_batch_size: 1,
+                    },
+                    memory_query: &memory_query,
+                    optional_backing: backing,
+                },
+                vec![MIB, MIB + TEST_OWNED_OPTIONAL_BYTES, MIB],
+                TEST_OWNED_MODEL_BYTES,
+                None,
+                true,
+            );
+            assert_eq!(result.is_ok(), fits, "{result:?}");
+            assert_eq!(loader.attempts.get(), attempts);
+            assert_eq!(loader.optional_queries.get(), 1);
+            if unified {
+                assert_eq!(queries.get(), attempts);
+            }
+            if let Ok(metadata) = result {
+                let mapper = crate::DeviceMapSetting::Map(metadata).into_mapper(
+                    TEST_LAYERS,
+                    &Device::Cpu,
+                    None,
+                    &[Device::Cpu],
+                )?;
+                assert_eq!(
+                    mapper.uses_host_memory_for_optional_allocations(TEST_OPTIONAL_LAYER),
+                    attempts == 2,
+                );
+            }
+        }
+        Ok(())
     }
 
     #[test]

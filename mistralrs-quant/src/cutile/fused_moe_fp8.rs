@@ -25,7 +25,7 @@ use super::tune::{
     cutile_error, tune, Bucket, Prepared, Space, TuneMode, TuneRequest, TuneRouting, TunedTable,
     TUNE_WEIGHT_SETS,
 };
-use super::warmup::CutileKernel;
+use super::warmup::{CutileKernel, WarmupProgress};
 use super::{catch_cutile_panic, context, MoeShapeKey, MoeTileConfig};
 
 /// Scale group along K and N; the kernel steps K one group at a time so every partial product is
@@ -1116,7 +1116,7 @@ pub struct FusedMoeFp8Kernel;
 pub static FUSED_MOE_FP8: FusedMoeFp8Kernel = FusedMoeFp8Kernel;
 
 impl CutileKernel for FusedMoeFp8Kernel {
-    fn warm(&self, dev: &CudaDevice) -> Result<()> {
+    fn warm(&self, dev: &CudaDevice, silent: bool) -> Result<()> {
         let shapes: Vec<Vec<CutileFp8MoeWeights>> = FP8_MOE_SHAPES
             .get_or_init(|| Mutex::new(Vec::new()))
             .lock()
@@ -1154,10 +1154,18 @@ impl CutileKernel for FusedMoeFp8Kernel {
             })
             .collect();
         let total: usize = plan.iter().map(|(_, ms)| ms.len()).sum();
-        tracing::info!("Warming {total} cuTile FP8 MoE kernels.");
+        tracing::info!("Warming {total} cuTile FP8 MoE variants.");
+        let progress = WarmupProgress::new("FP8 MoE variants", total, silent);
         for (weights, ms) in &plan {
             for &m in ms {
-                if let Err(err) = warmup_shape(dev, weights, m) {
+                if let Err(err) = progress.run(
+                    format!(
+                        "hidden={} inter={} rows={m}",
+                        weights.hidden(),
+                        weights.inter()
+                    ),
+                    || warmup_shape(dev, weights, m),
+                ) {
                     tracing::warn!(
                         "cuTile FP8 MoE warmup failed (hidden={} inter={} m={m}): {err}",
                         weights.hidden(),

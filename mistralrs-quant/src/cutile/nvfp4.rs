@@ -4,7 +4,7 @@ use std::sync::{Mutex, OnceLock};
 use candle_core::{CudaDevice, DType, Device, DeviceLocation, Result, Storage, Tensor};
 use cutile::cutile_compiler::specialization::DivHint;
 
-use super::warmup::CutileKernel;
+use super::warmup::{CutileKernel, WarmupProgress};
 use super::{device_compute_major, jit_available};
 
 const BLOCK_SIZE: usize = 16;
@@ -479,7 +479,7 @@ impl RegisteredShape {
 }
 
 impl CutileKernel for Nvfp4Kernel {
-    fn warm(&self, dev: &CudaDevice) -> Result<()> {
+    fn warm(&self, dev: &CudaDevice, silent: bool) -> Result<()> {
         let device = Device::Cuda(dev.clone());
         let shapes = {
             let mut registered = SHAPES
@@ -492,7 +492,16 @@ impl CutileKernel for Nvfp4Kernel {
             *registered = other_devices;
             shapes
         };
-        if let Err(error) = shapes.iter().try_for_each(RegisteredShape::warm) {
+        if shapes.is_empty() {
+            return Ok(());
+        }
+        let progress = WarmupProgress::new("NVFP4 shapes", shapes.len(), silent);
+        if let Err(error) = shapes.iter().try_for_each(|shape| {
+            progress.run(
+                format!("{:?} {:?}", shape.activation_dtype, shape.weights.dims()),
+                || shape.warm(),
+            )
+        }) {
             SHAPES.get().unwrap().lock().unwrap().extend(shapes);
             return Err(error);
         }

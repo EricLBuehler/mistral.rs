@@ -55,7 +55,7 @@ For configuration files written for 0.9.4, follow the [memory-option migration t
 | `max_prefill_chunk_tokens` | `--max-prefill-chunk-tokens` | 512 | CUDA or Metal prompt-token quantum while decode is resident and for recurrent prefill batching. Must be nonzero. |
 | `max_decode_steps_before_prefill` | `--max-decode-steps-before-prefill` | 8 | Maximum decode steps before a waiting prefill batch is admitted. Must be nonzero. |
 | `no_kv_cache` | `--no-kv-cache` | false | Disable KV cache entirely. |
-| `prefix_cache_n` | `--prefix-cache-n` | 16 | Prefix caches retained (0 to disable). |
+| `prefix_cache_n` | `--prefix-cache-n` | Automatic, up to 16 | Prefix caches retained within the memory budget. An explicit count is preserved; 0 disables retention. |
 | `chat_template` | `-c`, `--chat-template` | not set | Custom chat template file (`.json` or `.jinja`), applied to every model. Per-model `chat_template` in `[[models]]` overrides it. |
 | `jinja_explicit` | `-j`, `--jinja-explicit` | not set | Explicit Jinja template override. Per-model `jinja_explicit` also exists. |
 | `matformer_config_path` | `--matformer-config-path` | not set | MatFormer (nested-submodel) slice config (CSV/JSON). |

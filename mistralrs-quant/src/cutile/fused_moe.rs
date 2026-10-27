@@ -8,7 +8,6 @@ use cutile::cuda_async::device_operation::DeviceOp;
 use cutile::cuda_core::sys::CUdeviceptr;
 use cutile::tile_kernel::TileKernel;
 use half::bf16;
-use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
@@ -21,7 +20,7 @@ use super::tune::{
     buckets_from_breakpoints, cutile_error, tune, Bucket, Prepared, Space, TuneMode, TuneRequest,
     TuneRouting, TunedTable, HOT_ROUTING_TOKENS, TUNE_WEIGHT_SETS,
 };
-use super::warmup::CutileKernel;
+use super::warmup::{CutileKernel, WarmupProgress};
 use super::{catch_cutile_panic, context, get_default_config, MoeShapeKey, MoeTileConfig};
 
 #[cutile::module]
@@ -922,7 +921,7 @@ pub(super) fn warmup_token_counts_for(
     reps
 }
 
-fn warmup_moe_kernels_uncached(dev: &CudaDevice) -> Result<()> {
+fn warmup_moe_kernels_uncached(dev: &CudaDevice, silent: bool) -> Result<()> {
     let shapes: Vec<Vec<MoeWarmupEntry>> = MOE_SHAPES
         .get_or_init(|| Mutex::new(Vec::new()))
         .lock()
@@ -959,27 +958,22 @@ fn warmup_moe_kernels_uncached(dev: &CudaDevice) -> Result<()> {
         })
         .collect();
     let total: usize = plan.iter().map(|(_, ms)| ms.len()).sum();
-    tracing::info!("Warming {total} cuTile MoE kernels.");
-    let bar = ProgressBar::new(total as u64);
-    bar.set_style(
-        ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} warming cuTile MoE kernels ({eta})")
-            .unwrap()
-            .progress_chars("#>-"),
-    );
+    tracing::info!("Warming {total} cuTile MoE variants.");
+    let progress = WarmupProgress::new("MoE variants", total, silent);
     for (entry, ms) in &plan {
         for &m in ms {
-            if let Err(err) = warmup_shape(dev, entry, m) {
+            if let Err(err) = progress.run(
+                format!("hidden={} inter={} rows={m}", entry.hidden, entry.inter),
+                || warmup_shape(dev, entry, m),
+            ) {
                 tracing::warn!(
                     "cuTile MoE warmup failed (hidden={} inter={} m={m}): {err}",
                     entry.hidden,
                     entry.inter
                 );
             }
-            bar.inc(1);
         }
     }
-    bar.finish_and_clear();
     Ok(())
 }
 
@@ -1041,7 +1035,7 @@ pub struct FusedMoeKernel;
 pub static FUSED_MOE: FusedMoeKernel = FusedMoeKernel;
 
 impl CutileKernel for FusedMoeKernel {
-    fn warm(&self, dev: &CudaDevice) -> Result<()> {
-        warmup_moe_kernels_uncached(dev)
+    fn warm(&self, dev: &CudaDevice, silent: bool) -> Result<()> {
+        warmup_moe_kernels_uncached(dev, silent)
     }
 }

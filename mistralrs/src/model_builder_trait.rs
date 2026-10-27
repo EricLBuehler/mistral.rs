@@ -451,11 +451,18 @@ fn paged_attn_with_serving_capacity(
     config: Option<PagedAttentionConfig>,
     max_num_seqs: usize,
     recurrent_prefix_capacity: usize,
+    prefix_cache_n_explicit: bool,
 ) -> anyhow::Result<Option<PagedAttentionConfig>> {
     Ok(config
         .map(|config| config.with_serving_capacity(max_num_seqs))
         .transpose()?
-        .map(|config| config.with_recurrent_prefix_capacity(recurrent_prefix_capacity)))
+        .map(|config| {
+            if prefix_cache_n_explicit {
+                config.with_recurrent_prefix_capacity(recurrent_prefix_capacity)
+            } else {
+                config.with_automatic_recurrent_prefix_capacity(recurrent_prefix_capacity)
+            }
+        }))
 }
 
 pub(crate) async fn scheduler_config_from_pipeline<P>(
@@ -509,7 +516,7 @@ pub(crate) fn build_engine_config(
         tool_callbacks: tool_callbacks.clone(),
         no_kv_cache,
         no_prefix_cache: prefix_cache_n.is_none(),
-        prefix_cache_n: prefix_cache_n.unwrap_or(16),
+        prefix_cache_n: prefix_cache_n.unwrap_or(mistralrs_core::DEFAULT_PREFIX_CACHE_N),
         disable_eos_stop: false,
     }
 }
@@ -551,6 +558,7 @@ pub(crate) async fn build_pipeline_from_text_loader(
         builder.paged_attn_cfg.clone(),
         builder.max_num_seqs,
         builder.prefix_cache_n.unwrap_or(0),
+        builder.prefix_cache_n_explicit,
     )?;
 
     builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
@@ -628,6 +636,7 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
         builder.paged_attn_cfg.clone(),
         builder.max_num_seqs,
         builder.prefix_cache_n.unwrap_or(0),
+        builder.prefix_cache_n_explicit,
     )?;
 
     builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
@@ -778,6 +787,7 @@ pub async fn build_text_pipeline(
         builder.paged_attn_cfg.clone(),
         builder.max_num_seqs,
         builder.prefix_cache_n.unwrap_or(0),
+        builder.prefix_cache_n_explicit,
     )?;
 
     builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
@@ -931,6 +941,7 @@ pub async fn build_multimodal_pipeline(
         builder.paged_attn_cfg.clone(),
         builder.max_num_seqs,
         builder.prefix_cache_n.unwrap_or(0),
+        builder.prefix_cache_n_explicit,
     )?;
 
     builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
@@ -1101,6 +1112,7 @@ pub async fn build_gguf_pipeline(
         builder.paged_attn_cfg.clone(),
         builder.max_num_seqs,
         builder.prefix_cache_n.unwrap_or(0),
+        builder.prefix_cache_n_explicit,
     )?;
 
     builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
@@ -1555,6 +1567,7 @@ pub async fn build_auto_pipeline(
         builder.paged_attn_cfg.clone(),
         builder.max_num_seqs,
         builder.prefix_cache_n.unwrap_or(0),
+        builder.prefix_cache_n_explicit,
     )?;
 
     builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
@@ -1669,6 +1682,44 @@ mod paged_attention_policy_tests {
     const TEST_MAX_SEQUENCES: usize = 8;
     const TEST_PREFILL_TOKENS: usize = 256;
 
+    #[test]
+    fn builder_prefix_defaults_are_distinct_from_explicit_limits() {
+        let default = mistralrs_core::DEFAULT_PREFIX_CACHE_N;
+        let text = crate::TextModelBuilder::new("test");
+        let automatic = crate::ModelBuilder::new("test");
+        let gguf = crate::GgufModelBuilder::new("test", vec!["model.gguf"]);
+        let multimodal = crate::MultimodalModelBuilder::new("test");
+        for (count, explicit) in [
+            (text.prefix_cache_n, text.prefix_cache_n_explicit),
+            (automatic.prefix_cache_n, automatic.prefix_cache_n_explicit),
+            (gguf.prefix_cache_n, gguf.prefix_cache_n_explicit),
+        ] {
+            assert_eq!(count, Some(default));
+            assert!(!explicit);
+        }
+        assert_eq!(multimodal.prefix_cache_n, None);
+        assert!(!multimodal.prefix_cache_n_explicit);
+        for count in [None, Some(0), Some(default)] {
+            let text = crate::TextModelBuilder::new("test").with_prefix_cache_n(count);
+            let automatic = crate::ModelBuilder::new("test").with_prefix_cache_n(count);
+            let gguf =
+                crate::GgufModelBuilder::new("test", vec!["model.gguf"]).with_prefix_cache_n(count);
+            let multimodal = crate::MultimodalModelBuilder::new("test").with_prefix_cache_n(count);
+            for (actual, explicit) in [
+                (text.prefix_cache_n, text.prefix_cache_n_explicit),
+                (automatic.prefix_cache_n, automatic.prefix_cache_n_explicit),
+                (gguf.prefix_cache_n, gguf.prefix_cache_n_explicit),
+                (
+                    multimodal.prefix_cache_n,
+                    multimodal.prefix_cache_n_explicit,
+                ),
+            ] {
+                assert_eq!(actual, count);
+                assert!(explicit);
+            }
+        }
+    }
+
     fn explicit_config() -> anyhow::Result<PagedAttentionConfig> {
         PagedAttentionConfig::new(
             Some(TEST_BLOCK_SIZE),
@@ -1695,6 +1746,7 @@ mod paged_attention_policy_tests {
             metal_prefill_mask_is_structured: false,
             planned_query_tokens: TEST_CONTEXT,
             logits_bytes_per_query_token: 0,
+            recurrent_prefix_capacity: 0,
         };
         let limits = scheduler_execution_limits(TEST_MAX_SEQUENCES, Some(plan));
         assert_eq!(limits.max_num_seqs, TEST_MAX_SEQUENCES);
