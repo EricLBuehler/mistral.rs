@@ -11,6 +11,7 @@ pub struct SpeechModelBuilder {
     pub(crate) token_source: TokenSource,
     pub(crate) hf_revision: Option<String>,
     pub(crate) cfg: Option<SpeechGenerationConfig>,
+    pub(crate) voice: Option<String>,
 
     // Model running
     pub(crate) loader_type: SpeechLoaderType,
@@ -38,7 +39,14 @@ impl SpeechModelBuilder {
             with_logging: false,
             cfg: None,
             dac_model_id: None,
+            voice: None,
         }
+    }
+
+    /// Speaker voice for pocket-tts (a stock name like `alba`). Ignored by Dia. Defaults to `alba`.
+    pub fn with_voice(mut self, voice: impl ToString) -> Self {
+        self.voice = Some(voice.to_string());
+        self
     }
 
     /// DAC Model ID to load from. If not provided, this is automatically downloaded from the default path for the model.
