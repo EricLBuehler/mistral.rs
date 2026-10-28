@@ -18,6 +18,7 @@ use crate::gguf::{
         prepare_gemma3_text_config,
     },
     generation_config_from_metadata, get_gguf_chat_template, get_gguf_chat_template_from_metadata,
+    lfm3_vl_config::{lfm3_vl_processor_config, prepare_lfm3_vl_config},
     multimodal_bindings::build_gemma4_bindings,
     multimodal_vision_registry::resolve_native_multimodal_gguf,
     muse_glimmer_bindings::normalize_muse_glimmer_config,
@@ -26,7 +27,9 @@ use crate::gguf::{
         normal_loader_hint_from_external_config, normalize_external_normal_config,
         synthesize_normal_config, validate_normal_config_tensor_inventory,
     },
-    normal_registry::{resolve_native_adapter, GgufDescriptor, RopePairing},
+    normal_registry::{
+        resolve_native_adapter, CanonicalGgufArchitecture, GgufDescriptor, RopePairing,
+    },
     qwen_multimodal_bindings::{
         build_qwen_multimodal_bindings, normalize_qwen_multimodal_config,
         qwen_multimodal_loader_type,
@@ -974,15 +977,17 @@ impl GGUFLoader {
             }
         };
         validate_native_dynamic_lora(self.dynamic_lora.as_ref(), rope_pairing, &architecture)?;
-        if paths.get_config_filename().as_os_str().is_empty() {
-            bail!(
-                "multimodal GGUF architecture `{architecture}` requires its original `config.json`; pass `--tok-model-id <original-model-id>`"
-            );
-        }
-        let config = prepare_native_multimodal_config(
-            &loader_type,
-            &fs::read_to_string(paths.get_config_filename())?,
-        )?;
+        let external_config = read_external_config(paths)?;
+        let config = if matches!(loader_type, MultimodalLoaderType::Lfm3Vl) {
+            prepare_lfm3_vl_config(external_config.as_deref(), &archive)?
+        } else {
+            let external_config = external_config.with_context(|| {
+                format!(
+                    "multimodal GGUF architecture `{architecture}` requires its original `config.json`; pass `--tok-model-id <original-model-id>`"
+                )
+            })?;
+            prepare_native_multimodal_config(&loader_type, &external_config)?
+        };
         let config = stamp_qk_rope_layout(&config, rope_pairing)?;
         if architecture == "gemma3" {
             ensure_gemma3_vision_config(&config)?;
@@ -1003,7 +1008,7 @@ impl GGUFLoader {
             } else {
                 None
             };
-        let processor_config = paths
+        let mut processor_config = paths
             .get_processor_config()
             .as_ref()
             .map(fs::read_to_string)
@@ -1013,6 +1018,12 @@ impl GGUFLoader {
             .as_ref()
             .map(fs::read_to_string)
             .transpose()?;
+        if matches!(loader_type, MultimodalLoaderType::Lfm3Vl)
+            && processor_config.is_none()
+            && preprocessor_config.is_none()
+        {
+            processor_config = Some(lfm3_vl_processor_config(&archive)?);
+        }
         let mut source_weight_files = paths.get_weight_filenames().to_vec();
         source_weight_files.extend_from_slice(mmproj_paths);
         let source = PreparedMultimodalSource {
@@ -1072,6 +1083,13 @@ impl GGUFLoader {
         }
 
         let model_archive = mistralrs_quant::GgufArchive::open(paths.get_weight_filenames())?;
+        if matches!(
+            model_archive.metadata_value("general.architecture"),
+            Some(candle_core::quantized::gguf_file::Value::String(architecture))
+                if architecture.eq_ignore_ascii_case(CanonicalGgufArchitecture::Lfm3.as_str())
+        ) {
+            return Ok(None);
+        }
         let synthesizes_config = matches!(
             model_archive.metadata_value("general.architecture"),
             Some(candle_core::quantized::gguf_file::Value::String(architecture))
@@ -1815,6 +1833,7 @@ mod tests {
             MultimodalLoaderType::Idefics3,
             MultimodalLoaderType::Llama4,
             MultimodalLoaderType::Lfm2Vl,
+            MultimodalLoaderType::Lfm3Vl,
             MultimodalLoaderType::Mistral3,
             MultimodalLoaderType::MuseGlimmer,
             MultimodalLoaderType::Qwen2VL,

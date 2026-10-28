@@ -41,6 +41,7 @@ Fine-tunes and model sizes within a family use the same entry.
 | Hunyuan MoE | `hunyuan-moe` |
 | LFM2 and LFM2.5 dense | `lfm2` |
 | LFM2 and LFM2.5 MoE | `lfm2moe` |
+| LFM3 | `lfm3` |
 
 Some GGUF architectures cover more than one model family. Repository files and GGUF metadata are
 used together to select the family. For a standalone file that cannot be identified unambiguously,
@@ -64,6 +65,7 @@ files when the repository and GGUF metadata identify them unambiguously. The dir
 | Mistral 3 and Pixtral | `mistral3` |
 | Llama 4 | `llama4` |
 | LFM2-VL and LFM2.5-VL | `lfm2` |
+| LFM3-VL | `lfm3` |
 | Muse Glimmer | `muse-glimmer` |
 | Qwen2-VL and Qwen2.5-VL | `qwen2vl` |
 | Qwen3-VL | `qwen3vl` |
@@ -79,6 +81,10 @@ Multimodal Qwen3.5 and Qwen3.6 accept image and video input, but not audio. Gemm
 image/video and audio when the matching components are present in the model configuration and
 projector files.
 
+LFM3-VL supports image and video input with its companion `lfm3vl` projector. Its configuration
+and media preprocessing are reconstructed from the GGUF files; no original model assets are required.
+See the [LFM3 model notes](/guides/models/model-family-notes/#lfm3-and-lfm3-vl) for commands.
+
 Muse Glimmer GGUFs require a companion `muse-glimmer` projector. Current published GGUF
 repositories also require `--tok-model-id meta-models/Muse-Glimmer-30B` because they do not carry
 enough base-model configuration metadata for standalone loading. Image input is supported. Video
@@ -87,7 +93,7 @@ weights in the projector.
 
 The `gemma3n`, `gemma4`, `llama4`, `qwen2vl`, `qwen3vl`, and `qwen3vlmoe` architectures always need a
 projector. Architectures that appear in both tables above, including `gemma3`, `llama`, `mistral3`,
-`lfm2`, `qwen35`, and `qwen35moe`, load as text models when no projector is supplied.
+`lfm2`, `lfm3`, `qwen35`, and `qwen35moe`, load as text models when no projector is supplied.
 
 ## Storage formats
 

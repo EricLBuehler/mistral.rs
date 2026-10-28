@@ -57,12 +57,12 @@ pub use gguf::{GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
 pub use hf_config::HfConfigOverrides;
 use image::DynamicImage;
 pub use inputs_processor::InputProcessorOutput;
-pub(crate) use isq::IsqModelLoader;
 pub use isq::{
     expand_isq_value, expand_uqff_shards, parse_isq_value, parse_uqff_shard,
     resolve_uqff_report_output, resolve_uqff_shorthand, IsqModel, IsqOrganization, UqffWriteConfig,
     UQFF_MULTI_FILE_DELIMITER,
 };
+pub(crate) use isq::{sanitize_quantized_weight_source_config, IsqModelLoader};
 use llguidance::toktrie::TokEnv;
 pub(crate) use loaders::{apply_model_activation_memory, checkpoint_runtime_size};
 pub use loaders::{

@@ -208,7 +208,17 @@ mistralrs run -m LiquidAI/LFM3-VL-2B --isq q4k --video clip.mp4 -i "Describe wha
 
 Non-GIF video requires [FFmpeg on PATH](/guides/models/video-setup/). Animated GIFs are decoded natively. The video processor samples at 2 FPS, with a minimum of 4 and a maximum of 768 frames.
 
-Both models support [paged attention and chunked prefill](/guides/perf/paged-attention/). LFM3-VL also caches image and video embeddings for repeated media. Its quantization covers the language model and multimodal projector; the vision encoder remains unquantized.
+Both models support [paged attention and chunked prefill](/guides/perf/paged-attention/). LFM3-VL also caches image and video embeddings for repeated media. Its in-situ quantization covers the language model and multimodal projector; the vision encoder remains unquantized.
+
+The official [LFM3 GGUF](https://huggingface.co/LiquidAI/LFM3-1.7B-GGUF) and [LFM3-VL GGUF](https://huggingface.co/LiquidAI/LFM3-VL-2B-GGUF) repositories are also supported. `--quant` selects a published GGUF variant. LFM3-VL uses the matching companion projector for image and video input, with its configuration and media preprocessing reconstructed from the GGUF files:
+
+```bash
+mistralrs run -m LiquidAI/LFM3-1.7B-GGUF --quant 4
+mistralrs run -m LiquidAI/LFM3-VL-2B-GGUF --quant 4 \
+  --image photo.jpg -i "Describe this image."
+```
+
+Local files also load with `-f /path/model.gguf` when an unambiguous companion projector is stored beside the model; `--mmproj` selects a projector explicitly. See [Run GGUF models](/guides/models/run-gguf/) for details.
 
 To serve LFM3-VL through the OpenAI-compatible API:
 

@@ -1,4 +1,6 @@
-use super::normal_registry::{schema_for, CanonicalGgufArchitecture, GgufDescriptor};
+use super::normal_registry::{
+    schema_for, CanonicalGgufArchitecture, GgufDescriptor, GGUF_NORMAL_LOADER_COUNT,
+};
 #[cfg(test)]
 use super::normal_registry::{NativeModelAdapter, NORMAL_MODEL_ADAPTERS};
 use crate::{gdn::GDN_V_HEAD_LAYOUT_CONFIG_KEY, NormalLoaderType};
@@ -43,7 +45,7 @@ pub(crate) struct NormalConfigBuilder {
     build: BuilderFn,
 }
 
-pub(crate) const NORMAL_CONFIG_BUILDERS: &[NormalConfigBuilder; 27] = &[
+pub(crate) const NORMAL_CONFIG_BUILDERS: &[NormalConfigBuilder; GGUF_NORMAL_LOADER_COUNT] = &[
     NormalConfigBuilder {
         loader: NormalLoaderType::Mistral,
         build: build_mistral,
@@ -152,7 +154,23 @@ pub(crate) const NORMAL_CONFIG_BUILDERS: &[NormalConfigBuilder; 27] = &[
         loader: NormalLoaderType::Lfm2Moe,
         build: build_lfm2_moe,
     },
+    NormalConfigBuilder {
+        loader: NormalLoaderType::Lfm3,
+        build: build_lfm3,
+    },
 ];
+
+pub(crate) fn validate_lfm3_metadata(metadata: &HashMap<String, GgufValue>) -> SynthesisResult<()> {
+    match metadata.get("lfm3.attention.causal") {
+        None | Some(GgufValue::Bool(true)) => Ok(()),
+        Some(GgufValue::Bool(false)) => Err(NormalConfigSynthesisError::new(
+            "Native LFM3 GGUF loading does not support noncausal attention (d1 models)",
+        )),
+        Some(_) => Err(NormalConfigSynthesisError::new(
+            "GGUF metadata `lfm3.attention.causal` must be a boolean",
+        )),
+    }
+}
 
 pub(crate) fn synthesize_normal_config(
     loader: &NormalLoaderType,
@@ -346,6 +364,7 @@ fn loader_hint_from_config_object(
     match config_model_type(object)? {
         Some("mistral3") => Ok(Some(NormalLoaderType::Mistral)),
         Some("lfm2_vl") => Ok(Some(NormalLoaderType::Lfm2)),
+        Some("lfm3_vl") => Ok(Some(NormalLoaderType::Lfm3)),
         Some("qwen3_5" | "qwen3_5_text") => Ok(Some(NormalLoaderType::Qwen3_5)),
         Some("qwen3_5_moe" | "qwen3_5_moe_text") => Ok(Some(NormalLoaderType::Qwen3Next)),
         _ => Ok(None),
@@ -356,6 +375,7 @@ fn normal_loader_from_architecture(architecture: &str) -> anyhow::Result<NormalL
     match architecture {
         "Mistral3ForConditionalGeneration" => return Ok(NormalLoaderType::Mistral),
         "Lfm2VlForConditionalGeneration" => return Ok(NormalLoaderType::Lfm2),
+        "Lfm3VlForConditionalGeneration" => return Ok(NormalLoaderType::Lfm3),
         "Qwen3_5ForConditionalGeneration" | "Qwen3_5ForCausalLM" => {
             return Ok(NormalLoaderType::Qwen3_5)
         }
@@ -375,6 +395,7 @@ fn normal_loader_from_architecture(architecture: &str) -> anyhow::Result<NormalL
 enum NestedTextConfig {
     Mistral3,
     Lfm2Vl,
+    Lfm3Vl,
     Qwen35,
     Qwen35Moe,
 }
@@ -391,6 +412,7 @@ impl ExternalConfigShape {
         match self {
             Self::Nested(NestedTextConfig::Mistral3) => NormalLoaderType::Mistral,
             Self::Nested(NestedTextConfig::Lfm2Vl) => NormalLoaderType::Lfm2,
+            Self::Nested(NestedTextConfig::Lfm3Vl) => NormalLoaderType::Lfm3,
             Self::Nested(NestedTextConfig::Qwen35) | Self::Qwen35Text => NormalLoaderType::Qwen3_5,
             Self::Nested(NestedTextConfig::Qwen35Moe) | Self::Qwen35MoeText => {
                 NormalLoaderType::Qwen3Next
@@ -402,6 +424,7 @@ impl ExternalConfigShape {
         match self {
             Self::Nested(NestedTextConfig::Mistral3) => "Mistral3",
             Self::Nested(NestedTextConfig::Lfm2Vl) => "LFM2-VL",
+            Self::Nested(NestedTextConfig::Lfm3Vl) => "LFM3-VL",
             Self::Nested(NestedTextConfig::Qwen35) | Self::Qwen35Text => "Qwen3.5",
             Self::Nested(NestedTextConfig::Qwen35Moe) | Self::Qwen35MoeText => "Qwen3.5 MoE",
         }
@@ -420,6 +443,9 @@ fn external_config_shape(
     }
     if architecture == Some("Lfm2VlForConditionalGeneration") || model_type == Some("lfm2_vl") {
         return Ok(Some(ExternalConfigShape::Nested(NestedTextConfig::Lfm2Vl)));
+    }
+    if architecture == Some("Lfm3VlForConditionalGeneration") || model_type == Some("lfm3_vl") {
+        return Ok(Some(ExternalConfigShape::Nested(NestedTextConfig::Lfm3Vl)));
     }
     if architecture == Some("Qwen3_5ForConditionalGeneration") || model_type == Some("qwen3_5") {
         return Ok(Some(ExternalConfigShape::Nested(NestedTextConfig::Qwen35)));
@@ -547,6 +573,9 @@ impl<'a> MetadataView<'a> {
             },
         )?;
         let schema = schema_for(architecture);
+        if architecture == CanonicalGgufArchitecture::Lfm3 {
+            validate_lfm3_metadata(metadata)?;
+        }
         if !schema.compatible_loaders.contains(loader) {
             return Err(NormalConfigSynthesisError::new(format!(
                 "GGUF architecture `{architecture}` cannot synthesize native `{loader}` config; compatible loaders are {:?}",
@@ -2039,6 +2068,122 @@ fn build_lfm2_moe(metadata: &MetadataView<'_>) -> SynthesisResult<JsonValue> {
     build_lfm(metadata, true)
 }
 
+fn build_lfm3(metadata: &MetadataView<'_>) -> SynthesisResult<JsonValue> {
+    if let Some(scaling_type) = metadata.optional_string("rope.scaling.type")? {
+        if scaling_type != "none" {
+            return Err(NormalConfigSynthesisError::new(format!(
+                "Native LFM3 GGUF loading does not implement RoPE scaling type `{scaling_type}`"
+            )));
+        }
+    }
+    let num_hidden_layers = transformer_block_count(metadata)?;
+    let kv_heads = metadata
+        .per_layer_usize("attention.head_count_kv", num_hidden_layers)?
+        .ok_or_else(|| {
+            NormalConfigSynthesisError::new("LFM3 requires per-layer attention KV head counts")
+        })?;
+    let num_key_value_heads =
+        uniform_nonzero_values(metadata, "attention.head_count_kv", &kv_heads)?;
+    let sliding_layers =
+        metadata.required_layer_bools("attention.sliding_window_pattern", num_hidden_layers)?;
+    let use_sandwich_norm = metadata.has_tensor_marker(".post_attention_norm.weight");
+    let conv_bias = metadata.has_tensor_marker(".shortconv.conv.bias");
+    let mut layer_types = Vec::with_capacity(num_hidden_layers);
+    for (layer, (&heads, &sliding)) in kv_heads.iter().zip(&sliding_layers).enumerate() {
+        for name in ["post_attention_norm", "post_ffw_norm"] {
+            if metadata.has_tensor(&format!("blk.{layer}.{name}.weight")) != use_sandwich_norm {
+                return Err(NormalConfigSynthesisError::new(
+                    "LFM3 requires both sandwich norms on every layer or neither on any layer",
+                ));
+            }
+        }
+        let layer_type = if heads == 0 {
+            if sliding {
+                return Err(NormalConfigSynthesisError::new(format!(
+                    "LFM3 convolution layer {layer} cannot use sliding-window attention"
+                )));
+            }
+            if metadata.has_tensor(&format!("blk.{layer}.shortconv.conv.bias")) != conv_bias {
+                return Err(NormalConfigSynthesisError::new(
+                    "LFM3 requires consistent convolution bias across layers",
+                ));
+            }
+            "conv"
+        } else if sliding {
+            "sliding_attention"
+        } else {
+            "full_attention"
+        };
+        layer_types.push(layer_type);
+    }
+    let head_dim = metadata.required_usize("attention.key_length")?;
+    if head_dim == 0 || !head_dim.is_multiple_of(2) {
+        return Err(NormalConfigSynthesisError::new(
+            "LFM3 attention head dimension must be positive and even",
+        ));
+    }
+    if metadata
+        .optional_usize("attention.value_length")?
+        .is_some_and(|value| value != head_dim)
+    {
+        return Err(NormalConfigSynthesisError::new(
+            "LFM3 requires equal attention key and value dimensions",
+        ));
+    }
+    if metadata.required_usize("rope.dimension_count")? != head_dim {
+        return Err(NormalConfigSynthesisError::new(
+            "LFM3 GGUF RoPE dimension must equal its head dimension; partial rotation uses rope_freqs.weight",
+        ));
+    }
+    let full_rope_theta = metadata.required_f64("rope.freq_base")?;
+    let sliding_rope_theta = metadata.required_f64("rope.freq_base_swa")?;
+    if [full_rope_theta, sliding_rope_theta]
+        .iter()
+        .any(|theta| !theta.is_finite() || *theta <= 0.0)
+    {
+        return Err(NormalConfigSynthesisError::new(
+            "LFM3 RoPE frequency bases must be finite and positive",
+        ));
+    }
+    let conv_l_cache = metadata.required_usize("shortconv.l_cache")?;
+    let sliding_window = metadata.required_usize("attention.sliding_window")?;
+    if conv_l_cache == 0 || sliding_window == 0 {
+        return Err(NormalConfigSynthesisError::new(
+            "LFM3 convolution width and sliding window must be positive",
+        ));
+    }
+    Ok(json!({
+        "vocab_size": metadata.vocab_size()?,
+        "hidden_size": metadata.required_uniform_usize("embedding_length")?,
+        "intermediate_size": metadata.required_uniform_usize("feed_forward_length")?,
+        "num_hidden_layers": num_hidden_layers,
+        "num_attention_heads": metadata.required_uniform_usize("attention.head_count")?,
+        "num_key_value_heads": num_key_value_heads,
+        "head_dim": head_dim,
+        "max_position_embeddings": metadata.required_usize("context_length")?,
+        "norm_eps": metadata.norm_epsilon()?,
+        "rope_parameters": {
+            "full_attention": {
+                "rope_theta": full_rope_theta,
+                "rope_type": "default",
+                "partial_rotary_factor": 1.0,
+            },
+            "sliding_attention": {
+                "rope_theta": sliding_rope_theta,
+                "rope_type": "default",
+                "partial_rotary_factor": 1.0,
+            },
+        },
+        "conv_bias": conv_bias,
+        "conv_L_cache": conv_l_cache,
+        "sliding_window": sliding_window,
+        "use_sandwich_norm": use_sandwich_norm,
+        "tie_word_embeddings": metadata.tie_word_embeddings(),
+        "layer_types": layer_types,
+        "quantization_config": null,
+    }))
+}
+
 fn build_lfm(metadata: &MetadataView<'_>, is_moe: bool) -> SynthesisResult<JsonValue> {
     reject_unsupported_rope_scaling(metadata, "LFM2")?;
     let hidden_size = metadata.required_uniform_usize("embedding_length")?;
@@ -2881,6 +3026,39 @@ mod tests {
             );
         }
 
+        if matches!(loader, NormalLoaderType::Lfm3) {
+            insert_u32_array(
+                &mut metadata,
+                architecture,
+                "attention.head_count_kv",
+                &[0, 4, 4, 0],
+            );
+            metadata.insert(
+                format!("{}.attention.sliding_window_pattern", architecture.as_str()),
+                GgufValue::Array(
+                    [false, false, true, false]
+                        .into_iter()
+                        .map(GgufValue::Bool)
+                        .collect(),
+                ),
+            );
+            insert_u32(&mut metadata, architecture, "attention.sliding_window", 256);
+            insert_u32(&mut metadata, architecture, "shortconv.l_cache", 7);
+            insert_f32(&mut metadata, architecture, "rope.freq_base", 1_000_000.0);
+            insert_f32(&mut metadata, architecture, "rope.freq_base_swa", 10_000.0);
+            tensors.retain(|tensor| tensor != "blk.0.attn_q.weight");
+            tensors.push("rope_freqs.weight".to_string());
+            tensors.push("blk.1.attn_q.weight".to_string());
+            for layer in 0..LAYER_COUNT {
+                tensors.push(format!("blk.{layer}.post_attention_norm.weight"));
+                tensors.push(format!("blk.{layer}.post_ffw_norm.weight"));
+                if layer == 0 || layer == 3 {
+                    tensors.push(format!("blk.{layer}.shortconv.conv.weight"));
+                    tensors.push(format!("blk.{layer}.shortconv.in_proj.weight"));
+                }
+            }
+        }
+
         if matches!(loader, NormalLoaderType::Gemma2 | NormalLoaderType::GptOss) {
             insert_u32(
                 &mut metadata,
@@ -3444,6 +3622,93 @@ mod tests {
         );
         assert_eq!(config["conv_L_cache"], 3);
         assert_native_config_deserializes(&loader, config);
+    }
+
+    #[test]
+    fn lfm3_synthesizes_hybrid_layers_and_rope() {
+        let loader = NormalLoaderType::Lfm3;
+        let (_, metadata, tensors) = default_fixture(&loader);
+        let config = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap();
+        assert_eq!(
+            config["layer_types"],
+            json!(["conv", "full_attention", "sliding_attention", "conv"])
+        );
+        assert_eq!(config["num_key_value_heads"], 4);
+        assert_eq!(config["head_dim"], 64);
+        assert_eq!(config["conv_L_cache"], 7);
+        assert_eq!(config["sliding_window"], 256);
+        assert_eq!(config["use_sandwich_norm"], true);
+        assert_eq!(config["tie_word_embeddings"], true);
+        assert_eq!(
+            config["rope_parameters"]["full_attention"]["rope_theta"],
+            1_000_000.0
+        );
+        assert_eq!(
+            config["rope_parameters"]["sliding_attention"]["rope_theta"],
+            10_000.0
+        );
+        assert_eq!(
+            config["rope_parameters"]["full_attention"]["partial_rotary_factor"],
+            1.0
+        );
+        assert_native_config_deserializes(&loader, config);
+    }
+
+    #[test]
+    fn lfm3_rejects_inconsistent_layer_metadata() {
+        let loader = NormalLoaderType::Lfm3;
+        let (architecture, mut metadata, mut tensors) = default_fixture(&loader);
+        insert_bool(&mut metadata, architecture, "attention.causal", false);
+        let error = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap_err();
+        assert!(error.to_string().contains("noncausal"));
+        insert_bool(&mut metadata, architecture, "attention.causal", true);
+
+        tensors.retain(|tensor| tensor != "blk.2.post_ffw_norm.weight");
+        let error = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap_err();
+        assert!(error.to_string().contains("sandwich norms"));
+        tensors.push("blk.2.post_ffw_norm.weight".to_string());
+
+        tensors.push("blk.0.shortconv.conv.bias".to_string());
+        let error = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap_err();
+        assert!(error.to_string().contains("convolution bias"));
+        tensors.push("blk.3.shortconv.conv.bias".to_string());
+
+        insert_u32(&mut metadata, architecture, "attention.value_length", 32);
+        let error = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap_err();
+        assert!(error.to_string().contains("key and value dimensions"));
+        insert_u32(&mut metadata, architecture, "attention.value_length", 64);
+
+        metadata.insert(
+            "lfm3.attention.sliding_window_pattern".to_string(),
+            GgufValue::Array(vec![GgufValue::Bool(true); LAYER_COUNT]),
+        );
+        let error = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap_err();
+        assert!(error.to_string().contains("convolution layer 0"));
+    }
+
+    #[test]
+    fn lfm3_vl_external_config_unwraps_native_text_config() {
+        let loader = NormalLoaderType::Lfm3;
+        let (architecture, metadata, tensors) = default_fixture(&loader);
+        let mut text_config = synthesize_normal_config_value(&loader, &metadata, &tensors).unwrap();
+        text_config["rope_parameters"]["full_attention"]["partial_rotary_factor"] = json!(0.5);
+        text_config["quantization_config"] = json!({"quant_method": "awq"});
+        let raw = json!({
+            "architectures": ["Lfm3VlForConditionalGeneration"],
+            "model_type": "lfm3_vl",
+            "text_config": text_config,
+            "vision_config": {"sentinel": true},
+        })
+        .to_string();
+        assert_eq!(
+            normal_loader_hint_from_external_config(&raw).unwrap(),
+            Some(loader.clone())
+        );
+        let normalized = normalize_external_normal_config(&loader, architecture, &raw).unwrap();
+        let value: JsonValue = serde_json::from_str(&normalized).unwrap();
+        text_config["quantization_config"] = JsonValue::Null;
+        assert_eq!(value, text_config);
+        assert_native_config_deserializes(&loader, value);
     }
 
     #[test]

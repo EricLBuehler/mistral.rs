@@ -246,14 +246,16 @@ struct RotaryEmbedding {
     is_gptx: bool,
 }
 
+struct RotaryConfig<'a> {
+    model: &'a Config,
+    full_freq_factors: Option<&'a Tensor>,
+    dtype: DType,
+    is_gptx: bool,
+}
+
 impl RotaryEmbedding {
-    fn new(
-        cfg: &Config,
-        layer_type: LayerType,
-        device: &Device,
-        dtype: DType,
-        is_gptx: bool,
-    ) -> Result<Self> {
+    fn new(config: &RotaryConfig<'_>, layer_type: LayerType, device: &Device) -> Result<Self> {
+        let cfg = config.model;
         let params = cfg.rope(layer_type);
         if params.rope_type != "default" && !params.rope_type.is_empty() {
             candle_core::bail!("LFM3 RoPE type `{}` is not supported", params.rope_type);
@@ -269,15 +271,20 @@ impl RotaryEmbedding {
                 }
             })
             .collect::<Vec<_>>();
-        let inv_freq = Tensor::from_vec(inv_freq, (1, head_dim / 2), device)?;
+        let mut inv_freq = Tensor::from_vec(inv_freq, (1, head_dim / 2), device)?;
+        if layer_type == LayerType::Attention {
+            if let Some(factors) = config.full_freq_factors {
+                inv_freq = inv_freq.broadcast_div(&factors.to_device(device)?)?;
+            }
+        }
         let positions = Tensor::arange(0u32, cfg.max_position_embeddings as u32, device)?
             .to_dtype(DType::F32)?
             .reshape((cfg.max_position_embeddings, 1))?;
         let frequencies = positions.matmul(&inv_freq)?;
         Ok(Self {
-            cos: frequencies.cos()?.to_dtype(dtype)?,
-            sin: frequencies.sin()?.to_dtype(dtype)?,
-            is_gptx,
+            cos: frequencies.cos()?.to_dtype(config.dtype)?,
+            sin: frequencies.sin()?.to_dtype(config.dtype)?,
+            is_gptx: config.is_gptx,
         })
     }
 
@@ -802,6 +809,7 @@ pub struct Model {
     mapper: Box<dyn DeviceMapper + Send + Sync>,
     cfg: ModelConfigMetadata,
     sliding_window: usize,
+    rope_freqs: Option<Tensor>,
 }
 
 impl Model {
@@ -871,6 +879,17 @@ impl Model {
         };
 
         let head_dim = cfg.head_dim();
+        let rope_freqs = if vb_m.contains_tensor("rope_freqs.weight") {
+            Some(vb_m.get_unchecked_dtype("rope_freqs.weight", DType::F32)?)
+        } else {
+            None
+        };
+        let rotary_config = RotaryConfig {
+            model: cfg,
+            full_freq_factors: rope_freqs.as_ref(),
+            dtype,
+            is_gptx,
+        };
         let mut ropes = HashMap::new();
         for (layer_idx, layer_type) in layer_types.iter().enumerate() {
             if matches!(layer_type, LayerType::Conv) {
@@ -883,11 +902,9 @@ impl Model {
                 ropes.entry((device.location(), *layer_type))
             {
                 entry.insert(Arc::new(RotaryEmbedding::new(
-                    cfg,
+                    &rotary_config,
                     *layer_type,
                     device,
-                    vb_m.dtype(),
-                    is_gptx,
                 )?));
             }
         }
@@ -991,6 +1008,7 @@ impl Model {
             },
             mapper,
             sliding_window: cfg.sliding_window,
+            rope_freqs,
         })
     }
 
@@ -1159,6 +1177,11 @@ impl Model {
     pub fn residual_tensors_m(&self, uvb_m: UnVarBuilder) -> Vec<(String, Tensor)> {
         uvb_m.pp("embed_tokens").add(&self.embed_tokens);
         uvb_m.pp("embedding_norm").add(&self.embedding_norm);
+        if let Some(rope_freqs) = &self.rope_freqs {
+            uvb_m
+                .pp("rope_freqs")
+                .add_tensor("weight", rope_freqs.clone());
+        }
         for (layer_idx, layer) in self.layers.iter().enumerate() {
             let uvb_l = uvb_m.pp("layers").pp(layer_idx);
             uvb_l.pp("operator_norm").add(&layer.operator_norm);
@@ -1270,8 +1293,13 @@ mod tests {
             "max_position_embeddings": 32,
         }))
         .map_err(candle_core::Error::wrap)?;
-        let rope =
-            RotaryEmbedding::new(&cfg, LayerType::Attention, &Device::Cpu, DType::F32, true)?;
+        let rotary_config = RotaryConfig {
+            model: &cfg,
+            full_freq_factors: None,
+            dtype: DType::F32,
+            is_gptx: true,
+        };
+        let rope = RotaryEmbedding::new(&rotary_config, LayerType::Attention, &Device::Cpu)?;
         let sin = rope.sin.to_vec2::<f32>()?;
         let cos = rope.cos.to_vec2::<f32>()?;
         let position = 11;
@@ -1280,6 +1308,61 @@ mod tests {
         for (&sin, &cos) in sin[position][2..].iter().zip(&cos[position][2..]) {
             assert!(sin.abs() < ROTARY_TOLERANCE);
             assert!((cos - 1.0).abs() < ROTARY_TOLERANCE);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn gguf_rope_factors_apply_only_to_full_attention() -> Result<()> {
+        const DISABLED_FREQUENCY_FACTOR: f32 = 1e30;
+        let mut cfg: Config = serde_json::from_value(serde_json::json!({
+            "hidden_size": HIDDEN_SIZE,
+            "num_attention_heads": 2,
+            "head_dim": 8,
+            "max_position_embeddings": 32,
+        }))
+        .map_err(candle_core::Error::wrap)?;
+        cfg.rope_parameters.full_attention.partial_rotary_factor = 1.0;
+        let factors = Tensor::new(
+            &[
+                1.0,
+                1.0,
+                DISABLED_FREQUENCY_FACTOR,
+                DISABLED_FREQUENCY_FACTOR,
+            ],
+            &Device::Cpu,
+        )?;
+        let rotary_config = RotaryConfig {
+            model: &cfg,
+            full_freq_factors: Some(&factors),
+            dtype: DType::F32,
+            is_gptx: true,
+        };
+        let full = RotaryEmbedding::new(&rotary_config, LayerType::Attention, &Device::Cpu)?;
+        let sliding =
+            RotaryEmbedding::new(&rotary_config, LayerType::SlidingAttention, &Device::Cpu)?;
+        let full_sin = full.sin.to_vec2::<f32>()?;
+        let sliding_sin = sliding.sin.to_vec2::<f32>()?;
+        let position = 11;
+        for i in 0..cfg.head_dim() / 2 {
+            let full_frequency =
+                (DEFAULT_FULL_ROPE_THETA as f32).powf(-2.0 * i as f32 / cfg.head_dim() as f32);
+            let full_factor = if i < 2 {
+                1.0
+            } else {
+                DISABLED_FREQUENCY_FACTOR
+            };
+            let sliding_frequency =
+                (DEFAULT_SLIDING_ROPE_THETA as f32).powf(-2.0 * i as f32 / cfg.head_dim() as f32);
+            assert!(
+                (full_sin[position][i] - (position as f32 * full_frequency / full_factor).sin())
+                    .abs()
+                    < ROTARY_TOLERANCE
+            );
+            assert!(
+                (sliding_sin[position][i] - (position as f32 * sliding_frequency).sin()).abs()
+                    < ROTARY_TOLERANCE
+            );
         }
         Ok(())
     }
