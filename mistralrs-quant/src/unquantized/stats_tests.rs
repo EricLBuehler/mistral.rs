@@ -34,7 +34,7 @@ fn small_batch_gemv_records_each_forward_once() -> Result<()> {
                     ((index / INPUT_DIM + 1) * (index % INPUT_DIM + 1)) as f32 / INPUT_SCALE
                 })
                 .collect::<Vec<_>>();
-            for row in values.chunks_exact(INPUT_DIM) {
+            for row in values.as_chunks::<INPUT_DIM>().0 {
                 for (sum, value) in sum_squares.iter_mut().zip(row) {
                     *sum += value * value;
                 }

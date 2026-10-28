@@ -1272,9 +1272,21 @@ impl FastExpertsWeights {
                 forward
                     .xs_flat
                     .reshape((forward.shape.num_tokens, 1, forward.shape.hidden_dim))?;
-            let gate = self.fused_gate_proj.gather_forward(&xs, forward.topk_ids)?;
-            let up = self.fused_up_proj.gather_forward(&xs, forward.topk_ids)?;
-            let down_in = (up * gate.apply(&config.act)?)?;
+            let (gate, up) = if let Some(outputs) =
+                mistralrs_quant::try_gather_forward_with_shared_quantized_activation(
+                    &xs,
+                    forward.topk_ids,
+                    &[self.fused_gate_proj.as_ref(), self.fused_up_proj.as_ref()],
+                )? {
+                let mut outputs = outputs.into_iter();
+                (outputs.next().unwrap(), outputs.next().unwrap())
+            } else {
+                (
+                    self.fused_gate_proj.gather_forward(&xs, forward.topk_ids)?,
+                    self.fused_up_proj.gather_forward(&xs, forward.topk_ids)?,
+                )
+            };
+            let down_in = crate::ops::mul_and_act(&gate, &up, config.act)?;
             self.fused_down_proj.process_routed_stats(&down_in, ids)?;
             self.fused_down_proj
                 .gather_forward(&down_in, forward.topk_ids)?
@@ -1293,7 +1305,7 @@ impl FastExpertsWeights {
             ))?;
             let gate = self.fused_gate_proj.gather_forward(&xs, &indices)?;
             let up = self.fused_up_proj.gather_forward(&xs, &indices)?;
-            let down_in = (up * gate.apply(&config.act)?)?;
+            let down_in = crate::ops::mul_and_act(&gate, &up, config.act)?;
             let inter = down_in.dim(D::Minus1)?;
             self.fused_down_proj.process_routed_stats(
                 &down_in.reshape((forward.shape.num_tokens, config.num_experts_per_tok, inter))?,
@@ -1382,10 +1394,7 @@ impl FastExpertsWeights {
             None,
             LoraExpertInputMode::RoutedRows,
         )?;
-        down.to_dtype(DType::F32)?
-            .broadcast_mul(&forward.topk_weights.unsqueeze(D::Minus1)?)?
-            .sum(D::Minus2)?
-            .to_dtype(forward.original_dtype)
+        topk_weight_reduce(&down, forward.topk_weights, forward.original_dtype)
     }
 
     #[cfg(feature = "cuda")]
@@ -1552,6 +1561,26 @@ impl FastExpertsWeights {
         let num_experts = config.num_experts;
         let total_assignments = forward.shape.num_tokens * topk;
 
+        // Use the pre-quantized Q8_0 grouped kernel path
+        let gate_qt = match self.fused_gate_proj.get_qtensor() {
+            Some(qt) => qt,
+            None => return Ok(None),
+        };
+        let up_qt = match self.fused_up_proj.get_qtensor() {
+            Some(qt) => qt,
+            None => return Ok(None),
+        };
+        let down_qt = match self.fused_down_proj.get_qtensor() {
+            Some(qt) => qt,
+            None => return Ok(None),
+        };
+
+        let use_mmq_gate_up =
+            gate_qt.dtype() == up_qt.dtype() && mistralrs_quant::supports_mmq(gate_qt.dtype());
+        if forward.lora.is_some() && !use_mmq_gate_up {
+            return Ok(None);
+        }
+
         let dev = forward.xs_flat.device().as_cuda_device()?;
 
         // Get topk_ids as contiguous u32 CudaSlice
@@ -1574,26 +1603,6 @@ impl FastExpertsWeights {
                 topk,
                 dev,
             )?;
-
-        // Use the pre-quantized Q8_0 grouped kernel path
-        let gate_qt = match self.fused_gate_proj.get_qtensor() {
-            Some(qt) => qt,
-            None => return Ok(None),
-        };
-        let up_qt = match self.fused_up_proj.get_qtensor() {
-            Some(qt) => qt,
-            None => return Ok(None),
-        };
-        let down_qt = match self.fused_down_proj.get_qtensor() {
-            Some(qt) => qt,
-            None => return Ok(None),
-        };
-
-        let use_mmq_gate_up =
-            gate_qt.dtype() == up_qt.dtype() && mistralrs_quant::supports_mmq(gate_qt.dtype());
-        if forward.lora.is_some() && !use_mmq_gate_up {
-            return Ok(None);
-        }
 
         let gate_up = if use_mmq_gate_up {
             GroupedGateUp::Packed(mistralrs_quant::grouped_moe_mmq_pair_packed(
@@ -2025,6 +2034,13 @@ mod nvfp4_tests {
 
 /// Sum `[tokens, top_k, hidden]` expert outputs weighted by `topk_weights` into `[tokens, hidden]`.
 fn topk_weight_reduce(ys: &Tensor, topk_weights: &Tensor, dtype: DType) -> Result<Tensor> {
+    #[cfg(feature = "cuda")]
+    if ys.device().is_cuda()
+        && matches!(ys.dtype(), DType::BF16 | DType::F16 | DType::F32)
+        && matches!(dtype, DType::BF16 | DType::F16 | DType::F32)
+    {
+        return mistralrs_quant::moe::moe_weighted_reduce(ys, topk_weights, dtype);
+    }
     #[cfg(feature = "metal")]
     if ys.device().is_metal() && matches!(ys.dtype(), DType::BF16 | DType::F16 | DType::F32) {
         let (tokens, top_k, hidden) = ys.dims3()?;

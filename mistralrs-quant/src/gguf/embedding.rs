@@ -272,8 +272,10 @@ fn dequantize_row(dtype: GgufDType, src: &[u8], out: &mut [f32]) -> Result<()> {
         15 => dequantize_blocks::<BlockQ8K>(src, out),
         IQ4_NL => {
             for (block, dst) in src
-                .chunks_exact(IQ4_BLOCK_BYTES)
-                .zip(out.chunks_exact_mut(IQ4_BLOCK))
+                .as_chunks::<IQ4_BLOCK_BYTES>()
+                .0
+                .iter()
+                .zip(out.as_chunks_mut::<IQ4_BLOCK>().0)
             {
                 let scale = half::f16::from_le_bytes([block[0], block[1]]).to_f32();
                 for (j, &byte) in block[2..].iter().enumerate() {

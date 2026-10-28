@@ -5,9 +5,16 @@ use candle_nn::Linear;
 use float8::F8E4M3;
 
 use crate::{
-    Nvfp4ActivationMode, Nvfp4LinearSpec, QuantMethod, QuantMethodConfig, QuantizeOntoGuard,
-    QuantizedSerde, ScaleConvention, Shard, ShardedVarBuilder, NVFP4_BLOCK_SIZE,
+    Nvfp4ActivationMode, Nvfp4LinearSpec, Nvfp4ScaleEncoding, QuantMethod, QuantMethodConfig,
+    QuantizeOntoGuard, QuantizedSerde, ScaleConvention, Shard, ShardedVarBuilder, NVFP4_BLOCK_SIZE,
 };
+
+mod csf;
+#[cfg(all(feature = "cuda", feature = "cutile"))]
+mod decode;
+pub mod embedding;
+#[cfg(all(feature = "cuda", feature = "cutile"))]
+pub(crate) mod prepare;
 
 #[cfg(all(feature = "cuda", feature = "cutile", has_nvfp4_cutlass_sm121_kernels))]
 pub(crate) mod cutlass;
@@ -35,6 +42,7 @@ const VALUES_PER_BYTE: usize = 2;
 pub(crate) const NVFP4_ACTIVATION_SCHEME: crate::ActivationQuantizationScheme =
     crate::ActivationQuantizationScheme {
         dtype: DType::U8,
+        scale_encoding: crate::ActivationScaleEncoding::E4M3,
         block_shape: [1, NVFP4_BLOCK_SIZE],
     };
 
@@ -76,6 +84,13 @@ impl Nvfp4InputCalibration<'_> {
 }
 
 impl Nvfp4Layer {
+    pub fn has_checkpoint_scales(vb: &ShardedVarBuilder, spec: Nvfp4LinearSpec) -> bool {
+        match spec.weight_scale_encoding {
+            Nvfp4ScaleEncoding::Plain => vb.contains_tensor(spec.scale_names.block_scale),
+            Nvfp4ScaleEncoding::Csf => csf::contains(vb, spec.scale_names.block_scale),
+        }
+    }
+
     pub fn from_parts(parts: Nvfp4LayerParts) -> Result<Self> {
         for scale in [&parts.global_scales]
             .into_iter()
@@ -181,6 +196,20 @@ impl Nvfp4Layer {
                 .as_ref()
                 .map(Tensor::to_scalar::<f32>)
                 .transpose()?
+        } else if input_scale_immutable {
+            parts
+                .input_scale
+                .as_ref()
+                .map(|scale| -> Result<Option<f32>> {
+                    let values = scale.flatten_all()?.to_vec1::<f32>()?;
+                    let first = values[0];
+                    Ok(values
+                        .iter()
+                        .all(|value| value.to_bits() == first.to_bits())
+                        .then_some(first))
+                })
+                .transpose()?
+                .flatten()
         } else {
             None
         };
@@ -208,7 +237,9 @@ impl Nvfp4Layer {
             (None, None) => true,
             (Some(left), Some(right)) => {
                 left.id() == right.id()
-                    || (self.input_scale_immutable && other.input_scale_immutable)
+                    || (self.input_scale_immutable
+                        && other.input_scale_immutable
+                        && self.input_global_scale.is_some())
             }
             _ => false,
         }
@@ -298,12 +329,18 @@ impl Nvfp4Layer {
         )?;
         let mut scale_dims = dims.clone();
         scale_dims[input_axis] /= NVFP4_BLOCK_SIZE;
-        let scales = vb.get_with_hints_dtype(
-            scale_dims,
-            spec.scale_names.block_scale,
-            packed_shard(NVFP4_BLOCK_SIZE),
-            DType::F8E4M3,
-        )?;
+        let scale_shard = packed_shard(NVFP4_BLOCK_SIZE);
+        let scales = match spec.weight_scale_encoding {
+            Nvfp4ScaleEncoding::Plain => vb.get_with_hints_dtype(
+                scale_dims,
+                spec.scale_names.block_scale,
+                scale_shard,
+                DType::F8E4M3,
+            )?,
+            Nvfp4ScaleEncoding::Csf => {
+                csf::load(&vb, spec.scale_names.block_scale, &scale_dims, scale_shard)?
+            }
+        };
         let global = vb.get_unchecked_dtype(spec.scale_names.global_scale, DType::F32)?;
         let rows: usize = dims[..input_axis].iter().product();
         let values = global.flatten_all()?.to_vec1::<f32>()?;
@@ -532,6 +569,9 @@ impl Nvfp4Layer {
 
     #[cfg(all(feature = "cuda", feature = "cutile"))]
     fn forward_cuda(&self, x: &Tensor) -> Result<Tensor> {
+        if decode::supports(x.dim(0)?, 1, x.dtype(), self.gemm_args()) {
+            return decode::forward(x, None, self.gemm_args());
+        }
         #[cfg(has_nvfp4_cutlass_sm121_kernels)]
         if let Some(native) = &self.native {
             if native.supports(x.dim(0)?, x.dtype()) {
@@ -807,7 +847,16 @@ impl QuantMethod for Nvfp4Layer {
         if x.device().is_cuda() {
             let x = x.contiguous()?.reshape((tokens, input_routes, k))?;
             let indices = indices.contiguous()?.reshape((tokens, topk))?;
-            let output = crate::cutile::cutile_nvfp4_gather(&x, &indices, self.gemm_args())?;
+            let output = if decode::supports(tokens, topk, x.dtype(), self.gemm_args()) {
+                decode::forward(&x, Some(&indices), self.gemm_args())?
+            } else {
+                crate::cutile::cutile_nvfp4_gather_calibrated(
+                    &x,
+                    &indices,
+                    self.gemm_args(),
+                    self.input_global_scale.is_some(),
+                )?
+            };
             let output = match &self.parts.bias {
                 Some(bias) => output.broadcast_add(
                     &bias
@@ -831,6 +880,83 @@ impl QuantMethod for Nvfp4Layer {
             outputs.push(self.expert(id as usize)?.forward_raw(&row.unsqueeze(0)?)?);
         }
         Tensor::cat(&outputs, 0)?.reshape(output_shape)
+    }
+
+    fn nvfp4_expert_projection(&self) -> Option<&Nvfp4Layer> {
+        (self.parts.weight.rank() == 3).then_some(self)
+    }
+
+    #[cfg(all(feature = "cuda", feature = "cutile"))]
+    fn try_gather_forward_group(
+        &self,
+        x: &Tensor,
+        indices: &Tensor,
+        methods: &[&dyn QuantMethod],
+    ) -> Result<Option<Vec<Tensor>>> {
+        if !x.device().is_cuda()
+            || !matches!(x.dtype(), DType::BF16 | DType::F16)
+            || x.dtype() != self.parts.dtype
+            || indices.dtype() != DType::U32
+            || !indices.device().same_device(x.device())
+            || self.parts.weight.rank() != 3
+            || self.parts.activation != Nvfp4ActivationMode::DynamicBlock
+            || !self.input_scale_immutable
+            || self.input_global_scale.is_none()
+            || self.validate_input(x, 3).is_err()
+        {
+            return Ok(None);
+        }
+        let (tokens, topk) = match (x.dims(), indices.dims()) {
+            (&[tokens, _], &[indexed_tokens, topk]) if tokens == indexed_tokens => (tokens, topk),
+            (&[tokens, routes, _], &[indexed_tokens, topk])
+                if tokens == indexed_tokens && (routes == 1 || routes == topk) =>
+            {
+                (tokens, topk)
+            }
+            _ => return Ok(None),
+        };
+        if tokens == 0 || topk == 0 {
+            return Ok(None);
+        }
+        let Some(projections) = methods
+            .iter()
+            .map(|method| method.nvfp4_expert_projection())
+            .collect::<Option<Vec<_>>>()
+        else {
+            return Ok(None);
+        };
+        if projections.iter().any(|projection| {
+            !projection.input_scale_immutable
+                || projection.parts.weight.dims() != self.parts.weight.dims()
+                || projection.parts.activation != self.parts.activation
+                || projection.parts.dtype != self.parts.dtype
+                || !projection.parts.weight.device().same_device(x.device())
+                || !self.shares_input_calibration(projection)
+        }) {
+            return Ok(None);
+        }
+        let args = projections
+            .iter()
+            .map(|projection| projection.gemm_args())
+            .collect::<Vec<_>>();
+        let indices = indices.contiguous()?;
+        let Some(outputs) = crate::cutile::try_cutile_nvfp4_gather_shared(x, &indices, &args)?
+        else {
+            return Ok(None);
+        };
+        projections
+            .iter()
+            .zip(outputs)
+            .map(|(projection, output)| match &projection.parts.bias {
+                Some(bias) => output.broadcast_add(
+                    &bias
+                        .index_select(&indices.flatten_all()?, 0)?
+                        .reshape(output.shape())?,
+                ),
+                None => Ok(output),
+            })
+            .collect::<Result<Vec<_>>>()
+            .map(Some)
     }
 
     fn activation_quantization_scheme_for(
@@ -1238,4 +1364,122 @@ mod tests {
             .matches(unknown.nvfp4_input_calibration().unwrap()));
         Ok(())
     }
+
+    #[test]
+    fn expert_calibration_requires_matching_tensor_identity() -> Result<()> {
+        let loaded = |scale| checkpoint_calibrated_layer(true, Tensor::new(scale, &Device::Cpu)?);
+        let first = Nvfp4Layer::stack(vec![loaded(1f32)?, loaded(2f32)?])?;
+        let second = Nvfp4Layer::stack(vec![loaded(1f32)?, loaded(3f32)?])?;
+        assert_eq!(first.input_global_scale, None);
+        assert_eq!(second.input_global_scale, None);
+        assert!(!first.shares_input_calibration(&second));
+        assert!(first.shares_input_calibration(&first));
+        Ok(())
+    }
+    #[test]
+    fn uniform_expert_calibration_tracks_shards_and_private_storage() -> Result<()> {
+        const EXPERTS: usize = 4;
+        const ROWS: usize = 2;
+        const PREFIX: &str = "model.layers.0.mlp.experts";
+        let config: crate::QuantizedConfig = serde_json::from_value(serde_json::json!({
+            "quant_method": "modelopt", "quant_algo": "NVFP4", "group_size": 16,
+        }))
+        .unwrap();
+        let Some(crate::CheckpointLinearSpec::Nvfp4(spec)) = config.resolve_checkpoint(PREFIX)?
+        else {
+            panic!("fixture must resolve NVFP4");
+        };
+        let source = Tensor::new(&[1f32, 1.0, 2.0, 2.0], &Device::Cpu)?;
+        let tensors = std::collections::HashMap::from([
+            (
+                format!("{PREFIX}.{}", spec.scale_names.weight),
+                Tensor::full(0x22u8, (EXPERTS, ROWS, NVFP4_BLOCK_SIZE / 2), &Device::Cpu)?,
+            ),
+            (
+                format!("{PREFIX}.{}", spec.scale_names.block_scale),
+                Tensor::ones((EXPERTS, ROWS, 1), DType::F8E4M3, &Device::Cpu)?,
+            ),
+            (
+                format!("{PREFIX}.{}", spec.scale_names.global_scale),
+                Tensor::new(1f32, &Device::Cpu)?,
+            ),
+            (
+                format!("{PREFIX}.{}", spec.scale_names.activation_scale.unwrap()),
+                source.clone(),
+            ),
+        ]);
+        let vb = crate::ShardedSafeTensors::wrap(tensors, DType::F32, Device::Cpu).pp(PREFIX);
+        let full = Nvfp4Layer::load_stacked(
+            EXPERTS,
+            NVFP4_BLOCK_SIZE,
+            ROWS,
+            spec,
+            false,
+            Shard::default(),
+            vb.clone(),
+        )?;
+        assert_eq!(full.input_global_scale, None);
+        for (offset, expected) in [(0, 1f32), (2, 2f32)] {
+            let layer = Nvfp4Layer::load_stacked(
+                EXPERTS,
+                NVFP4_BLOCK_SIZE,
+                ROWS,
+                spec,
+                false,
+                Shard::Offset {
+                    dim: 0,
+                    offset,
+                    len: 2,
+                },
+                vb.clone(),
+            )?;
+            assert_eq!(layer.input_global_scale, Some(expected));
+            assert_eq!(
+                layer.parts.input_scale.as_ref().unwrap().to_vec1::<f32>()?,
+                vec![expected; 2]
+            );
+        }
+        let private = Nvfp4Layer::stack(vec![
+            checkpoint_calibrated_layer(true, Tensor::new(1f32, &Device::Cpu)?)?,
+            checkpoint_calibrated_layer(false, Tensor::new(1f32, &Device::Cpu)?)?,
+        ])?;
+        assert_eq!(private.input_global_scale, Some(1.0));
+        let mutable = Tensor::new(1f32, &Device::Cpu)?;
+        let mixed = Nvfp4Layer::stack(vec![
+            checkpoint_calibrated_layer(true, Tensor::new(1f32, &Device::Cpu)?)?,
+            public_calibrated_layer(mutable.clone())?,
+        ])?;
+        assert_eq!(mixed.input_global_scale, None);
+        let exposed = Tensor::ones(EXPERTS, DType::F32, &Device::Cpu)?;
+        let external = Nvfp4Layer::from_parts(Nvfp4LayerParts {
+            weight: full.parts.weight.clone(),
+            scales: full.parts.scales.clone(),
+            global_scales: full.parts.global_scales.clone(),
+            input_scale: Some(exposed.clone()),
+            activation: Nvfp4ActivationMode::DynamicBlock,
+            bias: None,
+            dtype: DType::F32,
+        })?;
+        assert_eq!(external.input_global_scale, None);
+        exposed.slice_set(&Tensor::new(&[3f32], &Device::Cpu)?, 0, 1)?;
+        assert_eq!(external.input_global_scale, None);
+        assert_eq!(
+            external
+                .parts
+                .input_scale
+                .as_ref()
+                .unwrap()
+                .to_vec1::<f32>()?[1],
+            3.0
+        );
+        source.slice_set(&Tensor::new(&[4f32], &Device::Cpu)?, 0, 0)?;
+        assert_eq!(
+            full.parts.input_scale.as_ref().unwrap().to_vec1::<f32>()?,
+            vec![1.0, 1.0, 2.0, 2.0]
+        );
+        Ok(())
+    }
 }
+
+#[cfg(all(test, feature = "cuda", feature = "cutile"))]
+mod shared_gather_tests;

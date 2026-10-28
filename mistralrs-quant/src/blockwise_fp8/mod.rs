@@ -574,6 +574,7 @@ impl QuantMethod for BlockwiseFP8Linear {
         if matches!(self.provider, BlockwiseFp8Provider::TensorCoreGemv) {
             return Some(ActivationQuantizationScheme {
                 dtype: DType::F8E4M3,
+                scale_encoding: crate::ActivationScaleEncoding::F32,
                 block_shape: [1, self.weight_block_size[1]],
             });
         }
@@ -581,6 +582,7 @@ impl QuantMethod for BlockwiseFP8Linear {
         {
             Some(ActivationQuantizationScheme {
                 dtype: DType::F8E4M3,
+                scale_encoding: crate::ActivationScaleEncoding::F32,
                 block_shape: [1, self.weight_block_size[1]],
             })
         }

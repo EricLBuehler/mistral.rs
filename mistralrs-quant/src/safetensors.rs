@@ -1005,14 +1005,13 @@ mod tests {
     fn topology_only_quantization_enables_streaming_cpu_load() -> Result<()> {
         let _restore = RestoreImmediateIsq(crate::get_immediate_isq());
         let (executor, _) = crate::create_isq_executor(crate::IsqExecutorConfig::new(None));
+        let predicate = Regex::new(r"\.experts\.down_proj\.weight$").map_err(Error::wrap)?;
         for ty in [None, Some(crate::IsqType::Q4K)] {
             crate::set_immediate_isq_with_executor(
                 None,
                 Vec::new(),
                 vec![crate::ImmediateIsqOverride {
-                    predicate: Some(
-                        Regex::new(r"\.experts\.down_proj\.weight$").map_err(Error::wrap)?,
-                    ),
+                    predicate: Some(predicate.clone()),
                     layer_range: None,
                     ty,
                     device: None,

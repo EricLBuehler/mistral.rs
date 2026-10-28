@@ -39,7 +39,7 @@ impl GatedResidual {
             .to_dtype(DType::F32)?
             + 1.0)?;
         let packed = if with_inject {
-            ReplicatedLayer::new_packed(
+            ReplicatedLayer::new_packed_aligned(
                 &[
                     LoraLinearSpec::replicated(hc_hidden, cfg.rank),
                     LoraLinearSpec::replicated(hc_hidden, cfg.streams),
@@ -88,6 +88,10 @@ impl GatedResidual {
             false,
             vb.pp("input_mix_weight_up"),
         )?;
+        #[cfg(feature = "cutile")]
+        if let Some(weight) = up.unquant_forward_weight() {
+            mistralrs_quant::cutile::register_hc_up_mix(&weight, cfg.streams);
+        }
         Ok(Self {
             norm_weight,
             down,

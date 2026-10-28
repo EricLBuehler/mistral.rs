@@ -177,6 +177,18 @@ pub enum Nvfp4ActivationMode {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
+pub enum Nvfp4ScaleEncoding {
+    Plain,
+    Csf,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+pub struct Mxfp8LinearSpec {
+    pub group_size: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ScaleConvention {
     Dequantize,
     Quantize,
@@ -196,6 +208,7 @@ pub struct Nvfp4LinearSpec {
     pub activation: Nvfp4ActivationMode,
     pub scale_names: Nvfp4ScaleNames,
     pub global_scale: ScaleConvention,
+    pub weight_scale_encoding: Nvfp4ScaleEncoding,
 }
 
 impl Nvfp4LinearSpec {
@@ -211,6 +224,7 @@ impl Nvfp4LinearSpec {
                     .then_some("input_scale"),
             },
             global_scale: ScaleConvention::Dequantize,
+            weight_scale_encoding: Nvfp4ScaleEncoding::Plain,
         }
     }
 
@@ -227,6 +241,7 @@ impl Nvfp4LinearSpec {
             },
             // compressed-tensors' ModelOpt converter reciprocates both global scales.
             global_scale: ScaleConvention::Quantize,
+            weight_scale_encoding: Nvfp4ScaleEncoding::Plain,
         }
     }
 }
@@ -235,7 +250,25 @@ impl Nvfp4LinearSpec {
 #[serde(rename_all = "snake_case")]
 pub enum CheckpointLinearSpec {
     Fp8(Fp8LinearSpec),
+    Mxfp8(Mxfp8LinearSpec),
     Nvfp4(Nvfp4LinearSpec),
+}
+
+#[derive(Clone, Debug)]
+struct CheckpointPattern(Arc<Regex>);
+
+impl PartialEq for CheckpointPattern {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.as_str() == other.0.as_str()
+    }
+}
+
+impl Eq for CheckpointPattern {}
+
+impl Serialize for CheckpointPattern {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.0.as_str())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -245,8 +278,8 @@ enum CheckpointTarget {
     Exact(String),
     Module(String),
     Contains(String),
-    Regex(String),
-    Glob(String),
+    Regex(CheckpointPattern),
+    Glob(CheckpointPattern),
 }
 
 impl CheckpointTarget {
@@ -255,9 +288,9 @@ impl CheckpointTarget {
             return Ok(Self::Linear);
         }
         if let Some(pattern) = raw.strip_prefix("re:") {
-            Regex::new(pattern)
+            let compiled = Regex::new(pattern)
                 .map_err(|err| format!("invalid compressed-tensors target regex `{raw}`: {err}"))?;
-            return Ok(Self::Regex(pattern.to_string()));
+            return Ok(Self::Regex(CheckpointPattern(Arc::new(compiled))));
         }
         Ok(Self::Exact(raw.to_string()))
     }
@@ -281,9 +314,7 @@ impl CheckpointTarget {
                         .is_some_and(|suffix| suffix.starts_with('.'))
             }
             Self::Contains(target) => prefix.contains(target),
-            Self::Regex(pattern) | Self::Glob(pattern) => Regex::new(pattern)
-                .expect("checkpoint target regex is validated during config parsing")
-                .is_match(prefix),
+            Self::Regex(pattern) | Self::Glob(pattern) => pattern.0.is_match(prefix),
         }
     }
 
@@ -337,18 +368,35 @@ impl CheckpointQuantConfig {
             Some(CheckpointLinearSpec::Nvfp4(_)) => Err(format!(
                 "module `{prefix}` uses NVFP4, but an FP8 specification was requested"
             )),
+            Some(CheckpointLinearSpec::Mxfp8(_)) => Err(format!(
+                "module `{prefix}` uses MXFP8, but an FP8 specification was requested"
+            )),
             None => Ok(None),
         }
     }
 
     pub fn resolve_checked(&self, prefix: &str) -> Result<Option<CheckpointLinearSpec>, String> {
-        match self.resolve_state_checked(prefix)? {
+        match self.resolve_state_checked(prefix, true)? {
             CheckpointDirectResolution::NoMatch => Ok(None),
             CheckpointDirectResolution::Resolved(spec) => Ok(spec),
         }
     }
 
-    fn resolve_state_checked(&self, prefix: &str) -> Result<CheckpointDirectResolution, String> {
+    pub fn resolve_explicit_checked(
+        &self,
+        prefix: &str,
+    ) -> Result<Option<CheckpointLinearSpec>, String> {
+        match self.resolve_state_checked(prefix, false)? {
+            CheckpointDirectResolution::NoMatch => Ok(None),
+            CheckpointDirectResolution::Resolved(spec) => Ok(spec),
+        }
+    }
+
+    fn resolve_state_checked(
+        &self,
+        prefix: &str,
+        include_linear_default: bool,
+    ) -> Result<CheckpointDirectResolution, String> {
         let prefixes = prefix_candidates(prefix);
         if self
             .ignore
@@ -362,12 +410,13 @@ impl CheckpointQuantConfig {
             return Ok(exact);
         }
         if let Some(constituents) = fused_constituents(prefix) {
-            let fused = self.resolve_fused_state(&constituents)?;
+            let fused = self.resolve_fused_state(&constituents, include_linear_default)?;
             if fused != CheckpointDirectResolution::NoMatch {
                 return Ok(fused);
             }
         }
-        for priority in 1..3 {
+        let priorities = if include_linear_default { 1..3 } else { 1..2 };
+        for priority in priorities {
             let resolved = self.resolve_rules_at_priority(prefix, &prefixes, priority)?;
             if resolved != CheckpointDirectResolution::NoMatch {
                 return Ok(resolved);
@@ -407,7 +456,7 @@ impl CheckpointQuantConfig {
         &self,
         prefixes: &[S],
     ) -> Result<Option<CheckpointLinearSpec>, String> {
-        match self.resolve_fused_state(prefixes)? {
+        match self.resolve_fused_state(prefixes, true)? {
             CheckpointDirectResolution::NoMatch => Ok(None),
             CheckpointDirectResolution::Resolved(spec) => Ok(spec),
         }
@@ -416,13 +465,14 @@ impl CheckpointQuantConfig {
     fn resolve_fused_state<S: AsRef<str>>(
         &self,
         prefixes: &[S],
+        include_linear_default: bool,
     ) -> Result<CheckpointDirectResolution, String> {
         let Some((first, rest)) = prefixes.split_first() else {
             return Ok(CheckpointDirectResolution::NoMatch);
         };
-        let resolved = self.resolve_state_checked(first.as_ref())?;
+        let resolved = self.resolve_state_checked(first.as_ref(), include_linear_default)?;
         for prefix in rest {
-            let next = self.resolve_state_checked(prefix.as_ref())?;
+            let next = self.resolve_state_checked(prefix.as_ref(), include_linear_default)?;
             if next != resolved {
                 return Err(format!(
                     "fused quantized projection has different schemes for `{}` and `{}`",
@@ -543,11 +593,13 @@ impl CheckpointQuantConfig {
             .into_iter()
             .map(|target| CheckpointTarget::model_opt(&target))
             .collect::<Result<Vec<_>, _>>()?;
-        ignore.extend(
-            MODEL_OPT_LEGACY_VISION_EXCLUSIONS
-                .iter()
-                .map(|target| CheckpointTarget::Contains((*target).to_string())),
-        );
+        if algorithm != "MIXED_PRECISION" {
+            ignore.extend(
+                MODEL_OPT_LEGACY_VISION_EXCLUSIONS
+                    .iter()
+                    .map(|target| CheckpointTarget::Contains((*target).to_string())),
+            );
+        }
 
         let rules = if algorithm == "MIXED_PRECISION" {
             let layers = config
@@ -587,6 +639,9 @@ impl CheckpointQuantConfig {
                             resolution: CheckpointRuleResolution::Quantized(model_opt_spec(
                                 &algorithm,
                                 layer.get("group_size").or_else(|| config.get("group_size")),
+                                layer
+                                    .get("weight_scale_encoding")
+                                    .or_else(|| config.get("weight_scale_encoding")),
                             )?),
                         });
                     }
@@ -600,7 +655,11 @@ impl CheckpointQuantConfig {
             }
             rules
         } else {
-            let spec = model_opt_spec(&algorithm, config.get("group_size"))?;
+            let spec = model_opt_spec(
+                &algorithm,
+                config.get("group_size"),
+                config.get("weight_scale_encoding"),
+            )?;
             vec![CheckpointConfigRule {
                 targets: vec![CheckpointTarget::Linear],
                 resolution: CheckpointRuleResolution::Quantized(spec),
@@ -644,8 +703,16 @@ pub(crate) fn checkpoint_linear_b(
     hints: crate::Shard,
     vb: crate::ShardedVarBuilder,
 ) -> CandleResult<Arc<dyn crate::QuantMethod>> {
-    if let Some(CheckpointLinearSpec::Nvfp4(spec)) = config.resolve_checkpoint(&vb.prefix())? {
-        return crate::nvfp4::Nvfp4Layer::linear_b(in_dim, out_dim, spec, bias, hints, vb);
+    match config.resolve_checkpoint(&vb.prefix())? {
+        Some(CheckpointLinearSpec::Nvfp4(spec)) => {
+            return crate::nvfp4::Nvfp4Layer::linear_b(in_dim, out_dim, spec, bias, hints, vb);
+        }
+        Some(CheckpointLinearSpec::Mxfp8(_)) => {
+            return Ok(Arc::new(crate::mxfp8::Mxfp8Linear::load(
+                in_dim, out_dim, bias, hints, vb,
+            )?));
+        }
+        _ => {}
     }
     let Some(spec) = config.resolve_fp8(&vb.prefix())? else {
         if matches!(config, crate::QuantizedConfig::Fp8 { .. })
@@ -1154,7 +1221,36 @@ fn validate_nvfp4_args(
 fn model_opt_spec(
     algorithm: &str,
     group_size: Option<&Value>,
+    weight_scale_encoding: Option<&Value>,
 ) -> Result<CheckpointLinearSpec, String> {
+    let encoding = match weight_scale_encoding {
+        None | Some(Value::Null) => Nvfp4ScaleEncoding::Plain,
+        Some(Value::String(value)) if value == "csf" => Nvfp4ScaleEncoding::Csf,
+        Some(Value::String(value)) if value == "plain" => Nvfp4ScaleEncoding::Plain,
+        Some(value) => {
+            return Err(format!(
+                "unsupported ModelOpt weight_scale_encoding `{value}`"
+            ))
+        }
+    };
+    if encoding != Nvfp4ScaleEncoding::Plain && !matches!(algorithm, "NVFP4" | "W4A16_NVFP4") {
+        return Err(format!(
+            "ModelOpt {algorithm} does not support CSF weight scales"
+        ));
+    }
+    if algorithm == "MXFP8" {
+        if group_size
+            .is_some_and(|value| value.as_u64() != Some(crate::mxfp8::MXFP8_BLOCK_SIZE as u64))
+        {
+            return Err(format!(
+                "ModelOpt MXFP8 requires group_size={}",
+                crate::mxfp8::MXFP8_BLOCK_SIZE
+            ));
+        }
+        return Ok(CheckpointLinearSpec::Mxfp8(Mxfp8LinearSpec {
+            group_size: crate::mxfp8::MXFP8_BLOCK_SIZE,
+        }));
+    }
     if matches!(algorithm, "NVFP4" | "W4A16_NVFP4") {
         if group_size.is_some_and(|value| value.as_u64() != Some(NVFP4_BLOCK_SIZE as u64)) {
             return Err(format!(
@@ -1166,9 +1262,9 @@ fn model_opt_spec(
         } else {
             Nvfp4ActivationMode::None
         };
-        return Ok(CheckpointLinearSpec::Nvfp4(Nvfp4LinearSpec::model_opt(
-            activation,
-        )));
+        let mut spec = Nvfp4LinearSpec::model_opt(activation);
+        spec.weight_scale_encoding = encoding;
+        return Ok(CheckpointLinearSpec::Nvfp4(spec));
     }
     let (weight_scale, activation) = match algorithm {
         "FP8" => (
@@ -1206,6 +1302,7 @@ fn model_opt_fields(value: &Value) -> Result<serde_json::Map<String, Value>, Str
         "kv_cache_quant_algo",
         "kv_cache_scheme",
         "group_size",
+        "weight_scale_encoding",
         "quantized_layers",
     ] {
         if let Some(value) = root.get(name) {
@@ -1380,7 +1477,7 @@ fn optional_string_array(value: Option<&Value>, field: &str) -> Result<Vec<Strin
     }
 }
 
-fn glob_regex(glob: &str) -> Result<String, String> {
+fn glob_regex(glob: &str) -> Result<CheckpointPattern, String> {
     let mut regex = String::from("^");
     let mut chars = glob.chars().peekable();
     while let Some(ch) = chars.next() {
@@ -1411,8 +1508,9 @@ fn glob_regex(glob: &str) -> Result<String, String> {
         }
     }
     regex.push('$');
-    Regex::new(&regex).map_err(|err| format!("invalid ModelOpt glob `{glob}`: {err}"))?;
-    Ok(regex)
+    let compiled =
+        Regex::new(&regex).map_err(|err| format!("invalid ModelOpt glob `{glob}`: {err}"))?;
+    Ok(CheckpointPattern(Arc::new(compiled)))
 }
 
 #[cfg(test)]
@@ -1421,6 +1519,82 @@ mod tests {
 
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn checkpoint_patterns_reuse_compiled_matchers_and_preserve_serialization() {
+        let regex = r"^model\.layers\.[0-9]+\.mlp\.(gate|up)_proj$";
+        let glob = "model.layers.*.mlp.[gu]*_proj";
+        for (target, reparsed, expected) in [
+            (
+                CheckpointTarget::compressed_tensors(&format!("re:{regex}")).unwrap(),
+                CheckpointTarget::compressed_tensors(&format!("re:{regex}")).unwrap(),
+                json!({"regex": regex}),
+            ),
+            (
+                CheckpointTarget::model_opt(glob).unwrap(),
+                CheckpointTarget::model_opt(glob).unwrap(),
+                json!({"glob": r"^model\.layers\..*\.mlp\.[gu].*_proj$"}),
+            ),
+        ] {
+            let cloned = target.clone();
+            assert_eq!(target, cloned);
+            assert_eq!(target, reparsed);
+            assert_eq!(serde_json::to_value(&target).unwrap(), expected);
+            let pattern = |target| match target {
+                CheckpointTarget::Regex(pattern) | CheckpointTarget::Glob(pattern) => pattern,
+                _ => unreachable!(),
+            };
+            let original = pattern(target.clone());
+            assert!(Arc::ptr_eq(&original.0, &pattern(cloned.clone()).0));
+            assert!(!Arc::ptr_eq(&original.0, &pattern(reparsed).0));
+            for layer in 0..128 {
+                assert!(cloned.matches(&format!("model.layers.{layer}.mlp.gate_proj")));
+                assert!(cloned.matches(&format!("model.layers.{layer}.mlp.up_proj")));
+                assert!(!cloned.matches(&format!("model.layers.{layer}.mlp.down_proj")));
+                assert!(!cloned.matches(&format!("other.model.layers.{layer}.mlp.gate_proj")));
+            }
+        }
+        assert!(CheckpointTarget::compressed_tensors("re:(").is_err());
+        assert!(CheckpointTarget::model_opt("model.layers.[").is_err());
+    }
+
+    #[test]
+    fn checkpoint_config_clones_preserve_pattern_resolution_and_equality() {
+        let value = json!({
+            "quant_algo": "NVFP4",
+            "exclude_modules": ["model.layers.*.mlp.gate", "lm_head"]
+        });
+        let config = CheckpointQuantConfig::model_opt(&value).unwrap();
+        let cloned = config.clone();
+        let reparsed = CheckpointQuantConfig::model_opt(&value).unwrap();
+        assert_eq!(config, cloned);
+        assert_eq!(config, reparsed);
+        assert_eq!(
+            serde_json::to_value(&config).unwrap(),
+            serde_json::to_value(&cloned).unwrap()
+        );
+        for layer in 0..128 {
+            for prefix in [
+                format!("model.layers.{layer}.mlp.gate"),
+                format!("model.layers.{layer}.mlp.experts.0.up_proj"),
+            ] {
+                assert_eq!(
+                    config.resolve_checked(&prefix),
+                    cloned.resolve_checked(&prefix)
+                );
+            }
+            assert_eq!(
+                cloned
+                    .resolve_checked(&format!("model.layers.{layer}.mlp.gate"))
+                    .unwrap(),
+                None
+            );
+            assert!(cloned
+                .resolve_checked(&format!("model.layers.{layer}.mlp.experts.0.up_proj"))
+                .unwrap()
+                .is_some());
+        }
+    }
 
     fn ct_args(strategy: &str) -> Value {
         json!({
@@ -2444,5 +2618,62 @@ mod tests {
         )
         .is_err());
         Ok(())
+    }
+    #[test]
+    fn model_opt_mxfp8_and_csf_keep_distinct_encodings() {
+        let config = CheckpointQuantConfig::model_opt(&serde_json::json!({
+            "quant_algo": "MIXED_PRECISION",
+            "quantized_layers": {
+                "model.vision_model.proj": {"quant_algo": "MXFP8", "group_size": 32},
+                "model.layers.0.mlp.experts": {"quant_algo": "NVFP4", "group_size": 16, "weight_scale_encoding": "csf"}
+            }
+        })).unwrap();
+        assert_eq!(
+            config.resolve_checked("model.vision_model.proj").unwrap(),
+            Some(CheckpointLinearSpec::Mxfp8(Mxfp8LinearSpec {
+                group_size: 32
+            }))
+        );
+        let Some(CheckpointLinearSpec::Nvfp4(spec)) = config
+            .resolve_checked("model.layers.0.mlp.experts.7.gate_proj")
+            .unwrap()
+        else {
+            panic!("expected NVFP4 expert")
+        };
+        assert_eq!(spec.weight_scale_encoding, Nvfp4ScaleEncoding::Csf);
+        assert!(CheckpointQuantConfig::model_opt(
+            &serde_json::json!({"quant_algo": "MXFP8", "group_size": 16})
+        )
+        .is_err());
+        assert!(CheckpointQuantConfig::model_opt(
+            &serde_json::json!({"quant_algo": "MXFP8", "weight_scale_encoding": "csf"})
+        )
+        .is_err());
+        assert!(CheckpointQuantConfig::model_opt(
+            &serde_json::json!({"quant_algo": "NVFP4", "weight_scale_encoding": "other"})
+        )
+        .is_err());
+        let legacy =
+            CheckpointQuantConfig::model_opt(&serde_json::json!({"quant_algo": "FP8"})).unwrap();
+        assert_eq!(
+            legacy.resolve_checked("model.vision_model.proj").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn model_opt_external_csf_encoding_survives_merge() {
+        let config = CheckpointQuantConfig::model_opt_merged(
+            None,
+            &serde_json::json!({
+                "quant_algo": "NVFP4", "weight_scale_encoding": "csf"
+            }),
+        )
+        .unwrap();
+        let Some(CheckpointLinearSpec::Nvfp4(spec)) = config.resolve_checked("layer").unwrap()
+        else {
+            panic!("expected NVFP4")
+        };
+        assert_eq!(spec.weight_scale_encoding, Nvfp4ScaleEncoding::Csf);
     }
 }

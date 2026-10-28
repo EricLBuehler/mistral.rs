@@ -369,22 +369,26 @@ impl Loader for EmbeddingLoader {
                         // Be sure to get the weight pack factor here; we might be loading a prequantized model.
                         let weight_pack_factor =
                             QuantizationConfigShim::get_quant_config_pack_factor(&config, dtype)?;
-                        let quantization =
-                            self.config.topology.as_ref().map(|topology| {
-                                AutoDeviceMapQuantization::isq(None, Some(topology))
-                            });
+                        let checkpoint_quantization =
+                            QuantizationConfigShim::get_quantization_config(&config)?;
+                        let quantization = AutoDeviceMapQuantization::checkpoint(
+                            checkpoint_quantization.as_ref(),
+                            self.config.topology.as_ref(),
+                        );
                         let weight_pack_factor =
                             quantization
                                 .as_ref()
                                 .map_or(weight_pack_factor, |quantization| {
                                     quantization.conservative_pack_factor(dtype, weight_pack_factor)
                                 });
-                        let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
-                            &config,
-                            dtype,
-                            weight_pack_factor,
-                            None,
-                        )?;
+                        let layer_sizes_in_bytes =
+                            self.inner.layer_sizes_in_bytes_with_quantization(
+                                &config,
+                                dtype,
+                                weight_pack_factor,
+                                quantization.as_ref(),
+                                None,
+                            )?;
                         let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
                             &config,
                             dtype,

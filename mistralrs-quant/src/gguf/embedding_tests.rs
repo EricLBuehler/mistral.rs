@@ -305,7 +305,9 @@ fn embedding_cuda_graph_replay_tracks_changed_strided_ids() -> Result<()> {
                     .map(|index| ((index * 3 + shift) % ROWS) as u32)
                     .collect();
                 let selected: Vec<_> = values
-                    .chunks_exact(ID_COLUMNS)
+                    .as_chunks::<ID_COLUMNS>()
+                    .0
+                    .iter()
                     .flat_map(|row| row[1..].iter().map(|&id| u64::from(id)))
                     .collect();
                 backing.set(&Tensor::from_vec(values, (ID_ROWS, ID_COLUMNS), &device)?)?;

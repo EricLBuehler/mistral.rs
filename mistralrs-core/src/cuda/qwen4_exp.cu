@@ -1,4 +1,5 @@
 // Qwen4-Exp hashed n-gram PLE and QSA sparse attention.
+#include <cub/block/block_scan.cuh>
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
@@ -14,6 +15,7 @@
 #define Q4_QSA_SCORE_KEYS 16
 #define Q4_QSA_SCORE_THREADS 128
 #define Q4_QSA_KEY_PADDING 2
+#define Q4_QSA_TOPK_THREADS 1024
 #define Q4_QSA_RADIX_BINS 256
 #define Q4_QSA_RADIX_WARPS (Q4_QSA_RADIX_BINS / 32)
 #define Q4_QSA_RADIX_MASK (Q4_QSA_RADIX_BINS - 1)
@@ -657,13 +659,14 @@ __device__ __forceinline__ unsigned int q4_ordered(float v) {
   return (bits & 0x80000000u) ? ~bits : (bits ^ 0x80000000u);
 }
 
-__global__ void q4_qsa_topk_kernel(const float *__restrict__ scores,
-                                   int score_stride, Q4Tokens l, Q4Paged pg,
-                                   int ratio, int topk,
-                                   int *__restrict__ selected,
-                                   int *__restrict__ n_selected) {
+__global__ __launch_bounds__(Q4_QSA_TOPK_THREADS) void q4_qsa_topk_kernel(
+    const float *__restrict__ scores, int score_stride, Q4Tokens l, Q4Paged pg,
+    int ratio, int topk, int *__restrict__ selected,
+    int *__restrict__ n_selected) {
   __shared__ unsigned int hist[Q4_QSA_RADIX_BINS];
   __shared__ unsigned int s_prefix, s_mask, s_remaining;
+  using Scan = cub::BlockScan<unsigned long long, Q4_QSA_TOPK_THREADS>;
+  __shared__ typename Scan::TempStorage scan_storage;
   __shared__ unsigned int s_gt, s_eq;
   __shared__ unsigned int warp_totals[Q4_QSA_RADIX_WARPS], winner_digit,
       winner_above;
@@ -743,17 +746,28 @@ __global__ void q4_qsa_topk_kernel(const float *__restrict__ scores,
   __syncthreads();
   const unsigned int threshold = s_prefix;
   const unsigned int want_eq = s_remaining;
-  const unsigned int n_gt = topk - want_eq;
-  for (int j = threadIdx.x; j < nb; j += blockDim.x) {
-    const unsigned int key = q4_ordered(row[j]);
-    if (key > threshold) {
-      out[atomicAdd(&s_gt, 1u)] = j;
-    } else if (key == threshold) {
-      const unsigned int e = atomicAdd(&s_eq, 1u);
-      if (e < want_eq) {
-        out[n_gt + e] = j;
-      }
+  // Atomic compaction changes the attention reduction order between identical
+  // requests.
+  for (int base = 0; base < nb; base += blockDim.x) {
+    const int j = base + threadIdx.x;
+    const unsigned int key = j < nb ? q4_ordered(row[j]) : 0u;
+    const bool greater = j < nb && key > threshold;
+    const bool equal = j < nb && key == threshold;
+    const unsigned long long flags =
+        (static_cast<unsigned long long>(equal) << 32) | greater;
+    unsigned long long prefix, total;
+    Scan(scan_storage).ExclusiveSum(flags, prefix, total);
+    const unsigned int above = s_gt + static_cast<unsigned int>(prefix);
+    const unsigned int ties = s_eq + static_cast<unsigned int>(prefix >> 32);
+    if (greater || (equal && ties < want_eq)) {
+      out[above + min(ties, want_eq)] = j;
     }
+    __syncthreads();
+    if (threadIdx.x == 0) {
+      s_gt += static_cast<unsigned int>(total);
+      s_eq += static_cast<unsigned int>(total >> 32);
+    }
+    __syncthreads();
   }
   if (threadIdx.x == 0) {
     n_selected[t] = topk;
@@ -761,8 +775,9 @@ __global__ void q4_qsa_topk_kernel(const float *__restrict__ scores,
 }
 
 // Splits cover contiguous ranges of selected blocks plus the incomplete tail.
-// FlashInfer caches use [blocks, kv_heads, block_size, head_dim] for both K and V.
-// Otherwise K uses [blocks, kv_heads, head_dim/8, block_size, 8] and V uses [blocks, kv_heads, head_dim, block_size].
+// FlashInfer caches use [blocks, kv_heads, block_size, head_dim] for both K and
+// V. Otherwise K uses [blocks, kv_heads, head_dim/8, block_size, 8] and V uses
+// [blocks, kv_heads, head_dim, block_size].
 template <typename T>
 __global__ void __launch_bounds__(Q4_ATTN_WARPS * 32) q4_qsa_attention_kernel(
     const T *__restrict__ q, const T *__restrict__ k_cache,
@@ -1178,7 +1193,7 @@ extern "C" void qwen4_qsa_select(const void *q, const void *block_keys,
                            topk, key_dim));
     }
   }
-  q4_qsa_topk_kernel<<<layout.n_tokens, 1024, 0, s>>>(
+  q4_qsa_topk_kernel<<<layout.n_tokens, Q4_QSA_TOPK_THREADS, 0, s>>>(
       scores, score_stride, layout, paged, ratio, topk, selected, n_selected);
 }
 
@@ -1189,7 +1204,7 @@ extern "C" void qwen4_qsa_topk(const float *scores, int score_stride,
   if (layout.n_tokens == 0) {
     return;
   }
-  q4_qsa_topk_kernel<<<layout.n_tokens, 1024, 0, (cudaStream_t)stream>>>(
+  q4_qsa_topk_kernel<<<layout.n_tokens, Q4_QSA_TOPK_THREADS, 0, (cudaStream_t)stream>>>(
       scores, score_stride, layout, paged, ratio, topk, selected, n_selected);
 }
 

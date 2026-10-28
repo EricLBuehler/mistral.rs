@@ -20,6 +20,7 @@ mod ffi {
             hc: i32,
             format: i32,
             dtype: i32,
+            multiprocessors: i32,
             stream: i64,
         );
         pub(super) fn mistral_hc_silu(
@@ -182,11 +183,17 @@ pub(crate) fn try_hc_up_mix(
 ) -> Result<Option<Tensor>> {
     if !xn.device().is_cuda()
         || !matches!(xn.dtype(), DType::BF16 | DType::F16)
-        || xn.elem_count() / xn.dim(candle_core::D::Minus1)? > FUSED_MAX_TOKENS
         || projection.has_bias()
         || projection.is_dynamic_lora_active()
         || projection.stats_snapshot().is_some()
     {
+        return Ok(None);
+    }
+    if xn.elem_count() / xn.dim(candle_core::D::Minus1)? > FUSED_MAX_TOKENS {
+        #[cfg(feature = "cutile")]
+        if let Some(weight) = projection.unquant_forward_weight() {
+            return mistralrs_quant::cutile::try_hc_prefill_up_mix(xn, lo, &weight, hc);
+        }
         return Ok(None);
     }
     let Some((weight, _)) = projection.unquant_weight_bias() else {
@@ -207,6 +214,13 @@ pub(crate) fn try_hc_up_mix(
     *shape.last_mut().unwrap() = hidden;
     let dtype = half_dtype_code(xn.dtype())?;
     let rank = lo.dim(candle_core::D::Minus1)?;
+    let multiprocessors = xn
+        .device()
+        .as_cuda_device()?
+        .cuda_stream()
+        .context()
+        .attribute(candle_core::cuda::cudarc::driver::sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)
+        .map_err(candle_core::Error::wrap)?;
     let outputs = launch(
         &[Some(&lo), Some(&weight), Some(&xn)],
         &[shape.into()],
@@ -224,6 +238,7 @@ pub(crate) fn try_hc_up_mix(
                 hc as i32,
                 i32::from(weight.dtype() == DType::BF16),
                 dtype,
+                multiprocessors,
                 stream,
             );
         },

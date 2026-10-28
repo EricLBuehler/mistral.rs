@@ -10,6 +10,25 @@ const TEST_HC: usize = 4;
 const TEST_HIDDEN: usize = 2560;
 const TEST_RANK: usize = 320;
 const TEST_TOLERANCE: f32 = 0.016;
+const UP_MIX_ROWS_PER_MULTIPROCESSOR: usize = 64;
+const UP_MIX_TOLERANCE: f32 = 0.004;
+const UP_MIX_ROUNDING_RANK: usize = 64;
+const UP_MIX_ROUNDING_CASES: [(DType, f32, f32, f32, f32); 2] = [
+    (
+        DType::BF16,
+        1.0 / 256.0,
+        37.0 / 128.0,
+        27.0 / 128.0,
+        217.0 / 1024.0,
+    ),
+    (
+        DType::F16,
+        1.0 / 2048.0,
+        9.0 / 32.0,
+        1684.0 / 8192.0,
+        1685.0 / 8192.0,
+    ),
+];
 
 fn max_diff(a: &Tensor, b: &Tensor) -> Result<f32> {
     (a.to_dtype(DType::F32)? - b.to_dtype(DType::F32)?)?
@@ -17,6 +36,96 @@ fn max_diff(a: &Tensor, b: &Tensor) -> Result<f32> {
         .flatten_all()?
         .max(0)?
         .to_scalar::<f32>()
+}
+
+fn up_mix_test_hidden(device: &Device) -> Result<usize> {
+    use candle_core::cuda::cudarc::driver::sys::CUdevice_attribute;
+    let multiprocessors = device
+        .as_cuda_device()?
+        .cuda_stream()
+        .context()
+        .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)
+        .map_err(candle_core::Error::wrap)?;
+    Ok(multiprocessors as usize * UP_MIX_ROWS_PER_MULTIPROCESSOR + 3)
+}
+
+#[test]
+fn vector_hyper_connection_upmix_matches_rounded_projection() -> Result<()> {
+    use crate::cuda::hyper_connection::{hc_mix, try_hc_up_mix};
+
+    let device = Device::new_cuda(0)?;
+    let hidden = up_mix_test_hidden(&device)?;
+    for (rank, streams, offset) in [
+        (64, 1, 0),
+        (320, 3, 0),
+        (127, 2, 0),
+        (320, 4, 1),
+        (32, 5, 0),
+    ] {
+        let width = hidden * streams;
+        for dtype in [DType::F16, DType::BF16] {
+            for weight_dtype in [DType::F16, DType::BF16] {
+                let values = (0..width * rank + offset)
+                    .map(|i| (i as f32 * 0.17 + 0.8).sin() / (rank as f32).sqrt())
+                    .collect::<Vec<_>>();
+                let weight = Tensor::from_vec(values, width * rank + offset, &device)?
+                    .to_dtype(weight_dtype)?
+                    .narrow(0, offset, width * rank)?
+                    .reshape((width, rank))?;
+                let values = (0..rank + offset)
+                    .map(|i| (i as f32 * 0.13).cos())
+                    .collect::<Vec<_>>();
+                let lo = Tensor::from_vec(values, rank + offset, &device)?
+                    .to_dtype(dtype)?
+                    .narrow(0, offset, rank)?
+                    .reshape((1, rank))?;
+                let values = (0..width)
+                    .map(|i| (i as f32 * 0.03 + 0.2).sin())
+                    .collect::<Vec<_>>();
+                let residual = Tensor::from_vec(values, (1, width), &device)?.to_dtype(dtype)?;
+                let gate = lo
+                    .to_dtype(DType::F32)?
+                    .matmul(&weight.to_dtype(DType::F32)?.t()?)?
+                    .to_dtype(dtype)?;
+                let expected = hc_mix(&residual, &gate, streams)?;
+                let projection = UnquantLinear::new(QuantMethodConfig::Unquantized(
+                    candle_nn::Linear::new(weight, None),
+                ))?;
+                let actual = try_hc_up_mix(&residual, &lo, &projection, streams)?.unwrap();
+                assert!(
+                    max_diff(&actual, &expected)? < UP_MIX_TOLERANCE,
+                    "{dtype:?} {weight_dtype:?} rank={rank} streams={streams} offset={offset}",
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn vector_hyper_connection_upmix_rounds_gates_before_sigmoid() -> Result<()> {
+    use crate::cuda::hyper_connection::try_hc_up_mix;
+
+    let device = Device::new_cuda(0)?;
+    let hidden = up_mix_test_hidden(&device)?;
+    for (dtype, delta, residual, rounded, unrounded) in UP_MIX_ROUNDING_CASES {
+        assert_ne!(rounded, unrounded);
+        let mut row = vec![0f32; UP_MIX_ROUNDING_RANK];
+        row[0] = 1.0;
+        row[1] = delta;
+        let weight = Tensor::from_vec(row.repeat(hidden), (hidden, UP_MIX_ROUNDING_RANK), &device)?
+            .to_dtype(dtype)?;
+        row[1] = 1.0;
+        let lo = Tensor::from_vec(row, (1, UP_MIX_ROUNDING_RANK), &device)?.to_dtype(dtype)?;
+        let input = Tensor::full(residual, (1, hidden), &device)?.to_dtype(dtype)?;
+        let expected = Tensor::full(rounded, (1, hidden), &device)?.to_dtype(dtype)?;
+        let projection = UnquantLinear::new(QuantMethodConfig::Unquantized(
+            candle_nn::Linear::new(weight, None),
+        ))?;
+        let actual = try_hc_up_mix(&input, &lo, &projection, 1)?.unwrap();
+        assert_eq!(max_diff(&actual, &expected)?, 0.0, "{dtype:?}");
+    }
+    Ok(())
 }
 
 #[test]
@@ -527,4 +636,445 @@ fn quantized_hyper_connection_graph_replay_matches_reference() -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(feature = "cutile")]
+mod hc_prefill_integration {
+    use candle_core::cuda::cudarc::driver::{sys, CudaGraph};
+    use candle_core::{DType, Device, Result, Tensor, Var};
+    use mistralrs_quant::cutile::{hc_prefill_supported, register_hc_up_mix, warmup_moe_kernels};
+    use mistralrs_quant::{
+        maybe_wrap_dynamic_lora, with_lora_execution, LoraExecution, LoraLayerRegistry,
+        LoraLinearSpec, LoraWeights, QuantMethod, QuantMethodConfig, ShardedSafeTensors,
+        UnquantLinear,
+    };
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex},
+    };
+
+    use crate::cuda::hyper_connection::{hc_mix, try_hc_up_mix};
+
+    const ROW_OFFSETS: [usize; 5] = [0, 1, 2, 4, 8];
+    const ROW_TILE: usize = 64;
+    const COLUMN_TILE: usize = 128;
+    const TEST_MIN_ROWS: usize = 512;
+    const CACHE_PARTS: usize = 3;
+    const BLOCKS_PER_SM: usize = 2;
+    const HALF_BYTES: usize = 2;
+    const ROW_ALIGNMENT: usize = 16;
+    const UNSEEN_ROW_OFFSET: usize = 32;
+
+    fn row_classes(device: &Device, streams: usize, hidden: usize) -> Result<[usize; 5]> {
+        use candle_core::cuda::cudarc::driver::sys::CUdevice_attribute;
+        let stream = device.as_cuda_device()?.cuda_stream();
+        let context = stream.context();
+        let sms = context
+            .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)
+            .map_err(candle_core::Error::msg)? as usize;
+        let cache = context
+            .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE)
+            .map_err(candle_core::Error::msg)? as usize;
+        let minimum = TEST_MIN_ROWS
+            .max((cache / CACHE_PARTS).div_ceil(streams * hidden * HALF_BYTES))
+            .max((sms * BLOCKS_PER_SM).div_ceil(hidden / COLUMN_TILE) * ROW_TILE);
+        let base = (minimum + UNSEEN_ROW_OFFSET).next_multiple_of(ROW_ALIGNMENT);
+        Ok(ROW_OFFSETS.map(|offset| base + offset))
+    }
+    const SHAPES: [(usize, usize, usize); 3] = [(4, 2048, 256), (3, 3072, 192), (4, 2560, 320)];
+    const REPLAY_SCALES: [(f64, f64, f64); 3] =
+        [(0.0, 1.0, 1.0), (-0.5, 0.75, 1.0), (2.0, -0.5, -0.5)];
+    const INPUT_SEED: u32 = 71;
+    const RESIDUAL_SEED: u32 = 97;
+    const WEIGHT_SEED: u32 = 23;
+    const BF16_ATOL: f32 = 0.004;
+    const BF16_RTOL: f32 = 0.016;
+    const F16_ATOL: f32 = 0.0005;
+    const F16_RTOL: f32 = 0.002;
+    const LORA_GATE_DELTA: f32 = 0.5;
+    const LORA_MIX_MIN_CHANGE: f32 = 0.05;
+    const MISALIGNED_OFFSET: usize = 1;
+    const UNREGISTERED_SHAPE: (usize, usize, usize) = (4, 3072, 192);
+    const EXCLUDED_SHAPES: [(usize, usize, usize); 2] = [(3, 1537, 130), (3, 257, 96)];
+    static CUDA_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn matrix(
+        rows: usize,
+        columns: usize,
+        seed: u32,
+        scale: f32,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<Tensor> {
+        let values = (0..rows * columns)
+            .map(|index| {
+                let mut bits = (index as u32).wrapping_add(seed);
+                bits ^= bits >> 16;
+                bits = bits.wrapping_mul(0x7feb352d);
+                bits ^= bits >> 15;
+                bits = bits.wrapping_mul(0x846ca68b);
+                bits ^= bits >> 16;
+                ((bits & 65535) as f32 / 32768.0 - 1.0) * scale
+            })
+            .collect::<Vec<_>>();
+        Tensor::from_vec(values, (rows, columns), device)?.to_dtype(dtype)
+    }
+
+    fn projection(weight: Tensor, bias: Option<Tensor>) -> Result<UnquantLinear> {
+        UnquantLinear::new(QuantMethodConfig::Unquantized(candle_nn::Linear::new(
+            weight, bias,
+        )))
+    }
+
+    fn assert_close(actual: &Tensor, expected: &Tensor) -> Result<()> {
+        assert_eq!(actual.dims(), expected.dims());
+        let (atol, rtol) = match actual.dtype() {
+            DType::BF16 => (BF16_ATOL, BF16_RTOL),
+            DType::F16 => (F16_ATOL, F16_RTOL),
+            _ => unreachable!(),
+        };
+        let actual = actual
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        let expected = expected
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        for (index, (&actual, &expected)) in actual.iter().zip(&expected).enumerate() {
+            assert!(
+                actual.is_finite() && expected.is_finite(),
+                "nonfinite at {index}"
+            );
+            assert!(
+                (actual - expected).abs() <= atol + rtol * expected.abs(),
+                "at {index}: actual={actual}, expected={expected}"
+            );
+        }
+        Ok(())
+    }
+
+    fn capture(
+        device: &Device,
+        run: impl FnOnce() -> Result<Option<Tensor>>,
+    ) -> Result<(CudaGraph, Tensor)> {
+        device.synchronize()?;
+        let stream = device.as_cuda_device()?.cuda_stream();
+        let tracking = stream.context().is_event_tracking();
+        if tracking {
+            unsafe { stream.context().disable_event_tracking() };
+        }
+        if let Err(error) =
+            stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+        {
+            if tracking {
+                unsafe { stream.context().enable_event_tracking() };
+            }
+            return Err(candle_core::Error::wrap(error));
+        }
+        let output = run();
+        let graph = stream.end_capture(
+            sys::CUgraphInstantiate_flags::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH,
+        );
+        if tracking {
+            unsafe { stream.context().enable_event_tracking() };
+        }
+        let output = output?.expect("registered prefill shape must select fusion");
+        let graph = graph
+            .map_err(candle_core::Error::wrap)?
+            .expect("captured graph");
+        Ok((graph, output))
+    }
+
+    #[test]
+    fn hc_prefill_warmup_covers_unseen_rows_and_mutated_graph_inputs() -> Result<()> {
+        let _lock = CUDA_TEST_LOCK.lock().unwrap();
+        let device = Device::new_cuda_with_stream(0)?;
+        let dev = device.as_cuda_device()?;
+        if !hc_prefill_supported(dev) {
+            return Ok(());
+        }
+        let mut cases = Vec::new();
+        for dtype in [DType::BF16, DType::F16] {
+            for (streams, hidden, rank) in SHAPES {
+                let width = streams * hidden;
+                let weight0 = matrix(
+                    width,
+                    rank,
+                    WEIGHT_SEED,
+                    1.0 / (rank as f32).sqrt(),
+                    dtype,
+                    &device,
+                )?;
+                let weight = Var::from_tensor(&weight0)?;
+                register_hc_up_mix(&weight, streams);
+                cases.push((dtype, streams, hidden, rank, weight0, weight));
+            }
+        }
+        warmup_moe_kernels(&device, true)?;
+        for (dtype, streams, hidden, rank, weight0, weight) in cases {
+            let width = streams * hidden;
+            let layer = projection(weight.as_tensor().clone(), None)?;
+            for rows in row_classes(&device, streams, hidden)? {
+                let lo0 = matrix(rows, rank, INPUT_SEED, 1.0, dtype, &device)?;
+                let xn0 = matrix(rows, width, RESIDUAL_SEED, 1.0, dtype, &device)?;
+                let lo = Var::from_tensor(&lo0)?;
+                let xn = Var::from_tensor(&xn0)?;
+                let lo_view = lo.reshape((1, rows, rank))?;
+                let xn_view = xn.reshape((1, rows, width))?;
+                let (graph, output) = capture(&device, || {
+                    try_hc_up_mix(&xn_view, &lo_view, &layer, streams)
+                })?;
+                assert_eq!(output.dims(), [1, rows, hidden]);
+                for (lo_scale, xn_scale, weight_scale) in REPLAY_SCALES {
+                    lo.set(&lo0.affine(lo_scale, 0.0)?)?;
+                    xn.set(&xn0.affine(xn_scale, 0.0)?)?;
+                    weight.set(&weight0.affine(weight_scale, 0.0)?)?;
+                    graph.launch().map_err(candle_core::Error::wrap)?;
+                    let expected = hc_mix(&xn_view, &layer.forward(&lo_view)?, streams)?;
+                    assert_close(&output, &expected)?;
+                }
+                weight.set(&weight0)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn hc_prefill_hook_preserves_bias_and_stats_fallbacks() -> Result<()> {
+        let _lock = CUDA_TEST_LOCK.lock().unwrap();
+        let device = Device::new_cuda_with_stream(0)?;
+        let dev = device.as_cuda_device()?;
+        if !hc_prefill_supported(dev) {
+            return Ok(());
+        }
+        let (streams, hidden, rank) = SHAPES[0];
+        let rows = row_classes(&device, streams, hidden)?[0];
+        let width = streams * hidden;
+        for dtype in [DType::BF16, DType::F16] {
+            let weight = matrix(
+                width,
+                rank,
+                WEIGHT_SEED,
+                1.0 / (rank as f32).sqrt(),
+                dtype,
+                &device,
+            )?;
+            register_hc_up_mix(&weight, streams);
+            warmup_moe_kernels(&device, true)?;
+            let lo = matrix(rows, rank, INPUT_SEED, 1.0, dtype, &device)?;
+            let xn = matrix(rows, width, RESIDUAL_SEED, 1.0, dtype, &device)?;
+            let bias = Tensor::full(0.25f32, width, &device)?.to_dtype(dtype)?;
+            let biased = projection(weight.clone(), Some(bias))?;
+            assert!(try_hc_up_mix(&xn, &lo, &biased, streams)?.is_none());
+            let tracked = projection(weight, None)?;
+            assert!(try_hc_up_mix(&xn, &lo, &tracked, streams)?.is_some());
+            tracked.begin_track_stats()?;
+            assert_eq!(tracked.stats_snapshot(), Some((0, 0)));
+            assert!(try_hc_up_mix(&xn, &lo, &tracked, streams)?.is_none());
+            assert_eq!(tracked.stats_snapshot(), Some((0, 0)));
+            let gate = tracked.forward(&lo)?;
+            assert_eq!(tracked.stats_snapshot(), Some((1, rows)));
+            let mixed = hc_mix(&xn, &gate, streams)?;
+            assert_eq!(mixed.dims(), [rows, hidden]);
+            tracked.end_track_stats()?;
+            assert!(try_hc_up_mix(&xn, &lo, &tracked, streams)?.is_some());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn hc_prefill_hook_preserves_dynamic_lora_execution() -> Result<()> {
+        let _lock = CUDA_TEST_LOCK.lock().unwrap();
+        let device = Device::new_cuda_with_stream(0)?;
+        if !hc_prefill_supported(device.as_cuda_device()?) {
+            return Ok(());
+        }
+        let (streams, hidden, rank) = SHAPES[0];
+        let rows = row_classes(&device, streams, hidden)?[0];
+        let width = streams * hidden;
+        for dtype in [DType::BF16, DType::F16] {
+            let registry = Arc::new(LoraLayerRegistry::new());
+            let vb =
+                ShardedSafeTensors::wrap(HashMap::<String, Tensor>::new(), dtype, device.clone())
+                    .with_lora_registry(registry.clone());
+            let weight = Tensor::zeros((width, rank), dtype, &device)?;
+            register_hc_up_mix(&weight, streams);
+            warmup_moe_kernels(&device, true)?;
+            let base = Arc::new(projection(weight, None)?) as Arc<dyn QuantMethod>;
+            let wrapped = maybe_wrap_dynamic_lora(
+                &vb.pp("hc_up"),
+                base,
+                LoraLinearSpec::replicated(rank, width),
+            )?;
+            registry.finalize()?;
+            let site = registry
+                .sites()
+                .into_iter()
+                .find(|site| site.key().path() == "hc_up")
+                .expect("HC up LoRA site");
+            let lo = Tensor::ones((rows, rank), dtype, &device)?;
+            let xn = Tensor::ones((rows, width), dtype, &device)?;
+            let inactive = try_hc_up_mix(&xn, &lo, &*wrapped, streams)?
+                .expect("inactive wrapper must preserve dense fusion");
+            let expected_inactive = hc_mix(&xn, &wrapped.forward(&lo)?, streams)?;
+            assert_close(&inactive, &expected_inactive)?;
+            let mut a_values = vec![0f32; rank];
+            a_values[0] = 1.0;
+            let a = Tensor::from_vec(a_values, (1, rank), &device)?.to_dtype(dtype)?;
+            let b = Tensor::full(LORA_GATE_DELTA, (width, 1), &device)?.to_dtype(dtype)?;
+            for active in [false, true] {
+                let mut execution =
+                    LoraExecution::new(registry.runtime_id(), vec![active.then_some(0); rows]);
+                execution.insert(&site, 0, LoraWeights::new(a.clone(), b.clone(), 1.0)?)?;
+                with_lora_execution(Some(Arc::new(execution)), || -> Result<()> {
+                    assert_eq!(wrapped.is_dynamic_lora_active(), active);
+                    let fused = try_hc_up_mix(&xn, &lo, &*wrapped, streams)?;
+                    if active {
+                        assert!(fused.is_none());
+                        let gate = wrapped.forward(&lo)?;
+                        let expected_gate = Tensor::full(LORA_GATE_DELTA, (rows, width), &device)?
+                            .to_dtype(dtype)?;
+                        assert_close(&gate, &expected_gate)?;
+                        let mixed = hc_mix(&xn, &gate, streams)?;
+                        assert_close(&mixed, &hc_mix(&xn, &expected_gate, streams)?)?;
+                        let change = (&mixed.to_dtype(DType::F32)?
+                            - &inactive.to_dtype(DType::F32)?)?
+                            .abs()?
+                            .flatten_all()?
+                            .max(0)?
+                            .to_scalar::<f32>()?;
+                        assert!(change > LORA_MIX_MIN_CHANGE);
+                    } else {
+                        assert_close(
+                            &fused.expect("unused adapter must preserve fusion"),
+                            &inactive,
+                        )?;
+                    }
+                    Ok(())
+                })?;
+            }
+            assert!(!wrapped.is_dynamic_lora_active());
+            assert_close(
+                &try_hc_up_mix(&xn, &lo, &*wrapped, streams)?
+                    .expect("fusion resumes after adapter scope"),
+                &inactive,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn misaligned_copy(tensor: &Tensor) -> Result<Tensor> {
+        let flat = tensor.flatten_all()?;
+        let prefix = Tensor::zeros(MISALIGNED_OFFSET, tensor.dtype(), tensor.device())?;
+        Tensor::cat(&[&prefix, &flat], 0)?
+            .narrow(0, MISALIGNED_OFFSET, tensor.elem_count())?
+            .reshape(tensor.shape())
+    }
+
+    #[test]
+    fn hc_prefill_hook_declines_unsupported_inputs() -> Result<()> {
+        let _lock = CUDA_TEST_LOCK.lock().unwrap();
+        let device = Device::new_cuda_with_stream(0)?;
+        if !hc_prefill_supported(device.as_cuda_device()?) {
+            return Ok(());
+        }
+        let (streams, hidden, rank) = SHAPES[0];
+        let rows = row_classes(&device, streams, hidden)?[0];
+        let width = streams * hidden;
+        for dtype in [DType::BF16, DType::F16] {
+            let other_dtype = if dtype == DType::BF16 {
+                DType::F16
+            } else {
+                DType::BF16
+            };
+            let weight = matrix(
+                width,
+                rank,
+                WEIGHT_SEED,
+                1.0 / (rank as f32).sqrt(),
+                dtype,
+                &device,
+            )?;
+            let other_weight = weight.to_dtype(other_dtype)?;
+            register_hc_up_mix(&weight, streams);
+            register_hc_up_mix(&other_weight, streams);
+            warmup_moe_kernels(&device, true)?;
+            let layer = projection(weight.clone(), None)?;
+            let other_layer = projection(other_weight, None)?;
+            let lo = matrix(rows, rank, INPUT_SEED, 1.0, dtype, &device)?;
+            let xn = matrix(rows, width, RESIDUAL_SEED, 1.0, dtype, &device)?;
+            assert!(try_hc_up_mix(&xn, &lo, &layer, streams)?.is_some());
+            assert!(try_hc_up_mix(&xn, &lo.to_dtype(other_dtype)?, &layer, streams)?.is_none());
+            assert!(try_hc_up_mix(&xn.to_dtype(other_dtype)?, &lo, &layer, streams)?.is_none());
+            assert!(try_hc_up_mix(&xn, &lo, &other_layer, streams)?.is_none());
+
+            let strided_lo =
+                matrix(rows, rank + 1, INPUT_SEED, 1.0, dtype, &device)?.narrow(1, 0, rank)?;
+            let strided_xn =
+                matrix(rows, width + 1, RESIDUAL_SEED, 1.0, dtype, &device)?.narrow(1, 0, width)?;
+            let strided_weight =
+                matrix(width, rank + 1, WEIGHT_SEED, 1.0, dtype, &device)?.narrow(1, 0, rank)?;
+            assert!(
+                !strided_lo.is_contiguous()
+                    && !strided_xn.is_contiguous()
+                    && !strided_weight.is_contiguous()
+            );
+            assert!(try_hc_up_mix(&xn, &strided_lo, &layer, streams)?.is_none());
+            assert!(try_hc_up_mix(&strided_xn, &lo, &layer, streams)?.is_none());
+            assert!(
+                try_hc_up_mix(&xn, &lo, &projection(strided_weight, None)?, streams)?.is_none()
+            );
+
+            let offset_lo = misaligned_copy(&lo)?;
+            let offset_xn = misaligned_copy(&xn)?;
+            let offset_weight = misaligned_copy(&weight)?;
+            for tensor in [&offset_lo, &offset_xn, &offset_weight] {
+                assert!(tensor.is_contiguous());
+                assert_eq!(tensor.layout().start_offset(), MISALIGNED_OFFSET);
+            }
+            assert!(try_hc_up_mix(&xn, &offset_lo, &layer, streams)?.is_none());
+            assert!(try_hc_up_mix(&offset_xn, &lo, &layer, streams)?.is_none());
+            assert!(try_hc_up_mix(&xn, &lo, &projection(offset_weight, None)?, streams)?.is_none());
+
+            for (excluded_streams, excluded_hidden, excluded_rank) in EXCLUDED_SHAPES {
+                let excluded_width = excluded_streams * excluded_hidden;
+                let excluded_weight =
+                    Tensor::zeros((excluded_width, excluded_rank), dtype, &device)?;
+                register_hc_up_mix(&excluded_weight, excluded_streams);
+                warmup_moe_kernels(&device, true)?;
+                let excluded_lo = Tensor::zeros((rows, excluded_rank), dtype, &device)?;
+                let excluded_xn = Tensor::zeros((rows, excluded_width), dtype, &device)?;
+                assert!(try_hc_up_mix(
+                    &excluded_xn,
+                    &excluded_lo,
+                    &projection(excluded_weight, None)?,
+                    excluded_streams,
+                )?
+                .is_none());
+            }
+
+            let (unregistered_streams, unregistered_hidden, unregistered_rank) = UNREGISTERED_SHAPE;
+            let unregistered_width = unregistered_streams * unregistered_hidden;
+            let unregistered_weight = matrix(
+                unregistered_width,
+                unregistered_rank,
+                WEIGHT_SEED,
+                1.0,
+                dtype,
+                &device,
+            )?;
+            let unregistered_lo = matrix(rows, unregistered_rank, INPUT_SEED, 1.0, dtype, &device)?;
+            let unregistered_xn =
+                matrix(rows, unregistered_width, RESIDUAL_SEED, 1.0, dtype, &device)?;
+            assert!(try_hc_up_mix(
+                &unregistered_xn,
+                &unregistered_lo,
+                &projection(unregistered_weight, None)?,
+                unregistered_streams,
+            )?
+            .is_none());
+        }
+        Ok(())
+    }
 }

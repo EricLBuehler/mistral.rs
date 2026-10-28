@@ -2268,6 +2268,7 @@ mod tests {
 
         let scheme = ActivationQuantizationScheme {
             dtype: DType::F8E4M3,
+            scale_encoding: crate::ActivationScaleEncoding::F32,
             block_shape: [1, GROUP_SIZE],
         };
         let scale_layout = ActivationScaleLayout::GroupMajor {
@@ -2436,6 +2437,7 @@ mod tests {
 
         let scheme = ActivationQuantizationScheme {
             dtype: DType::F8E4M3,
+            scale_encoding: crate::ActivationScaleEncoding::F32,
             block_shape: [1, GROUP_SIZE],
         };
         let scale_layout = ActivationScaleLayout::GroupMajor {

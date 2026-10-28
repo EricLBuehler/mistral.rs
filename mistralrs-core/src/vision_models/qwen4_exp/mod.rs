@@ -41,6 +41,7 @@ mod text;
 
 pub(crate) use crate::vision_models::qwen3_vl::Qwen3VLProcessor as Qwen4ExpProcessor;
 pub(crate) use config::Config;
+pub(crate) use ple::checkpoint_table_is_packed;
 #[cfg(feature = "cuda")]
 pub(crate) use ple::planned_resident_table_bytes;
 
@@ -176,6 +177,9 @@ impl Qwen4ExpModel {
             .map(|vision_cfg| {
                 Qwen3VLVisionModel::new(
                     vision_cfg,
+                    &cfg.quantization_config
+                        .clone()
+                        .or_else(|| cfg.text_config.quantization_config.clone()),
                     vision_vb.set_device(normal_loading_metadata.real_device.clone()),
                 )
             })

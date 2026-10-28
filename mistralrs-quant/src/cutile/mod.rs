@@ -7,6 +7,8 @@ mod fp8_w8a8;
 mod fused_moe;
 mod fused_moe_fp8;
 mod gdn_prefill;
+mod hyper_connection;
+mod mxfp8_gemm;
 mod nvfp4;
 mod nvfp4_gemv;
 mod nvfp4_glu;
@@ -34,10 +36,13 @@ pub use gdn_prefill::{
     cutile_gdn_prefill, gdn_prefill_supported, GdnPrefillArgs, GDN_PREFILL_CHUNK,
     GDN_PREFILL_HEAD_DIM,
 };
+pub use hyper_connection::{hc_prefill_supported, register_hc_up_mix, try_hc_prefill_up_mix};
+pub(crate) use mxfp8_gemm::{forward as cutile_mxfp8_gemm, register as register_mxfp8_shape};
 pub use nvfp4::{
     cutile_nvfp4, cutile_nvfp4_gather, cutile_nvfp4_prequantized, cutile_nvfp4_quantize,
     nvfp4_supported, register_nvfp4_routing, register_nvfp4_shape, Nvfp4GemmArgs,
 };
+pub(crate) use nvfp4::{cutile_nvfp4_gather_calibrated, try_cutile_nvfp4_gather_shared};
 pub(crate) use nvfp4_glu::{launch as cutile_nvfp4_glu, GluQuantArgs};
 pub use qsa::{
     cutile_qsa_attention, cutile_qsa_score, register_qsa_shape, QsaAttentionArgs, QsaPaged,
@@ -96,6 +101,17 @@ pub fn device_compute_capability(dev: &candle_core::CudaDevice) -> (i32, i32) {
     }
     .unwrap_or(0);
     (major, minor)
+}
+
+const BLOCK_SCALED_MIN_CUDA_VERSION: u32 = 1303;
+const BLOCK_SCALED_MIN_TILEIRAS_VERSION: (u32, u32) = (13, 3);
+
+pub(crate) fn block_scaled_mma_supported(dev: &candle_core::CudaDevice) -> bool {
+    device_compute_major(dev) >= 10
+        && build_cuda_version_code().is_some_and(|version| version >= BLOCK_SCALED_MIN_CUDA_VERSION)
+        && tileiras_capabilities()
+            .is_some_and(|capabilities| capabilities.version >= BLOCK_SCALED_MIN_TILEIRAS_VERSION)
+        && jit_available(dev)
 }
 
 pub fn device_compute_major(dev: &candle_core::CudaDevice) -> i32 {

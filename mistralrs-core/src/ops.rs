@@ -7168,6 +7168,7 @@ mod tests {
 
     use super::MergedDenseProjection;
 
+    const MERGED_PADDED_OUTPUT_ROWS: usize = 16;
     #[cfg(feature = "cuda")]
     const CUDA_F32_REL_TOLERANCE: f32 = 1e-5;
     #[cfg(feature = "cuda")]
@@ -7772,6 +7773,17 @@ mod tests {
                 .with_lora_registry(registry.clone());
         let packed_weight =
             Tensor::new(&[[1f32, 0.], [0., 1.], [1., 1.], [1., -1.]], &Device::Cpu)?;
+        let packed_weight = Tensor::cat(
+            &[
+                &packed_weight,
+                &Tensor::zeros(
+                    (MERGED_PADDED_OUTPUT_ROWS - packed_weight.dim(0)?, 2),
+                    DType::F32,
+                    &Device::Cpu,
+                )?,
+            ],
+            0,
+        )?;
         let packed = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
             Linear::new(packed_weight.clone(), None),
         ))?) as Arc<dyn QuantMethod>;
@@ -7792,6 +7804,7 @@ mod tests {
         });
         let input = Tensor::new(&[[2f32, 3.]], &Device::Cpu)?;
         let base = merged.forward(&input)?;
+        assert_eq!(base[0].stride(), &[MERGED_PADDED_OUTPUT_ROWS, 1]);
         assert_eq!(base[0].to_vec2::<f32>()?, vec![vec![2., 3.]]);
         assert_eq!(base[1].to_vec2::<f32>()?, vec![vec![5., -1.]]);
 
@@ -7820,6 +7833,17 @@ mod tests {
     fn merged_projection_records_constituent_stats() -> candle_core::Result<()> {
         let device = Device::Cpu;
         let weights = Tensor::new(&[[1f32, 0.], [0., 1.], [1., 1.]], &device)?;
+        let weights = Tensor::cat(
+            &[
+                &weights,
+                &Tensor::zeros(
+                    (MERGED_PADDED_OUTPUT_ROWS - weights.dim(0)?, 2),
+                    DType::F32,
+                    &device,
+                )?,
+            ],
+            0,
+        )?;
         let linear = |weight| -> candle_core::Result<Arc<dyn QuantMethod>> {
             Ok(Arc::new(UnquantLinear::new(
                 QuantMethodConfig::Unquantized(Linear::new(weight, None)),
@@ -7847,7 +7871,10 @@ mod tests {
         assert_eq!(second.stats_snapshot(), Some((1, 2)));
         first.end_track_stats()?;
         second.end_track_stats()?;
-        assert!(merged.forward_packed(&input)?.is_some());
+        assert_eq!(
+            merged.forward_packed(&input)?.unwrap().dims(),
+            &[2, MERGED_PADDED_OUTPUT_ROWS]
+        );
         Ok(())
     }
 

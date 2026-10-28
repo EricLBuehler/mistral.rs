@@ -2,6 +2,7 @@
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <stdint.h>
+#include <type_traits>
 
 #define HC_THREADS 128
 #define HC_WARP_SIZE 32
@@ -9,6 +10,13 @@
 constexpr int HC_COMBINE_VECTOR = 4;
 constexpr int HC_COMBINE_RETAINED_VALUES = 32;
 constexpr uintptr_t HC_COMBINE_ALIGNMENT = 16;
+constexpr int HC_UP_VECTOR = 8;
+constexpr int HC_UP_LANES = 8;
+constexpr int HC_UP_THREADS = 256;
+
+template <typename T, int V> struct alignas(sizeof(T) * V) HcPack {
+  T x[V];
+};
 
 template <typename T> __device__ __forceinline__ float hc_f(T v) {
   return (float)v;
@@ -112,6 +120,44 @@ __global__ void hc_silu_kernel(const T *__restrict__ input,
   }
 }
 
+template <typename T, int FORMAT>
+__global__ void
+hc_up_mix_vector_kernel(const T *__restrict__ lo, const void *__restrict__ up,
+                        const T *__restrict__ xn, T *__restrict__ out,
+                        int hidden, int rank, int hc) {
+  using Weight = std::conditional_t<FORMAT == 1, __nv_bfloat16, __half>;
+  const int lane = threadIdx.x % HC_UP_LANES;
+  const int h =
+      blockIdx.x * (HC_UP_THREADS / HC_UP_LANES) + threadIdx.x / HC_UP_LANES;
+  if (h >= hidden)
+    return;
+  const int token = blockIdx.y;
+  const auto *input = reinterpret_cast<const HcPack<T, HC_UP_VECTOR> *>(
+      lo + (size_t)token * rank);
+  float mixed = 0.0f;
+  for (int stream = 0; stream < hc; ++stream) {
+    const int row = stream * hidden + h;
+    const auto *weight = reinterpret_cast<const HcPack<Weight, HC_UP_VECTOR> *>(
+        static_cast<const Weight *>(up) + (size_t)row * rank);
+    float sum = 0.0f;
+    for (int k = lane; k < rank / HC_UP_VECTOR; k += HC_UP_LANES) {
+      const auto x = input[k];
+      const auto w = weight[k];
+#pragma unroll
+      for (int component = 0; component < HC_UP_VECTOR; ++component)
+        sum = fmaf(hc_f(x.x[component]), hc_f(w.x[component]), sum);
+    }
+#pragma unroll
+    for (int offset = HC_UP_LANES / 2; offset > 0; offset /= 2)
+      sum += __shfl_xor_sync(__activemask(), sum, offset, HC_UP_LANES);
+    if (lane == 0)
+      mixed += hc_f(xn[(size_t)token * hc * hidden + row]) *
+               hc_sigmoid(hc_f(hc_t<T>(sum)));
+  }
+  if (lane == 0)
+    out[(size_t)token * hidden + h] = hc_t<T>(mixed / hc);
+}
+
 template <typename T>
 __global__ void
 hc_norm_kernel(const T *__restrict__ x, const float *__restrict__ weight,
@@ -152,7 +198,8 @@ __global__ void hc_mix_kernel(const T *__restrict__ xn,
   out[idx] = hc_t<T>(acc / (float)hc);
 }
 
-// next_weight enables grouped RMSNorm of the rounded residual for the next mixer.
+// next_weight enables grouped RMSNorm of the rounded residual for the next
+// mixer.
 template <typename T, bool STRIDED>
 __global__ void
 hc_combine_kernel(const T *__restrict__ res, const T *__restrict__ block_out,
@@ -186,10 +233,6 @@ hc_combine_kernel(const T *__restrict__ res, const T *__restrict__ block_out,
     xr[i] = hc_t<T>(hc_f(orow[i]) * inv * wr[i]);
   }
 }
-
-template <typename T, int V> struct alignas(sizeof(T) * V) HcCombinePack {
-  T x[V];
-};
 
 __device__ __forceinline__ float hc_combine_sum(float value, float *shared) {
   const int lane = threadIdx.x % 32, warp = threadIdx.x / 32;
@@ -227,11 +270,11 @@ hc_combine_vector_kernel(const T *__restrict__ res, const T *__restrict__ block,
   for (int item = 0; item < ITEMS; ++item) {
     const int index = (threadIdx.x + item * blockDim.x) * V;
     if (index < hidden) {
-      const auto residual = reinterpret_cast<const HcCombinePack<T, V> *>(
-          res + row * hidden)[index / V];
-      const auto value = reinterpret_cast<const HcCombinePack<T, V> *>(
+      const auto residual =
+          reinterpret_cast<const HcPack<T, V> *>(res + row * hidden)[index / V];
+      const auto value = reinterpret_cast<const HcPack<T, V> *>(
           block + token * hidden)[index / V];
-      HcCombinePack<T, V> combined;
+      HcPack<T, V> combined;
 #pragma unroll
       for (int component = 0; component < V; ++component) {
         combined.x[component] = hc_t<T>(
@@ -239,8 +282,8 @@ hc_combine_vector_kernel(const T *__restrict__ res, const T *__restrict__ block,
         retained[item][component] = hc_f(combined.x[component]);
         sum = fmaf(retained[item][component], retained[item][component], sum);
       }
-      reinterpret_cast<HcCombinePack<T, V> *>(
-          output + row * hidden)[index / V] = combined;
+      reinterpret_cast<HcPack<T, V> *>(output + row * hidden)[index / V] =
+          combined;
     }
   }
   if (weight == nullptr)
@@ -250,15 +293,15 @@ hc_combine_vector_kernel(const T *__restrict__ res, const T *__restrict__ block,
   for (int item = 0; item < ITEMS; ++item) {
     const int index = (threadIdx.x + item * blockDim.x) * V;
     if (index < hidden) {
-      const auto scale = reinterpret_cast<const HcCombinePack<float, V> *>(
+      const auto scale = reinterpret_cast<const HcPack<float, V> *>(
           weight + (size_t)stream * hidden)[index / V];
-      HcCombinePack<T, V> normalized;
+      HcPack<T, V> normalized;
 #pragma unroll
       for (int component = 0; component < V; ++component)
         normalized.x[component] =
             hc_t<T>(retained[item][component] * inv * scale.x[component]);
-      reinterpret_cast<HcCombinePack<T, V> *>(
-          normed + row * hidden)[index / V] = normalized;
+      reinterpret_cast<HcPack<T, V> *>(normed + row * hidden)[index / V] =
+          normalized;
     }
   }
 }
@@ -299,8 +342,34 @@ static inline int hc_row_threads(int hidden) {
 extern "C" void mistral_hc_up_mix(const void *lo, const void *up,
                                   const void *xn, void *out, int tokens,
                                   int hidden, int rank, int hc, int format,
-                                  int dtype, int64_t stream) {
+                                  int dtype, int multiprocessors,
+                                  int64_t stream) {
   const cudaStream_t s = (cudaStream_t)stream;
+  const bool vector =
+      rank >= HC_UP_VECTOR * HC_UP_LANES && rank % HC_UP_VECTOR == 0 &&
+      hidden >= multiprocessors * (HC_UP_THREADS / HC_UP_LANES) &&
+      (reinterpret_cast<uintptr_t>(lo) % (HC_UP_VECTOR * sizeof(__half))) ==
+          0 &&
+      (reinterpret_cast<uintptr_t>(up) % (HC_UP_VECTOR * sizeof(__half))) == 0;
+  if (vector) {
+    const dim3 vector_grid((hidden + HC_UP_THREADS / HC_UP_LANES - 1) /
+                               (HC_UP_THREADS / HC_UP_LANES),
+                           tokens);
+#define HC_UP_VECTOR_LAUNCH(FORMAT)                                            \
+  hc_up_mix_vector_kernel<scalar_t, FORMAT>                                    \
+      <<<vector_grid, HC_UP_THREADS, 0, s>>>(                                  \
+          (const scalar_t *)lo, up, (const scalar_t *)xn, (scalar_t *)out,     \
+          hidden, rank, hc)
+    HC_DISPATCH_HALF(dtype, {
+      if (format == 1) {
+        HC_UP_VECTOR_LAUNCH(1);
+      } else {
+        HC_UP_VECTOR_LAUNCH(0);
+      }
+    });
+#undef HC_UP_VECTOR_LAUNCH
+    return;
+  }
   const dim3 grid((hidden + HC_THREADS / HC_WARP_SIZE - 1) /
                       (HC_THREADS / HC_WARP_SIZE),
                   tokens);

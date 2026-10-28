@@ -2,10 +2,12 @@ use super::*;
 use crate::pipeline::cuda_graph::CudaGraphHandle;
 use candle_core::{cuda_backend::cudarc::driver::sys, Var};
 
-const SELECTION_GROUPS: &[usize] = &[0, 511, 512, 513, 527, 544, 2048, 4097];
+const SELECTION_GROUPS: &[usize] = &[0, 511, 512, 513, 527, 544, 1023, 1024, 1025, 2048, 4097];
 const MAX_GROUPS: usize = 4097;
 const PAGE_SIZE: usize = 32;
 const TOPK: usize = 512;
+const LARGE_TOPK: usize = 1025;
+const GRAPH_REPLAYS: usize = 3;
 const RNG_MULTIPLIER: u64 = 6364136223846793005;
 const RNG_INCREMENT: u64 = 1442695040888963407;
 
@@ -56,25 +58,19 @@ fn assert_selection(scores: &[f32], selected: &[i32], count: i32, topk: usize) {
         );
         return;
     }
-    let keys = scores.iter().copied().map(ordered).collect::<Vec<_>>();
-    let mut ranked = keys.clone();
-    ranked.sort_unstable_by(|a, b| b.cmp(a));
-    let threshold = ranked[topk - 1];
-    let above = keys.iter().filter(|&&key| key > threshold).count();
-    let mut seen = vec![false; scores.len()];
-    for (rank, &index) in selected[..topk].iter().enumerate() {
-        let index = index as usize;
-        assert!(index < scores.len() && !seen[index]);
-        seen[index] = true;
-        if rank < above {
-            assert!(keys[index] > threshold);
-        } else {
-            assert_eq!(keys[index], threshold);
-        }
-    }
-    for (index, &key) in keys.iter().enumerate() {
-        assert!(key <= threshold || seen[index]);
-    }
+    let mut ranked = scores
+        .iter()
+        .enumerate()
+        .map(|(index, &score)| (ordered(score), index as i32))
+        .collect::<Vec<_>>();
+    ranked.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    let mut expected = ranked
+        .into_iter()
+        .take(topk)
+        .map(|(_, index)| index)
+        .collect::<Vec<_>>();
+    expected.sort_unstable();
+    assert_eq!(&selected[..topk], expected.as_slice());
 }
 
 #[test]
@@ -93,7 +89,7 @@ fn qsa_topk_preserves_float_order_and_boundary_ties_on_graph_replay() -> Result<
         kv_lens: lengths.as_tensor(),
         block_size: PAGE_SIZE,
     };
-    for topk in [1, 31, TOPK] {
+    for topk in [1, 31, TOPK, LARGE_TOPK] {
         let selected = Tensor::zeros((ROWS, topk), DType::I32, &device)?;
         let counts = Tensor::zeros(ROWS, DType::I32, &device)?;
         let forward = || -> Result<()> {
@@ -125,15 +121,15 @@ fn qsa_topk_preserves_float_order_and_boundary_ties_on_graph_replay() -> Result<
                             .wrapping_mul(RNG_MULTIPLIER)
                             .wrapping_add(RNG_INCREMENT);
                         host[row * MAX_GROUPS + index] = match pattern {
-                            0 => index as f32 / 8.0 - 300.0,
-                            1 => (random % 17) as f32 - 8.0,
+                            0 => f32::from(u16::try_from(index).unwrap()) / 8.0 - 300.0,
+                            1 => f32::from(u16::try_from(random % 17).unwrap()) - 8.0,
                             2 => 0.0,
                             3 => match index % 6 {
                                 0 => f32::NAN,
                                 1 => f32::INFINITY,
                                 2 => f32::NEG_INFINITY,
                                 3 => -0.0,
-                                _ => (random % 100) as f32 / 64.0,
+                                _ => f32::from(u16::try_from(random % 100).unwrap()) / 64.0,
                             },
                             _ => f32::from_bits((random >> 32) as u32),
                         };
@@ -148,16 +144,18 @@ fn qsa_topk_preserves_float_order_and_boundary_ties_on_graph_replay() -> Result<
                     live.map(|count| (count * RATIO) as u32).as_slice(),
                     &device,
                 )?)?;
-                graph.launch()?;
-                let actual = selected.to_vec2::<i32>()?;
-                let counts = counts.to_vec1::<i32>()?;
-                for row in 0..ROWS {
-                    assert_selection(
-                        &host[row * MAX_GROUPS..row * MAX_GROUPS + live[row]],
-                        &actual[row],
-                        counts[row],
-                        topk,
-                    );
+                for _ in 0..GRAPH_REPLAYS {
+                    graph.launch()?;
+                    let actual = selected.to_vec2::<i32>()?;
+                    let counts = counts.to_vec1::<i32>()?;
+                    for row in 0..ROWS {
+                        assert_selection(
+                            &host[row * MAX_GROUPS..row * MAX_GROUPS + live[row]],
+                            &actual[row],
+                            counts[row],
+                            topk,
+                        );
+                    }
                 }
             }
         }
@@ -237,7 +235,7 @@ fn qsa_scoring_preserves_selection_with_changed_heads_pages_and_dtype() -> Resul
                         let row =
                             &mut host[physical * key_stride..physical * key_stride + QSA_HEAD_DIM];
                         row.fill(0.0);
-                        row[0] = (index % 129) as f32 - 64.0;
+                        row[0] = f32::from(u16::try_from(index % 129).unwrap()) - 64.0;
                         expected.push((direction * row[0]).max(0.0));
                     }
                     keys.set(

@@ -927,9 +927,12 @@ impl Loader for MultimodalLoader {
                                 QuantizationConfigShim::get_quant_config_pack_factor(
                                     &config, dtype,
                                 )?;
-                            let quantization = self.config.topology.as_ref().map(|topology| {
-                                AutoDeviceMapQuantization::isq(None, Some(topology))
-                            });
+                            let checkpoint_quantization =
+                                QuantizationConfigShim::get_quantization_config(&config)?;
+                            let quantization = AutoDeviceMapQuantization::checkpoint(
+                                checkpoint_quantization.as_ref(),
+                                self.config.topology.as_ref(),
+                            );
                             let weight_pack_factor =
                                 quantization
                                     .as_ref()
@@ -977,6 +980,10 @@ impl Loader for MultimodalLoader {
                     .prepared_source
                     .as_ref()
                     .is_some_and(|source| source.weights.raw_gguf().is_some())
+                    || self.inner.supports_file_mapped_optional_allocations(
+                        &config,
+                        paths.get_weight_filenames(),
+                    )?
                 {
                     auto_device_map::OptionalAllocationBacking::FileMapped
                 } else {

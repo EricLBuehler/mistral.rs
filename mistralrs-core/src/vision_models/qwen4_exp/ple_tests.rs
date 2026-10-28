@@ -1,6 +1,141 @@
 use super::*;
 use crate::vision_models::qwen4_exp::config::tests::flash_next_text_config;
 
+#[test]
+fn nvfp4_shards_load_without_requantizing() -> Result<()> {
+    const HEAD_DIM: usize = 160;
+    const SHARD_ROWS: usize = 3;
+    const SHARDS: usize = 2;
+    const PREFIX: &str = "model.layers.1.ple.ple_embedding.ngram_embedding";
+    const GLOBAL_SCALE: f32 = 0.251;
+    let mut tensors = std::collections::HashMap::new();
+    for shard in 0..SHARDS {
+        tensors.insert(
+            format!("{PREFIX}.shard_{shard}.weight"),
+            Tensor::from_vec(
+                (0..SHARD_ROWS * HEAD_DIM / 2)
+                    .map(|i| {
+                        let value = ((i / (HEAD_DIM / 2) + shard * SHARD_ROWS) % 4 + 2) as u8;
+                        value | ((value + 1) << 4)
+                    })
+                    .collect::<Vec<_>>(),
+                (SHARD_ROWS, HEAD_DIM / 2),
+                &Device::Cpu,
+            )?,
+        );
+        tensors.insert(
+            format!("{PREFIX}.shard_{shard}.weight_scale"),
+            Tensor::ones((SHARD_ROWS, HEAD_DIM / 16), DType::F32, &Device::Cpu)?
+                .to_dtype(DType::F8E4M3)?,
+        );
+    }
+    tensors.insert(
+        format!("{PREFIX}.weight_scale_2"),
+        Tensor::from_slice(&[GLOBAL_SCALE], 1, &Device::Cpu)?,
+    );
+    let file = tempfile::NamedTempFile::new().map_err(candle_core::Error::wrap)?;
+    candle_core::safetensors::save(&tensors, file.path())?;
+    let vb = unsafe {
+        mistralrs_quant::ShardedSafeTensors::sharded(
+            &[file.path()],
+            DType::BF16,
+            &Device::Cpu,
+            None,
+            Arc::new(|_| true),
+        )?
+    }
+    .pp("model")
+    .pp("layers")
+    .pp("1")
+    .pp("ple")
+    .pp("ple_embedding")
+    .pp("ngram_embedding");
+    let table = PleTable::load(&vb, HEAD_DIM, &Device::Cpu)?;
+    assert!(matches!(table.source, TableSource::Nvfp4(_)));
+    let ids = [5u64, 0, 3, 2, 3, 1];
+    let expected = table.gather_host(&ids, &Device::Cpu)?;
+    let first = expected.i(0)?.to_vec1::<f32>()?;
+    assert_eq!(first[0], 1.5 * GLOBAL_SCALE);
+    assert_eq!(first[1], 2.0 * GLOBAL_SCALE);
+    assert_ne!(
+        expected
+            .to_dtype(DType::F16)?
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1::<f32>()?,
+        expected
+            .to_dtype(DType::BF16)?
+            .to_dtype(DType::F16)?
+            .to_dtype(DType::F32)?
+            .flatten_all()?
+            .to_vec1::<f32>()?,
+    );
+    #[cfg(feature = "cuda")]
+    {
+        let device = Device::new_cuda_with_stream(0)?;
+        let mut table = PleTable::load(&vb, HEAD_DIM, &device)?;
+        let ids = Tensor::from_slice(&ids.map(|i| i as i64), (2, 3), &device)?;
+        if table.device_index.is_some() {
+            for prepared in [false, true] {
+                if prepared {
+                    table.prepare_mapped(&device, SHARD_ROWS, 0)?;
+                }
+                for dtype in [DType::BF16, DType::F16, DType::F32] {
+                    let expected = expected
+                        .to_dtype(dtype)?
+                        .to_dtype(DType::F32)?
+                        .flatten_all()?
+                        .to_vec1::<f32>()?;
+                    for layout in [
+                        crate::cuda::qwen4_exp::TokenLayout::rectangular(2, 1),
+                        crate::cuda::qwen4_exp::TokenLayout::from_host(
+                            &[(0, 2)],
+                            &[2],
+                            2,
+                            &device,
+                        )?,
+                    ] {
+                        let actual = table.gather_mapped(&ids, &layout, dtype)?;
+                        assert_eq!(actual.dtype(), dtype);
+                        assert_eq!(actual.dims(), &[2, 3 * HEAD_DIM]);
+                        assert_eq!(
+                            actual
+                                .to_dtype(DType::F32)?
+                                .flatten_all()?
+                                .to_vec1::<f32>()?,
+                            expected
+                        );
+                    }
+                }
+            }
+        }
+        let bytes = SHARD_ROWS * SHARDS * (HEAD_DIM / 2 + HEAD_DIM / 16);
+        table.make_resident(
+            &device,
+            WeightAllocationBudget {
+                persistent_bytes: bytes,
+                execution_bytes: bytes + RESIDENT_RESERVE_BYTES,
+            },
+        )?;
+        let Some(ResidentTable::Nvfp4(resident)) = &table.resident else {
+            panic!("packed table was not made resident");
+        };
+        for dtype in [DType::BF16, DType::F16, DType::F32] {
+            let actual = unsafe { resident.gather(&ids, dtype)? }
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            let expected = expected
+                .to_dtype(dtype)?
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            assert_eq!(actual, expected);
+        }
+    }
+    Ok(())
+}
+
 #[cfg(feature = "cuda")]
 const GGML_TYPE_IQ4_NL: u32 = 20;
 #[cfg(feature = "cuda")]
@@ -138,7 +273,7 @@ fn resident_quantization_matches_host() -> Result<()> {
                 .iter()
                 .all(|v| *v == half::f16::ZERO));
             let mut expected = vec![0u8; ROWS * row_bytes];
-            for (g, values) in values.chunks_exact(RESIDENT_GROUP).enumerate() {
+            for (g, values) in values.as_chunks::<RESIDENT_GROUP>().0.iter().enumerate() {
                 let amax = values.iter().map(|v| v.abs()).fold(0.0f32, f32::max);
                 let scale = half::f16::from_f32(amax / qmax);
                 assert_eq!(got_scales[groups + g], scale, "{dtype:?} Q{bits} group {g}");
@@ -351,7 +486,7 @@ fn mapped_quantization_preserves_shard_and_chunk_offsets() -> Result<()> {
                 crate::cuda::qwen4_exp::TokenLayout::rectangular(2, 1),
                 crate::cuda::qwen4_exp::TokenLayout::from_host(&[(0, 2)], &[2], 2, &device)?,
             ] {
-                let actual = table.gather_mapped(&rows, &layout)?;
+                let actual = table.gather_mapped(&rows, &layout, DType::BF16)?;
                 assert!(actual.device().same_device(&device));
                 assert_eq!(actual.dims(), &[2, 3 * HEAD_DIM]);
                 assert_eq!(actual.flatten_all()?.to_vec1::<half::bf16>()?, host);
@@ -436,7 +571,7 @@ fn assert_mapped_graph_replay(
     let _htod_cache_guard = cuda.enable_cuda_graph_htod_cache();
     let rows = Var::zeros((2, 3), DType::I64, device)?;
     let layout = crate::cuda::qwen4_exp::TokenLayout::rectangular(2, 1);
-    let gather = || table.gather_mapped(&rows, &layout);
+    let gather = || table.gather_mapped(&rows, &layout, DType::BF16);
     let _ = gather()?;
     device.synchronize()?;
     let stream = cuda.cuda_stream();
@@ -543,7 +678,7 @@ fn iq4_nl_gather_matches_host_dequant() -> Result<()> {
             crate::cuda::qwen4_exp::TokenLayout::rectangular(2, 1),
             crate::cuda::qwen4_exp::TokenLayout::from_host(&[(0, 2)], &[2], 2, &device)?,
         ] {
-            let actual = table.gather_mapped(&rows, &layout)?;
+            let actual = table.gather_mapped(&rows, &layout, DType::BF16)?;
             assert!(actual.device().same_device(&device));
             assert_eq!(actual.dims(), &[2, 4 * HEAD_DIM]);
             assert_eq!(

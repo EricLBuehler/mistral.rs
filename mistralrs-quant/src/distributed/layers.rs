@@ -21,6 +21,8 @@ use crate::{
 
 use super::Comm;
 
+pub const DENSE_PACKED_ROW_ALIGNMENT: usize = 16;
+
 fn shard(dim: usize, rank: usize, world_size: usize) -> Shard {
     Shard::Simple {
         dim,
@@ -63,6 +65,11 @@ fn load_weight_source_dense(
         None
     };
     Ok(Some((weight, bias)))
+}
+
+struct PackedLoadOptions<'a> {
+    output_layouts: &'a [PackedOutputLayout],
+    dense_output_alignment: usize,
 }
 
 struct PackedWeights {
@@ -440,12 +447,29 @@ enum PackedWeightKind {
     },
 }
 
-fn pack_dense_weights(parts: Vec<(Tensor, Option<Arc<[usize]>>)>) -> Result<PackedWeights> {
+fn pack_dense_weights(
+    parts: Vec<(Tensor, Option<Arc<[usize]>>)>,
+    alignment: usize,
+) -> Result<PackedWeights> {
     let rows = parts
         .iter()
         .map(|(part, _)| part.dim(0))
         .collect::<Result<Vec<_>>>()?;
-    let packed_weight = Tensor::cat(&parts.iter().map(|(part, _)| part).collect::<Vec<_>>(), 0)?;
+    let mut weights = parts
+        .iter()
+        .map(|(part, _)| part.clone())
+        .collect::<Vec<_>>();
+    let total_rows = rows.iter().sum::<usize>();
+    let padding = total_rows.next_multiple_of(alignment) - total_rows;
+    if padding != 0 {
+        let first = &weights[0];
+        weights.push(Tensor::zeros(
+            (padding, first.dim(1)?),
+            first.dtype(),
+            first.device(),
+        )?);
+    }
+    let packed_weight = Tensor::cat(&weights, 0)?;
     let packed = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
         Linear::new(packed_weight.clone(), None),
     ))?) as Arc<dyn QuantMethod>;
@@ -472,9 +496,10 @@ fn load_packed_weights(
     names: &[&str],
     config: &Option<QuantizedConfig>,
     shards: &[Shard],
-    output_layouts: &[PackedOutputLayout],
+    options: &PackedLoadOptions<'_>,
     vb: ShardedVarBuilder,
 ) -> Result<Option<PackedWeights>> {
+    let output_layouts = options.output_layouts;
     if out_dims.is_empty()
         || out_dims.len() != names.len()
         || names.len() != shards.len()
@@ -536,33 +561,92 @@ fn load_packed_weights(
             };
             parts.push((weight, output_map));
         }
-        return pack_dense_weights(parts).map(Some);
+        return pack_dense_weights(parts, options.dense_output_alignment).map(Some);
     }
+    let all_dense = match config {
+        Some(
+            config @ (QuantizedConfig::ModelOpt { .. } | QuantizedConfig::CompressedTensors { .. }),
+        ) => builders
+            .iter()
+            .all(|builder| matches!(config.resolve_checkpoint(&builder.prefix()), Ok(None))),
+        _ => false,
+    };
+    let config = if all_dense { &None } else { config };
     if let Some(
         config @ (QuantizedConfig::ModelOpt { .. } | QuantizedConfig::CompressedTensors { .. }),
     ) = config
     {
-        if output_layouts.iter().any(|layout| !layout.is_identity()) {
-            return Ok(None);
-        }
         let mut specs = Vec::with_capacity(builders.len());
-        for (((builder, &out_dim), &shard), layout) in builders
-            .iter()
-            .zip(out_dims)
-            .zip(shards)
-            .zip(output_layouts)
-        {
-            layout.local_runtime_to_canonical(out_dim, shard)?;
-            let Some(crate::CheckpointLinearSpec::Nvfp4(spec)) =
-                config.resolve_checkpoint(&builder.prefix())?
-            else {
+        for builder in &builders {
+            let Some(spec) = config.resolve_checkpoint(&builder.prefix())? else {
                 return Ok(None);
             };
-            if !builder.contains_tensor(spec.scale_names.weight) {
+            let scales = match &spec {
+                crate::CheckpointLinearSpec::Nvfp4(spec) => spec.scale_names.weight,
+                crate::CheckpointLinearSpec::Mxfp8(_) => "weight_scale",
+                _ => return Ok(None),
+            };
+            if !builder.contains_tensor(scales) {
                 return Ok(None);
             }
             specs.push(spec);
         }
+        if specs
+            .iter()
+            .all(|spec| matches!(spec, crate::CheckpointLinearSpec::Mxfp8(_)))
+        {
+            let mut layers = Vec::with_capacity(builders.len());
+            let mut output_maps = Vec::with_capacity(builders.len());
+            for (((builder, &out_dim), &shard), layout) in builders
+                .iter()
+                .zip(out_dims)
+                .zip(shards)
+                .zip(output_layouts)
+            {
+                let layer = crate::mxfp8::Mxfp8Linear::load(
+                    in_dim,
+                    out_dim,
+                    false,
+                    shard,
+                    builder.clone(),
+                )?;
+                let output_map = layout.local_runtime_to_canonical(out_dim, shard)?;
+                let layer = match &output_map {
+                    Some(rows) => layer.permute_output_rows(rows)?,
+                    None => layer,
+                };
+                layers.push(layer);
+                output_maps.push(output_map);
+            }
+            return Ok(
+                crate::mxfp8::Mxfp8Linear::merge(layers)?.map(|group| PackedWeights {
+                    packed: group.packed,
+                    constituents: group
+                        .constituents
+                        .into_iter()
+                        .zip(output_maps)
+                        .map(|(layer, output_map)| RuntimeOutputLinear::wrap(layer, output_map))
+                        .collect(),
+                    rows: group.rows_per_rank,
+                }),
+            );
+        }
+        if output_layouts.iter().any(|layout| !layout.is_identity()) {
+            return Ok(None);
+        }
+        for ((layout, &out_dim), &shard) in output_layouts.iter().zip(out_dims).zip(shards) {
+            layout.local_runtime_to_canonical(out_dim, shard)?;
+        }
+        let Some(specs) = specs
+            .into_iter()
+            .map(|spec| match spec {
+                crate::CheckpointLinearSpec::Nvfp4(spec) => Some(spec),
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()
+        else {
+            return Ok(None);
+        };
         let layers = builders
             .iter()
             .zip(out_dims)
@@ -672,7 +756,7 @@ fn load_packed_weights(
                     Ok((weight, output_map))
                 })
                 .collect::<Result<Vec<_>>>()?;
-            pack_dense_weights(parts).map(Some)
+            pack_dense_weights(parts, options.dense_output_alignment).map(Some)
         }
         PackedWeightKind::BlockwiseFp8 {
             block_size,
@@ -1664,7 +1748,10 @@ impl ColumnParallelLayer {
             names,
             config,
             &shards,
-            output_layouts,
+            &PackedLoadOptions {
+                output_layouts,
+                dense_output_alignment: 1,
+            },
             vb.clone(),
         )?
         else {
@@ -2125,6 +2212,37 @@ impl ReplicatedLayer {
         Self::new_packed_with_output_layouts(lora_specs, names, &output_layouts, config, bias, vb)
     }
 
+    /// Pad dense CUDA half-precision output rows to 16; constituent widths stay unchanged.
+    pub fn new_packed_aligned(
+        lora_specs: &[LoraLinearSpec],
+        names: &[&str],
+        config: &Option<QuantizedConfig>,
+        bias: bool,
+        vb: ShardedVarBuilder,
+    ) -> Result<Option<PackedLinear>> {
+        let output_layouts = lora_specs
+            .iter()
+            .map(|spec| PackedOutputLayout::identity(spec.out_features()))
+            .collect::<Vec<_>>();
+        let dense_output_alignment =
+            if vb.device().is_cuda() && matches!(vb.dtype(), DType::F16 | DType::BF16) {
+                DENSE_PACKED_ROW_ALIGNMENT
+            } else {
+                1
+            };
+        Self::new_packed_with_options(
+            lora_specs,
+            names,
+            PackedLoadOptions {
+                output_layouts: &output_layouts,
+                dense_output_alignment,
+            },
+            config,
+            bias,
+            vb,
+        )
+    }
+
     pub fn new_packed_with_output_layouts(
         lora_specs: &[LoraLinearSpec],
         names: &[&str],
@@ -2133,6 +2251,28 @@ impl ReplicatedLayer {
         bias: bool,
         vb: ShardedVarBuilder,
     ) -> Result<Option<PackedLinear>> {
+        Self::new_packed_with_options(
+            lora_specs,
+            names,
+            PackedLoadOptions {
+                output_layouts,
+                dense_output_alignment: 1,
+            },
+            config,
+            bias,
+            vb,
+        )
+    }
+
+    fn new_packed_with_options(
+        lora_specs: &[LoraLinearSpec],
+        names: &[&str],
+        options: PackedLoadOptions<'_>,
+        config: &Option<QuantizedConfig>,
+        bias: bool,
+        vb: ShardedVarBuilder,
+    ) -> Result<Option<PackedLinear>> {
+        let output_layouts = options.output_layouts;
         if bias || lora_specs.is_empty() || lora_specs.len() != names.len() {
             return Ok(None);
         }
@@ -2161,7 +2301,7 @@ impl ReplicatedLayer {
             names,
             config,
             &shards,
-            output_layouts,
+            &options,
             vb.clone(),
         )?
         else {
@@ -2578,6 +2718,21 @@ impl CheckpointExpertLoad<'_> {
                     })
                     .collect::<Result<Vec<_>>>()?;
                 Ok(Arc::new(crate::nvfp4::Nvfp4Layer::stack(layers)?))
+            }
+            Some(CheckpointLinearSpec::Mxfp8(_)) => {
+                let layers = builders
+                    .into_iter()
+                    .map(|vb| {
+                        crate::mxfp8::Mxfp8Linear::load(
+                            in_dim,
+                            out_dim,
+                            false,
+                            Shard::default(),
+                            vb,
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Arc::new(crate::mxfp8::Mxfp8Linear::stack(layers)?))
             }
             Some(CheckpointLinearSpec::Fp8(spec)) => {
                 let Fp8WeightScaleLayout::Block(block_size) = spec.weight_scale else {
@@ -3386,6 +3541,7 @@ mod tests {
         fn activation_quantization_scheme(&self) -> Option<ActivationQuantizationScheme> {
             Some(ActivationQuantizationScheme {
                 dtype: DType::F8E4M3,
+                scale_encoding: crate::ActivationScaleEncoding::F32,
                 block_shape: [1, 4],
             })
         }
@@ -3616,6 +3772,7 @@ mod tests {
 
         let expected_scheme = ActivationQuantizationScheme {
             dtype: DType::F8E4M3,
+            scale_encoding: crate::ActivationScaleEncoding::F32,
             block_shape: [1, 4],
         };
         for layer in [&row as &dyn QuantMethod, &column, &replicated] {
@@ -3824,6 +3981,539 @@ mod tests {
             );
             assert_eq!(source.loads.load(std::sync::atomic::Ordering::Relaxed), 2);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn packed_dense_output_padding_preserves_weights_layouts_and_outputs() -> candle_core::Result<()>
+    {
+        const COLUMNS: usize = 4;
+        const ALIGNMENT: usize = 16;
+        let device = Device::Cpu;
+        for dimensions in [[5, 3], [8, 8]] {
+            for dtype in [DType::F32, DType::F16, DType::BF16] {
+                for alignment in [1, ALIGNMENT] {
+                    let first = Tensor::from_vec(
+                        (0..dimensions[0] * COLUMNS)
+                            .map(|index| index as f32 / 8.0)
+                            .collect::<Vec<_>>(),
+                        (dimensions[0], COLUMNS),
+                        &device,
+                    )?
+                    .to_dtype(dtype)?;
+                    let second = Tensor::full(0.25f32, (dimensions[1], COLUMNS), &device)?
+                        .to_dtype(dtype)?;
+                    let permutation: Arc<[usize]> =
+                        (0..dimensions[0]).rev().collect::<Vec<_>>().into();
+                    let runtime_first = super::select_rows(&first, &permutation)?;
+                    let loaded = super::pack_dense_weights(
+                        vec![
+                            (runtime_first.clone(), Some(permutation)),
+                            (second.clone(), None),
+                        ],
+                        alignment,
+                    )?;
+                    let rows = dimensions.iter().sum::<usize>();
+                    let padded_rows = rows.next_multiple_of(alignment);
+                    let weight = loaded.packed.dequantize_w()?;
+                    assert_eq!(loaded.rows, dimensions);
+                    assert_eq!(weight.dims(), &[padded_rows, COLUMNS]);
+                    let expected = Tensor::cat(&[runtime_first.clone(), second.clone()], 0)?;
+                    assert_eq!(
+                        weight
+                            .narrow(0, 0, rows)?
+                            .to_dtype(DType::F32)?
+                            .to_vec2::<f32>()?,
+                        expected.to_dtype(DType::F32)?.to_vec2::<f32>()?,
+                    );
+                    for (projection, canonical) in loaded.constituents.iter().zip([first, second]) {
+                        assert_eq!(
+                            projection
+                                .unquant_weight_bias()
+                                .unwrap()
+                                .0
+                                .to_dtype(DType::F32)?
+                                .to_vec2::<f32>()?,
+                            canonical.to_dtype(DType::F32)?.to_vec2::<f32>()?,
+                        );
+                    }
+                    if padded_rows > rows {
+                        assert_eq!(
+                            weight
+                                .narrow(0, rows, padded_rows - rows)?
+                                .to_dtype(DType::F32)?
+                                .to_vec2::<f32>()?,
+                            vec![vec![0f32; COLUMNS]; padded_rows - rows],
+                        );
+                    }
+                    if dtype == DType::F32 {
+                        let input =
+                            Tensor::new(&[[1f32, 2., -1., 0.5], [2., -1., 0.5, 1.]], &device)?;
+                        let output = loaded.packed.forward(&input)?;
+                        let mut offset = 0;
+                        for (projection, &width) in loaded.constituents.iter().zip(&loaded.rows) {
+                            let view = output.narrow(1, offset, width)?;
+                            assert_eq!(view.stride(), &[padded_rows, 1]);
+                            assert_eq!(
+                                view.to_vec2::<f32>()?,
+                                projection.forward(&input)?.to_vec2::<f32>()?
+                            );
+                            offset += width;
+                        }
+                        if padded_rows > rows {
+                            assert_eq!(
+                                output
+                                    .narrow(1, rows, padded_rows - rows)?
+                                    .to_vec2::<f32>()?,
+                                vec![vec![0f32; padded_rows - rows]; 2]
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn padded_dense_constituents_roundtrip_uqff_without_padding() -> candle_core::Result<()> {
+        const COLUMNS: usize = 4;
+        const ROWS: [usize; 2] = [320, 4];
+        const PADDED_ROWS: usize = 336;
+        const VALUE_DIVISOR: f32 = 8.0;
+        const PREFIXES: [&str; 2] = ["hc.input_mix_weight_down", "hc.block_inject_weight"];
+        let device = Device::Cpu;
+        let weights = ROWS
+            .iter()
+            .enumerate()
+            .map(|(projection, &rows)| {
+                Tensor::from_vec(
+                    (0..rows * COLUMNS)
+                        .map(|index| (index + projection * COLUMNS) as f32 / VALUE_DIVISOR)
+                        .collect::<Vec<_>>(),
+                    (rows, COLUMNS),
+                    &device,
+                )
+            })
+            .collect::<candle_core::Result<Vec<_>>>()?;
+        let loaded = super::pack_dense_weights(
+            weights
+                .iter()
+                .cloned()
+                .map(|weight| (weight, None))
+                .collect(),
+            super::DENSE_PACKED_ROW_ALIGNMENT,
+        )?;
+        let packed_weight = loaded.packed.dequantize_w()?;
+        assert_eq!(packed_weight.dims(), &[PADDED_ROWS, COLUMNS]);
+        let mut tensors = crate::uqff_version_tensors();
+        for (projection, prefix) in loaded.constituents.iter().zip(PREFIXES) {
+            let weight = projection.dequantize_w()?;
+            {
+                let (packed_storage, _) = packed_weight.storage_and_layout();
+                let (storage, _) = weight.storage_and_layout();
+                assert!(std::ptr::eq(&*packed_storage, &*storage));
+            }
+            tensors.extend(projection.serialize_uqff(prefix, IsqType::Q4K)?);
+        }
+        let dir = tempfile::tempdir().map_err(candle_core::Error::wrap)?;
+        let path = dir.path().join("padded-constituents.uqff");
+        safetensors::serialize_to_file(
+            tensors.iter().map(|tensor| (tensor.name(), tensor)),
+            None,
+            &path,
+        )
+        .map_err(candle_core::Error::wrap)?;
+        let reader = crate::UqffReader::open(&[path])?;
+        let input = Tensor::new(&[[1f32, 2., -1., 0.5], [2., -1., 0.5, 1.]], &device)?;
+        for (prefix, expected) in PREFIXES.into_iter().zip(&weights) {
+            assert_eq!(
+                reader.tensor_dims(&format!("{prefix}.weight"))?,
+                expected.dims()
+            );
+            let projection = reader
+                .load_linear(prefix, &device, Shard::default())?
+                .expect("serialized constituent");
+            assert_eq!(
+                projection.dequantize_w()?.to_vec2::<f32>()?,
+                expected.to_vec2::<f32>()?
+            );
+            assert_eq!(
+                projection.forward(&input)?.to_vec2::<f32>()?,
+                input.matmul(&expected.t()?)?.to_vec2::<f32>()?
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn packed_checkpoint_aligned_dense_exclusions_keep_logical_slices() -> candle_core::Result<()> {
+        const COLUMNS: usize = 64;
+        const ROWS: [usize; 2] = [32, 3];
+        const PADDED_ROWS: usize = 48;
+        let device = Device::new_cuda(0)?;
+        let names = ["down", "inject"];
+        let specs = ROWS.map(|rows| LoraLinearSpec::replicated(COLUMNS, rows));
+        let config = Some(
+            serde_json::from_value::<QuantizedConfig>(serde_json::json!({
+                "quant_method": "modelopt", "quant_algo": "NVFP4", "group_size": 16,
+                "exclude_modules": ["model.down", "model.inject"]
+            }))
+            .map_err(candle_core::Error::msg)?,
+        );
+        for dtype in [DType::F16, DType::BF16] {
+            let tensors = HashMap::from([
+                (
+                    "model.down.weight".to_string(),
+                    Tensor::full(0.25f32, (ROWS[0], COLUMNS), &device)?.to_dtype(dtype)?,
+                ),
+                (
+                    "model.inject.weight".to_string(),
+                    Tensor::full(0.5f32, (ROWS[1], COLUMNS), &device)?.to_dtype(dtype)?,
+                ),
+            ]);
+            let builder = ShardedSafeTensors::wrap(tensors, dtype, device.clone()).pp("model");
+            let group =
+                ReplicatedLayer::new_packed_aligned(&specs, &names, &config, false, builder)?
+                    .unwrap();
+            assert_eq!(group.rows_per_rank, ROWS);
+            assert_eq!(group.packed.dequantize_w()?.dims(), &[PADDED_ROWS, COLUMNS]);
+            for tokens in [1, 17] {
+                let input = Tensor::ones((2, tokens, COLUMNS), dtype, &device)?;
+                let output = group.packed.forward(&input)?;
+                assert_eq!(output.dims(), &[2, tokens, PADDED_ROWS]);
+                let mut offset = 0;
+                for (projection, &rows) in group.constituents.iter().zip(&group.rows_per_rank) {
+                    let view = output.narrow(2, offset, rows)?;
+                    assert_eq!(view.stride(), &[tokens * PADDED_ROWS, PADDED_ROWS, 1]);
+                    assert_eq!(
+                        view.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?,
+                        projection
+                            .forward(&input)?
+                            .to_dtype(DType::F32)?
+                            .flatten_all()?
+                            .to_vec1::<f32>()?
+                    );
+                    offset += rows;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn packed_checkpoint_dense_exclusions_preserve_weights_and_outputs() -> candle_core::Result<()>
+    {
+        const COLUMNS: usize = 4;
+        let device = Device::Cpu;
+        let names = ["left", "right"];
+        let dimensions = [4, 6];
+        let specs = dimensions.map(|rows| LoraLinearSpec::replicated(COLUMNS, rows));
+        let comm = Arc::new(Comm::from_device(Id::new(), &device, 1, 2)?);
+        let shards = [
+            Shard::Simple {
+                dim: 0,
+                rank: 1,
+                world_size: 2,
+            },
+            Shard::Offset {
+                dim: 0,
+                offset: 0,
+                len: 2,
+            },
+        ];
+        let layouts = [
+            PackedOutputLayout::from_runtime_to_canonical(vec![1, 0, 3, 2])?,
+            PackedOutputLayout::identity(6),
+        ];
+        for value in [
+            serde_json::json!({
+                "quant_method": "modelopt", "quant_algo": "NVFP4", "group_size": 16,
+                "exclude_modules": ["model.block.left", "model.block.right"]
+            }),
+            serde_json::json!({
+                "quant_method": "modelopt", "quant_algo": "MIXED_PRECISION",
+                "quantized_layers": {"model.other": {"quant_algo": "MXFP8", "group_size": 32}}
+            }),
+            serde_json::json!({
+                "quant_method": "compressed-tensors", "format": "float-quantized",
+                "config_groups": {"group_0": {
+                    "targets": ["Linear"],
+                    "weights": {"dynamic": false, "num_bits": 8, "strategy": "channel",
+                                "symmetric": true, "type": "float"}
+                }},
+                "ignore": ["model.block.left", "model.block.right"]
+            }),
+        ] {
+            let config = Some(
+                serde_json::from_value::<QuantizedConfig>(value)
+                    .map_err(candle_core::Error::msg)?,
+            );
+            for dtype in [DType::F32, DType::F16, DType::BF16] {
+                let weights = dimensions.map(|rows| {
+                    Tensor::from_vec(
+                        (0..rows * COLUMNS)
+                            .map(|i| i as f32 / 8.0 + 0.125)
+                            .collect::<Vec<_>>(),
+                        (rows, COLUMNS),
+                        &device,
+                    )?
+                    .to_dtype(dtype)
+                });
+                let [left, right] = weights;
+                let weights = [left?, right?];
+                let tensors = names
+                    .iter()
+                    .zip(&weights)
+                    .map(|(name, weight)| (format!("model.block.{name}.weight"), weight.clone()))
+                    .collect::<HashMap<_, _>>();
+                let vb = ShardedSafeTensors::wrap(tensors, dtype, device.clone())
+                    .pp("model")
+                    .pp("block");
+                let group =
+                    ReplicatedLayer::new_packed(&specs, &names, &config, false, vb.clone())?
+                        .expect("excluded dense projections should pack");
+                assert_eq!(group.rows_per_rank, dimensions);
+                let packed_weight = group.packed.dequantize_w()?;
+                assert_eq!(packed_weight.dtype(), dtype);
+                assert_eq!(
+                    packed_weight.to_dtype(DType::F32)?.to_vec2::<f32>()?,
+                    Tensor::cat(&weights, 0)?
+                        .to_dtype(DType::F32)?
+                        .to_vec2::<f32>()?
+                );
+                if dtype == DType::F32 {
+                    let input = Tensor::new(&[[1f32, 2., -1., 0.5], [2., -1., 0.5, 1.]], &device)?;
+                    let expected = names
+                        .iter()
+                        .zip(dimensions)
+                        .map(|(name, rows)| {
+                            ReplicatedLayer::new(COLUMNS, rows, &config, false, vb.pp(name))?
+                                .forward(&input)
+                        })
+                        .collect::<candle_core::Result<Vec<_>>>()?;
+                    assert_eq!(
+                        group.packed.forward(&input)?.to_vec2::<f32>()?,
+                        Tensor::cat(&expected, 1)?.to_vec2::<f32>()?
+                    );
+                }
+                let group = ColumnParallelLayer::new_packed_with_output_layouts(
+                    COLUMNS,
+                    &dimensions,
+                    &names,
+                    &layouts,
+                    &config,
+                    false,
+                    &comm,
+                    Some(&shards),
+                    vb,
+                )?
+                .expect("excluded dense projections should preserve sharded output layouts");
+                assert_eq!(group.rows_per_rank, [2, 2]);
+                let expected = Tensor::cat(
+                    &[
+                        weights[0].narrow(0, 3, 1)?,
+                        weights[0].narrow(0, 2, 1)?,
+                        weights[1].narrow(0, 0, 2)?,
+                    ],
+                    0,
+                )?;
+                assert_eq!(
+                    group
+                        .packed
+                        .dequantize_w()?
+                        .to_dtype(DType::F32)?
+                        .to_vec2::<f32>()?,
+                    expected.to_dtype(DType::F32)?.to_vec2::<f32>()?
+                );
+                assert_eq!(
+                    group.constituents[0]
+                        .dequantize_w()?
+                        .to_dtype(DType::F32)?
+                        .to_vec2::<f32>()?,
+                    weights[0]
+                        .narrow(0, 2, 2)?
+                        .to_dtype(DType::F32)?
+                        .to_vec2::<f32>()?
+                );
+            }
+            let missing = ShardedSafeTensors::wrap(HashMap::new(), DType::F32, device.clone())
+                .pp("model.block");
+            assert!(
+                ReplicatedLayer::new_packed(&specs, &names, &config, false, missing)?.is_none()
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn packed_checkpoint_mixed_and_incompatible_groups_keep_fallback() -> candle_core::Result<()> {
+        const COLUMNS: usize = 32;
+        const ROWS: usize = 4;
+        let device = Device::Cpu;
+        let specs = [
+            LoraLinearSpec::replicated(COLUMNS, ROWS),
+            LoraLinearSpec::replicated(COLUMNS, ROWS),
+        ];
+        let mut tensors = HashMap::new();
+        for name in ["left", "right"] {
+            tensors.insert(
+                format!("model.block.{name}.weight"),
+                Tensor::ones((ROWS, COLUMNS), DType::F32, &device)?,
+            );
+            tensors.insert(
+                format!("model.block.{name}.weight_scale"),
+                Tensor::ones((ROWS, 2), DType::U8, &device)?,
+            );
+        }
+        let vb = ShardedSafeTensors::wrap(tensors, DType::F32, device).pp("model.block");
+        for value in [
+            serde_json::json!({
+                "quant_method": "modelopt", "quant_algo": "MXFP8", "group_size": 32,
+                "exclude_modules": ["model.block.left"]
+            }),
+            serde_json::json!({
+                "quant_method": "modelopt", "quant_algo": "MIXED_PRECISION",
+                "quantized_layers": {
+                    "model.block.left": {"quant_algo": "NVFP4", "group_size": 16},
+                    "model.block.right": {"quant_algo": "MXFP8", "group_size": 32}
+                }
+            }),
+            serde_json::json!({
+                "quant_method": "compressed-tensors", "format": "float-quantized",
+                "config_groups": {"group_0": {
+                    "targets": ["Linear"],
+                    "weights": {"dynamic": false, "num_bits": 8, "strategy": "channel",
+                                "symmetric": true, "type": "float"}
+                }},
+                "ignore": ["model.block.left"]
+            }),
+            serde_json::json!({"quant_method": "modelopt", "quant_algo": "FP8"}),
+        ] {
+            let config = Some(
+                serde_json::from_value::<QuantizedConfig>(value)
+                    .map_err(candle_core::Error::msg)?,
+            );
+            for names in [["left", "right"], ["right", "left"]] {
+                assert!(
+                    ReplicatedLayer::new_packed(&specs, &names, &config, false, vb.clone())?
+                        .is_none()
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn packed_mxfp8_preserves_scales_shards_and_output_layouts() -> candle_core::Result<()> {
+        const COLUMNS: usize = 64;
+        let device = Device::Cpu;
+        let comm = Arc::new(Comm::from_device(Id::new(), &device, 1, 2)?);
+        let shards = [
+            Shard::Simple {
+                dim: 0,
+                rank: 1,
+                world_size: 2,
+            },
+            Shard::Offset {
+                dim: 0,
+                offset: 0,
+                len: 2,
+            },
+        ];
+        let layouts = [
+            PackedOutputLayout::from_runtime_to_canonical(vec![1, 0, 3, 2])?,
+            PackedOutputLayout::identity(6),
+        ];
+        let config = Some(
+            serde_json::from_value::<QuantizedConfig>(serde_json::json!({
+                "quant_method": "modelopt", "quant_algo": "MXFP8", "group_size": 32
+            }))
+            .map_err(candle_core::Error::msg)?,
+        );
+        let mut tensors = HashMap::new();
+        let mut dense = Vec::new();
+        for (name, rows) in [("left", 4), ("right", 6)] {
+            let values = (0..rows * COLUMNS)
+                .map(|i| float8::F8E4M3::from_f32((i / COLUMNS + 1) as f32))
+                .collect::<Vec<_>>();
+            let scales = (0..rows * 2)
+                .map(|i| 126 + (i % 3) as u8)
+                .collect::<Vec<_>>();
+            dense.push(Tensor::from_vec(
+                (0..rows * COLUMNS)
+                    .map(|i| values[i].to_f32() * 2f32.powi(i32::from(scales[i / 32]) - 127))
+                    .collect::<Vec<_>>(),
+                (rows, COLUMNS),
+                &device,
+            )?);
+            tensors.insert(
+                format!("{name}.weight"),
+                Tensor::from_vec(values, (rows, COLUMNS), &device)?,
+            );
+            tensors.insert(
+                format!("{name}.weight_scale"),
+                Tensor::from_vec(scales, (rows, 2), &device)?,
+            );
+        }
+        let vb = ShardedSafeTensors::wrap(tensors, DType::F32, device.clone());
+        let group = ColumnParallelLayer::new_packed_with_output_layouts(
+            COLUMNS,
+            &[4, 6],
+            &["left", "right"],
+            &layouts,
+            &config,
+            false,
+            &comm,
+            Some(&shards),
+            vb.clone(),
+        )?
+        .expect("MXFP8 projections pack without expanding weights");
+        assert_eq!(group.rows_per_rank, [2, 2]);
+        assert_eq!(group.packed.name(), "MXFP8");
+        let expected = Tensor::cat(
+            &[
+                dense[0].narrow(0, 3, 1)?,
+                dense[0].narrow(0, 2, 1)?,
+                dense[1].narrow(0, 0, 2)?,
+            ],
+            0,
+        )?;
+        assert_eq!(
+            group.packed.dequantize_w()?.to_vec2::<f32>()?,
+            expected.to_vec2::<f32>()?
+        );
+        assert_eq!(
+            group.constituents[0].dequantize_w()?.to_vec2::<f32>()?,
+            dense[0].narrow(0, 2, 2)?.to_vec2::<f32>()?
+        );
+        let input = Tensor::ones((1, COLUMNS), DType::F32, &device)?;
+        assert_eq!(
+            group.packed.forward(&input)?.to_vec2::<f32>()?,
+            input.matmul(&expected.t()?)?.to_vec2::<f32>()?
+        );
+        let mixed = Some(
+            serde_json::from_value::<QuantizedConfig>(serde_json::json!({
+                "quant_method": "modelopt", "quant_algo": "MIXED_PRECISION",
+                "quantized_layers": {
+                    "left": {"quant_algo": "MXFP8", "group_size": 32},
+                    "right": {"quant_algo": "NVFP4", "group_size": 16}
+                }
+            }))
+            .map_err(candle_core::Error::msg)?,
+        );
+        assert!(ColumnParallelLayer::new_packed(
+            COLUMNS,
+            &[4, 6],
+            &["left", "right"],
+            &mixed,
+            false,
+            &comm,
+            Some(&shards),
+            vb,
+        )?
+        .is_none());
         Ok(())
     }
 

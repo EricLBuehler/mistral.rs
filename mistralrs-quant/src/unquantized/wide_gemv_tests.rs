@@ -4,6 +4,7 @@ use half::{bf16, f16};
 
 const OUTPUT_DIM: usize = 32_769;
 const INPUT_DIM: usize = 3_074;
+const INPUT_DIMS: [usize; 3] = [2_048, 2_560, INPUT_DIM];
 const BIAS_INPUT_DIM: usize = 3_072;
 const EVEN_OFFSET: usize = 2;
 const CUDA_SEED: u64 = 0x61d2_89a3;
@@ -105,17 +106,20 @@ fn wide_gemv_random_tails_preserve_ranks_and_statistics() -> Result<()> {
     let Some(device) = sm121_device()? else {
         return Ok(());
     };
-    for dtype in [DType::BF16, DType::F16] {
+    for (dtype, input_dim) in [DType::BF16, DType::F16]
+        .into_iter()
+        .flat_map(|dtype| INPUT_DIMS.map(|input_dim| (dtype, input_dim)))
+    {
         device.set_seed(CUDA_SEED)?;
-        let weight = Tensor::randn(0f32, RANDOM_STDDEV, (OUTPUT_DIM, INPUT_DIM), &device)?
+        let weight = Tensor::randn(0f32, RANDOM_STDDEV, (OUTPUT_DIM, input_dim), &device)?
             .to_dtype(dtype)?;
-        let input = Tensor::randn(0f32, RANDOM_STDDEV, (1, INPUT_DIM), &device)?.to_dtype(dtype)?;
+        let input = Tensor::randn(0f32, RANDOM_STDDEV, (1, input_dim), &device)?.to_dtype(dtype)?;
         let layer = linear(weight.clone(), None)?;
         layer.begin_track_stats()?;
         for (index, shape) in [
-            vec![1, INPUT_DIM],
-            vec![1, 1, INPUT_DIM],
-            vec![1, 1, 1, INPUT_DIM],
+            vec![1, input_dim],
+            vec![1, 1, input_dim],
+            vec![1, 1, 1, input_dim],
         ]
         .iter()
         .enumerate()
@@ -126,7 +130,7 @@ fn wide_gemv_random_tails_preserve_ranks_and_statistics() -> Result<()> {
             let mut expected_shape = shape.clone();
             *expected_shape.last_mut().unwrap() = OUTPUT_DIM;
             let reference = input
-                .reshape((1, INPUT_DIM))?
+                .reshape((1, input_dim))?
                 .matmul(&weight.t()?)?
                 .reshape(expected_shape)?;
             assert_finite_close(&actual, &reference, false)?;

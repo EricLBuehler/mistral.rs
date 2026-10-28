@@ -239,7 +239,7 @@ fn compact_mmq_handles_partial_rows_and_multiple_expert_chunks() -> Result<()> {
     let ids = cuda.clone_htod(&(0..TOKENS as u32).collect::<Vec<_>>())?;
     let bounds = cuda.clone_htod(
         &(0..=EXPERTS)
-            .map(|expert| ((expert + 63) / 64).min(TOKENS) as u32)
+            .map(|expert| expert.div_ceil(64).min(TOKENS) as u32)
             .collect::<Vec<_>>(),
     )?;
     for dtype in [GgmlDType::Q4_0, GgmlDType::Q2K] {

@@ -5,11 +5,8 @@ use candle_core::{CudaDevice, DType, Device, DeviceLocation, Result, Storage, Te
 use cutile::cutile_compiler::specialization::DivHint;
 
 use super::warmup::{CutileKernel, WarmupProgress};
-use super::{device_compute_major, jit_available};
 
 const BLOCK_SIZE: usize = 16;
-const MIN_CUDA_VERSION: u32 = 1303;
-const MIN_TILEIRAS_VERSION: (u32, u32) = (13, 3);
 const GEMV_MAX_ROWS: usize = 1;
 const SMALL_MATMUL_MIN_COLUMNS: usize = 4096;
 const SMALL_MATMUL_MAX_K: usize = 8192;
@@ -34,11 +31,7 @@ pub struct Nvfp4GemmArgs<'a> {
 }
 
 pub fn nvfp4_supported(dev: &CudaDevice) -> bool {
-    device_compute_major(dev) >= 10
-        && super::build_cuda_version_code().is_some_and(|version| version >= MIN_CUDA_VERSION)
-        && super::tileiras_capabilities()
-            .is_some_and(|capabilities| capabilities.version >= MIN_TILEIRAS_VERSION)
-        && jit_available(dev)
+    super::block_scaled_mma_supported(dev)
 }
 
 pub fn cutile_nvfp4(x: &Tensor, args: Nvfp4GemmArgs<'_>) -> Result<Tensor> {
@@ -136,6 +129,15 @@ pub fn cutile_nvfp4_gather(
     launch(x, Some(indices), args, false)
 }
 
+pub(crate) fn cutile_nvfp4_gather_calibrated(
+    x: &Tensor,
+    indices: &Tensor,
+    args: Nvfp4GemmArgs<'_>,
+    uniform_input_scale: bool,
+) -> Result<Tensor> {
+    launch_calibrated(x, Some(indices), args, false, uniform_input_scale)
+}
+
 fn validate_kernel_dimensions(dimensions: &[usize]) -> Result<()> {
     if dimensions
         .iter()
@@ -154,6 +156,14 @@ fn launch(
     args: Nvfp4GemmArgs<'_>,
     compile_only: bool,
 ) -> Result<Tensor> {
+    launch_calibrated(x, indices, args, compile_only, false)
+}
+
+fn validate_input(
+    x: &Tensor,
+    indices: Option<&Tensor>,
+    args: Nvfp4GemmArgs<'_>,
+) -> Result<(usize, usize, usize, usize)> {
     let (experts, n, packed_k) = if indices.is_some() {
         args.weights.dims3()?
     } else {
@@ -239,6 +249,65 @@ fn launch(
             "cuTile NVFP4 requires Blackwell or newer with CUDA 13.3 or newer and a compatible tileiras"
         )
     }
+    Ok((experts, n, k, rows))
+}
+
+pub(crate) fn try_cutile_nvfp4_gather_shared(
+    x: &Tensor,
+    indices: &Tensor,
+    projections: &[Nvfp4GemmArgs<'_>],
+) -> Result<Option<Vec<Tensor>>> {
+    let first = projections[0];
+    let shape = validate_input(x, Some(indices), first)?;
+    let (experts, n, k, _) = shape;
+    let (tokens, topk) = indices.dims2()?;
+    if tokens < grouped_min_tokens(experts, topk) {
+        return Ok(None);
+    }
+    for &projection in projections {
+        if validate_input(x, Some(indices), projection)? != shape
+            || projection.activation_global_scale.is_some()
+                != first.activation_global_scale.is_some()
+            || !projection.weights.is_contiguous()
+            || !projection.weight_scales.is_contiguous()
+            || !projection.weight_global_scale.is_contiguous()
+        {
+            return Ok(None);
+        }
+    }
+    let dev = x.device().as_cuda_device()?;
+    let geometry = super::nvfp4_matmul::routed_geometry(
+        tokens,
+        n,
+        k,
+        first.activation_global_scale.is_some(),
+        super::nvfp4_matmul::matmul_device(dev).compute_major,
+    );
+    validate_kernel_dimensions(&[crate::moe::cuda::moe_align_em(
+        tokens,
+        topk,
+        experts,
+        geometry.rows,
+    )])?;
+    let prepared = super::nvfp4_matmul::prepare_gather(x, indices, first, true, false)?;
+    projections
+        .iter()
+        .map(|&projection| {
+            super::nvfp4_matmul::launch_gather_prepared(&prepared, projection, false)
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(Some)
+}
+
+fn launch_calibrated(
+    x: &Tensor,
+    indices: Option<&Tensor>,
+    args: Nvfp4GemmArgs<'_>,
+    compile_only: bool,
+    uniform_input_scale: bool,
+) -> Result<Tensor> {
+    let (experts, n, k, rows) = validate_input(x, indices, args)?;
+    let dev = x.device().as_cuda_device()?;
     if let Some(indices) = indices {
         if indices.dim(0)? < grouped_min_tokens(experts, indices.dim(1)?) {
             return super::nvfp4_gemv::launch(x, Some(indices), args, compile_only);
@@ -247,7 +316,14 @@ fn launch(
             indices.dim(0)?,
             indices.dim(1)?,
             experts,
-            super::nvfp4_matmul::ROUTED_ROWS,
+            super::nvfp4_matmul::routed_geometry(
+                indices.dim(0)?,
+                n,
+                k,
+                args.activation_global_scale.is_some(),
+                super::nvfp4_matmul::matmul_device(dev).compute_major,
+            )
+            .rows,
         )])?;
     } else if rows <= GEMV_MAX_ROWS
         && !(args.activation_global_scale.is_some()
@@ -272,7 +348,7 @@ fn launch(
         activation_global_scale: activation_global_scale.as_ref(),
     };
     if let Some(indices) = indices {
-        super::nvfp4_matmul::launch_gather(&x, indices, args, compile_only)
+        super::nvfp4_matmul::launch_gather(&x, indices, args, uniform_input_scale, compile_only)
     } else {
         super::nvfp4_matmul::launch(&x, args, compile_only)
     }
@@ -407,22 +483,33 @@ fn dense_warmup_rows() -> Vec<usize> {
     rows
 }
 
-fn grouped_warmup_rows(experts: usize, topk: usize) -> Vec<usize> {
-    let block = super::nvfp4_matmul::ROUTED_ROWS;
-    let period = block * MAX_DIMENSION_DIVISOR;
+fn grouped_warmup_rows(
+    experts: usize,
+    topk: usize,
+    geometry: impl Fn(usize) -> super::nvfp4_matmul::RoutedGeometry,
+) -> Vec<usize> {
+    let period = super::nvfp4_matmul::MAX_ROUTED_ROWS * MAX_DIMENSION_DIVISOR;
     let start = grouped_min_tokens(experts, topk);
     let mut seen = HashSet::new();
-    (start..start + period)
-        .filter(|&tokens| {
-            let routes = tokens * topk;
-            let em = crate::moe::cuda::moe_align_em(tokens, topk, experts, block);
-            seen.insert((
-                dimension_divisor(routes),
-                dimension_divisor(em),
-                dimension_divisor(em.div_ceil(block)),
-            ))
-        })
-        .collect()
+    [
+        start,
+        start.max(super::nvfp4_matmul::ROUTED_PREFILL_MIN_TOKENS),
+        start.max(super::nvfp4_matmul::ROUTED_LARGE_PREFILL_MIN_TOKENS),
+    ]
+    .into_iter()
+    .flat_map(|start| start..start + period)
+    .filter(|&tokens| {
+        let cfg = geometry(tokens);
+        let routes = tokens * topk;
+        let em = crate::moe::cuda::moe_align_em(tokens, topk, experts, cfg.rows);
+        seen.insert((
+            cfg,
+            dimension_divisor(routes),
+            dimension_divisor(em),
+            dimension_divisor(em.div_ceil(cfg.rows)),
+        ))
+    })
+    .collect()
 }
 
 impl RegisteredShape {
@@ -449,6 +536,18 @@ impl RegisteredShape {
             return Ok(());
         }
         let experts = self.weights.dim(0)?;
+        let n = self.weights.dim(1)?;
+        let compute_major =
+            super::nvfp4_matmul::matmul_device(device.as_cuda_device()?).compute_major;
+        let geometry = |tokens| {
+            super::nvfp4_matmul::routed_geometry(
+                tokens,
+                n,
+                k,
+                self.activation_global_scale.is_some(),
+                compute_major,
+            )
+        };
         let mut topks: Vec<_> = ROUTING
             .get_or_init(|| Mutex::new(Vec::new()))
             .lock()
@@ -463,7 +562,7 @@ impl RegisteredShape {
         for topk in topks {
             for rows in ROUTED_GEMV_WARMUP_ROWS
                 .into_iter()
-                .chain(grouped_warmup_rows(experts, topk))
+                .chain(grouped_warmup_rows(experts, topk, geometry))
             {
                 let indices = Tensor::zeros((rows, topk), DType::U32, device)?;
                 let x = Tensor::zeros((rows, k), self.activation_dtype, device)?;
@@ -656,43 +755,61 @@ mod tests {
                 }
             }
         }
-        for experts in [3, 128, 256] {
-            for topk in [1, 2, 8, 32].into_iter().filter(|&topk| topk <= experts) {
-                let grouped_key = |tokens| {
-                    let block = super::super::nvfp4_matmul::ROUTED_ROWS;
-                    let routes = tokens * topk;
-                    let em = crate::moe::cuda::moe_align_em(tokens, topk, experts, block);
-                    (
-                        dimension_divisor(routes),
-                        dimension_divisor(em),
-                        dimension_divisor(em.div_ceil(block)),
-                    )
-                };
-                let grouped_keys: HashSet<_> = grouped_warmup_rows(experts, topk)
-                    .into_iter()
-                    .map(grouped_key)
-                    .collect();
-                let gemv_keys: HashSet<_> = ROUTED_GEMV_WARMUP_ROWS
-                    .into_iter()
-                    .filter(|&tokens| tokens < grouped_min_tokens(experts, topk))
-                    .map(|tokens| (dimension_divisor(tokens), dimension_divisor(tokens * topk)))
-                    .collect();
-                for tokens in 1..grouped_min_tokens(experts, topk) {
-                    assert!(
-                        gemv_keys.contains(&(
-                            dimension_divisor(tokens),
-                            dimension_divisor(tokens * topk)
-                        )),
-                        "routed GEMV tokens={tokens} experts={experts} topk={topk}"
-                    );
-                }
-                for tokens in grouped_min_tokens(experts, topk)..=COVERAGE_TOKENS {
-                    assert!(
-                        grouped_keys.contains(&grouped_key(tokens)),
-                        "grouped tokens={tokens} experts={experts} topk={topk}"
-                    );
+        for (n, k) in [(640, 2560), (2560, 640), (73, 144)] {
+            for major in [10, 12] {
+                for a4 in [false, true] {
+                    let geometry = |tokens| {
+                        super::super::nvfp4_matmul::routed_geometry(tokens, n, k, a4, major)
+                    };
+                    for experts in [3, 128, 256, 512] {
+                        for topk in [1, 2, 8, 10, 32]
+                            .into_iter()
+                            .filter(|&topk| topk <= experts)
+                        {
+                            let grouped_key = |tokens| {
+                                let cfg = geometry(tokens);
+                                let routes = tokens * topk;
+                                let em =
+                                    crate::moe::cuda::moe_align_em(tokens, topk, experts, cfg.rows);
+                                (
+                                    cfg,
+                                    dimension_divisor(routes),
+                                    dimension_divisor(em),
+                                    dimension_divisor(em.div_ceil(cfg.rows)),
+                                )
+                            };
+                            let grouped_keys: HashSet<_> =
+                                grouped_warmup_rows(experts, topk, geometry)
+                                    .into_iter()
+                                    .map(grouped_key)
+                                    .collect();
+                            let gemv_keys: HashSet<_> = ROUTED_GEMV_WARMUP_ROWS
+                                .into_iter()
+                                .filter(|&tokens| tokens < grouped_min_tokens(experts, topk))
+                                .map(|tokens| {
+                                    (dimension_divisor(tokens), dimension_divisor(tokens * topk))
+                                })
+                                .collect();
+                            for tokens in 1..grouped_min_tokens(experts, topk) {
+                                assert!(
+                                    gemv_keys.contains(&(
+                                        dimension_divisor(tokens),
+                                        dimension_divisor(tokens * topk)
+                                    )),
+                                    "routed GEMV tokens={tokens} experts={experts} topk={topk}"
+                                );
+                            }
+                            for tokens in grouped_min_tokens(experts, topk)..=COVERAGE_TOKENS {
+                                assert!(grouped_keys.contains(&grouped_key(tokens)), "grouped tokens={tokens} experts={experts} topk={topk} n={n} k={k} a4={a4} major={major}");
+                            }
+                        }
+                    }
                 }
             }
         }
     }
 }
+
+#[cfg(test)]
+#[path = "nvfp4_routed_tests.rs"]
+mod routed_tests;

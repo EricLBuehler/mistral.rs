@@ -128,6 +128,7 @@ impl GdnFp8OutputSpec {
 
     fn layout(&self, num_v_heads: usize, head_v_dim: usize) -> Option<GdnFp8OutputLayout> {
         if self.scheme.dtype != DType::F8E4M3
+            || self.scheme.scale_encoding != mistralrs_quant::ActivationScaleEncoding::F32
             || self.scheme.block_shape != [1, GDN_FP8_GROUP_SIZE]
             || head_v_dim != GDN_FP8_GROUP_SIZE
             || num_v_heads == 0
@@ -200,6 +201,7 @@ mod fp8_output_contract_tests {
     fn scheme() -> ActivationQuantizationScheme {
         ActivationQuantizationScheme {
             dtype: DType::F8E4M3,
+            scale_encoding: mistralrs_quant::ActivationScaleEncoding::F32,
             block_shape: [1, GDN_FP8_GROUP_SIZE],
         }
     }
@@ -255,12 +257,24 @@ mod fp8_output_contract_tests {
     #[test]
     fn gdn_fp8_contract_rejects_incompatible_dimensions_and_scheme() {
         let row_major = ActivationScaleLayout::RowMajor;
+        assert!(GdnFp8OutputSpec::new(
+            [1, 1, 6144],
+            ActivationQuantizationScheme {
+                scale_encoding: mistralrs_quant::ActivationScaleEncoding::E8M0,
+                ..scheme()
+            },
+            row_major,
+            48,
+            128,
+        )
+        .is_none());
         assert!(GdnFp8OutputSpec::new([1, 1, 6144], scheme(), row_major, 48, 64).is_none());
         assert!(GdnFp8OutputSpec::new([1, 1, 4096], scheme(), row_major, 48, 128).is_none());
         assert!(GdnFp8OutputSpec::new(
             [1, 1, 6144],
             ActivationQuantizationScheme {
                 dtype: DType::F8E4M3,
+                scale_encoding: mistralrs_quant::ActivationScaleEncoding::F32,
                 block_shape: [1, 64],
             },
             row_major,

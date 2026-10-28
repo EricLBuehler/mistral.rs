@@ -36,7 +36,7 @@ fn qsa_dense_graph_matches_identity_selection() -> Result<()> {
                 batch * blocks * DENSE_TEST_KV_HEADS * DENSE_TEST_BLOCK_SIZE * ATTN_HEAD_DIM;
             let key_cache = Tensor::from_vec(
                 (0..cache_len)
-                    .map(|i| ((i * 71 % 997) as f32 - 498.0) / 498.0)
+                    .map(|i| (f32::from(u16::try_from(i * 71 % 997).unwrap()) - 498.0) / 498.0)
                     .collect(),
                 cache_shape,
                 &device,
@@ -44,7 +44,7 @@ fn qsa_dense_graph_matches_identity_selection() -> Result<()> {
             .to_dtype(dtype)?;
             let value_cache = Tensor::from_vec(
                 (0..cache_len)
-                    .map(|i| ((i * 37 % 1009) as f32 - 504.0) / 504.0)
+                    .map(|i| (f32::from(u16::try_from(i * 37 % 1009).unwrap()) - 504.0) / 504.0)
                     .collect(),
                 cache_shape,
                 &device,
@@ -52,7 +52,7 @@ fn qsa_dense_graph_matches_identity_selection() -> Result<()> {
             .to_dtype(dtype)?;
             let q = Tensor::from_vec(
                 (0..n_tokens * DENSE_TEST_Q_HEADS * ATTN_HEAD_DIM)
-                    .map(|i| ((i * 29 % 991) as f32 - 495.0) / 495.0)
+                    .map(|i| (f32::from(u16::try_from(i * 29 % 991).unwrap()) - 495.0) / 495.0)
                     .collect(),
                 (n_tokens, DENSE_TEST_Q_HEADS, ATTN_HEAD_DIM),
                 &device,
@@ -104,7 +104,7 @@ fn qsa_dense_graph_matches_identity_selection() -> Result<()> {
                     selection,
                     shape: &shape,
                     n_kv_heads: DENSE_TEST_KV_HEADS,
-                    scale: 1.0 / (ATTN_HEAD_DIM as f32).sqrt(),
+                    scale: 1.0 / f32::from(u16::try_from(ATTN_HEAD_DIM).unwrap()).sqrt(),
                 })
             };
             let identity = Some((&selected, n_selected.as_tensor()));
@@ -298,9 +298,13 @@ fn qsa_scored_topk_graph_ignores_poisoned_unused_pages_across_requests() -> Resu
             let token_value = if token < RATIO {
                 16.0
             } else {
-                (token % 7) as f32 / 8.0
+                f32::from(u16::try_from(token % 7).unwrap()) / 8.0
             };
-            round(token_value + head as f32 / 16.0 + (dim % 13) as f32 / 64.0)
+            round(
+                token_value
+                    + f32::from(u16::try_from(head).unwrap()) / 16.0
+                    + f32::from(u16::try_from(dim % 13).unwrap()) / 64.0,
+            )
         };
         for flashinfer_layout in [false, true] {
             let key_shape = if flashinfer_layout {
@@ -412,7 +416,7 @@ fn qsa_scored_topk_graph_ignores_poisoned_unused_pages_across_requests() -> Resu
                     write_cache(&mut keys, &mut values, &table, token);
                     let base = physical_slot(&table, token) * aux_width;
                     raw[base..base + QSA_HEAD_DIM].fill(1.0);
-                    raw[base] = (token / RATIO + 1) as f32;
+                    raw[base] = f32::from(u16::try_from(token / RATIO + 1).unwrap());
                     raw[base + QSA_HEAD_DIM..base + QSA_HEAD_DIM + HALF_ROT].fill(1.0);
                     raw[base + QSA_HEAD_DIM + HALF_ROT..base + aux_width].fill(0.0);
                 }
@@ -451,7 +455,7 @@ fn qsa_scored_topk_graph_ignores_poisoned_unused_pages_across_requests() -> Resu
                     &device,
                 )?)?;
                 let mut raw = vec![1.0f32; QSA_HEAD_DIM];
-                raw[0] = (token / RATIO + 1) as f32;
+                raw[0] = f32::from(u16::try_from(token / RATIO + 1).unwrap());
                 raw_key.set(&Tensor::from_vec(raw, (1, QSA_HEAD_DIM), &device)?.to_dtype(dtype)?)
             };
             let forward = || -> Result<(Tensor, Tensor, Tensor)> {
@@ -488,7 +492,7 @@ fn qsa_scored_topk_graph_ignores_poisoned_unused_pages_across_requests() -> Resu
                     selection: Some((&selected, &counts)),
                     shape: &shape,
                     n_kv_heads: DENSE_TEST_KV_HEADS,
-                    scale: 1.0 / (ATTN_HEAD_DIM as f32).sqrt(),
+                    scale: 1.0 / f32::from(u16::try_from(ATTN_HEAD_DIM).unwrap()).sqrt(),
                 })?;
                 Ok((selected, counts, output))
             };
@@ -549,7 +553,7 @@ fn qsa_scored_topk_graph_ignores_poisoned_unused_pages_across_requests() -> Resu
                             (first_token..context)
                                 .map(|token| value(token, kv_head, dim) as f64)
                                 .sum::<f64>() as f32
-                                / (context - first_token) as f32,
+                                / f32::from(u16::try_from(context - first_token).unwrap()),
                         );
                         assert!(actual.is_finite() && (actual - expected).abs() <= tolerance,
                                 "{dtype:?} flashinfer={flashinfer_layout} request={request} context={context} element={index}: {actual} != {expected}");

@@ -2506,6 +2506,7 @@ fn speculative_checkpoint_kernels_match_serial_cuda() -> Result<()> {
                         [batch_size, seq_len, value_dim],
                         ActivationQuantizationScheme {
                             dtype: DType::F8E4M3,
+                            scale_encoding: mistralrs_quant::ActivationScaleEncoding::F32,
                             block_shape: [1, GDN_FP8_GROUP_SIZE],
                         },
                         scale_layout,
@@ -4140,6 +4141,7 @@ fn rmsnorm_gated_quantized_matches_bf16_rounding_cuda() -> Result<()> {
                 source_shape,
                 ActivationQuantizationScheme {
                     dtype: DType::F8E4M3,
+                    scale_encoding: mistralrs_quant::ActivationScaleEncoding::F32,
                     block_shape: [1, GDN_FP8_GROUP_SIZE],
                 },
                 scale_layout,
@@ -4908,6 +4910,7 @@ fn deferred_decode_matches_eager_across_wrap_and_flush_cuda() -> Result<()> {
             [BATCH_SIZE, 1, value_dim],
             ActivationQuantizationScheme {
                 dtype: DType::F8E4M3,
+                scale_encoding: mistralrs_quant::ActivationScaleEncoding::F32,
                 block_shape: [1, GDN_FP8_GROUP_SIZE],
             },
             scale_layout,

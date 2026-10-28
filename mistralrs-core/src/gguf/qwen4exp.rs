@@ -630,19 +630,28 @@ mod tests {
             ("qwen4exp.block_count", Value::U32(1)),
             (
                 "qwen4exp.hyper_connection.count",
-                Value::U32(HC_COUNT as u32),
+                Value::U32(u32::try_from(HC_COUNT).unwrap()),
             ),
             (
                 "qwen4exp.hyper_connection.low_rank",
-                Value::U32(HC_LOWRANK as u32),
+                Value::U32(u32::try_from(HC_LOWRANK).unwrap()),
             ),
-            ("qwen4exp.ssm.group_count", Value::U32(KEY_HEADS as u32)),
-            ("qwen4exp.ssm.state_size", Value::U32(KEY_DIM as u32)),
+            (
+                "qwen4exp.ssm.group_count",
+                Value::U32(u32::try_from(KEY_HEADS).unwrap()),
+            ),
+            (
+                "qwen4exp.ssm.state_size",
+                Value::U32(u32::try_from(KEY_DIM).unwrap()),
+            ),
             (
                 "qwen4exp.ssm.time_step_rank",
-                Value::U32(VALUE_HEADS as u32),
+                Value::U32(u32::try_from(VALUE_HEADS).unwrap()),
             ),
-            ("qwen4exp.ssm.inner_size", Value::U32(VALUE_DIM as u32)),
+            (
+                "qwen4exp.ssm.inner_size",
+                Value::U32(u32::try_from(VALUE_DIM).unwrap()),
+            ),
         ];
         for dtype in [GgmlDType::Q4K, GgmlDType::Q8_0] {
             let specifications = [
@@ -664,7 +673,10 @@ mod tests {
                 .enumerate()
                 .map(|(index, (_, rows, cols))| {
                     let data = (0..rows * cols)
-                        .map(|i| ((i * 17 + index * 7) % 101) as f32 / 50.0 - 1.0)
+                        .map(|i| {
+                            f32::from(u16::try_from((i * 17 + index * 7) % 101).unwrap()) / 50.0
+                                - 1.0
+                        })
                         .collect::<Vec<_>>();
                     QTensor::quantize(
                         &Tensor::from_vec(data, (*rows, *cols), &Device::Cpu)?,

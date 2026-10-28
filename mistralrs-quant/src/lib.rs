@@ -45,6 +45,7 @@ mod lora;
 #[cfg(feature = "cuda")]
 pub mod moe;
 mod mxfp4;
+mod mxfp8;
 pub mod nvfp4;
 mod pending_layer;
 mod pertensor_fp8;
@@ -209,8 +210,8 @@ pub use f8q8::F8Q8Linear;
 pub use fp8::FP8Linear;
 pub use fp8_config::{
     CheckpointDialect, CheckpointLinearSpec, CheckpointQuantConfig, Fp8ActivationMode,
-    Fp8LinearSpec, Fp8ScaleNames, Fp8WeightScaleLayout, Nvfp4ActivationMode, Nvfp4LinearSpec,
-    Nvfp4ScaleNames, ScaleConvention, NVFP4_BLOCK_SIZE,
+    Fp8LinearSpec, Fp8ScaleNames, Fp8WeightScaleLayout, Mxfp8LinearSpec, Nvfp4ActivationMode,
+    Nvfp4LinearSpec, Nvfp4ScaleEncoding, Nvfp4ScaleNames, ScaleConvention, NVFP4_BLOCK_SIZE,
 };
 #[cfg(feature = "cuda")]
 pub use gemv::gemv;
@@ -776,7 +777,22 @@ impl QuantizedConfig {
             Some(CheckpointLinearSpec::Nvfp4(_)) => {
                 candle_core::bail!("NVFP4 layer `{prefix}` requires the NVFP4 loader")
             }
+            Some(CheckpointLinearSpec::Mxfp8(_)) => {
+                candle_core::bail!("MXFP8 layer `{prefix}` requires the MXFP8 loader")
+            }
             None => Ok(None),
+        }
+    }
+
+    pub fn resolve_explicit_checkpoint(
+        &self,
+        prefix: &str,
+    ) -> Result<Option<CheckpointLinearSpec>> {
+        match self {
+            Self::CompressedTensors { config, .. } | Self::ModelOpt { config, .. } => config
+                .resolve_explicit_checked(prefix)
+                .map_err(candle_core::Error::msg),
+            _ => Ok(None),
         }
     }
 
@@ -799,7 +815,9 @@ impl QuantizedConfig {
             Self::CompressedTensors { .. } | Self::ModelOpt { .. } => {
                 match self.resolve_checkpoint(&vb.prefix()) {
                     Ok(Some(CheckpointLinearSpec::Nvfp4(_))) => "4 bits".to_string(),
-                    Ok(Some(CheckpointLinearSpec::Fp8(_))) => "8 bits".to_string(),
+                    Ok(Some(CheckpointLinearSpec::Fp8(_) | CheckpointLinearSpec::Mxfp8(_))) => {
+                        "8 bits".to_string()
+                    }
                     _ => "unquantized".to_string(),
                 }
             }
@@ -1605,6 +1623,24 @@ pub enum DistributedKind {
 pub struct ActivationQuantizationScheme {
     pub dtype: DType,
     pub block_shape: [usize; 2],
+    pub scale_encoding: ActivationScaleEncoding,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActivationScaleEncoding {
+    F32,
+    E4M3,
+    E8M0,
+}
+
+impl ActivationScaleEncoding {
+    fn storage_dtype(self) -> DType {
+        match self {
+            Self::F32 => DType::F32,
+            Self::E4M3 => DType::F8E4M3,
+            Self::E8M0 => DType::U8,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1670,9 +1706,11 @@ impl QuantizedActivation {
                 scheme.dtype
             );
         }
-        if scales.dtype() != DType::F32 {
+        if scales.dtype() != scheme.scale_encoding.storage_dtype() {
             candle_core::bail!(
-                "quantized activation scales must be F32, got {:?}",
+                "quantized activation scales for {:?} must be {:?}, got {:?}",
+                scheme.scale_encoding,
+                scheme.scale_encoding.storage_dtype(),
                 scales.dtype()
             );
         }
@@ -1891,6 +1929,20 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         )
     }
 
+    fn try_gather_forward_group(
+        &self,
+        _a: &Tensor,
+        _indices: &Tensor,
+        _methods: &[&dyn QuantMethod],
+    ) -> Result<Option<Vec<Tensor>>> {
+        Ok(None)
+    }
+
+    #[doc(hidden)]
+    fn nvfp4_expert_projection(&self) -> Option<&Nvfp4Layer> {
+        None
+    }
+
     fn embedding_forward(&self, ids: &Tensor, output_dtype: DType) -> Result<Tensor> {
         self.embedding_forward_raw(ids)?.to_dtype(output_dtype)
     }
@@ -2058,6 +2110,17 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     }
 }
 
+pub fn try_gather_forward_with_shared_quantized_activation(
+    a: &Tensor,
+    indices: &Tensor,
+    methods: &[&dyn QuantMethod],
+) -> Result<Option<Vec<Tensor>>> {
+    if methods.len() < 2 {
+        return Ok(None);
+    }
+    methods[0].try_gather_forward_group(a, indices, methods)
+}
+
 pub fn try_forward_with_shared_quantized_activation(
     a: &Tensor,
     methods: &[&dyn QuantMethod],
@@ -2190,7 +2253,10 @@ pub fn try_forward_fused_quantized_glu(
         let Some(scheme) = projection.activation_quantization_scheme_for(value) else {
             return Ok(None);
         };
-        if scheme.dtype != DType::F8E4M3 || scheme.block_shape != [1, 128] {
+        if scheme.dtype != DType::F8E4M3
+            || scheme.block_shape != [1, 128]
+            || scheme.scale_encoding != ActivationScaleEncoding::F32
+        {
             return Ok(None);
         }
         let Some(scale_layout @ ActivationScaleLayout::GroupMajor { row_alignment }) =
@@ -3182,7 +3248,7 @@ mod tests {
     use super::*;
 
     #[derive(Debug)]
-    struct SharedActivationProbe(Option<f32>);
+    struct SharedActivationProbe(Option<f32>, ActivationScaleEncoding);
 
     impl QuantizedSerde for SharedActivationProbe {
         fn name(&self) -> &'static str {
@@ -3192,7 +3258,7 @@ mod tests {
 
     impl QuantMethod for SharedActivationProbe {
         fn new(_method: QuantMethodConfig) -> Result<Self> {
-            Ok(Self(None))
+            Ok(Self(None, ActivationScaleEncoding::F32))
         }
 
         fn dequantize_w(&self) -> Result<Tensor> {
@@ -3206,6 +3272,7 @@ mod tests {
         fn activation_quantization_scheme(&self) -> Option<ActivationQuantizationScheme> {
             Some(ActivationQuantizationScheme {
                 dtype: DType::F8E4M3,
+                scale_encoding: self.1,
                 block_shape: [1, 4],
             })
         }
@@ -3249,10 +3316,57 @@ mod tests {
     #[test]
     fn shared_activation_requires_matching_global_calibration() -> Result<()> {
         let input = Tensor::zeros((2, 4), DType::BF16, &Device::Cpu)?;
-        let first = SharedActivationProbe(Some(0.25));
-        let second = SharedActivationProbe(Some(0.5));
+        let first = SharedActivationProbe(Some(0.25), ActivationScaleEncoding::F32);
+        let second = SharedActivationProbe(Some(0.5), ActivationScaleEncoding::F32);
         assert!(
             try_forward_with_shared_quantized_activation(&input, &[&first, &second])?.is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn shared_activation_requires_matching_scale_encoding() -> Result<()> {
+        let input = Tensor::zeros((2, 4), DType::BF16, &Device::Cpu)?;
+        let first = SharedActivationProbe(None, ActivationScaleEncoding::F32);
+        let second = SharedActivationProbe(None, ActivationScaleEncoding::E8M0);
+        assert!(
+            try_forward_with_shared_quantized_activation(&input, &[&first, &second])?.is_none()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mxfp8_activation_preserves_e8m0_scale_encoding() -> Result<()> {
+        let scheme = mxfp8::MXFP8_ACTIVATION_SCHEME;
+        let quantized = Tensor::zeros((2, 64), DType::F8E4M3, &Device::Cpu)?;
+        let scales = Tensor::full(127u8, (2, 2), &Device::Cpu)?;
+        let activation = QuantizedActivation::new(
+            quantized.clone(),
+            scales.clone(),
+            vec![1, 2, 64],
+            DType::BF16,
+            scheme,
+        )?;
+        assert_eq!(activation.scales().dtype(), DType::U8);
+        assert_eq!(
+            activation.scheme().scale_encoding,
+            ActivationScaleEncoding::E8M0
+        );
+        assert!(QuantizedActivation::new(
+            quantized.clone(),
+            scales.to_dtype(DType::F32)?,
+            vec![2, 64],
+            DType::BF16,
+            scheme,
+        )
+        .is_err());
+        let ordinary = ActivationQuantizationScheme {
+            scale_encoding: ActivationScaleEncoding::F32,
+            ..scheme
+        };
+        assert!(
+            QuantizedActivation::new(quantized, scales, vec![2, 64], DType::BF16, ordinary,)
+                .is_err()
         );
         Ok(())
     }
@@ -3282,7 +3396,7 @@ mod tests {
     #[test]
     fn shared_activation_falls_back_for_unsupported_input_dtype() -> Result<()> {
         let input = Tensor::zeros((1, 4), DType::F32, &Device::Cpu)?;
-        let method = SharedActivationProbe(None);
+        let method = SharedActivationProbe(None, ActivationScaleEncoding::F32);
         assert!(try_forward_with_shared_quantized_activation(&input, &[&method])?.is_none());
         Ok(())
     }
@@ -3290,7 +3404,7 @@ mod tests {
     #[test]
     fn fused_glu_quantization_defaults_to_fallback() -> Result<()> {
         let input = Tensor::zeros((2, 16), DType::BF16, &Device::Cpu)?;
-        let method = SharedActivationProbe(None);
+        let method = SharedActivationProbe(None, ActivationScaleEncoding::F32);
         assert!(method
             .try_quantize_glu(&input, &input, GluActivationType::Relu)?
             .is_none());
@@ -3301,7 +3415,7 @@ mod tests {
     fn fused_quantized_glu_falls_back_off_cuda() -> Result<()> {
         let gate = Tensor::zeros((3, 4), DType::BF16, &Device::Cpu)?;
         let value = Tensor::ones((3, 4), DType::BF16, &Device::Cpu)?;
-        let method = SharedActivationProbe(None);
+        let method = SharedActivationProbe(None, ActivationScaleEncoding::F32);
         assert!(try_forward_fused_quantized_glu(
             &gate,
             &value,
@@ -3326,6 +3440,7 @@ mod tests {
     fn quantized_activation_validates_flattened_shape_and_scale_grid() -> Result<()> {
         let scheme = ActivationQuantizationScheme {
             dtype: DType::F8E4M3,
+            scale_encoding: crate::ActivationScaleEncoding::F32,
             block_shape: [1, 4],
         };
         let quantized = Tensor::zeros((6, 8), DType::F8E4M3, &Device::Cpu)?;
@@ -3358,6 +3473,7 @@ mod tests {
     fn quantized_activation_validates_group_major_scale_layout() -> Result<()> {
         let scheme = ActivationQuantizationScheme {
             dtype: DType::F8E4M3,
+            scale_encoding: crate::ActivationScaleEncoding::F32,
             block_shape: [1, 128],
         };
         let layout = ActivationScaleLayout::GroupMajor {
@@ -3393,6 +3509,7 @@ mod tests {
         .is_err());
         let row_blocked_scheme = ActivationQuantizationScheme {
             dtype: DType::F8E4M3,
+            scale_encoding: crate::ActivationScaleEncoding::F32,
             block_shape: [2, 128],
         };
         assert!(QuantizedActivation::new_with_scale_layout(

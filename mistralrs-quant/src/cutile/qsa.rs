@@ -898,6 +898,10 @@ mod tests {
     const Q_HEADS: usize = 24;
     const POOL_BLOCKS: usize = 48;
     const MAX_BLOCKS: usize = 12;
+    const LONG_CONTEXT: usize = 8192;
+    const LONG_TOPK: usize = 512;
+    const LONG_ROWS: usize = 4;
+    const LONG_LAYOUTS: [(usize, usize); 3] = [(4, 16), (4, 32), (8, 32)];
     // (tokens, kv length after the step) per sequence; the short ones select every block or none
     const SEQS: [(usize, usize); 4] = [(37, 300), (21, 150), (4, 6), (3, 3)];
 
@@ -1143,6 +1147,136 @@ mod tests {
             }
         }
         assert!(max_err < 2e-3, "max abs error {max_err}");
+        Ok(())
+    }
+
+    #[test]
+    #[ignore = "requires a CUDA device with cuTile support"]
+    fn cutile_qsa_prefill_warmup_covers_long_context_graph_replay() -> Result<()> {
+        use candle_core::cuda::cudarc::driver::sys;
+        use candle_core::Var;
+
+        let device = Device::new_cuda_with_stream(0)?;
+        let cuda = device.as_cuda_device()?;
+        let stream = cuda.cuda_stream();
+        for (ratio, block_size) in LONG_LAYOUTS {
+            register_qsa_shape(QsaWarmShape {
+                ratio,
+                topk: LONG_TOPK,
+                n_q_heads: Q_HEADS,
+                n_kv_heads: KV_HEADS,
+                block_size,
+            });
+        }
+        QSA.warm(cuda, true)?;
+        for (ratio, block_size) in LONG_LAYOUTS {
+            let pages = LONG_CONTEXT / block_size;
+            let table = (0..pages)
+                .map(|page| ((page * 7 + 3) % pages) as i32)
+                .collect::<Vec<_>>();
+            let tables = Tensor::from_vec(table.clone(), (1, pages), &device)?;
+            let paged = QsaPaged {
+                block_tables: &tables,
+                max_blocks_per_seq: pages,
+                block_size,
+            };
+            let d = QSA_ATTN_HEAD_DIM;
+            let cache_shape = [pages, KV_HEADS, block_size, d];
+            let mut rng = Lcg(31);
+            let values = rng.vec(pages * KV_HEADS * block_size * d);
+            let value = to_bf16(&values, &cache_shape, &device)?;
+            let key = Tensor::zeros(&cache_shape, DType::BF16, &device)?;
+            let q = Tensor::zeros((LONG_ROWS, Q_HEADS, d), DType::BF16, &device)?;
+            let selected = Var::zeros((LONG_ROWS, LONG_TOPK), DType::I32, &device)?;
+            let counts = Var::zeros(LONG_ROWS, DType::I32, &device)?;
+            let tokens = Var::zeros((LONG_ROWS, 2), DType::I32, &device)?;
+            let args = QsaAttentionArgs {
+                q: &q,
+                key_cache: &key,
+                value_cache: &value,
+                paged: &paged,
+                selected: &selected,
+                n_selected: &counts,
+                tokens: &tokens,
+                n_kv_heads: KV_HEADS,
+                ratio,
+                scale: (d as f32).sqrt().recip(),
+            };
+            let compiled = cutile::tile_kernel::jit_compile_count();
+            device.synchronize()?;
+            unsafe { stream.context().disable_event_tracking() };
+            stream
+                .begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+                .map_err(candle_core::Error::wrap)?;
+            let output = cutile_qsa_attention(&args, cuda);
+            let graph = stream.end_capture(
+                sys::CUgraphInstantiate_flags::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH,
+            );
+            unsafe { stream.context().enable_event_tracking() };
+            let output = output?;
+            let graph = graph.map_err(candle_core::Error::wrap)?.unwrap();
+            assert_eq!(cutile::tile_kernel::jit_compile_count(), compiled);
+            for shift in [0, 1, 0] {
+                let positions = [0, LONG_CONTEXT / 2 - 1 + shift, LONG_CONTEXT - 2 + shift];
+                let mut selected_host = vec![0i32; LONG_ROWS * LONG_TOPK];
+                let mut counts_host = vec![0i32; LONG_ROWS];
+                let mut tokens_host = vec![-1i32; LONG_ROWS * 2];
+                let mut expected = vec![0f32; LONG_ROWS * Q_HEADS * d];
+                for (row, position) in positions.into_iter().enumerate() {
+                    tokens_host[row * 2] = 0;
+                    tokens_host[row * 2 + 1] = position as i32;
+                    let complete = (position + 1) / ratio;
+                    let count = complete.min(LONG_TOPK);
+                    counts_host[row] = count as i32;
+                    let selected_row = &mut selected_host[row * LONG_TOPK..][..count];
+                    for (item, entry) in selected_row.iter_mut().enumerate() {
+                        *entry = (complete - 1 - item) as i32;
+                    }
+                    let items = selected_row
+                        .iter()
+                        .flat_map(|&block| block as usize * ratio..(block as usize + 1) * ratio)
+                        .chain(complete * ratio..=position)
+                        .collect::<Vec<_>>();
+                    for kv_head in 0..KV_HEADS {
+                        let mut mean = vec![0f32; d];
+                        for &item in &items {
+                            let page = table[item / block_size] as usize;
+                            let base =
+                                ((page * KV_HEADS + kv_head) * block_size + item % block_size) * d;
+                            for (column, value) in mean.iter_mut().enumerate() {
+                                *value += values[base + column] / items.len() as f32;
+                            }
+                        }
+                        let group = Q_HEADS / KV_HEADS;
+                        for head in kv_head * group..(kv_head + 1) * group {
+                            expected[(row * Q_HEADS + head) * d..][..d].copy_from_slice(&mean);
+                        }
+                    }
+                }
+                selected.set(&Tensor::from_vec(
+                    selected_host,
+                    (LONG_ROWS, LONG_TOPK),
+                    &device,
+                )?)?;
+                counts.set(&Tensor::from_vec(counts_host, LONG_ROWS, &device)?)?;
+                tokens.set(&Tensor::from_vec(tokens_host, (LONG_ROWS, 2), &device)?)?;
+                graph.launch().map_err(candle_core::Error::wrap)?;
+                let actual = output
+                    .to_dtype(DType::F32)?
+                    .flatten_all()?
+                    .to_vec1::<f32>()?;
+                let max_error = actual
+                    .iter()
+                    .zip(expected)
+                    .map(|(actual, expected)| (actual - expected).abs())
+                    .fold(0f32, f32::max);
+                assert!(max_error < 2e-3, "max abs error {max_error}");
+                assert_eq!(cutile::tile_kernel::jit_compile_count(), compiled);
+            }
+            drop(output);
+            device.synchronize()?;
+            drop(graph);
+        }
         Ok(())
     }
 }
