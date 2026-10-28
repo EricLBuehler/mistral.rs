@@ -52,6 +52,7 @@ The `Architecture` column is the `config.json` `architectures` value. Per-family
 | `Qwen3NextForCausalLM` | Qwen3-Next, Qwen3-Coder-Next | <details><summary><code>Qwen/Qwen3-Next-80B-A3B-Instruct</code></summary><code>mistralrs run -m Qwen/Qwen3-Next-80B-A3B-Instruct</code></details> |
 | `Qwen3_5ForCausalLM` | Qwen3.5 | No published example |
 | `Lfm2ForCausalLM` | LFM2, LFM2.5 | <details><summary><code>LiquidAI/LFM2.5-1.2B-Instruct</code> (LFM2.5), <code>LiquidAI/LFM2-1.2B</code> (LFM2)</summary><code>mistralrs run -m LiquidAI/LFM2.5-1.2B-Instruct</code><br><code>mistralrs run -m LiquidAI/LFM2-1.2B</code></details> |
+| `Lfm3ForCausalLM` | LFM3 | <details><summary><code>LiquidAI/LFM3-1.7B</code></summary><code>mistralrs run -m LiquidAI/LFM3-1.7B</code></details> |
 | `Lfm2MoeForCausalLM` | LFM2 MoE, LFM2.5 MoE | <details><summary><code>LiquidAI/LFM2.5-8B-A1B</code> (LFM2.5), <code>LiquidAI/LFM2-8B-A1B</code> (LFM2)</summary><code>mistralrs run -m LiquidAI/LFM2.5-8B-A1B</code><br><code>mistralrs run -m LiquidAI/LFM2-8B-A1B</code></details> |
 
 ## Multimodal models
@@ -63,6 +64,7 @@ The `Architecture` column is the `config.json` `architectures` value. Per-family
 | `LlavaNextForConditionalGeneration` | LLaVA-NeXT | <details><summary><code>llava-hf/llava-v1.6-mistral-7b-hf</code></summary><code>mistralrs run -m llava-hf/llava-v1.6-mistral-7b-hf</code></details> |
 | `LlavaForConditionalGeneration` | LLaVA 1.5 | <details><summary><code>llava-hf/llava-1.5-7b-hf</code></summary><code>mistralrs run -m llava-hf/llava-1.5-7b-hf</code></details> |
 | `Lfm2VlForConditionalGeneration` | LFM2-VL, LFM2.5-VL | <details><summary><code>LiquidAI/LFM2.5-VL-1.6B</code> (1.6B), <code>LiquidAI/LFM2.5-VL-450M</code> (450M)</summary><code>mistralrs run -m LiquidAI/LFM2.5-VL-1.6B</code><br><code>mistralrs run -m LiquidAI/LFM2.5-VL-450M</code></details> |
+| `Lfm3VlForConditionalGeneration` | LFM3-VL | <details><summary><code>LiquidAI/LFM3-VL-2B</code></summary><code>mistralrs run -m LiquidAI/LFM3-VL-2B</code></details> |
 | `MllamaForConditionalGeneration` | Llama 3.2 Vision | <details><summary><code>meta-llama/Llama-3.2-11B-Vision-Instruct</code></summary><code>mistralrs run -m meta-llama/Llama-3.2-11B-Vision-Instruct</code></details> |
 | `Qwen2VLForConditionalGeneration` | Qwen2-VL | <details><summary><code>Qwen/Qwen2-VL-7B-Instruct</code></summary><code>mistralrs run -m Qwen/Qwen2-VL-7B-Instruct</code></details> |
 | `Idefics3ForConditionalGeneration` | Idefics3, SmolVLM | <details><summary><code>HuggingFaceM4/Idefics3-8B-Llama3</code></summary><code>mistralrs run -m HuggingFaceM4/Idefics3-8B-Llama3</code></details> |

@@ -658,6 +658,35 @@ mod tests {
     }
 
     #[test]
+    fn lfm3_auto_detection_selects_native_loaders() {
+        for (architecture, multimodal) in [
+            ("Lfm3ForCausalLM", false),
+            ("Lfm3VlForConditionalGeneration", true),
+        ] {
+            let mut loader = detector();
+            loader.dynamic_lora_enabled = false;
+            let detected = loader
+                .detect(&ConfigArtifacts {
+                    contents: Some(
+                        serde_json::json!({"architectures": [architecture]}).to_string(),
+                    ),
+                    sentence_transformers_present: false,
+                    repo_files: Vec::new(),
+                    remote_access_issue: None,
+                })
+                .unwrap();
+            if multimodal {
+                assert!(matches!(
+                    detected,
+                    Detected::Multimodal(MultimodalLoaderType::Lfm3Vl)
+                ));
+            } else {
+                assert!(matches!(detected, Detected::Normal(NormalLoaderType::Lfm3)));
+            }
+        }
+    }
+
+    #[test]
     fn qwen3_5_moe_auto_detection_routes_dynamic_lora_to_multimodal() {
         let detected = detector()
             .detect(&ConfigArtifacts {
@@ -694,6 +723,7 @@ mod tests {
             MultimodalLoaderType::Mistral3,
             MultimodalLoaderType::Llama4,
             MultimodalLoaderType::Lfm2Vl,
+            MultimodalLoaderType::Lfm3Vl,
             MultimodalLoaderType::Gemma4,
             MultimodalLoaderType::MuseGlimmer,
         ] {

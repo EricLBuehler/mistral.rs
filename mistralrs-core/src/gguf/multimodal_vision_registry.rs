@@ -8,6 +8,7 @@ use super::{
     gemma3n_bindings::build_gemma3n_bindings,
     idefics3_bindings::build_idefics3_bindings,
     lfm2_vl_bindings::build_lfm2_vl_bindings,
+    lfm3_vl_bindings::build_lfm3_vl_bindings,
     llama4_bindings::build_llama4_bindings,
     mistral3_bindings::build_mistral3_bindings,
     multimodal_binding_utils::{metadata_string, projector_type},
@@ -23,6 +24,7 @@ pub(crate) enum NativeMultimodalGgufFamily {
     Mistral3,
     Llama4,
     Lfm2Vl,
+    Lfm3Vl,
     MuseGlimmer,
 }
 
@@ -56,13 +58,14 @@ impl NativeMultimodalGgufFamily {
             Self::Mistral3 => MultimodalLoaderType::Mistral3,
             Self::Llama4 => MultimodalLoaderType::Llama4,
             Self::Lfm2Vl => MultimodalLoaderType::Lfm2Vl,
+            Self::Lfm3Vl => MultimodalLoaderType::Lfm3Vl,
             Self::MuseGlimmer => MultimodalLoaderType::MuseGlimmer,
         }
     }
 
     fn rope_pairing(self) -> RopePairing {
         match self {
-            Self::Gemma3 | Self::Gemma3n | Self::Lfm2Vl => RopePairing::HalfSplit,
+            Self::Gemma3 | Self::Gemma3n | Self::Lfm2Vl | Self::Lfm3Vl => RopePairing::HalfSplit,
             Self::Idefics3 | Self::Mistral3 | Self::Llama4 | Self::MuseGlimmer => {
                 RopePairing::Adjacent
             }
@@ -77,6 +80,7 @@ impl NativeMultimodalGgufFamily {
             Self::Mistral3 => build_mistral3_bindings(archive),
             Self::Llama4 => build_llama4_bindings(archive),
             Self::Lfm2Vl => build_lfm2_vl_bindings(archive),
+            Self::Lfm3Vl => build_lfm3_vl_bindings(archive),
             Self::MuseGlimmer => build_muse_glimmer_bindings(archive),
         }
     }
@@ -110,6 +114,10 @@ fn family_from_names(
         Some("lfm2") => {
             require_architecture(architecture, "lfm2", "lfm2")?;
             NativeMultimodalGgufFamily::Lfm2Vl
+        }
+        Some("lfm3vl") => {
+            require_architecture(architecture, "lfm3", "lfm3vl")?;
+            NativeMultimodalGgufFamily::Lfm3Vl
         }
         Some("muse-glimmer") => {
             require_architecture(architecture, "muse-glimmer", "muse-glimmer")?;
@@ -179,6 +187,12 @@ mod tests {
                 NativeMultimodalGgufFamily::MuseGlimmer,
                 RopePairing::Adjacent,
             ),
+            (
+                "lfm3",
+                "lfm3vl",
+                NativeMultimodalGgufFamily::Lfm3Vl,
+                RopePairing::HalfSplit,
+            ),
         ] {
             let detected = family_from_names(architecture, Some(projector))
                 .unwrap()
@@ -190,8 +204,16 @@ mod tests {
 
     #[test]
     fn rejects_cross_family_projector_pair() {
-        let error = family_from_names("llama", Some("pixtral")).unwrap_err();
-        assert!(error.to_string().contains("requires `mistral3`"));
+        for (architecture, projector, expected) in [
+            ("llama", "pixtral", "mistral3"),
+            ("lfm2", "lfm3vl", "lfm3"),
+            ("lfm3", "lfm2", "lfm2"),
+        ] {
+            let error = family_from_names(architecture, Some(projector)).unwrap_err();
+            assert!(error
+                .to_string()
+                .contains(&format!("requires `{expected}`")));
+        }
     }
 
     #[test]

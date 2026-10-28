@@ -41,7 +41,7 @@ use crate::{
     xlora_models::{self, XLoraConfig},
 };
 
-use super::{ActivationModelConfig, AutoDeviceMapParams, DeviceMappedModelLoader};
+use super::{ActivationModelConfig, AutoDeviceMapParams, DeviceMappedModelLoader, Lfm3Loader};
 use crate::gguf::normal_registry::RopePairing;
 
 const PHI35_MOE_EXPERTS_PER_TOKEN: usize = 2;
@@ -267,6 +267,8 @@ pub enum NormalLoaderType {
     Qwen3_5,
     #[serde(rename = "lfm2")]
     Lfm2,
+    #[serde(rename = "lfm3")]
+    Lfm3,
     #[serde(rename = "lfm2_moe")]
     Lfm2Moe,
 }
@@ -301,6 +303,7 @@ impl NormalLoaderType {
             Self::Qwen3Next => "Qwen3NextForCausalLM",
             Self::Qwen3_5 => "Qwen3_5ForCausalLM",
             Self::Lfm2 => "Lfm2ForCausalLM",
+            Self::Lfm3 => "Lfm3ForCausalLM",
             Self::Lfm2Moe => "Lfm2MoeForCausalLM",
         }
     }
@@ -333,6 +336,7 @@ impl NormalLoaderType {
             Self::Qwen3Next => "qwen3_next",
             Self::Qwen3_5 => "qwen3_5_text",
             Self::Lfm2 => "lfm2",
+            Self::Lfm3 => "lfm3",
             Self::Lfm2Moe => "lfm2_moe",
         }
     }
@@ -365,6 +369,7 @@ impl NormalLoaderType {
             "Qwen3NextForCausalLM" => Ok(Self::Qwen3Next),
             "Qwen3_5ForCausalLM" => Ok(Self::Qwen3_5),
             "Lfm2ForCausalLM" => Ok(Self::Lfm2),
+            "Lfm3ForCausalLM" => Ok(Self::Lfm3),
             "Lfm2MoeForCausalLM" => Ok(Self::Lfm2Moe),
             other => anyhow::bail!(
                 "Unsupported Hugging Face Transformers -CausalLM model class `{other}`. Please raise an issue."
@@ -403,8 +408,9 @@ impl FromStr for NormalLoaderType {
             "qwen3next" => Ok(Self::Qwen3Next),
             "qwen3_5" => Ok(Self::Qwen3_5),
             "lfm2" => Ok(Self::Lfm2),
+            "lfm3" => Ok(Self::Lfm3),
             "lfm2_moe" => Ok(Self::Lfm2Moe),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`, `deepseekv2`, `deepseekv3`, `qwen3`, `glm4`, `glm4moelite`, `glm4moe`, `qwen3moe`, `flint`, `smollm3`, `granitemoehybrid`, `gpt_oss`, `hunyuanv1dense`, `hunyuanv1moe`, `qwen3next`, `qwen3_5`, `lfm2`, `lfm2_moe`.")),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`, `deepseekv2`, `deepseekv3`, `qwen3`, `glm4`, `glm4moelite`, `glm4moe`, `qwen3moe`, `flint`, `smollm3`, `granitemoehybrid`, `gpt_oss`, `hunyuanv1dense`, `hunyuanv1moe`, `qwen3next`, `qwen3_5`, `lfm2`, `lfm2_moe`, `lfm3`.")),
         }
     }
 }
@@ -438,6 +444,7 @@ impl Display for NormalLoaderType {
             Self::Qwen3Next => write!(f, "qwen3next"),
             Self::Qwen3_5 => write!(f, "qwen3_5"),
             Self::Lfm2 => write!(f, "lfm2"),
+            Self::Lfm3 => write!(f, "lfm3"),
             Self::Lfm2Moe => write!(f, "lfm2_moe"),
         }
     }
@@ -501,6 +508,7 @@ impl AutoNormalLoader {
             NormalLoaderType::Qwen3Next => Ok(Box::new(Qwen3NextLoader)),
             NormalLoaderType::Qwen3_5 => Ok(Box::new(Qwen3_5TextLoader)),
             NormalLoaderType::Lfm2 => Ok(Box::new(Lfm2Loader)),
+            NormalLoaderType::Lfm3 => Ok(Box::new(Lfm3Loader)),
             NormalLoaderType::Lfm2Moe => Ok(Box::new(Lfm2Loader)),
         }
     }

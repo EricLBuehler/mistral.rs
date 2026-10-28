@@ -293,7 +293,7 @@ impl GgufMatMul {
 
     fn add_bias(&self, x: Tensor) -> Result<Tensor> {
         if let Some(ref b) = self.b {
-            x.broadcast_add(b)
+            crate::elementwise::broadcast_add(&x, &b.to_dtype(x.dtype())?)
         } else {
             Ok(x)
         }
@@ -835,6 +835,25 @@ mod tests {
 
     const TEST_EMBEDDING_DIM: usize = 256;
     const TEST_VOCAB_SIZE: usize = 8;
+
+    #[test]
+    fn quantized_bias_preserves_activation_dtype() -> Result<()> {
+        let device = Device::Cpu;
+        let weight = Tensor::zeros((2, TEST_EMBEDDING_DIM), DType::F32, &device)?;
+        let bias = Tensor::new(&[0.25f32, -0.5], &device)?;
+        let layer =
+            GgufMatMul::from_qtensor(QTensor::quantize(&weight, GgmlDType::Q4K)?, Some(bias));
+        for dtype in [DType::F32, DType::BF16, DType::F16] {
+            let input = Tensor::ones((1, TEST_EMBEDDING_DIM), dtype, &device)?;
+            let output = layer.forward_raw(&input)?;
+            assert_eq!(output.dtype(), dtype);
+            assert_eq!(
+                output.to_dtype(DType::F32)?.to_vec2::<f32>()?,
+                [[0.25, -0.5]]
+            );
+        }
+        Ok(())
+    }
 
     fn assert_embedding_matches_dequantized_gather(
         device: &Device,

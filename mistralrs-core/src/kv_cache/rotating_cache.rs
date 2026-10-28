@@ -79,6 +79,14 @@ impl RotatingCache {
         Ok(data)
     }
 
+    pub(super) fn replace_retained_data(&mut self, data: Tensor, current_seq_len: usize) {
+        self.capacity_seq_len = data.dims()[self.dim];
+        self.write_pos = self.capacity_seq_len;
+        self.current_seq_len = current_seq_len;
+        self.last_append_result = None;
+        self.all_data = Some(data);
+    }
+
     pub fn last_append_result(&self) -> Option<&Tensor> {
         self.last_append_result.as_ref()
     }
@@ -360,6 +368,56 @@ mod tests {
             .flat_map(|row| row.iter().copied())
             .collect::<Vec<_>>();
         Tensor::new(values, &Device::Cpu)?.reshape((rows.len(), 1, len, 1))
+    }
+
+    #[test]
+    fn replaces_compacted_window_before_decode() -> candle_core::Result<()> {
+        for prefill_len in [3_u16, 7] {
+            let values = (0..prefill_len).map(f32::from).collect::<Vec<_>>();
+            let mut source = RotatingCache::new(2, 4, 4);
+            source.append(&make_src(&values)?)?;
+            let mut cache = RotatingCache::new(2, 4, 4);
+            cache.append(&make_src(&[20., 21.])?)?;
+            cache.replace_retained_data(source.current_data()?.unwrap(), source.current_seq_len);
+
+            assert_eq!(cache.current_seq_len, usize::from(prefill_len));
+            assert_eq!(cache.capacity_seq_len, usize::from(prefill_len.min(4)));
+            assert_eq!(cache.write_pos, usize::from(prefill_len.min(4)));
+            assert!(cache.last_append_result.is_none());
+            let next = cache.append(&make_src(&[f32::from(prefill_len)])?)?;
+            let expected = (prefill_len + 1 - 4..=prefill_len)
+                .map(f32::from)
+                .collect::<Vec<_>>();
+            assert_eq!(next.flatten_all()?.to_vec1::<f32>()?, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn compacted_sequence_rows_rebatch_after_sliding() -> candle_core::Result<()> {
+        let mut batched = RotatingCache::new(2, 4, 4);
+        batched.append(&make_batched_src(&[
+            &[0., 1., 2., 3., 4., 5., 6.],
+            &[10., 11., 12., 13., 14., 15., 16.],
+        ])?)?;
+        batched.append(&make_batched_src(&[&[7., 8.], &[17., 18.]])?)?;
+        batched.append(&make_batched_src(&[&[9.], &[19.]])?)?;
+        assert!(batched.write_pos > batched.max_seq_len);
+
+        let rows = batched.current_data()?.unwrap().chunk(2, 0)?;
+        let mut sequences = Vec::new();
+        for row in rows {
+            let mut cache = batched.clone();
+            cache.replace_retained_data(row, batched.current_seq_len);
+            sequences.push(cache.current_data()?.unwrap());
+        }
+        batched.replace_retained_data(Tensor::cat(&sequences, 0)?, 10);
+        let next = batched.append(&make_batched_src(&[&[10.], &[20.]])?)?;
+        assert_eq!(
+            next.flatten_all()?.to_vec1::<f32>()?,
+            vec![7., 8., 9., 10., 17., 18., 19., 20.]
+        );
+        Ok(())
     }
 
     #[test]

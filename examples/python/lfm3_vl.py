@@ -1,0 +1,44 @@
+"""
+LiquidAI LFM3-VL image understanding with the Python SDK.
+
+Run with `python examples/python/lfm3_vl.py photo.jpg`.
+The architecture is detected automatically; Q4K quantization reduces weight memory.
+"""
+
+import argparse
+from pathlib import Path
+
+from mistralrs import ChatCompletionRequest, Runner, Which
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("image", type=Path, help="Path to an image")
+args = parser.parse_args()
+
+runner = Runner(
+    which=Which.MultimodalPlain(model_id="LiquidAI/LFM3-VL-2B"),
+    in_situ_quant="q4k",
+)
+
+res = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": args.image.resolve().as_uri()},
+                    },
+                    {
+                        "type": "text",
+                        "text": "Describe this image and identify the main subject.",
+                    },
+                ],
+            }
+        ],
+        max_tokens=256,
+    )
+)
+print(res.choices[0].message.content)
+print(res.usage)

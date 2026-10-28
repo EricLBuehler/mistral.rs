@@ -33,6 +33,7 @@ Members and their wire/config names where relevant. The members are fieldless Py
 | `Architecture.GptOss` | `'gptoss'` |
 | `Architecture.Qwen3Next` | `'qwen3next'` |
 | `Architecture.Lfm2` | `'lfm2'` |
+| `Architecture.Lfm3` | `'lfm3'` |
 | `Architecture.Lfm2Moe` | `'lfm2_moe'` |
 
 
@@ -57,6 +58,7 @@ Members and their wire/config names where relevant. The members are fieldless Py
 | `MultimodalArchitecture.LLaVANext` | `'llava-next'` |
 | `MultimodalArchitecture.LLaVA` | `'llava'` |
 | `MultimodalArchitecture.Lfm2Vl` | `'lfm2vl'` |
+| `MultimodalArchitecture.Lfm3Vl` | `'lfm3vl'` |
 | `MultimodalArchitecture.VLlama` | `'vllama'` |
 | `MultimodalArchitecture.Qwen2VL` | `'qwen2vl'` |
 | `MultimodalArchitecture.Idefics3` | `'idefics3'` |

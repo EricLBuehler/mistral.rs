@@ -19,6 +19,7 @@ pub mod metal_kernels;
 mod afq;
 mod bitsandbytes;
 mod blockwise_fp8;
+mod cpu_rms_norm;
 pub mod cublaslt;
 #[cfg(test)]
 #[path = "build_support/cuda_headers.rs"]
@@ -30,6 +31,7 @@ mod cuda_toolkit;
 pub mod cutile;
 pub mod distributed;
 mod dummy;
+pub mod elementwise;
 pub mod f8q8;
 mod fp8;
 mod fp8_config;
@@ -39,6 +41,8 @@ mod gptq;
 mod hqq;
 mod imatrix;
 mod isq_executor;
+mod lfm3_conv;
+pub mod lfm3_spatial_conv;
 mod lora;
 #[cfg(feature = "cuda")]
 pub mod moe;
@@ -54,7 +58,9 @@ mod uqff;
 mod utils;
 mod vector_fp8;
 
+pub use cpu_rms_norm::cpu_rms_norm;
 use gptq::gptq_linear;
+pub use lfm3_conv::lfm3_causal_conv1d;
 use regex::Regex;
 pub use safetensors::{Shard, ShardedSafeTensors, TensorShapes};
 pub use uqff::{

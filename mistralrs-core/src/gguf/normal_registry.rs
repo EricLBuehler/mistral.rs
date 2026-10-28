@@ -1,8 +1,8 @@
 use crate::NormalLoaderType;
 use std::{error::Error, fmt, str::FromStr};
 
-pub(crate) const GGUF_NORMAL_LOADER_COUNT: usize = 27;
-pub(crate) const CANONICAL_GGUF_ARCHITECTURE_COUNT: usize = 27;
+pub(crate) const GGUF_NORMAL_LOADER_COUNT: usize = 28;
+pub(crate) const CANONICAL_GGUF_ARCHITECTURE_COUNT: usize = 28;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum CanonicalGgufArchitecture {
@@ -33,6 +33,7 @@ pub(crate) enum CanonicalGgufArchitecture {
     HunYuanMoe,
     Lfm2,
     Lfm2Moe,
+    Lfm3,
 }
 
 impl CanonicalGgufArchitecture {
@@ -65,6 +66,7 @@ impl CanonicalGgufArchitecture {
             Self::HunYuanMoe => "hunyuan-moe",
             Self::Lfm2 => "lfm2",
             Self::Lfm2Moe => "lfm2moe",
+            Self::Lfm3 => "lfm3",
         }
     }
 }
@@ -107,6 +109,7 @@ impl FromStr for CanonicalGgufArchitecture {
             "hunyuan-moe" => Ok(Self::HunYuanMoe),
             "lfm2" => Ok(Self::Lfm2),
             "lfm2moe" => Ok(Self::Lfm2Moe),
+            "lfm3" => Ok(Self::Lfm3),
             _ => Err(NormalGgufRegistryError::UnknownArchitecture(
                 value.to_string(),
             )),
@@ -390,6 +393,14 @@ const QWEN35_METADATA: &[&str] = &[
     "{arch}.ssm.time_step_rank",
 ];
 const LFM2_METADATA: &[&str] = &["{arch}.shortconv.l_cache"];
+const LFM3_METADATA: &[&str] = &[
+    "{arch}.shortconv.l_cache",
+    "{arch}.attention.head_count_kv",
+    "{arch}.attention.sliding_window",
+    "{arch}.attention.sliding_window_pattern",
+    "{arch}.rope.freq_base",
+    "{arch}.rope.freq_base_swa",
+];
 const LFM2_MOE_METADATA: &[&str] = &[
     "{arch}.shortconv.l_cache",
     "{arch}.expert_count",
@@ -463,6 +474,7 @@ const HUNYUAN_DENSE_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::HunYuanDe
 const HUNYUAN_MOE_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::HunYuanMoEV1];
 const LFM2_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Lfm2];
 const LFM2_MOE_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Lfm2Moe];
+const LFM3_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Lfm3];
 
 pub(crate) const GGUF_SCHEMAS: &[GgufSchema; CANONICAL_GGUF_ARCHITECTURE_COUNT] = &[
     GgufSchema {
@@ -681,6 +693,14 @@ pub(crate) const GGUF_SCHEMAS: &[GgufSchema; CANONICAL_GGUF_ARCHITECTURE_COUNT] 
         required_tensors: SHORTCONV_TENSORS,
         unsupported_metadata: NO_REQUIREMENTS,
     },
+    GgufSchema {
+        architecture: CanonicalGgufArchitecture::Lfm3,
+        compatible_loaders: LFM3_LOADERS,
+        rope_pairing: RopePairing::HalfSplit,
+        required_metadata: LFM3_METADATA,
+        required_tensors: SHORTCONV_TENSORS,
+        unsupported_metadata: NO_REQUIREMENTS,
+    },
 ];
 
 pub(crate) const NORMAL_MODEL_ADAPTERS: &[NativeModelAdapter; GGUF_NORMAL_LOADER_COUNT] = &[
@@ -890,6 +910,15 @@ pub(crate) const NORMAL_MODEL_ADAPTERS: &[NativeModelAdapter; GGUF_NORMAL_LOADER
         layouts: &[
             GgufLayout::Direct,
             GgufLayout::StackedExperts,
+            GgufLayout::PerLayerInventory,
+            GgufLayout::SqueezedShortConv,
+        ],
+    },
+    NativeModelAdapter {
+        loader: NormalLoaderType::Lfm3,
+        architectures: &[CanonicalGgufArchitecture::Lfm3],
+        layouts: &[
+            GgufLayout::Direct,
             GgufLayout::PerLayerInventory,
             GgufLayout::SqueezedShortConv,
         ],

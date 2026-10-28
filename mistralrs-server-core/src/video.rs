@@ -130,21 +130,21 @@ fn decode_gif_frames(bytes: &[u8], sampling: Option<VideoFrameSampling>) -> Resu
     }
 
     // Estimate FPS from average frame delay
-    let total_delay_ms: u32 = raw_frames
+    let total_delay_ms: f64 = raw_frames
         .iter()
         .map(|f| {
             let (num, den) = f.delay().numer_denom_ms();
-            (num * 1000).checked_div(den).unwrap_or(100)
+            f64::from(num) / f64::from(den)
         })
         .sum();
-    let fps = if total_delay_ms > 0 {
-        (total as f64 * 1000.0) / total_delay_ms as f64
+    let fps = if total_delay_ms > 0.0 {
+        (total as f64 * 1000.0) / total_delay_ms
     } else {
         DEFAULT_FPS
     };
 
     let indices = sampling
-        .map(|sampling| sample_frame_indices(total, sampling.target_frames(total, fps)))
+        .map(|sampling| sampling.sample_indices(total, sampling.target_frames(total, fps)))
         .unwrap_or_else(|| (0..total).collect());
     let frames: Vec<DynamicImage> = indices
         .iter()
@@ -209,7 +209,9 @@ async fn decode_video_ffmpeg(
         } else {
             match sampling {
                 VideoFrameSampling::Uniform(count) => count,
-                VideoFrameSampling::Fps { .. } => SERVER_VIDEO_FRAME_LIMIT,
+                VideoFrameSampling::Fps { .. } | VideoFrameSampling::FpsInclusive { .. } => {
+                    SERVER_VIDEO_FRAME_LIMIT
+                }
             }
         };
         let effective_total = if total_frames > 0 {
@@ -217,7 +219,7 @@ async fn decode_video_ffmpeg(
         } else {
             num_frames
         };
-        let indices = sample_frame_indices(effective_total, num_frames);
+        let indices = sampling.sample_indices(effective_total, num_frames);
         let select_expr = indices
             .iter()
             .map(|i| format!("eq(n\\,{i})"))
@@ -419,6 +421,36 @@ mod tests {
     fn gif_decodes_within_limits() {
         let video = decode_gif_frames(&gif(1, 1, 3), None).unwrap();
         assert_eq!(video.total_num_frames, 3);
+    }
+
+    #[test]
+    fn gif_sampling_preserves_fps_and_endpoint_timestamps() {
+        let mut encoded = Vec::new();
+        {
+            let mut encoder = image::codecs::gif::GifEncoder::new(&mut encoded);
+            for _ in 0..10 {
+                encoder
+                    .encode_frame(image::Frame::from_parts(
+                        image::RgbaImage::new(1, 1),
+                        0,
+                        0,
+                        image::Delay::from_numer_denom_ms(100, 1),
+                    ))
+                    .unwrap();
+            }
+        }
+        let video = decode_gif_frames(
+            &encoded,
+            Some(VideoFrameSampling::FpsInclusive {
+                fps: 2.0,
+                min_frames: 4,
+                max_frames: 768,
+            }),
+        )
+        .unwrap();
+        assert_eq!(video.fps, 10.0);
+        assert_eq!(video.sampled_indices, vec![0, 3, 6, 9]);
+        assert_eq!(video.timestamps_secs(), vec![0.0, 0.3, 0.6, 0.9]);
     }
 
     #[test]

@@ -1856,17 +1856,35 @@ impl Engine {
                                 }
                             };
                             let reserve = (|| -> candle_core::Result<_> {
+                                let pipeline = get_mut_arcmutex!(self.pipeline);
                                 let mut has_encoder_input = false;
+                                let mut encoder_activation_bytes = Some(0usize);
                                 let mut return_raw_logits = false;
                                 let mut cold = true;
                                 let mut final_chunk = true;
                                 for (index, seq) in output.scheduled.iter().enumerate() {
                                     let seq = get_mut_arcmutex!(seq);
-                                    has_encoder_input |= is_prompt
+                                    let seq_has_encoder_input = is_prompt
                                         && (seq.has_images()
                                             || seq.has_audios()
                                             || seq.has_videos()
                                             || !seq.mm_features().is_empty());
+                                    has_encoder_input |= seq_has_encoder_input;
+                                    if seq_has_encoder_input {
+                                        encoder_activation_bytes = match (
+                                            encoder_activation_bytes,
+                                            pipeline.encoder_activation_memory_bytes(&seq)?,
+                                        ) {
+                                            (Some(total), Some(bytes)) => {
+                                                Some(total.checked_add(bytes).ok_or_else(|| {
+                                                    candle_core::Error::msg(
+                                                        "encoder workspace size overflow",
+                                                    )
+                                                })?)
+                                            }
+                                            _ => None,
+                                        };
+                                    }
                                     return_raw_logits |= seq.return_raw_logits;
                                     cold &=
                                         seq.num_computed_tokens() == 0 && seq.token_offset() == 0;
@@ -1925,6 +1943,7 @@ impl Engine {
                                         query_tokens,
                                         sequences: query_lens.len(),
                                         has_encoder_input,
+                                        encoder_activation_bytes,
                                         extra_logit_tokens,
                                     },
                                     attention_bytes,

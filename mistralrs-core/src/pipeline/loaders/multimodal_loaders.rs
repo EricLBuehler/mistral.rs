@@ -21,7 +21,8 @@ use serde::Deserialize;
 use self::minicpmo::{MiniCpmOConfig, MiniCpmOModel, MiniCpmOProcessor};
 
 use super::{
-    ActivationModelConfig, DeviceMappedModelLoader, NonMappedSubModel, NormalLoadingMetadata,
+    ActivationModelConfig, DeviceMappedModelLoader, Lfm3VlLoader, NonMappedSubModel,
+    NormalLoadingMetadata,
 };
 use crate::amoe::AnyMoeBaseModelMixin;
 use crate::attention::ATTENTION_CHUNK_SIZE;
@@ -151,6 +152,12 @@ pub trait MultimodalModel:
     }
     fn supports_mixed_media_batches(&self) -> bool {
         false
+    }
+    fn encoder_activation_memory_bytes(
+        &self,
+        _seq: &crate::sequence::Sequence,
+    ) -> candle_core::Result<Option<usize>> {
+        Ok(None)
     }
     fn device(&self) -> &Device;
     fn cache(&self) -> &EitherCache;
@@ -305,6 +312,8 @@ pub enum MultimodalLoaderType {
     LLaVA,
     #[serde(rename = "lfm2vl")]
     Lfm2Vl,
+    #[serde(rename = "lfm3vl", alias = "lfm3_vl")]
+    Lfm3Vl,
     #[serde(rename = "vllama")]
     VLlama,
     #[serde(rename = "qwen2vl")]
@@ -354,6 +363,7 @@ impl MultimodalLoaderType {
             "LlavaNextForConditionalGeneration" => Ok(Self::LLaVANext),
             "LlavaForConditionalGeneration" => Ok(Self::LLaVA),
             "Lfm2VlForConditionalGeneration" => Ok(Self::Lfm2Vl),
+            "Lfm3VlForConditionalGeneration" => Ok(Self::Lfm3Vl),
             "MllamaForConditionalGeneration" => Ok(Self::VLlama),
             "Qwen2VLForConditionalGeneration" => Ok(Self::Qwen2VL),
             "Idefics3ForConditionalGeneration" => Ok(Self::Idefics3),
@@ -392,6 +402,7 @@ impl FromStr for MultimodalLoaderType {
             "llava_next" => Ok(Self::LLaVANext),
             "llava" => Ok(Self::LLaVA),
             "lfm2vl" | "lfm2_vl" => Ok(Self::Lfm2Vl),
+            "lfm3vl" | "lfm3_vl" => Ok(Self::Lfm3Vl),
             "vllama" => Ok(Self::VLlama),
             "qwen2vl" => Ok(Self::Qwen2VL),
             "idefics3" => Ok(Self::Idefics3),
@@ -411,7 +422,7 @@ impl FromStr for MultimodalLoaderType {
             "qwen3_5moe" => Ok(Self::Qwen3_5Moe),
             "qwen4exp" => Ok(Self::Qwen4Exp),
             "voxtral" => Ok(Self::Voxtral),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `lfm2vl`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`, `gemma3n`, `gemma4`, `muse_glimmer`, `qwen3vl`, `qwen3vlmoe`, `qwen3_5`, `qwen3_5moe`, `qwen4exp`, `voxtral`, `diffusiongemma`.")),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `lfm2vl`, `lfm3vl`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`, `gemma3n`, `gemma4`, `muse_glimmer`, `qwen3vl`, `qwen3vlmoe`, `qwen3_5`, `qwen3_5moe`, `qwen4exp`, `voxtral`, `diffusiongemma`.")),
         }
     }
 }
@@ -424,6 +435,7 @@ impl std::fmt::Display for MultimodalLoaderType {
             MultimodalLoaderType::LLaVANext => "llava_next",
             MultimodalLoaderType::LLaVA => "llava",
             MultimodalLoaderType::Lfm2Vl => "lfm2vl",
+            MultimodalLoaderType::Lfm3Vl => "lfm3vl",
             MultimodalLoaderType::VLlama => "vllama",
             MultimodalLoaderType::Qwen2VL => "qwen2vl",
             MultimodalLoaderType::Idefics3 => "idefics3",
@@ -486,6 +498,7 @@ impl AutoMultimodalLoader {
             MultimodalLoaderType::LLaVANext => Box::new(LLaVANextLoader),
             MultimodalLoaderType::LLaVA => Box::new(LLaVALoader),
             MultimodalLoaderType::Lfm2Vl => Box::new(Lfm2VlLoader),
+            MultimodalLoaderType::Lfm3Vl => Box::new(Lfm3VlLoader),
             MultimodalLoaderType::VLlama => Box::new(VLlamaLoader),
             MultimodalLoaderType::Qwen2VL => Box::new(Qwen2VLLoader),
             MultimodalLoaderType::Idefics3 => Box::new(Idefics3Loader),

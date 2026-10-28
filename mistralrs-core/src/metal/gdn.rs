@@ -1026,7 +1026,9 @@ mod tests {
     fn patterned_tensor(shape: impl Into<candle_core::Shape>, seed: usize) -> Result<Tensor> {
         let shape = shape.into();
         let data = (0..shape.elem_count())
-            .map(|index| (((index * 13 + seed) % 53) as f32 - 26.0) * 0.013)
+            .map(|index| {
+                (f32::from(u8::try_from((index * 13 + seed) % 53).unwrap()) - 26.0) * 0.013
+            })
             .collect::<Vec<_>>();
         Tensor::from_vec(data, shape, &Device::Cpu)
     }
