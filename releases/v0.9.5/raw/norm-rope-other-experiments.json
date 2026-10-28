@@ -1,0 +1,4506 @@
+{
+  "scope": "Standalone experiments on GB10. None of these prototypes is included in production. No quantized weight values changed.",
+  "planar_gguf": {
+    "decision": "Do not integrate: cold Q8 gains are modest and inconsistent across dominant geometries; canonical storage and MMQ conversion cost not justified by this proof. No production edits.",
+    "modes": {
+      "0": "Exact production prefetch_row arithmetic and launch geometry on original GGUF AoS bytes",
+      "1": "Field-planar aligned loads without prefetch",
+      "2": "Field-planar aligned loads with prefetch of every field",
+      "3": "Field-planar aligned loads with prefetch of fields of at least16bytes"
+    },
+    "correctness": {
+      "all_format_shape_cases": 44,
+      "bitwise_dtype_mode_replays": 1188,
+      "packing_errors": 0,
+      "formats": [
+        "q2k",
+        "q3k",
+        "q4_0",
+        "q4_1",
+        "q4k",
+        "q5_0",
+        "q5_1",
+        "q5k",
+        "q6k",
+        "q8_0",
+        "q8_1"
+      ],
+      "outputs": [
+        "F32",
+        "F16",
+        "BF16"
+      ],
+      "changed_input_replays": 3,
+      "raw_bytes_unchanged": true
+    },
+    "timing_method": "CUDA event timing around captured repeated kernels; interleaved forward/reverse modes,3 baseline samples and2 per candidate; hot same buffer and cold rotating >=256MiB; allocated original+candidate buffers are experiment-only. Eight-warp prefetch control matches production selected Q8 but is not dispatch baseline for low-density/short geometries.",
+    "timings": [
+      {
+        "artifact": "q4_0-10240-2560.jsonl",
+        "format": "q4_0",
+        "rows": 10240,
+        "columns": 2560,
+        "timed_case_bitwise_checks": 27,
+        "modes": {
+          "hot": {
+            "median_us": {
+              "0": 24.943501,
+              "1": 23.1435625,
+              "2": 23.8900625,
+              "3": 23.737250500000002
+            },
+            "speedup_percent": {
+              "1": 7.7772749981771305,
+              "2": 4.40952592735997,
+              "3": 5.081677425108699
+            },
+            "samples_us": {
+              "0": [
+                24.6535,
+                25.229626,
+                24.943501
+              ],
+              "1": [
+                23.376625,
+                22.9105
+              ],
+              "2": [
+                23.481001,
+                24.299124
+              ],
+              "3": [
+                23.802876,
+                23.671625
+              ]
+            }
+          },
+          "cold": {
+            "median_us": {
+              "0": 63.580624,
+              "1": 62.9855025,
+              "2": 62.8759405,
+              "3": 63.0389385
+            },
+            "speedup_percent": {
+              "1": 0.9448547306580624,
+              "2": 1.120752221591026,
+              "3": 0.8592871531299728
+            },
+            "samples_us": {
+              "0": [
+                64.828003,
+                63.580624,
+                62.9995
+              ],
+              "1": [
+                63.442753,
+                62.528252
+              ],
+              "2": [
+                63.767754,
+                61.984127
+              ],
+              "3": [
+                62.193626,
+                63.884251
+              ]
+            }
+          }
+        }
+      },
+      {
+        "artifact": "q4k-6144-2560.jsonl",
+        "format": "q4k",
+        "rows": 6144,
+        "columns": 2560,
+        "timed_case_bitwise_checks": 27,
+        "modes": {
+          "hot": {
+            "median_us": {
+              "0": 21.490376,
+              "1": 16.3520635,
+              "2": 16.6623755,
+              "3": 16.5216885
+            },
+            "speedup_percent": {
+              "1": 31.423021932369586,
+              "2": 28.975463312539084,
+              "3": 30.073727028566122
+            },
+            "samples_us": {
+              "0": [
+                21.06875,
+                21.490376,
+                22.085875
+              ],
+              "1": [
+                16.531876,
+                16.172251
+              ],
+              "2": [
+                16.550501,
+                16.77425
+              ],
+              "3": [
+                16.259626,
+                16.783751
+              ]
+            }
+          },
+          "cold": {
+            "median_us": {
+              "0": 41.273998,
+              "1": 38.875189000000006,
+              "2": 38.2580645,
+              "3": 37.585125000000005
+            },
+            "speedup_percent": {
+              "1": 6.170539775382156,
+              "2": 7.883131411417832,
+              "3": 9.814715263019602
+            },
+            "samples_us": {
+              "0": [
+                41.273998,
+                41.274498,
+                41.252625
+              ],
+              "1": [
+                40.465,
+                37.285378
+              ],
+              "2": [
+                39.156502,
+                37.359627
+              ],
+              "3": [
+                37.873249,
+                37.297001
+              ]
+            }
+          }
+        }
+      },
+      {
+        "artifact": "q5_0-10240-2560.jsonl",
+        "format": "q5_0",
+        "rows": 10240,
+        "columns": 2560,
+        "timed_case_bitwise_checks": 27,
+        "modes": {
+          "hot": {
+            "median_us": {
+              "0": 26.839874,
+              "1": 26.748313,
+              "2": 26.963188,
+              "3": 27.7105
+            },
+            "speedup_percent": {
+              "1": 0.3423056998024476,
+              "2": -0.45734206207367345,
+              "3": -3.1418631926526053
+            },
+            "samples_us": {
+              "0": [
+                26.656876,
+                26.839874,
+                29.735624
+              ],
+              "1": [
+                27.44725,
+                26.049376
+              ],
+              "2": [
+                26.516626,
+                27.40975
+              ],
+              "3": [
+                28.14325,
+                27.27775
+              ]
+            }
+          },
+          "cold": {
+            "median_us": {
+              "0": 76.187874,
+              "1": 76.828625,
+              "2": 76.4456905,
+              "3": 76.9178735
+            },
+            "speedup_percent": {
+              "1": -0.8340003481775327,
+              "2": -0.33725445909864593,
+              "3": -0.9490635489292409
+            },
+            "samples_us": {
+              "0": [
+                75.417,
+                78.466881,
+                76.187874
+              ],
+              "1": [
+                78.417618,
+                75.239632
+              ],
+              "2": [
+                77.497002,
+                75.394379
+              ],
+              "3": [
+                75.4515,
+                78.384247
+              ]
+            }
+          }
+        }
+      },
+      {
+        "artifact": "q5_1-2560-640.jsonl",
+        "format": "q5_1",
+        "rows": 2560,
+        "columns": 640,
+        "timed_case_bitwise_checks": 27,
+        "modes": {
+          "hot": {
+            "median_us": {
+              "0": 5.83189,
+              "1": 6.055343000000001,
+              "2": 6.126958999999999,
+              "3": 6.037206
+            },
+            "speedup_percent": {
+              "1": -3.6901790699552572,
+              "2": -4.81591275541422,
+              "3": -3.400844695377314
+            },
+            "samples_us": {
+              "0": [
+                5.79631,
+                5.83189,
+                5.862612
+              ],
+              "1": [
+                6.003288,
+                6.107398
+              ],
+              "2": [
+                6.189881,
+                6.064037
+              ],
+              "3": [
+                6.000987,
+                6.073425
+              ]
+            }
+          },
+          "cold": {
+            "median_us": {
+              "0": 8.938484,
+              "1": 9.6145745,
+              "2": 9.562136,
+              "3": 9.479927
+            },
+            "speedup_percent": {
+              "1": -7.031933654474242,
+              "2": -6.522099246444513,
+              "3": -5.711468031346644
+            },
+            "samples_us": {
+              "0": [
+                8.938484,
+                9.390429,
+                8.876456
+              ],
+              "1": [
+                9.843762,
+                9.385387
+              ],
+              "2": [
+                9.572565,
+                9.551707
+              ],
+              "3": [
+                9.492347,
+                9.467507
+              ]
+            }
+          }
+        }
+      },
+      {
+        "artifact": "q8_0-10240-2560.jsonl",
+        "format": "q8_0",
+        "rows": 10240,
+        "columns": 2560,
+        "timed_case_bitwise_checks": 27,
+        "modes": {
+          "hot": {
+            "median_us": {
+              "0": 79.991127,
+              "1": 81.9661255,
+              "2": 73.991501,
+              "3": 76.178623
+            },
+            "speedup_percent": {
+              "1": -2.4095301418144977,
+              "2": 8.108533978787658,
+              "3": 5.004690095277775
+            },
+            "samples_us": {
+              "0": [
+                80.131874,
+                79.991127,
+                76.937752
+              ],
+              "1": [
+                82.778374,
+                81.153877
+              ],
+              "2": [
+                74.114006,
+                73.868996
+              ],
+              "3": [
+                75.523872,
+                76.833374
+              ]
+            }
+          },
+          "cold": {
+            "median_us": {
+              "0": 116.378998,
+              "1": 115.92724999999999,
+              "2": 115.125,
+              "3": 114.311001
+            },
+            "speedup_percent": {
+              "1": 0.38968232231852973,
+              "2": 1.0892490770901153,
+              "3": 1.809097096437795
+            },
+            "samples_us": {
+              "0": [
+                120.464752,
+                116.378998,
+                115.212128
+              ],
+              "1": [
+                117.60125,
+                114.25325
+              ],
+              "2": [
+                116.528625,
+                113.721375
+              ],
+              "3": [
+                114.571625,
+                114.050377
+              ]
+            }
+          }
+        }
+      },
+      {
+        "artifact": "q8_0-248320-2560.jsonl",
+        "format": "q8_0",
+        "rows": 248320,
+        "columns": 2560,
+        "timed_case_bitwise_checks": 27,
+        "modes": {
+          "hot": {
+            "median_us": {
+              "0": 2828.980225,
+              "1": 2703.5224605,
+              "2": 2724.6845705,
+              "3": 2732.6553955
+            },
+            "speedup_percent": {
+              "1": 4.640529765630186,
+              "2": 3.827806551598778,
+              "3": 3.5249534082717693
+            },
+            "samples_us": {
+              "0": [
+                2825.977295,
+                2828.980225,
+                2851.257812
+              ],
+              "1": [
+                2705.186523,
+                2701.858398
+              ],
+              "2": [
+                2724.098145,
+                2725.270996
+              ],
+              "3": [
+                2731.735352,
+                2733.575439
+              ]
+            }
+          },
+          "cold": {
+            "median_us": {
+              "0": 2855.875732,
+              "1": 2718.7353515,
+              "2": 2741.5356444999998,
+              "3": 2735.053955
+            },
+            "speedup_percent": {
+              "1": 5.044271058760308,
+              "2": 4.170658431138263,
+              "3": 4.417528099550783
+            },
+            "samples_us": {
+              "0": [
+                2864.405273,
+                2855.875732,
+                2843.364014
+              ],
+              "1": [
+                2717.019043,
+                2720.45166
+              ],
+              "2": [
+                2735.751465,
+                2747.319824
+              ],
+              "3": [
+                2737.870361,
+                2732.237549
+              ]
+            }
+          }
+        }
+      },
+      {
+        "artifact": "q8_0-2560-6144.jsonl",
+        "format": "q8_0",
+        "rows": 2560,
+        "columns": 6144,
+        "timed_case_bitwise_checks": 27,
+        "modes": {
+          "hot": {
+            "median_us": {
+              "0": 15.367875,
+              "1": 18.4527505,
+              "2": 15.893688000000001,
+              "3": 15.8860005
+            },
+            "speedup_percent": {
+              "1": -16.717700160742975,
+              "2": -3.308313337974178,
+              "3": -3.26152262175744
+            },
+            "samples_us": {
+              "0": [
+                15.692625,
+                15.367875,
+                15.05425
+              ],
+              "1": [
+                17.535126,
+                19.370375
+              ],
+              "2": [
+                15.872125,
+                15.915251
+              ],
+              "3": [
+                15.871376,
+                15.900625
+              ]
+            }
+          },
+          "cold": {
+            "median_us": {
+              "0": 70.287621,
+              "1": 72.7079355,
+              "2": 71.290001,
+              "3": 71.9226265
+            },
+            "speedup_percent": {
+              "1": -3.328817526389538,
+              "2": -1.4060597362034022,
+              "3": -2.273283915736868
+            },
+            "samples_us": {
+              "0": [
+                72.044754,
+                70.287621,
+                70.012001
+              ],
+              "1": [
+                72.897873,
+                72.517998
+              ],
+              "2": [
+                72.578377,
+                70.001625
+              ],
+              "3": [
+                73.382126,
+                70.463127
+              ]
+            }
+          }
+        }
+      },
+      {
+        "artifact": "q8_0-6144-2560.jsonl",
+        "format": "q8_0",
+        "rows": 6144,
+        "columns": 2560,
+        "timed_case_bitwise_checks": 27,
+        "modes": {
+          "hot": {
+            "median_us": {
+              "0": 22.872749,
+              "1": 20.804812499999997,
+              "2": 16.457062,
+              "3": 16.039438
+            },
+            "speedup_percent": {
+              "1": 9.93970265293187,
+              "2": 38.984400739330006,
+              "3": 42.603182231197856
+            },
+            "samples_us": {
+              "0": [
+                22.872749,
+                22.862375,
+                23.435625
+              ],
+              "1": [
+                20.722374,
+                20.887251
+              ],
+              "2": [
+                16.547125,
+                16.366999
+              ],
+              "3": [
+                15.904125,
+                16.174751
+              ]
+            }
+          },
+          "cold": {
+            "median_us": {
+              "0": 71.721001,
+              "1": 70.79694,
+              "2": 69.890186,
+              "3": 70.41749949999999
+            },
+            "speedup_percent": {
+              "1": 1.3052273163218553,
+              "2": 2.6195594900834784,
+              "3": 1.8511044971144086
+            },
+            "samples_us": {
+              "0": [
+                71.721001,
+                72.459877,
+                69.5755
+              ],
+              "1": [
+                72.262253,
+                69.331627
+              ],
+              "2": [
+                70.938499,
+                68.841873
+              ],
+              "3": [
+                71.720749,
+                69.11425
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "integration_risks": [
+      "Cannot retain another full dense-weight copy on memory-tight UMA",
+      "All prefill MMQ loads need canonical planar read support; unpack-per-request would erase prefill benefit",
+      "Every direct QTensor consumer and serializer needs explicit storage capability; changes cannot be confined to dense MMVQ"
+    ],
+    "source_sha256": {
+      "generate.py": "9b7b20ffe06d483afbf966c401f137184c43e3e13c32e550469472888273f135",
+      "planar.cuh": "b6bbce694ae70f1b114bab9f19bffd7356fd54b849f48838e738f86b063f08bf",
+      "bench.cu": "96f1e8158a440895005e9c5ac4cf66c01deea416be92cb955814eede3eb8f877",
+      "build.sh": "12de6e2412d40a0ee035fad0957f12a71f09f8c22e90b83574bedf5c45715022"
+    }
+  },
+  "fixed_width_mmq": {
+    "decision": "Rejected; fixed-column bucket kernels lose to existing dynamic compact in all15timedcases. No production edits.",
+    "numerical": "All tested outputs finite with max absolute difference0 after NaN-poisoning candidate output before validation. Three format/geometries, balanced512/2048/8192tokens plus2048moderate/heavy skew. Not an all-format qualification.",
+    "method": "CUDA events around10launchiterations after3warmups; three interleaved samples per variant. Includes unchanged prepare plus3/4filtered full-capacity grids for candidate versus one dynamic grid for control. No CUDA graphs.",
+    "rationale": "Separate widths reduce per-CTA resource reservation, but multiplied launches and skipped full grids outweigh benefit. A future per-bucket worklist can avoid skippedCTAs but is untested.",
+    "review": "Uniform early return precedesbarriers; disjoint runtime-column buckets; same compact_columns/worklist mapping. Initial stale-output validation issue was corrected by parent before retainedtimings.",
+    "cases": [
+      {
+        "artifact": "timing-2048-0.log",
+        "projection": "gateQ4K",
+        "compact_ms": 3.2095,
+        "bucketed_ms": 3.4751,
+        "latency_increase_percent": 8.275432310328723,
+        "max_absolute_difference": 0.0,
+        "samples_ms": {
+          "0": [
+            3.2084,
+            3.2095,
+            3.2128
+          ],
+          "2": [
+            3.4751,
+            3.4649,
+            3.5013
+          ]
+        }
+      },
+      {
+        "artifact": "timing-2048-0.log",
+        "projection": "downQ5_1",
+        "compact_ms": 4.7676,
+        "bucketed_ms": 5.0834,
+        "latency_increase_percent": 6.623877842100856,
+        "max_absolute_difference": 0.0,
+        "samples_ms": {
+          "0": [
+            4.7507,
+            4.7676,
+            4.7912
+          ],
+          "2": [
+            5.0834,
+            5.0711,
+            5.0919
+          ]
+        }
+      },
+      {
+        "artifact": "timing-2048-0.log",
+        "projection": "downQ8_0",
+        "compact_ms": 5.9388,
+        "bucketed_ms": 6.2789,
+        "latency_increase_percent": 5.7267461440021705,
+        "max_absolute_difference": 0.0,
+        "samples_ms": {
+          "0": [
+            5.9388,
+            6.0091,
+            5.937
+          ],
+          "2": [
+            6.3681,
+            6.2789,
+            6.212
+          ]
+        }
+      },
+      {
+        "artifact": "timing-2048-1.log",
+        "projection": "gateQ4K",
+        "compact_ms": 3.3508,
+        "bucketed_ms": 3.5635,
+        "latency_increase_percent": 6.347737853646884,
+        "max_absolute_difference": 0.0,
+        "samples_ms": {
+          "0": [
+            3.3458,
+            3.3508,
+            3.3933
+          ],
+          "2": [
+            3.5774,
+            3.5635,
+            3.4409
+          ]
+        }
+      },
+      {
+        "artifact": "timing-2048-1.log",
+        "projection": "downQ5_1",
+        "compact_ms": 4.8244,
+        "bucketed_ms": 5.1691,
+        "latency_increase_percent": 7.144929939474354,
+        "max_absolute_difference": 0.0,
+        "samples_ms": {
+          "0": [
+            4.8244,
+            4.8208,
+            4.8533
+          ],
+          "2": [
+            5.1815,
+            5.1515,
+            5.1691
+          ]
+        }
+      },
+      {
+        "artifact": "timing-2048-1.log",
+        "projection": "downQ8_0",
+        "compact_ms": 6.0363,
+        "bucketed_ms": 6.3811,
+        "latency_increase_percent": 5.712108410781447,
+        "max_absolute_difference": 0.0,
+        "samples_ms": {
+          "0": [
+            6.0286,
+            6.0363,
+            6.0399
+          ],
+          "2": [
+            6.3811,
+            6.3688,
+            6.4162
+          ]
+        }
+      },
+      {
+        "artifact": "timing-2048-2.log",
+        "projection": "gateQ4K",
+        "compact_ms": 1.0789,
+        "bucketed_ms": 1.1687,
+        "latency_increase_percent": 8.323292242098447,
+        "max_absolute_difference": 0.0,
+        "samples_ms": {
+          "0": [
+            1.0724,
+            1.0789,
+            1.1541
+          ],
+          "2": [
+            1.2472,
+            1.1644,
+            1.1687
+          ]
+        }
+      },
+      {
+        "artifact": "timing-2048-2.log",
+        "projection": "downQ5_1",
+        "compact_ms": 2.2083,
+        "bucketed_ms": 2.4648,
+        "latency_increase_percent": 11.61526966444777,
+        "max_absolute_difference": 0.0,
+        "samples_ms": {
+          "0": [
+            2.2128,
+            2.2083,
+            2.2079
+          ],
+          "2": [
+            2.4463,
+            2.47,
+            2.4648
+          ]
+        }
+      },
+      {
+        "artifact": "timing-2048-2.log",
+        "projection": "downQ8_0",
+        "compact_ms": 2.188,
+        "bucketed_ms": 2.4845,
+        "latency_increase_percent": 13.551188299817184,
+        "max_absolute_difference": 0.0,
+        "samples_ms": {
+          "0": [
+            2.1741,
+            2.188,
+            2.2107
+          ],
+          "2": [
+            2.4406,
+            2.5033,
+            2.4845
+          ]
+        }
+      },
+      {
+        "artifact": "timing-512-0.log",
+        "projection": "gateQ4K",
+        "compact_ms": 2.6516,
+        "bucketed_ms": 2.7541,
+        "latency_increase_percent": 3.865590586815504,
+        "max_absolute_difference": 0.0,
+        "samples_ms": {
+          "0": [
+            2.7408,
+            2.649,
+            2.6516
+          ],
+          "2": [
+            2.823,
+            2.7541,
+            2.7496
+          ]
+        }
+      },
+      {
+        "artifact": "timing-512-0.log",
+        "projection": "downQ5_1",
+        "compact_ms": 3.5012,
+        "bucketed_ms": 3.7427,
+        "latency_increase_percent": 6.897635096538335,
+        "max_absolute_difference": 0.0,
+        "samples_ms": {
+          "0": [
+            3.5012,
+            3.4764,
+            3.6059
+          ],
+          "2": [
+            3.7427,
+            3.7363,
+            3.8062
+          ]
+        }
+      },
+      {
+        "artifact": "timing-512-0.log",
+        "projection": "downQ8_0",
+        "compact_ms": 4.7065,
+        "bucketed_ms": 4.9195,
+        "latency_increase_percent": 4.525656007649004,
+        "max_absolute_difference": 0.0,
+        "samples_ms": {
+          "0": [
+            4.8426,
+            4.7035,
+            4.7065
+          ],
+          "2": [
+            4.9854,
+            4.9146,
+            4.9195
+          ]
+        }
+      },
+      {
+        "artifact": "timing-8192-0.log",
+        "projection": "gateQ4K",
+        "compact_ms": 6.8476,
+        "bucketed_ms": 7.1536,
+        "latency_increase_percent": 4.468718967229401,
+        "max_absolute_difference": 0.0,
+        "samples_ms": {
+          "0": [
+            6.8515,
+            6.7888,
+            6.8476
+          ],
+          "2": [
+            7.2096,
+            7.1536,
+            7.0616
+          ]
+        }
+      },
+      {
+        "artifact": "timing-8192-0.log",
+        "projection": "downQ5_1",
+        "compact_ms": 11.868,
+        "bucketed_ms": 12.8725,
+        "latency_increase_percent": 8.463936636333003,
+        "max_absolute_difference": 0.0,
+        "samples_ms": {
+          "0": [
+            11.868,
+            11.8669,
+            11.9311
+          ],
+          "2": [
+            12.7221,
+            12.8805,
+            12.8725
+          ]
+        }
+      },
+      {
+        "artifact": "timing-8192-0.log",
+        "projection": "downQ8_0",
+        "compact_ms": 13.0128,
+        "bucketed_ms": 13.9093,
+        "latency_increase_percent": 6.889370466002709,
+        "max_absolute_difference": 0.0,
+        "samples_ms": {
+          "0": [
+            13.0935,
+            13.0128,
+            12.9997
+          ],
+          "2": [
+            13.9341,
+            13.9093,
+            13.9031
+          ]
+        }
+      }
+    ],
+    "source_sha256": {
+      "bucketed.cu": "b0a3b7df28edca054dc8e06364d14e920ec8ab3c4e5bbb969a1582bb045c459e",
+      "build-inputs.json": "70408fa8637900d4c9260d7f2383b738575739d5867e76cc21bec9bb0eabca21",
+      "build.py": "ba7760cbcf6e74b0006580b962a3f881ed6221eb0990dfcc8ed2b76375fdff38",
+      "bench.cu": "e496a23470f88b163704df1369da3fda07e8fa22ac01e76ddaf25383a642f34c"
+    }
+  },
+  "partitioned_mmq": {
+    "decision": "Rejected; per-width worklists remove most skipped-grid overhead but only tiny mixed wins remain, with regressions at main balanced512/2048gate cases. No production edits.",
+    "numerical": "All tested outputs finite and max absolute difference0 after NaN outputpoisoning. These15format/shape/routingcases are not an all-format qualification.",
+    "method": "Same existing MMQ arithmetic; separate16/32/64/128worklists generated by oneblock prefix scans; generic per-width upper bounds. CUDAevents after3warmups around10iterations,3interleaved samples each.",
+    "bounds_validation": "partition-bounds-check.json covers5600random distributions includingexpertcount>1024.",
+    "cases": [
+      {
+        "artifact": "partitioned-timing-2048-0.log",
+        "projection": "gateQ4K",
+        "compact_ms": 3.337,
+        "partitioned_ms": 3.4095,
+        "latency_change_percent": 2.1726101288582544,
+        "max_absolute_difference": 0.0,
+        "samples_ms": {
+          "0": [
+            3.3451,
+            3.2885,
+            3.337
+          ],
+          "2": [
+            3.4224,
+            3.4059,
+            3.4095
+          ]
+        }
+      },
+      {
+        "artifact": "partitioned-timing-2048-0.log",
+        "projection": "downQ5_1",
+        "compact_ms": 4.7411,
+        "partitioned_ms": 4.7264,
+        "latency_change_percent": -0.3100546286726735,
+        "max_absolute_difference": 0.0,
+        "samples_ms": {
+          "0": [
+            4.7411,
+            4.7493,
+            4.7142
+          ],
+          "2": [
+            4.7163,
+            4.7264,
+            4.7632
+          ]
+        }
+      },
+      {
+        "artifact": "partitioned-timing-2048-0.log",
+        "projection": "downQ8_0",
+        "compact_ms": 5.9287,
+        "partitioned_ms": 5.8733,
+        "latency_change_percent": -0.9344375664142146,
+        "max_absolute_difference": 0.0,
+        "samples_ms": {
+          "0": [
+            5.918,
+            5.9829,
+            5.9287
+          ],
+          "2": [
+            5.8651,
+            5.9258,
+            5.8733
+          ]
+        }
+      },
+      {
+        "artifact": "partitioned-timing-2048-1.log",
+        "projection": "gateQ4K",
+        "compact_ms": 3.34,
+        "partitioned_ms": 3.4287,
+        "latency_change_percent": 2.655688622754493,
+        "max_absolute_difference": 0.0,
+        "samples_ms": {
+          "0": [
+            3.34,
+            3.3049,
+            3.374
+          ],
+          "2": [
+            3.4287,
+            3.4865,
+            3.3581
+          ]
+        }
+      },
+      {
+        "artifact": "partitioned-timing-2048-1.log",
+        "projection": "downQ5_1",
+        "compact_ms": 4.8189,
+        "partitioned_ms": 4.832,
+        "latency_change_percent": 0.27184627197076594,
+        "max_absolute_difference": 0.0,
+        "samples_ms": {
+          "0": [
+            4.8189,
+            4.8754,
+            4.8149
+          ],
+          "2": [
+            4.8009,
+            4.832,
+            4.8348
+          ]
+        }
+      },
+      {
+        "artifact": "partitioned-timing-2048-1.log",
+        "projection": "downQ8_0",
+        "compact_ms": 6.0393,
+        "partitioned_ms": 6.0195,
+        "latency_change_percent": -0.32785256569469734,
+        "max_absolute_difference": 0.0,
+        "samples_ms": {
+          "0": [
+            6.0029,
+            6.0863,
+            6.0393
+          ],
+          "2": [
+            6.0811,
+            6.0195,
+            5.9561
+          ]
+        }
+      },
+      {
+        "artifact": "partitioned-timing-2048-2.log",
+        "projection": "gateQ4K",
+        "compact_ms": 1.1049,
+        "partitioned_ms": 1.0815,
+        "latency_change_percent": -2.1178387184360603,
+        "max_absolute_difference": 0.0,
+        "samples_ms": {
+          "0": [
+            1.0985,
+            1.1049,
+            1.1424
+          ],
+          "2": [
+            1.0793,
+            1.0815,
+            1.1486
+          ]
+        }
+      },
+      {
+        "artifact": "partitioned-timing-2048-2.log",
+        "projection": "downQ5_1",
+        "compact_ms": 2.1988,
+        "partitioned_ms": 2.1704,
+        "latency_change_percent": -1.2916136074222262,
+        "max_absolute_difference": 0.0,
+        "samples_ms": {
+          "0": [
+            2.1854,
+            2.1988,
+            2.242
+          ],
+          "2": [
+            2.1704,
+            2.162,
+            2.1989
+          ]
+        }
+      },
+      {
+        "artifact": "partitioned-timing-2048-2.log",
+        "projection": "downQ8_0",
+        "compact_ms": 2.182,
+        "partitioned_ms": 2.1105,
+        "latency_change_percent": -3.276810265811181,
+        "max_absolute_difference": 0.0,
+        "samples_ms": {
+          "0": [
+            2.182,
+            2.1938,
+            2.17
+          ],
+          "2": [
+            2.1105,
+            2.1401,
+            2.1071
+          ]
+        }
+      },
+      {
+        "artifact": "partitioned-timing-512-0.log",
+        "projection": "gateQ4K",
+        "compact_ms": 2.6555,
+        "partitioned_ms": 2.6903,
+        "latency_change_percent": 1.3104876671060195,
+        "max_absolute_difference": 0.0,
+        "samples_ms": {
+          "0": [
+            2.724,
+            2.6507,
+            2.6555
+          ],
+          "2": [
+            2.7986,
+            2.6903,
+            2.6893
+          ]
+        }
+      },
+      {
+        "artifact": "partitioned-timing-512-0.log",
+        "projection": "downQ5_1",
+        "compact_ms": 3.5745,
+        "partitioned_ms": 3.626,
+        "latency_change_percent": 1.4407609455867831,
+        "max_absolute_difference": 0.0,
+        "samples_ms": {
+          "0": [
+            3.5745,
+            3.561,
+            3.6391
+          ],
+          "2": [
+            3.626,
+            3.5863,
+            3.6444
+          ]
+        }
+      },
+      {
+        "artifact": "partitioned-timing-512-0.log",
+        "projection": "downQ8_0",
+        "compact_ms": 4.842,
+        "partitioned_ms": 4.7963,
+        "latency_change_percent": -0.9438248657579473,
+        "max_absolute_difference": 0.0,
+        "samples_ms": {
+          "0": [
+            4.8446,
+            4.842,
+            4.8031
+          ],
+          "2": [
+            4.7963,
+            4.8223,
+            4.7209
+          ]
+        }
+      },
+      {
+        "artifact": "partitioned-timing-8192-0.log",
+        "projection": "gateQ4K",
+        "compact_ms": 6.8697,
+        "partitioned_ms": 6.7847,
+        "latency_change_percent": -1.2373174956693878,
+        "max_absolute_difference": 0.0,
+        "samples_ms": {
+          "0": [
+            6.9443,
+            6.8019,
+            6.8697
+          ],
+          "2": [
+            6.8019,
+            6.6991,
+            6.7847
+          ]
+        }
+      },
+      {
+        "artifact": "partitioned-timing-8192-0.log",
+        "projection": "downQ5_1",
+        "compact_ms": 11.9974,
+        "partitioned_ms": 11.6684,
+        "latency_change_percent": -2.742260823178355,
+        "max_absolute_difference": 0.0,
+        "samples_ms": {
+          "0": [
+            11.9974,
+            12.0703,
+            11.9307
+          ],
+          "2": [
+            11.6027,
+            11.8121,
+            11.6684
+          ]
+        }
+      },
+      {
+        "artifact": "partitioned-timing-8192-0.log",
+        "projection": "downQ8_0",
+        "compact_ms": 12.9578,
+        "partitioned_ms": 12.9211,
+        "latency_change_percent": -0.28322709101854526,
+        "max_absolute_difference": 0.0,
+        "samples_ms": {
+          "0": [
+            12.9578,
+            12.8677,
+            13.0625
+          ],
+          "2": [
+            12.9211,
+            12.7855,
+            12.9212
+          ]
+        }
+      }
+    ],
+    "source_sha256": {
+      "bench-partitioned.cu": "a09261f63c6175f2f5a58b782f283ec4bb18bbba2e5f11ba3dd330cd3f48b86b",
+      "build-partitioned.py": "376d2c420dac9a10a61d21244ff8cdcb92edc0abb6c03252a4e0720a37b3380f",
+      "partitioned.cu": "162161bc07345e05bb37e0c27a8ea8577d02da57f9e2ab956c50156294b07aa3"
+    }
+  },
+  "weighted_atomic_mmq": {
+    "numerical_contract": "Assignment dot products unchanged. F32 atomic weighted sums reassociate ascending-slot FMA and perform a rounded multiply before atomic addition. Global F32 atomics flush subnormal inputs/results. Tests bound normal finite data; not bitwise equivalent or a quality-equivalence claim.",
+    "correctness_cases": 720,
+    "formats": [
+      "q2k",
+      "q3k",
+      "q4_0",
+      "q4_1",
+      "q4k",
+      "q5_0",
+      "q5_1",
+      "q5k",
+      "q6k",
+      "q8_0"
+    ],
+    "dtypes": {
+      "F32": {
+        "cases": 240,
+        "elements": 2507760,
+        "changed": 1615344,
+        "max_abs": 2.38418579e-07,
+        "max_rel_floor1e6": 0.00838190317,
+        "max_error_bound_ratio": 0.476477995
+      },
+      "F16": {
+        "cases": 240,
+        "elements": 2507760,
+        "changed": 726,
+        "max_abs": 0.000122070312,
+        "max_rel_floor1e6": 0.0596046448,
+        "max_error_bound_ratio": 0.974396522
+      },
+      "BF16": {
+        "cases": 240,
+        "elements": 2507760,
+        "changed": 227,
+        "max_abs": 0.000244140625,
+        "max_rel_floor1e6": 0.00775193798,
+        "max_error_bound_ratio": 0.958109988
+      }
+    },
+    "timings": [
+      {
+        "case": "q5_1-2048",
+        "median_ms": {
+          "0": 5.855688,
+          "1": 5.709504,
+          "2": 5.690808
+        },
+        "throughput_change_percent": {
+          "1": 2.560362511349501,
+          "2": 2.89730386265008
+        },
+        "samples": [
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 0,
+            "ms": 6.034368
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 0,
+            "ms": 5.886408
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 0,
+            "ms": 5.686464
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 1,
+            "ms": 5.690808
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 1,
+            "ms": 5.692608
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 1,
+            "ms": 5.84928
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 2,
+            "ms": 6.037648
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 2,
+            "ms": 5.70388
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 2,
+            "ms": 5.972168
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 3,
+            "ms": 5.681344
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 3,
+            "ms": 5.709504
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 3,
+            "ms": 5.853456
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 4,
+            "ms": 5.855688
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 4,
+            "ms": 5.7218
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 4,
+            "ms": 5.911496
+          }
+        ]
+      },
+      {
+        "case": "q5_1-512",
+        "median_ms": {
+          "0": 3.797128,
+          "1": 3.711196,
+          "2": 3.9178
+        },
+        "throughput_change_percent": {
+          "1": 2.315479969260581,
+          "2": -3.080095972229324
+        },
+        "samples": [
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 0,
+            "ms": 3.987172
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 0,
+            "ms": 3.889972
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 0,
+            "ms": 3.82128
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 1,
+            "ms": 3.922272
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 1,
+            "ms": 3.750792
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 1,
+            "ms": 3.796692
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 2,
+            "ms": 3.797128
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 2,
+            "ms": 3.693152
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 2,
+            "ms": 3.923556
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 3,
+            "ms": 3.9178
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 3,
+            "ms": 3.711196
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 3,
+            "ms": 3.798508
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 4,
+            "ms": 3.794752
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 4,
+            "ms": 3.701216
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 4,
+            "ms": 3.821964
+          }
+        ]
+      },
+      {
+        "case": "q5_1-8192",
+        "median_ms": {
+          "0": 17.331673,
+          "1": 18.600208,
+          "2": 14.762184
+        },
+        "throughput_change_percent": {
+          "1": -6.820004378445665,
+          "2": 17.40588655445563
+        },
+        "samples": [
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 0,
+            "ms": 17.331673
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 0,
+            "ms": 18.600208
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 0,
+            "ms": 14.762184
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 1,
+            "ms": 14.751944
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 1,
+            "ms": 18.589064
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 1,
+            "ms": 17.572624
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 2,
+            "ms": 17.537848
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 2,
+            "ms": 18.620537
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 2,
+            "ms": 14.803232
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 3,
+            "ms": 14.589128
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 3,
+            "ms": 18.859968
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 3,
+            "ms": 17.214945
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 4,
+            "ms": 17.214775
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 4,
+            "ms": 18.565577
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 4,
+            "ms": 15.020232
+          }
+        ]
+      },
+      {
+        "case": "q8_0-2048",
+        "median_ms": {
+          "0": 7.070208,
+          "1": 7.32756,
+          "2": 6.971584
+        },
+        "throughput_change_percent": {
+          "1": -3.5121104433126438,
+          "2": 1.4146569846967383
+        },
+        "samples": [
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 0,
+            "ms": 7.229384
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 0,
+            "ms": 7.487176
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 0,
+            "ms": 7.265384
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 1,
+            "ms": 6.971584
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 1,
+            "ms": 7.321024
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 1,
+            "ms": 7.070208
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 2,
+            "ms": 7.065288
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 2,
+            "ms": 7.32756
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 2,
+            "ms": 7.152072
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 3,
+            "ms": 6.970568
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 3,
+            "ms": 7.385792
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 3,
+            "ms": 7.066824
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 4,
+            "ms": 7.220904
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 4,
+            "ms": 7.32
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 4,
+            "ms": 6.969488
+          }
+        ]
+      },
+      {
+        "case": "q8_0-512",
+        "median_ms": {
+          "0": 5.05358,
+          "1": 5.023968,
+          "2": 5.04074
+        },
+        "throughput_change_percent": {
+          "1": 0.5894145822584962,
+          "2": 0.2547245047354041
+        },
+        "samples": [
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 0,
+            "ms": 5.1922
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 0,
+            "ms": 5.10768
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 0,
+            "ms": 5.133412
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 1,
+            "ms": 5.04074
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 1,
+            "ms": 5.021332
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 1,
+            "ms": 5.02128
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 2,
+            "ms": 5.019744
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 2,
+            "ms": 5.023332
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 2,
+            "ms": 5.039712
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 3,
+            "ms": 5.037028
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 3,
+            "ms": 5.023968
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 3,
+            "ms": 5.102432
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 4,
+            "ms": 5.05358
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 4,
+            "ms": 5.02512
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 4,
+            "ms": 5.040992
+          }
+        ]
+      },
+      {
+        "case": "q8_0-8192",
+        "median_ms": {
+          "0": 18.078144,
+          "1": 20.372761,
+          "2": 15.752392
+        },
+        "throughput_change_percent": {
+          "1": -11.263161630374984,
+          "2": 14.764437045497614
+        },
+        "samples": [
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 0,
+            "ms": 18.069696
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 0,
+            "ms": 20.372761
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 0,
+            "ms": 15.530784
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 1,
+            "ms": 15.552952
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 1,
+            "ms": 20.437952
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 1,
+            "ms": 18.052889
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 2,
+            "ms": 18.078144
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 2,
+            "ms": 20.218016
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 2,
+            "ms": 15.752392
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 3,
+            "ms": 15.982256
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 3,
+            "ms": 20.545641
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 3,
+            "ms": 18.245089
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 4,
+            "ms": 18.082504
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 4,
+            "ms": 20.358576
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 4,
+            "ms": 15.762624
+          }
+        ]
+      }
+    ],
+    "artifact_sha256": {
+      "bench": "571b5e9e336a2afed42f44980971195d60aa8f9653b3779a5c5631194b4c2847",
+      "bench.cu": "e4b38a5e90eb54046062958536ac77d9c1b01c83a134a16a7e5c849057ab3ebc",
+      "generate.py": "c9444c5d1a6eac65fedea86e427903a3ee3f237f913bf77f8f1957f82b2f5f59",
+      "source-manifest.json": "07bf415aa4973e4d43e13f6367ae8c1eba9ed80eb434b53ffb21463550637e7d"
+    },
+    "followup_plain_grid_control": {
+      "artifact": "/tmp/qwen38-next-pass/feature-major-compact/summary.json",
+      "result": "All six actual-shape cases regressed5.2-16.8%; no production edit."
+    },
+    "integration_assessment": {
+      "scope": "Shared grouped compact GGUF down projection, all10supported MMQ formats; keep noncompact, LoRA/post-down transforms and unsupported activation fallbacks.",
+      "api": "Pass routing weights as Tensor with live actual-compute-stream guards, topk/token dimensions checked once; own zeroed aggregate/output tensors through graph replay via existing allocator/graph ownership.",
+      "arithmetic": "Existing F32 assignment dot is unchanged. Weighted atomic accumulation replaces slot-ordered FMA with rounded product plus unordered sum. Global atomicAdd also flushes subnormals. Final dtype cast remains once.",
+      "dispatch": "Current six cells are insufficient for a general policy. Aggregate-size/L2 reasoning is credible, but validate neighboring matrix dimensions/topk/routing distributions and allformats before choosing a cache-based policy; do not hardcode token8192 or this model.",
+      "unit_validation": "Strict unchanged assignment-dot reference plus per-element error bounds; include normal cancellation, signed zeros, subnormals, finite extreme scales, zero routing, repeated expert IDs, partial rows and16/32/64/128column tails. Poison both aggregate and final buffers before changed-input/routing graph replay.",
+      "model_validation": "Compare samecheckpoint baseline/candidate at identical teacher-forced histories; record full-logit maxabs/RMS/relative errors, target-token logprob and held-out crossentropy/perplexity deltas, argmax margins and agreement. Repeat candidate to characterize atomic nondeterminism; separately run greedy generations and matched performance fixture. No quality-equivalence claim from final-output layer error alone.",
+      "decision": "No production atomic integration this window; requires explicit numerical scope and broader evidence. User did not require bitwise equivalence, so numerical reassociation alone is not a rejection criterion."
+    }
+  },
+  "feature_major_mmq": {
+    "correctness_cases": 360,
+    "elements": 3761640,
+    "changed": 0,
+    "timings": [
+      {
+        "case": "q5_1-2048",
+        "median_ms": {
+          "0": 5.942904,
+          "1": 7.101896
+        },
+        "throughput_change_percent": -16.319472997070072,
+        "samples": [
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 0,
+            "ms": 6.110592
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 0,
+            "ms": 7.101896
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 1,
+            "ms": 7.03796
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 1,
+            "ms": 5.907896
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 2,
+            "ms": 5.998736
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 2,
+            "ms": 7.200968
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 3,
+            "ms": 7.038848
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 3,
+            "ms": 5.921472
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 4,
+            "ms": 5.942904
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 4,
+            "ms": 7.306688
+          }
+        ]
+      },
+      {
+        "case": "q5_1-512",
+        "median_ms": {
+          "0": 3.792376,
+          "1": 4.104672
+        },
+        "throughput_change_percent": -7.608305852453013,
+        "samples": [
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 0,
+            "ms": 3.953896
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 0,
+            "ms": 4.110948
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 1,
+            "ms": 4.10378
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 1,
+            "ms": 3.958112
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 2,
+            "ms": 3.789912
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 2,
+            "ms": 4.192228
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 3,
+            "ms": 4.104672
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 3,
+            "ms": 3.792376
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 4,
+            "ms": 3.791164
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 4,
+            "ms": 4.102116
+          }
+        ]
+      },
+      {
+        "case": "q5_1-8192",
+        "median_ms": {
+          "0": 17.271992,
+          "1": 19.301048
+        },
+        "throughput_change_percent": -10.512672679742574,
+        "samples": [
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 0,
+            "ms": 17.002176
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 0,
+            "ms": 19.218121
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 1,
+            "ms": 19.391424
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 1,
+            "ms": 17.271992
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 2,
+            "ms": 17.137712
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 2,
+            "ms": 19.382769
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 3,
+            "ms": 19.301048
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 3,
+            "ms": 17.379448
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 4,
+            "ms": 17.410839
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 4,
+            "ms": 19.039936
+          }
+        ]
+      },
+      {
+        "case": "q8_0-2048",
+        "median_ms": {
+          "0": 7.095336,
+          "1": 8.52724
+        },
+        "throughput_change_percent": -16.792115620059967,
+        "samples": [
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 0,
+            "ms": 7.299032
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 0,
+            "ms": 8.52724
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 1,
+            "ms": 8.53064
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 1,
+            "ms": 7.240904
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 2,
+            "ms": 7.090784
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 2,
+            "ms": 8.539328
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 3,
+            "ms": 8.376264
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 3,
+            "ms": 7.095336
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 4,
+            "ms": 7.084488
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 4,
+            "ms": 8.445128
+          }
+        ]
+      },
+      {
+        "case": "q8_0-512",
+        "median_ms": {
+          "0": 5.106532,
+          "1": 5.388764
+        },
+        "throughput_change_percent": -5.23741622383167,
+        "samples": [
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 0,
+            "ms": 5.184356
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 0,
+            "ms": 5.477024
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 1,
+            "ms": 5.468104
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 1,
+            "ms": 5.022148
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 2,
+            "ms": 5.107152
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 2,
+            "ms": 5.38236
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 3,
+            "ms": 5.382884
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 3,
+            "ms": 5.022188
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 4,
+            "ms": 5.106532
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 4,
+            "ms": 5.388764
+          }
+        ]
+      },
+      {
+        "case": "q8_0-8192",
+        "median_ms": {
+          "0": 18.265535,
+          "1": 20.182983
+        },
+        "throughput_change_percent": -9.500320145936803,
+        "samples": [
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 0,
+            "ms": 18.290119
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 0,
+            "ms": 20.34836
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 1,
+            "ms": 20.159168
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 1,
+            "ms": 18.230473
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 2,
+            "ms": 18.260719
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 2,
+            "ms": 20.182983
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 3,
+            "ms": 20.341448
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 3,
+            "ms": 18.292473
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 4,
+            "ms": 18.265535
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 4,
+            "ms": 20.167368
+          }
+        ]
+      }
+    ],
+    "validation_scope": "Final outputs strictly compared to original arithmetic with changed routing/inputs/weights and graph replay. Assignment buffer reused between reference and candidate; this is not a poison-coverage proof.",
+    "artifact_sha256": {
+      "bench": "01169ffc023a55e0a3a97026a04a6c9954bda4595fc9b4a035c27bf8c2a70cef",
+      "bench.cu": "b7cc33b1f4d00643007f4b23aed48170e60c868d6434c67b54b1809be9993fdf",
+      "generate.py": "d0b74be0dfd67f467e8fcb44e25149241ab81444d77acbeafd111610b5ad0aef",
+      "source-manifest.json": "6db0c5222b78ae08a947a5daf6ee14ab47292d50dfa14428b7266a0c2b502758"
+    }
+  },
+  "decision": "Keep the bitwise norm/RoPE fusion for full-model measurement. Storage and plain scheduling experiments do not establish a broad speed advantage. Weighted atomic accumulation remains experimental and needs model-level numerical validation.",
+  "weighted_atomic_followup": {
+    "numerical_contract": "Assignment dot products unchanged. F32 atomic weighted sums reassociate ascending-slot FMA and perform a rounded multiply before atomic addition. Global F32 atomics flush subnormal inputs/results. Tests bound normal finite data; not bitwise equivalent or a quality-equivalence claim.",
+    "correctness_cases": 720,
+    "formats": [
+      "q2k",
+      "q3k",
+      "q4_0",
+      "q4_1",
+      "q4k",
+      "q5_0",
+      "q5_1",
+      "q5k",
+      "q6k",
+      "q8_0"
+    ],
+    "dtypes": {
+      "F32": {
+        "cases": 240,
+        "elements": 2507760,
+        "changed": 1615344,
+        "max_abs": 2.38418579e-07,
+        "max_rel_floor1e6": 0.00838190317,
+        "max_error_bound_ratio": 0.476477995
+      },
+      "F16": {
+        "cases": 240,
+        "elements": 2507760,
+        "changed": 726,
+        "max_abs": 0.000122070312,
+        "max_rel_floor1e6": 0.0596046448,
+        "max_error_bound_ratio": 0.974396522
+      },
+      "BF16": {
+        "cases": 240,
+        "elements": 2507760,
+        "changed": 227,
+        "max_abs": 0.000244140625,
+        "max_rel_floor1e6": 0.00775193798,
+        "max_error_bound_ratio": 0.958109988
+      }
+    },
+    "timings": [
+      {
+        "case": "q5_1-2048",
+        "median_ms": {
+          "0": 5.855688,
+          "1": 5.709504,
+          "2": 5.690808
+        },
+        "throughput_change_percent": {
+          "1": 2.560362511349501,
+          "2": 2.89730386265008
+        },
+        "samples": [
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 0,
+            "ms": 6.034368
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 0,
+            "ms": 5.886408
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 0,
+            "ms": 5.686464
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 1,
+            "ms": 5.690808
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 1,
+            "ms": 5.692608
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 1,
+            "ms": 5.84928
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 2,
+            "ms": 6.037648
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 2,
+            "ms": 5.70388
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 2,
+            "ms": 5.972168
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 3,
+            "ms": 5.681344
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 3,
+            "ms": 5.709504
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 3,
+            "ms": 5.853456
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 4,
+            "ms": 5.855688
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 4,
+            "ms": 5.7218
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 4,
+            "ms": 5.911496
+          }
+        ]
+      },
+      {
+        "case": "q5_1-512",
+        "median_ms": {
+          "0": 3.797128,
+          "1": 3.711196,
+          "2": 3.9178
+        },
+        "throughput_change_percent": {
+          "1": 2.315479969260581,
+          "2": -3.080095972229324
+        },
+        "samples": [
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 0,
+            "ms": 3.987172
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 0,
+            "ms": 3.889972
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 0,
+            "ms": 3.82128
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 1,
+            "ms": 3.922272
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 1,
+            "ms": 3.750792
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 1,
+            "ms": 3.796692
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 2,
+            "ms": 3.797128
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 2,
+            "ms": 3.693152
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 2,
+            "ms": 3.923556
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 3,
+            "ms": 3.9178
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 3,
+            "ms": 3.711196
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 3,
+            "ms": 3.798508
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 4,
+            "ms": 3.794752
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 4,
+            "ms": 3.701216
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 4,
+            "ms": 3.821964
+          }
+        ]
+      },
+      {
+        "case": "q5_1-8192",
+        "median_ms": {
+          "0": 17.331673,
+          "1": 18.600208,
+          "2": 14.762184
+        },
+        "throughput_change_percent": {
+          "1": -6.820004378445665,
+          "2": 17.40588655445563
+        },
+        "samples": [
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 0,
+            "ms": 17.331673
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 0,
+            "ms": 18.600208
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 0,
+            "ms": 14.762184
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 1,
+            "ms": 14.751944
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 1,
+            "ms": 18.589064
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 1,
+            "ms": 17.572624
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 2,
+            "ms": 17.537848
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 2,
+            "ms": 18.620537
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 2,
+            "ms": 14.803232
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 3,
+            "ms": 14.589128
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 3,
+            "ms": 18.859968
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 3,
+            "ms": 17.214945
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 4,
+            "ms": 17.214775
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 4,
+            "ms": 18.565577
+          },
+          {
+            "kind": "timing",
+            "format": "q5_1",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 4,
+            "ms": 15.020232
+          }
+        ]
+      },
+      {
+        "case": "q8_0-2048",
+        "median_ms": {
+          "0": 7.070208,
+          "1": 7.32756,
+          "2": 6.971584
+        },
+        "throughput_change_percent": {
+          "1": -3.5121104433126438,
+          "2": 1.4146569846967383
+        },
+        "samples": [
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 0,
+            "ms": 7.229384
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 0,
+            "ms": 7.487176
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 0,
+            "ms": 7.265384
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 1,
+            "ms": 6.971584
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 1,
+            "ms": 7.321024
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 1,
+            "ms": 7.070208
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 2,
+            "ms": 7.065288
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 2,
+            "ms": 7.32756
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 2,
+            "ms": 7.152072
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 3,
+            "ms": 6.970568
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 3,
+            "ms": 7.385792
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 3,
+            "ms": 7.066824
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 4,
+            "ms": 7.220904
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 4,
+            "ms": 7.32
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 2048,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 4,
+            "ms": 6.969488
+          }
+        ]
+      },
+      {
+        "case": "q8_0-512",
+        "median_ms": {
+          "0": 5.05358,
+          "1": 5.023968,
+          "2": 5.04074
+        },
+        "throughput_change_percent": {
+          "1": 0.5894145822584962,
+          "2": 0.2547245047354041
+        },
+        "samples": [
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 0,
+            "ms": 5.1922
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 0,
+            "ms": 5.10768
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 0,
+            "ms": 5.133412
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 1,
+            "ms": 5.04074
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 1,
+            "ms": 5.021332
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 1,
+            "ms": 5.02128
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 2,
+            "ms": 5.019744
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 2,
+            "ms": 5.023332
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 2,
+            "ms": 5.039712
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 3,
+            "ms": 5.037028
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 3,
+            "ms": 5.023968
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 3,
+            "ms": 5.102432
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 4,
+            "ms": 5.05358
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 4,
+            "ms": 5.02512
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 512,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 4,
+            "ms": 5.040992
+          }
+        ]
+      },
+      {
+        "case": "q8_0-8192",
+        "median_ms": {
+          "0": 18.078144,
+          "1": 20.372761,
+          "2": 15.752392
+        },
+        "throughput_change_percent": {
+          "1": -11.263161630374984,
+          "2": 14.764437045497614
+        },
+        "samples": [
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 0,
+            "ms": 18.069696
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 0,
+            "ms": 20.372761
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 0,
+            "ms": 15.530784
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 1,
+            "ms": 15.552952
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 1,
+            "ms": 20.437952
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 1,
+            "ms": 18.052889
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 2,
+            "ms": 18.078144
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 2,
+            "ms": 20.218016
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 2,
+            "ms": 15.752392
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 3,
+            "ms": 15.982256
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 3,
+            "ms": 20.545641
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 3,
+            "ms": 18.245089
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 0,
+            "pass": 4,
+            "ms": 18.082504
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 1,
+            "pass": 4,
+            "ms": 20.358576
+          },
+          {
+            "kind": "timing",
+            "format": "q8_0",
+            "tokens": 8192,
+            "experts": 512,
+            "topk": 10,
+            "hidden": 2560,
+            "columns": 640,
+            "variant": 2,
+            "pass": 4,
+            "ms": 15.762624
+          }
+        ]
+      }
+    ],
+    "followup_plain_grid_control": {
+      "artifact": "/tmp/qwen38-next-pass/feature-major-compact/summary.json",
+      "result": "All six actual-shape cases regressed5.2-16.8%; no production edit."
+    },
+    "integration_assessment": {
+      "scope": "Shared grouped compact GGUF down projection, all10supported MMQ formats; keep noncompact, LoRA/post-down transforms and unsupported activation fallbacks.",
+      "api": "Pass routing weights as Tensor with live actual-compute-stream guards, topk/token dimensions checked once; own zeroed aggregate/output tensors through graph replay via existing allocator/graph ownership.",
+      "arithmetic": "Existing F32 assignment dot is unchanged. Weighted atomic accumulation replaces slot-ordered FMA with rounded product plus unordered sum. Global atomicAdd also flushes subnormals. Final dtype cast remains once.",
+      "dispatch": "Current six cells are insufficient for a general policy. Aggregate-size/L2 reasoning is credible, but validate neighboring matrix dimensions/topk/routing distributions and allformats before choosing a cache-based policy; do not hardcode token8192 or this model.",
+      "unit_validation": "Strict unchanged assignment-dot reference plus per-element error bounds; include normal cancellation, signed zeros, subnormals, finite extreme scales, zero routing, repeated expert IDs, partial rows and16/32/64/128column tails. Poison both aggregate and final buffers before changed-input/routing graph replay.",
+      "model_validation": "Compare samecheckpoint baseline/candidate at identical teacher-forced histories; record full-logit maxabs/RMS/relative errors, target-token logprob and held-out crossentropy/perplexity deltas, argmax margins and agreement. Repeat candidate to characterize atomic nondeterminism; separately run greedy generations and matched performance fixture. No quality-equivalence claim from final-output layer error alone.",
+      "decision": "No production atomic integration this window; requires explicit numerical scope and broader evidence. User did not require bitwise equivalence, so numerical reassociation alone is not a rejection criterion."
+    }
+  }
+}

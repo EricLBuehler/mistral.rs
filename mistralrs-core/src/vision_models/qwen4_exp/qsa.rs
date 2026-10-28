@@ -10,7 +10,7 @@ use mistralrs_quant::{
 use super::config::{QsaConfig, TextConfig};
 use crate::{
     attention::{AttentionMask, SdpaParams},
-    layers::{GemmaRmsNorm, Qwen3VLRotaryEmbedding, Sdpa},
+    layers::{rms_norm_partial_rotary_neox, GemmaRmsNorm, Qwen3VLRotaryEmbedding, Sdpa},
     paged_attention::{load_fp8_attention_scales, PagedAttention},
     pipeline::{
         text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
@@ -317,12 +317,13 @@ impl QsaAttention {
 
     /// Normalized, rotated indexer queries `[b, s, heads, head_dim]`.
     fn index_query(&self, index_q: &Tensor, (cos, sin): &(Tensor, Tensor)) -> Result<Tensor> {
-        let q = candle_nn::ops::rms_norm(
-            &index_q.contiguous()?,
+        rms_norm_partial_rotary_neox(
+            index_q,
             self.index_q_norm.weight(),
+            cos,
+            sin,
             self.eps as f32,
-        )?;
-        rope_partial_neox(&q, cos, sin)
+        )
     }
 
     #[cfg(feature = "cuda")]
@@ -635,11 +636,6 @@ impl QsaAttention {
             .to_dtype(DType::F32)?
             .mean(2)?
             .to_dtype(aux.dtype())?;
-        let pooled = candle_nn::ops::rms_norm(
-            &pooled.contiguous()?,
-            self.index_k_norm.weight(),
-            self.eps as f32,
-        )?;
         let starts = block_starts
             .reshape((b_sz, n_blocks, ratio, aux.dim(D::Minus1)?))?
             .i((.., .., 0, ..))?;
@@ -647,7 +643,14 @@ impl QsaAttention {
         let sin = starts
             .narrow(D::Minus1, d + half_rot, half_rot)?
             .contiguous()?;
-        let block_keys = rope_partial_neox(&pooled.unsqueeze(2)?, &cos, &sin)?.squeeze(2)?;
+        let block_keys = rms_norm_partial_rotary_neox(
+            &pooled.unsqueeze(2)?,
+            self.index_k_norm.weight(),
+            &cos,
+            &sin,
+            self.eps as f32,
+        )?
+        .squeeze(2)?;
         // [b, s, heads, d] x [b, blocks, d] -> [b, s, heads, blocks]
         let scores = index_q
             .to_dtype(DType::F32)?
@@ -742,41 +745,9 @@ fn last_row_per_sequence(lens: &Tensor, n_seqs: usize) -> Result<Tensor> {
         .contiguous()
 }
 
-/// NeoX RoPE over the first `2 * half` dims of `x: [b, s, heads, d]`; `cos`/`sin` are `[b, s, half]`.
-pub(super) fn rope_partial_neox(x: &Tensor, cos: &Tensor, sin: &Tensor) -> Result<Tensor> {
-    let half = cos.dim(D::Minus1)?;
-    let d = x.dim(D::Minus1)?;
-    let cos = cos.to_dtype(DType::F32)?.unsqueeze(2)?;
-    let sin = sin.to_dtype(DType::F32)?.unsqueeze(2)?;
-    let xf = x.to_dtype(DType::F32)?;
-    let x1 = xf.narrow(D::Minus1, 0, half)?;
-    let x2 = xf.narrow(D::Minus1, half, half)?;
-    let r1 = (x1.broadcast_mul(&cos)? - x2.broadcast_mul(&sin)?)?;
-    let r2 = (x2.broadcast_mul(&cos)? + x1.broadcast_mul(&sin)?)?;
-    let mut parts = vec![r1, r2];
-    if d > 2 * half {
-        parts.push(xf.narrow(D::Minus1, 2 * half, d - 2 * half)?);
-    }
-    Tensor::cat(&parts, D::Minus1)?.to_dtype(x.dtype())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn partial_rope_rotates_leading_dims_only() -> Result<()> {
-        let device = Device::Cpu;
-        let x = Tensor::arange(0f32, 8., &device)?.reshape((1, 1, 1, 8))?;
-        let cos = Tensor::new(&[[[0f32, 1.0]]], &device)?;
-        let sin = Tensor::new(&[[[1f32, 0.0]]], &device)?;
-        let out = rope_partial_neox(&x, &cos, &sin)?
-            .flatten_all()?
-            .to_vec1::<f32>()?;
-        // pairs (0, 2) rotate by 90 degrees, (1, 3) stay, dims 4.. pass through
-        assert_eq!(out, [-2.0, 1.0, 0.0, 3.0, 4.0, 5.0, 6.0, 7.0]);
-        Ok(())
-    }
 
     #[test]
     fn mode_is_dense_until_the_budget_is_exceeded() {

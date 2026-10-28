@@ -45,6 +45,8 @@ mod router;
 pub(crate) use router::router_linear;
 mod gated_add;
 pub(crate) use gated_add::sigmoid_gated_add;
+mod rotary;
+pub(crate) use rotary::rms_norm_partial_rotary_neox;
 
 pub fn dense_embedding(
     in_size: usize,

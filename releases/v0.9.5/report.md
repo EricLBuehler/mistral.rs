@@ -5,7 +5,7 @@ UD-Q4_K_XL GGUF checkpoint in mistral.rs and freshly rebuilt llama.cpp. It also 
 the changes that replace narrow model-specific kernels with shared architecture and
 quantization implementations.
 
-The latest measured source `24b72dc9...` and release binary `6681778b...` achieve the requested
+The paired-projection source `24b72dc9...` and release binary `6681778b...` achieve the requested
 10% decode lead in all three measured C1 prompt-length cases using the same GGUF
 checkpoint. Against the best historical or fresh llama.cpp median selected separately
 for each metric and length, prompt throughput leads by 60.5% to 69.1% and decode by
@@ -19,7 +19,7 @@ and loaded libraries, with no compiler or profiler active during measurement.
 
 The three historical mistral.rs runs use source `b55a21db...` and binary `eca4ba52...`.
 The next mistral.rs run uses `464e5a6f...` / `81d1e23b...`, followed by the
-attention-optimization run `4ac5bbc7...` / `2f66d0a6...` and the latest measured paired-projection
+attention-optimization run `4ac5bbc7...` / `2f66d0a6...` and the paired-projection
 run `24b72dc9...` / `6681778b...`. The llama.cpp controls use commit `7aca0d2e...` and
 binary `b6704403...`. Every retained result identifies its own engine and provenance.
 
@@ -28,14 +28,16 @@ unreachable kernel instantiations and stale comments, and clarified shared API d
 Kernel arithmetic and dispatch policies are unchanged. Its
 [validation record](raw/cleanup-validation.json) and
 [kernel reachability audit](raw/kernel-reachability.json) are separate from the benchmark
-provenance; no serving sweep was rerun after cleanup.
+provenance; that cleanup did not include a serving sweep. The later
+[shared norm/RoPE follow-up](#shared-rmsnorm-and-partial-rope-follow-up) measures a fresh
+`ee47d306f` baseline and the additional fusion separately from these canonical tables.
 
-## Latest measured same GGUF, best recorded llama.cpp controls
+## Paired-projection same GGUF, best recorded llama.cpp controls
 
 Each baseline cell independently selects the highest median across historical and fresh
 llama.cpp controls at both batch limits. This is a conservative per-metric comparison;
 it does not imply one llama configuration simultaneously produced every selected value.
-The latest measured mistral.rs run uses 8,192-token prompt batches in every row.
+The paired-projection mistral.rs run uses 8,192-token prompt batches in every row.
 
 | Prompt tokens | mistral.rs prompt tok/s | Best llama.cpp prompt tok/s | Difference | mistral.rs decode tok/s | Best llama.cpp decode tok/s | Difference |
 |---:|---:|---:|---:|---:|---:|---:|
@@ -48,7 +50,7 @@ batch limit for every cell. All ten canonical runs remain in the
 [manifest](raw/run-manifest.json), and the [summary](raw/summary.json) recomputes their
 medians and comparisons from the retained request records.
 
-## Latest measured run validation
+## Paired-projection run validation
 
 The checkpoint, fixture, precision settings, 16,384-token context limit and concurrency
 are unchanged. All 48 mistral.rs decoder layers remain on CUDA. Values are medians of
@@ -488,6 +490,64 @@ and [build/test record](raw/paired-build-validation.json).
 |---|---|
 | Source | `24b72dc9f7a4bab0a215fbe87543ad0a7c23ad20b3bd856590d313d950c1ac77` |
 | Release binary | `6681778b528263db9c729a69c98f74c0f1a8327f4d337d04cd3c79a7485b7ec5` |
+
+## Shared RMSNorm and partial RoPE follow-up
+
+The shared `layers::rms_norm_partial_rotary_neox` operation combines RMSNorm and
+partial NeoX rotation while preserving the intermediate BF16/F16/F32 rounding.
+Both matching QSA callers use it: index queries and unpaged pooled block keys.
+The implementation has no quantization-type, model-size or prompt-length switch;
+unsupported layouts retain the existing tensor expression.
+
+A fresh release baseline from `ee47d306f` (`d55c08b6...`) and the fused release
+(`d4f86169...`) used identical GGUF files, prompts, BF16 KV, C1, 16,384-token context,
+8,192-token batches and disabled prefix caching. The original baseline binary was
+run again after the candidate. Each run completed a full 12-request
+prewarm sweep followed by one warmup and three measured requests per length.
+Startup is excluded. No compiler or profiler ran during measurement.
+
+| Prompt tokens | Baseline prompt tok/s range | Fused prompt tok/s | Baseline decode tok/s range | Fused decode tok/s | Decode change range |
+|---:|---:|---:|---:|---:|---:|
+| 512 | 1,234.27 to 1,237.26 | 1,231.18 | 31.426 to 31.558 | 31.468 | -0.29% to +0.13% |
+| 2,048 | 1,848.58 to 1,866.43 | 1,842.12 | 30.704 to 30.875 | 30.983 | +0.35% to +0.91% |
+| 8,192 | 1,957.92 to 1,962.63 | 1,958.47 | 30.539 to 30.704 | 30.834 | +0.42% to +0.97% |
+
+Ranges show the two baseline run medians, not confidence intervals. All six measured
+2K/8K decode comparisons improved against each baseline: 0.855% to 1.172% against
+the first and 0.291% to 0.631% against the repeat. The
+[three-run audit](raw/norm-rope-three-run-comparison.json) retains all samples,
+checks configuration and memory placement, and reports the control drift explicitly.
+The 512-token workload never executes the fused index-query path and serves as an
+unchanged-code control. Prefill does not show a clear improvement in these sweeps.
+All three runs recorded four successful graph captures, 3,048 replays and no graph
+failures. Embedding placement and KV/recurrent cache capacities matched.
+The [first baseline](raw/norm-rope-baseline-serving.json),
+[candidate](raw/norm-rope-candidate-serving.json) and
+[repeat baseline](raw/norm-rope-repeat-serving.json) retain the individual requests;
+their manifests and prewarm records are stored alongside them.
+
+The [kernel evidence](raw/norm-rope-kernel-evidence.json) records 240 strict cases
+covering 951,315 values with zero bit differences, including dtype rounding,
+signed zeros, subnormals, strides and changed-input graph replay. The BF16 C1
+operation measured 16.62 us before fusion and 2.00 us afterward. These isolated
+timings do not predict an equivalent model-level speedup. The
+[validation](raw/norm-rope-validation.json), [test output](raw/norm-rope-tests.log)
+and [release build](raw/norm-rope-release-build.json) record CPU/CUDA compile checks,
+formatting, five shared-operation tests and the QSA mode regression test.
+
+Model-output repeatability is a separate limitation: within each run,
+11 of 12 prewarm/serving text pairs differ. Candidate text matches none of the
+24 first-baseline requests and four of the 24 repeat-baseline requests; the two
+baseline runs match only three of 24 texts. This remains fixed-prompt serving, without identical generated
+histories. The bitwise claim applies to the fused operation, not full-model text.
+
+The [other experiments](raw/norm-rope-other-experiments.json) preserve lossless
+planar GGUF storage, fixed-width and partitioned MMQ scheduling, and MoE aggregation
+results. Mixed or negative gains kept the storage and plain scheduling prototypes
+out of production. Weighted atomic aggregation improved the isolated 8K down path
+by 14.8% to 17.4%, but changes accumulation order and subnormal behavior; it remains
+experimental pending model-level numerical validation. No unused prototype kernels
+were added to the source tree.
 
 ## Further decode experiments
 

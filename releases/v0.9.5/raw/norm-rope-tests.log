@@ -1,0 +1,24 @@
+warning: mistralrs-flash-attn@0.9.5: Using 10 threads for compilation
+warning: mistralrs-flash-attn@0.9.5: Using cached cutlass at /home/ericbuehler/.cudaforge/git/checkouts/cutlass-7127592069c2fe01
+warning: mistralrs-flash-attn@0.9.5: Compiling 53 of 53 kernels
+warning: mistralrs-paged-attn@0.9.5: Using 10 threads for compilation
+warning: mistralrs-paged-attn@0.9.5: Compiling 15 of 15 kernels
+warning: mistralrs-quant@0.9.5: Using 10 threads for compilation
+warning: mistralrs-quant@0.9.5: Using cached cutlass at /home/ericbuehler/.cudaforge/git/checkouts/cutlass-7127592069c2fe01
+warning: mistralrs-quant@0.9.5: Compiling 52 of 52 kernels
+   Compiling mistralrs-quant v0.9.5 (/home/ericbuehler/mistral.rs/mistralrs-quant)
+   Compiling mistralrs-core v0.9.5 (/home/ericbuehler/mistral.rs/mistralrs-core)
+warning: mistralrs-core@0.9.5: Using 10 threads for compilation
+warning: mistralrs-core@0.9.5: Compiling 1 of 19 kernels
+    Finished `test` profile [optimized + debuginfo] target(s) in 1m 39s
+     Running unittests src/lib.rs (target/debug/deps/mistralrs_core-2dfd7f3c1634b658)
+
+running 5 tests
+test layers::rotary::tests::cuda::rounded_norm_rope_keeps_fallbacks_and_secondary_stream_inputs ... ok
+test layers::rotary::tests::cuda::rounded_norm_rope_preserves_rounding_and_changed_graph_views ... ok
+test layers::rotary::tests::partial_rope_rotates_leading_dims_only ... ok
+test layers::rotary::tests::partial_rotary_norm_accepts_leading_batch_dimensions ... ok
+test layers::rotary::tests::partial_rotary_norm_cpu_fallback_preserves_untouched_columns ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1895 filtered out; finished in 0.42s
+
