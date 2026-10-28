@@ -53,7 +53,6 @@ pub struct Nvfp4LayerParts {
     pub dtype: DType,
 }
 
-#[derive(Debug)]
 pub struct Nvfp4Layer {
     parts: Nvfp4LayerParts,
     input_global_scale: Option<f32>,
@@ -61,6 +60,17 @@ pub struct Nvfp4Layer {
     input_scale_immutable: bool,
     #[cfg(all(feature = "cuda", feature = "cutile", has_nvfp4_cutlass_sm121_kernels))]
     native: Option<cutlass::State>,
+    #[cfg(all(feature = "cuda", feature = "cuda-legacy-fp4"))]
+    legacy: Option<candle_core::quantized::nvfp4_arch_e7::Nvfp4E7Linear>,
+}
+
+impl std::fmt::Debug for Nvfp4Layer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Nvfp4Layer")
+            .field("weight_shape", &self.parts.weight.dims())
+            .field("output_dtype", &self.parts.dtype)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -110,13 +120,16 @@ impl Nvfp4Layer {
         }
         #[cfg(all(feature = "cuda", feature = "cutile"))]
         if let Device::Cuda(device) = parts.weight.device() {
-            if !crate::cutile::nvfp4_supported(device) {
+            if !crate::cutile::nvfp4_supported(device) && !cfg!(feature = "cuda-legacy-fp4") {
                 candle_core::bail!(
                     "NVFP4 CUDA inference requires Blackwell or newer, CUDA 13.3 or newer, and a compatible tileiras"
                 );
             }
         }
-        #[cfg(not(all(feature = "cuda", feature = "cutile")))]
+        #[cfg(not(any(
+            all(feature = "cuda", feature = "cutile"),
+            all(feature = "cuda", feature = "cuda-legacy-fp4")
+        )))]
         if parts.weight.device().is_cuda() {
             candle_core::bail!("NVFP4 CUDA inference requires the cuda and cutile features");
         }
@@ -186,16 +199,53 @@ impl Nvfp4Layer {
         };
         #[cfg(all(feature = "cuda", feature = "cutile", has_nvfp4_cutlass_sm121_kernels))]
         let native = cutlass::State::new(&parts)?;
+        #[cfg(all(feature = "cuda", feature = "cuda-legacy-fp4"))]
+        let legacy = if let Device::Cuda(device) = parts.weight.device() {
+            #[cfg(feature = "cutile")]
+            let supported_by_cutile = crate::cutile::nvfp4_supported(device);
+            #[cfg(not(feature = "cutile"))]
+            let supported_by_cutile = false;
+            if supported_by_cutile {
+                None
+            } else {
+                if parts.weight.rank() != 2 || parts.activation != Nvfp4ActivationMode::None {
+                    candle_core::bail!(
+                        "legacy NVFP4 CUDA supports rank-2 W4A16 only (packed E2M1 weights)"
+                    );
+                }
+                let n = parts.weight.dim(0)?;
+                let k = parts.weight.dim(1)? * VALUES_PER_BYTE;
+                let packed = parts.weight.to_device(&Device::Cpu)?
+                    .flatten_all()?.to_vec1::<u8>()?;
+                // Reuse UQFF's lossless raw-byte conversion: FP8 scale payloads
+                // must not be numerically rounded or converted on Pascal.
+                let scales = crate::utils::data_to_bytes::<F8E4M3>(
+                    parts.scales.to_device(&Device::Cpu)?
+                        .flatten_all()?.to_vec1::<F8E4M3>()?,
+                );
+                // E7 currently accepts one global multiplier; use 1.0 and apply
+                // the checkpoint's per-output-row multipliers after the GEMV.
+                Some(candle_core::quantized::nvfp4_arch_e7::Nvfp4E7Linear::from_modelopt_bytes(
+                    device, n, k, &packed, &scales, 1.0,
+                )?)
+            }
+        } else {
+            None
+        };
         let layer = Self {
             parts,
             input_global_scale,
             input_scale_immutable,
+            #[cfg(all(feature = "cuda", feature = "cuda-legacy-fp4"))]
+            legacy,
             #[cfg(all(feature = "cuda", feature = "cutile", has_nvfp4_cutlass_sm121_kernels))]
             native,
         };
         #[cfg(all(feature = "cuda", feature = "cutile"))]
-        if layer.parts.weight.device().is_cuda() {
-            crate::cutile::register_nvfp4_shape(layer.gemm_args(), layer.parts.dtype)?;
+        if let Device::Cuda(device) = layer.parts.weight.device() {
+            if crate::cutile::nvfp4_supported(device) {
+                crate::cutile::register_nvfp4_shape(layer.gemm_args(), layer.parts.dtype)?;
+            }
         }
         Ok(layer)
     }
@@ -732,6 +782,25 @@ impl QuantMethod for Nvfp4Layer {
             let mut shape = x.dims().to_vec();
             *shape.last_mut().unwrap() = self.parts.weight.dim(0)?;
             return Tensor::zeros(shape, x.dtype(), x.device());
+        }
+        #[cfg(all(feature = "cuda", feature = "cuda-legacy-fp4"))]
+        if let Some(legacy) = &self.legacy {
+            let k = x.dim(D::Minus1)?;
+            let rows = x.elem_count() / k;
+            let output = legacy.forward(
+                &x.contiguous()?.reshape((rows, k))?.to_dtype(DType::F16)?,
+                candle_core::quantized::nvfp4_arch_e7::E7Mode::W4A16Reference,
+            )?;
+            let n = self.parts.weight.dim(0)?;
+            let output = output.broadcast_mul(&self.parts.global_scales.reshape((1, n))?)?
+                .to_dtype(x.dtype())?;
+            let output = match &self.parts.bias {
+                Some(bias) => output.broadcast_add(bias)?,
+                None => output,
+            };
+            let mut shape = x.dims().to_vec();
+            *shape.last_mut().unwrap() = n;
+            return output.reshape(shape);
         }
         #[cfg(all(feature = "cuda", feature = "cutile"))]
         if x.device().is_cuda() {
