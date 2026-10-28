@@ -1,8 +1,0 @@
-
-running 3 tests
-test cutile::qsa_decode::tests::qsa_decode_graph_tracks_metadata_and_matches_independent_attention ... ok
-test cutile::qsa_decode::tests::qsa_decode_index_and_alignment_guards_reject_unsupported_views ... ok
-test cutile::qsa_decode::tests::qsa_decode_orders_secondary_stream_inputs_and_preserves_fallbacks ... ok
-
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 505 filtered out; finished in 21.41s
-

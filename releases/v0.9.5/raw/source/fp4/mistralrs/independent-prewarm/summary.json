@@ -1,0 +1,183 @@
+{
+  "schema_version": 1,
+  "engine": "mistralrs-fp4-final-independent-prewarm",
+  "model": "default",
+  "base_url": "http://127.0.0.1:8239/v1",
+  "started_at": "2026-10-28T18:24:55.647560+00:00",
+  "workload": "/tmp/qwen38-fp4-local/workload-independent-warmup.json",
+  "workload_sha256": "5178aa72f9c9ee00f97b90dcd18e24acfbeb6387f01b12055b9a495e8869a2c4",
+  "measurement": {
+    "scheduling": "closed loop, shared queue, at most C requests in flight",
+    "ttft": "request start to first nonempty content or reasoning SSE delta",
+    "e2e": "request start to finish_reason SSE event",
+    "tpot": "(e2e - ttft) / (server completion_tokens - 1)",
+    "throughput": "sum of server token usage / entire round wall time",
+    "prefix_cache": "must be disabled in each server launch",
+    "temperature": 0,
+    "ignore_eos": true,
+    "chat_template_kwargs": {
+      "enable_thinking": false
+    }
+  },
+  "rounds": [
+    {
+      "id": "p8192-c1-warmup--1",
+      "phase": "warmup",
+      "repetition": -1,
+      "input_tokens": 8192,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "engine": "mistralrs-fp4-final-independent-prewarm",
+      "completed_at": "2026-10-28T18:25:05.158197+00:00",
+      "requested": 1,
+      "completed": 1,
+      "failed": 0,
+      "duration_seconds": 9.51034440798685,
+      "success": true,
+      "requests_per_second": 0.1051486630873424,
+      "output_tokens_per_second": 13.459028875179827,
+      "total_tokens_per_second": 874.8368768866887,
+      "ttft_ms": {
+        "mean": 3238.889670930803,
+        "p50": 3238.889670930803,
+        "p95": 3238.889670930803,
+        "min": 3238.889670930803,
+        "max": 3238.889670930803
+      },
+      "e2e_ms": {
+        "mean": 9510.132536990568,
+        "p50": 9510.132536990568,
+        "p95": 9510.132536990568,
+        "min": 9510.132536990568,
+        "max": 9510.132536990568
+      },
+      "tpot_ms": {
+        "mean": 49.37986508708477,
+        "p50": 49.37986508708477,
+        "p95": 49.37986508708477,
+        "min": 49.37986508708477,
+        "max": 49.37986508708477
+      }
+    },
+    {
+      "id": "p8192-c1-measured-0",
+      "phase": "warmup",
+      "repetition": -1,
+      "input_tokens": 8192,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "engine": "mistralrs-fp4-final-independent-prewarm",
+      "completed_at": "2026-10-28T18:25:22.280117+00:00",
+      "requested": 2,
+      "completed": 2,
+      "failed": 0,
+      "duration_seconds": 17.121572514995933,
+      "success": true,
+      "requests_per_second": 0.11681170045848882,
+      "output_tokens_per_second": 14.951897658686569,
+      "total_tokens_per_second": 971.873347814627,
+      "ttft_ms": {
+        "mean": 2880.0108949653804,
+        "p50": 2880.0108949653804,
+        "p95": 2915.547398594208,
+        "min": 2840.5258909333497,
+        "max": 2919.495898997411
+      },
+      "e2e_ms": {
+        "mean": 8560.622546472587,
+        "p50": 8560.622546472587,
+        "p95": 8802.888725639787,
+        "min": 8291.437902953476,
+        "max": 8829.807189991698
+      },
+      "tpot_ms": {
+        "mean": 44.72922560241895,
+        "p50": 44.72922560241895,
+        "p95": 46.35701832319353,
+        "min": 42.92056702378052,
+        "max": 46.53788418105737
+      }
+    },
+    {
+      "id": "p2048-c1-warmup--1",
+      "phase": "warmup",
+      "repetition": -1,
+      "input_tokens": 2048,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "engine": "mistralrs-fp4-final-independent-prewarm",
+      "completed_at": "2026-10-28T18:25:28.585572+00:00",
+      "requested": 1,
+      "completed": 1,
+      "failed": 0,
+      "duration_seconds": 6.305078172008507,
+      "success": true,
+      "requests_per_second": 0.15860231589824145,
+      "output_tokens_per_second": 20.301096434974905,
+      "total_tokens_per_second": 345.1186393945734,
+      "ttft_ms": {
+        "mean": 703.6724500358105,
+        "p50": 703.6724500358105,
+        "p95": 703.6724500358105,
+        "min": 703.6724500358105,
+        "max": 703.6724500358105
+      },
+      "e2e_ms": {
+        "mean": 6304.904605029151,
+        "p50": 6304.904605029151,
+        "p95": 6304.904605029151,
+        "min": 6304.904605029151,
+        "max": 6304.904605029151
+      },
+      "tpot_ms": {
+        "mean": 44.10419019679796,
+        "p50": 44.10419019679796,
+        "p95": 44.10419019679796,
+        "min": 44.10419019679796,
+        "max": 44.10419019679796
+      }
+    },
+    {
+      "id": "p512-c1-warmup--1",
+      "phase": "warmup",
+      "repetition": -1,
+      "input_tokens": 512,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "engine": "mistralrs-fp4-final-independent-prewarm",
+      "completed_at": "2026-10-28T18:25:33.950555+00:00",
+      "requested": 1,
+      "completed": 1,
+      "failed": 0,
+      "duration_seconds": 5.364575405023061,
+      "success": true,
+      "requests_per_second": 0.18640804248247886,
+      "output_tokens_per_second": 23.860229437757294,
+      "total_tokens_per_second": 119.30114718878647,
+      "ttft_ms": {
+        "mean": 242.79465491417795,
+        "p50": 242.79465491417795,
+        "p95": 242.79465491417795,
+        "min": 242.79465491417795,
+        "max": 242.79465491417795
+      },
+      "e2e_ms": {
+        "mean": 5364.387421985157,
+        "p50": 5364.387421985157,
+        "p95": 5364.387421985157,
+        "min": 5364.387421985157,
+        "max": 5364.387421985157
+      },
+      "tpot_ms": {
+        "mean": 40.327502102921095,
+        "p50": 40.327502102921095,
+        "p95": 40.327502102921095,
+        "min": 40.327502102921095,
+        "max": 40.327502102921095
+      }
+    }
+  ],
+  "updated_at": "2026-10-28T18:25:33.950633+00:00",
+  "completed_at": "2026-10-28T18:25:33.951119+00:00",
+  "success": true
+}

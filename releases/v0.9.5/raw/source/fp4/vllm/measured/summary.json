@@ -1,0 +1,495 @@
+{
+  "schema_version": 1,
+  "engine": "vllm-fp4-final-measured",
+  "model": "nvidia/Qwen3.8-Flash-Next-FP4-Local",
+  "base_url": "http://127.0.0.1:8238/v1",
+  "started_at": "2026-10-28T15:36:51.402538+00:00",
+  "workload": "/tmp/qwen38-fp4-vllm/workload-c1.json",
+  "workload_sha256": "04d0560b4e013c34baf727dd2c79f5e285af7da9af9e6fad5945807b547033f4",
+  "measurement": {
+    "scheduling": "closed loop, shared queue, at most C requests in flight",
+    "ttft": "request start to first nonempty content or reasoning SSE delta",
+    "e2e": "request start to finish_reason SSE event",
+    "tpot": "(e2e - ttft) / (server completion_tokens - 1)",
+    "throughput": "sum of server token usage / entire round wall time",
+    "prefix_cache": "must be disabled in each server launch",
+    "temperature": 0,
+    "ignore_eos": true,
+    "chat_template_kwargs": {
+      "enable_thinking": false
+    }
+  },
+  "rounds": [
+    {
+      "id": "p512-c1-warmup--1",
+      "phase": "warmup",
+      "repetition": -1,
+      "input_tokens": 512,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "engine": "vllm-fp4-final-measured",
+      "completed_at": "2026-10-28T15:36:56.622897+00:00",
+      "requested": 1,
+      "completed": 1,
+      "failed": 0,
+      "duration_seconds": 5.219599831034429,
+      "success": true,
+      "requests_per_second": 0.19158556831392537,
+      "output_tokens_per_second": 24.522952744182447,
+      "total_tokens_per_second": 122.61476372091224,
+      "ttft_ms": {
+        "mean": 249.71425998955965,
+        "p50": 249.71425998955965,
+        "p95": 249.71425998955965,
+        "min": 249.71425998955965,
+        "max": 249.71425998955965
+      },
+      "e2e_ms": {
+        "mean": 5219.244801090099,
+        "p50": 5219.244801090099,
+        "p95": 5219.244801090099,
+        "min": 5219.244801090099,
+        "max": 5219.244801090099
+      },
+      "tpot_ms": {
+        "mean": 39.13016174094913,
+        "p50": 39.13016174094913,
+        "p95": 39.13016174094913,
+        "min": 39.13016174094913,
+        "max": 39.13016174094913
+      }
+    },
+    {
+      "id": "p512-c1-measured-0",
+      "phase": "measured",
+      "repetition": 0,
+      "input_tokens": 512,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "engine": "vllm-fp4-final-measured",
+      "completed_at": "2026-10-28T15:37:28.076188+00:00",
+      "requested": 6,
+      "completed": 6,
+      "failed": 0,
+      "duration_seconds": 31.452911725034937,
+      "success": true,
+      "requests_per_second": 0.1907613531126373,
+      "output_tokens_per_second": 24.417453198417576,
+      "total_tokens_per_second": 122.08726599208788,
+      "ttft_ms": {
+        "mean": 258.8075133195768,
+        "p50": 255.65021199872717,
+        "p95": 276.4764199964702,
+        "min": 247.27507692296058,
+        "max": 280.04362899810076
+      },
+      "e2e_ms": {
+        "mean": 5241.87067746728,
+        "p50": 5240.4296064632945,
+        "p95": 5264.901357732015,
+        "min": 5216.966367908753,
+        "max": 5267.576809972525
+      },
+      "tpot_ms": {
+        "mean": 39.236717827934676,
+        "p50": 39.26362999207083,
+        "p95": 39.31016561952896,
+        "min": 39.13142748807711,
+        "max": 39.31355361339057
+      }
+    },
+    {
+      "id": "p512-c1-measured-1",
+      "phase": "measured",
+      "repetition": 1,
+      "input_tokens": 512,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "engine": "vllm-fp4-final-measured",
+      "completed_at": "2026-10-28T15:37:59.490267+00:00",
+      "requested": 6,
+      "completed": 6,
+      "failed": 0,
+      "duration_seconds": 31.413423176971264,
+      "success": true,
+      "requests_per_second": 0.19100115152042757,
+      "output_tokens_per_second": 24.44814739461473,
+      "total_tokens_per_second": 122.24073697307365,
+      "ttft_ms": {
+        "mean": 254.05216366440678,
+        "p50": 252.0419709617272,
+        "p95": 262.9438430594746,
+        "min": 250.27505599427968,
+        "max": 266.3032930577174
+      },
+      "e2e_ms": {
+        "mean": 5235.314333171118,
+        "p50": 5237.3426090343855,
+        "p95": 5247.7619692799635,
+        "min": 5210.671094013378,
+        "max": 5250.47153304331
+      },
+      "tpot_ms": {
+        "mean": 39.22253676776938,
+        "p50": 39.24975094456944,
+        "p95": 39.27300030738665,
+        "min": 39.05421965407193,
+        "max": 39.27699300849179
+      }
+    },
+    {
+      "id": "p512-c1-measured-2",
+      "phase": "measured",
+      "repetition": 2,
+      "input_tokens": 512,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "engine": "vllm-fp4-final-measured",
+      "completed_at": "2026-10-28T15:38:30.864741+00:00",
+      "requested": 6,
+      "completed": 6,
+      "failed": 0,
+      "duration_seconds": 31.37405318801757,
+      "success": true,
+      "requests_per_second": 0.19124083088797497,
+      "output_tokens_per_second": 24.478826353660796,
+      "total_tokens_per_second": 122.39413176830398,
+      "ttft_ms": {
+        "mean": 252.6137638099802,
+        "p50": 253.0168070225045,
+        "p95": 254.39912622096017,
+        "min": 250.20979589316994,
+        "max": 254.52873297035694
+      },
+      "e2e_ms": {
+        "mean": 5228.8040187947145,
+        "p50": 5236.1866745050065,
+        "p95": 5239.1613036743365,
+        "min": 5210.1983149768785,
+        "max": 5239.239748916589
+      },
+      "tpot_ms": {
+        "mean": 39.182600432950665,
+        "p50": 39.24164896066425,
+        "p95": 39.256736405164474,
+        "min": 39.03483612532544,
+        "max": 39.25968710182777
+      }
+    },
+    {
+      "id": "p2048-c1-warmup--1",
+      "phase": "warmup",
+      "repetition": -1,
+      "input_tokens": 2048,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "engine": "vllm-fp4-final-measured",
+      "completed_at": "2026-10-28T15:38:36.621884+00:00",
+      "requested": 1,
+      "completed": 1,
+      "failed": 0,
+      "duration_seconds": 5.756692042923532,
+      "success": true,
+      "requests_per_second": 0.17371087293600487,
+      "output_tokens_per_second": 22.234991735808624,
+      "total_tokens_per_second": 377.9948595087466,
+      "ttft_ms": {
+        "mean": 772.223268984817,
+        "p50": 772.223268984817,
+        "p95": 772.223268984817,
+        "min": 772.223268984817,
+        "max": 772.223268984817
+      },
+      "e2e_ms": {
+        "mean": 5756.409878958948,
+        "p50": 5756.409878958948,
+        "p95": 5756.409878958948,
+        "min": 5756.409878958948,
+        "max": 5756.409878958948
+      },
+      "tpot_ms": {
+        "mean": 39.245563858064024,
+        "p50": 39.245563858064024,
+        "p95": 39.245563858064024,
+        "min": 39.245563858064024,
+        "max": 39.245563858064024
+      }
+    },
+    {
+      "id": "p2048-c1-measured-0",
+      "phase": "measured",
+      "repetition": 0,
+      "input_tokens": 2048,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "engine": "vllm-fp4-final-measured",
+      "completed_at": "2026-10-28T15:39:11.158887+00:00",
+      "requested": 6,
+      "completed": 6,
+      "failed": 0,
+      "duration_seconds": 34.536593998083845,
+      "success": true,
+      "requests_per_second": 0.1737287701367683,
+      "output_tokens_per_second": 22.237282577506342,
+      "total_tokens_per_second": 378.0338038176078,
+      "ttft_ms": {
+        "mean": 775.5724046728574,
+        "p50": 776.0618919855915,
+        "p95": 780.0678907369729,
+        "min": 769.8171669617295,
+        "max": 780.983202974312
+      },
+      "e2e_ms": {
+        "mean": 5755.878756327244,
+        "p50": 5759.501977474429,
+        "p95": 5760.738550743554,
+        "min": 5744.874517084099,
+        "max": 5760.7663969974965
+      },
+      "tpot_ms": {
+        "mean": 39.21501064294793,
+        "p50": 39.22486713377935,
+        "p95": 39.273935834662694,
+        "min": 39.14713540928453,
+        "max": 39.28484759058833
+      }
+    },
+    {
+      "id": "p2048-c1-measured-1",
+      "phase": "measured",
+      "repetition": 1,
+      "input_tokens": 2048,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "engine": "vllm-fp4-final-measured",
+      "completed_at": "2026-10-28T15:39:45.710317+00:00",
+      "requested": 6,
+      "completed": 6,
+      "failed": 0,
+      "duration_seconds": 34.55095415003598,
+      "success": true,
+      "requests_per_second": 0.17365656456100365,
+      "output_tokens_per_second": 22.228040263808467,
+      "total_tokens_per_second": 377.876684484744,
+      "ttft_ms": {
+        "mean": 778.636859341835,
+        "p50": 779.4084020424634,
+        "p95": 788.3046009810641,
+        "min": 767.6843869267032,
+        "max": 789.8033519741148
+      },
+      "e2e_ms": {
+        "mean": 5758.277131341553,
+        "p50": 5760.138544545043,
+        "p95": 5769.932784722187,
+        "min": 5736.965254996903,
+        "max": 5772.3231399431825
+      },
+      "tpot_ms": {
+        "mean": 39.20976592125762,
+        "p50": 39.21763976352055,
+        "p95": 39.25584223374402,
+        "min": 39.128195811576376,
+        "max": 39.26364321987636
+      }
+    },
+    {
+      "id": "p2048-c1-measured-2",
+      "phase": "measured",
+      "repetition": 2,
+      "input_tokens": 2048,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "engine": "vllm-fp4-final-measured",
+      "completed_at": "2026-10-28T15:40:20.199385+00:00",
+      "requested": 6,
+      "completed": 6,
+      "failed": 0,
+      "duration_seconds": 34.48861675593071,
+      "success": true,
+      "requests_per_second": 0.17397044487057406,
+      "output_tokens_per_second": 22.26821694343348,
+      "total_tokens_per_second": 378.5596880383692,
+      "ttft_ms": {
+        "mean": 777.117210168702,
+        "p50": 777.1692929673009,
+        "p95": 780.8333795110229,
+        "min": 773.8334790337831,
+        "max": 781.7339620087296
+      },
+      "e2e_ms": {
+        "mean": 5747.881581676968,
+        "p50": 5747.381047520321,
+        "p95": 5755.034534988226,
+        "min": 5741.334944032133,
+        "max": 5756.721773999743
+      },
+      "tpot_ms": {
+        "mean": 39.13987694100997,
+        "p50": 39.132452260072185,
+        "p95": 39.16981629912712,
+        "min": 39.11418476376653,
+        "max": 39.173132377882
+      }
+    },
+    {
+      "id": "p8192-c1-warmup--1",
+      "phase": "warmup",
+      "repetition": -1,
+      "input_tokens": 8192,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "engine": "vllm-fp4-final-measured",
+      "completed_at": "2026-10-28T15:40:28.093952+00:00",
+      "requested": 1,
+      "completed": 1,
+      "failed": 0,
+      "duration_seconds": 7.894063472980633,
+      "success": true,
+      "requests_per_second": 0.12667747142175192,
+      "output_tokens_per_second": 16.214716341984246,
+      "total_tokens_per_second": 1053.956562228976,
+      "ttft_ms": {
+        "mean": 2907.039650948718,
+        "p50": 2907.039650948718,
+        "p95": 2907.039650948718,
+        "min": 2907.039650948718,
+        "max": 2907.039650948718
+      },
+      "e2e_ms": {
+        "mean": 7893.778749043122,
+        "p50": 7893.778749043122,
+        "p95": 7893.778749043122,
+        "min": 7893.778749043122,
+        "max": 7893.778749043122
+      },
+      "tpot_ms": {
+        "mean": 39.26566218971971,
+        "p50": 39.26566218971971,
+        "p95": 39.26566218971971,
+        "min": 39.26566218971971,
+        "max": 39.26566218971971
+      }
+    },
+    {
+      "id": "p8192-c1-measured-0",
+      "phase": "measured",
+      "repetition": 0,
+      "input_tokens": 8192,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "engine": "vllm-fp4-final-measured",
+      "completed_at": "2026-10-28T15:41:15.478785+00:00",
+      "requested": 6,
+      "completed": 6,
+      "failed": 0,
+      "duration_seconds": 47.384331626934,
+      "success": true,
+      "requests_per_second": 0.1266241348984124,
+      "output_tokens_per_second": 16.207889266996787,
+      "total_tokens_per_second": 1053.5128023547911,
+      "ttft_ms": {
+        "mean": 2896.4934868078367,
+        "p50": 2895.577692484949,
+        "p95": 2904.2200992116705,
+        "min": 2886.047002975829,
+        "max": 2904.697468969971
+      },
+      "e2e_ms": {
+        "mean": 7897.164156020153,
+        "p50": 7897.595764021389,
+        "p95": 7907.256102014799,
+        "min": 7886.318788048811,
+        "max": 7908.059790031984
+      },
+      "tpot_ms": {
+        "mean": 39.375359600096985,
+        "p50": 39.3792473744073,
+        "p95": 39.40738099269701,
+        "min": 39.325171008185436,
+        "max": 39.410990087212774
+      }
+    },
+    {
+      "id": "p8192-c1-measured-1",
+      "phase": "measured",
+      "repetition": 1,
+      "input_tokens": 8192,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "engine": "vllm-fp4-final-measured",
+      "completed_at": "2026-10-28T15:42:02.840844+00:00",
+      "requested": 6,
+      "completed": 6,
+      "failed": 0,
+      "duration_seconds": 47.361162603017874,
+      "success": true,
+      "requests_per_second": 0.12668607927326678,
+      "output_tokens_per_second": 16.215818146978147,
+      "total_tokens_per_second": 1054.0281795535795,
+      "ttft_ms": {
+        "mean": 2895.733564995074,
+        "p50": 2895.565585058648,
+        "p95": 2909.2941969283856,
+        "min": 2876.7925199354067,
+        "max": 2910.8524199109524
+      },
+      "e2e_ms": {
+        "mean": 7893.273564133172,
+        "p50": 7890.386850049254,
+        "p95": 7905.847928399453,
+        "min": 7881.07995793689,
+        "max": 7906.010252889246
+      },
+      "tpot_ms": {
+        "mean": 39.350708654630694,
+        "p50": 39.353934094203474,
+        "p95": 39.39824941931073,
+        "min": 39.30015822021863,
+        "max": 39.403838094499875
+      }
+    },
+    {
+      "id": "p8192-c1-measured-2",
+      "phase": "measured",
+      "repetition": 2,
+      "input_tokens": 8192,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "engine": "vllm-fp4-final-measured",
+      "completed_at": "2026-10-28T15:42:50.169164+00:00",
+      "requested": 6,
+      "completed": 6,
+      "failed": 0,
+      "duration_seconds": 47.32775728101842,
+      "success": true,
+      "requests_per_second": 0.1267754980311818,
+      "output_tokens_per_second": 16.22726374799127,
+      "total_tokens_per_second": 1054.7721436194324,
+      "ttft_ms": {
+        "mean": 2889.397556660697,
+        "p50": 2891.0627074656077,
+        "p95": 2896.800889429869,
+        "min": 2878.612395026721,
+        "max": 2897.364851902239
+      },
+      "e2e_ms": {
+        "mean": 7887.73206914387,
+        "p50": 7889.198096934706,
+        "p95": 7901.198427192867,
+        "min": 7872.400518041104,
+        "max": 7901.552130933851
+      },
+      "tpot_ms": {
+        "mean": 39.35696466522184,
+        "p50": 39.35539676747321,
+        "p95": 39.41358632053336,
+        "min": 39.29710692880074,
+        "max": 39.42081203874875
+      }
+    }
+  ],
+  "updated_at": "2026-10-28T15:42:50.169269+00:00",
+  "completed_at": "2026-10-28T15:42:50.169877+00:00",
+  "success": true
+}

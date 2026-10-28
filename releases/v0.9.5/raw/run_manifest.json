@@ -1,0 +1,267 @@
+{
+  "schema_version": 1,
+  "measurement_dates_utc": [
+    "2026-10-27",
+    "2026-10-28"
+  ],
+  "hardware": {
+    "gpu": "NVIDIA GB10",
+    "compute_capability": "12.1",
+    "host_architecture": "aarch64",
+    "physical_memory": "128 GB unified memory",
+    "os_memtotal_kib": 127600748,
+    "driver": "580.126.09",
+    "l2_bytes": 25165824
+  },
+  "scope": "Single NVIDIA GB10, C1, warmed text generation, no speculative decoding. Two checkpoints and separate measurement protocols; not a GGUF-versus-FP4 quantization comparison.",
+  "comparisons": {
+    "gguf": {
+      "models": {
+        "model": "Qwen/Qwen3.8-Flash-Next",
+        "source_revision": "de4b8e4d43b917e7706784d8bb445c9af86a3540",
+        "gguf_repository": "unsloth/Qwen3.8-Flash-Next-GGUF",
+        "gguf_revision": "38bb39ee97821de2c9009abb7e93950eec396e66",
+        "gguf_quantization": "UD-Q4_K_XL",
+        "gguf_shards": 4,
+        "weights_policy": "Both GGUF servers load the same four files. No claim of bitwise numerical identity across engines."
+      },
+      "workload": {
+        "concurrency": 1,
+        "prompt_lengths": [
+          512,
+          2048,
+          8192
+        ],
+        "fixture_sha256": "049f78cd048bd286deb0deb54bb5715b0b80397ddee98a9bd49eed45cbc69f44",
+        "warmup_requests_per_length": 1,
+        "measured_requests_per_length": 3,
+        "output_tokens": 128,
+        "temperature": 0,
+        "ignore_eos": true,
+        "prefix_caching": false,
+        "max_context": 16384,
+        "activation_dtype": {
+          "mistral.rs": "BF16 selected by --dtype bf16",
+          "llama.cpp": "Internal mixed activation implementation; not claimed identical to mistral.rs"
+        },
+        "kv_cache_dtype": "BF16",
+        "transport": {
+          "llama.cpp": "token IDs",
+          "mistral.rs": "decoded text with exact tokenizer round-trip assertion and server token-count check"
+        },
+        "warm_state": "A full fixture sweep precedes the measured sweep. The earlier llama512 canonical sweep followed an exploratory full sweep. Each measured sweep additionally discards the first request per length.",
+        "measurement": "One server at a time; no profiler attached and no concurrent compilers during serving measurements.",
+        "prompt_rate_definition": "prompt_tokens / time_to_first_nonempty_text_chunk",
+        "decode_rate_definition": "(completion_tokens - 1) / (last_nonempty_chunk_time - first_nonempty_chunk_time)",
+        "stream_validation": "All canonical requests have 128 nonempty text chunks and 128 completion tokens.",
+        "decode_workload_caveat": "Generated tokens and MoE routing differ between engines; fixed-prompt/fixed-length serving, not teacher-forced identical-token decode.",
+        "prompts": "prompts/gguf.json"
+      },
+      "runs": [
+        {
+          "engine": "llama.cpp",
+          "chunk_tokens": 512,
+          "result": "source/gguf/llama-clean-serving.json",
+          "quantization": "UD-Q4_K_XL GGUF",
+          "measurement_generation": "historical",
+          "binary_sha256": "b670440317d3356fb6bda9e4fe290a176157ecb04d95ea93b8b246958272aa76",
+          "source_commit": "7aca0d2ea8d92b56911233b822db01f9fbb1ae50"
+        },
+        {
+          "engine": "llama.cpp",
+          "chunk_tokens": 8192,
+          "result": "source/gguf/llama-chunk8192-serving.json",
+          "prewarm": "source/gguf/llama-chunk8192-warmup-serving.json",
+          "quantization": "UD-Q4_K_XL GGUF",
+          "measurement_generation": "historical",
+          "binary_sha256": "b670440317d3356fb6bda9e4fe290a176157ecb04d95ea93b8b246958272aa76",
+          "source_commit": "7aca0d2ea8d92b56911233b822db01f9fbb1ae50"
+        },
+        {
+          "engine": "mistral.rs",
+          "chunk_tokens": 8192,
+          "result": "source/gguf/mrs-paired-8192-serving.json",
+          "prewarm": "source/gguf/mrs-paired-8192-prewarm.json",
+          "decoder_layers_on_cuda": 48,
+          "quantization": "UD-Q4_K_XL GGUF",
+          "measurement_generation": "current",
+          "source_sha256": "24b72dc9f7a4bab0a215fbe87543ad0a7c23ad20b3bd856590d313d950c1ac77",
+          "binary_sha256": "6681778b528263db9c729a69c98f74c0f1a8327f4d337d04cd3c79a7485b7ec5"
+        },
+        {
+          "engine": "llama.cpp",
+          "chunk_tokens": 512,
+          "result": "source/gguf/llama-verify-paired512-serving.json",
+          "prewarm": "source/gguf/llama-verify-paired512-warmup-serving.json",
+          "metadata": "source/gguf/llama-verify-paired512-metadata.json",
+          "quantization": "UD-Q4_K_XL GGUF",
+          "measurement_generation": "fresh-verification",
+          "source_commit": "7aca0d2ea8d92b56911233b822db01f9fbb1ae50",
+          "binary_sha256": "b670440317d3356fb6bda9e4fe290a176157ecb04d95ea93b8b246958272aa76"
+        },
+        {
+          "engine": "llama.cpp",
+          "chunk_tokens": 8192,
+          "result": "source/gguf/llama-verify-paired8192-serving.json",
+          "prewarm": "source/gguf/llama-verify-paired8192-warmup-serving.json",
+          "metadata": "source/gguf/llama-verify-paired8192-metadata.json",
+          "quantization": "UD-Q4_K_XL GGUF",
+          "measurement_generation": "fresh-verification",
+          "source_commit": "7aca0d2ea8d92b56911233b822db01f9fbb1ae50",
+          "binary_sha256": "b670440317d3356fb6bda9e4fe290a176157ecb04d95ea93b8b246958272aa76"
+        }
+      ],
+      "aggregation": "Median of three measured requests per length per run; select the highest llama.cpp median independently for each length and metric across four controls.",
+      "software": {
+        "mistralrs_base_commit": "142bc95a506512eb21d9458bce73400e6ec9f335",
+        "mistralrs_source_sha256": "24b72dc9f7a4bab0a215fbe87543ad0a7c23ad20b3bd856590d313d950c1ac77",
+        "mistralrs_binary_sha256": "6681778b528263db9c729a69c98f74c0f1a8327f4d337d04cd3c79a7485b7ec5",
+        "candle_revision": "66a8cf184a5a519671454066b1b9efd446ec9f5c",
+        "llama_commit": "7aca0d2ea8d92b56911233b822db01f9fbb1ae50",
+        "llama_binary_sha256": "b670440317d3356fb6bda9e4fe290a176157ecb04d95ea93b8b246958272aa76",
+        "cuda_toolkit": "13.2",
+        "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+        "llvm": "23.1.1"
+      },
+      "source_limit": "The modified-tree inventory records hashes, not a reconstructable patch. These historical measurements are not a benchmark of the later FP4 commit.",
+      "precision_note": "Same GGUF files and BF16 KV cache; mistral.rs uses BF16 activations and casts F32 dense weights to BF16, while llama.cpp retains F32 dense storage.",
+      "output_limit": "Generated tokens and routing differ across engines. Historical GGUF full-model determinism was not established; later FP4 repeat checks do not apply retrospectively."
+    },
+    "fp4": {
+      "model": "nvidia/Qwen3.8-Flash-Next-FP4-Local",
+      "revision": "b9ce18a6887e18c089fdea8509a33e63429a3300",
+      "workload": {
+        "prompts": "prompts/fp4.json",
+        "independent_warmup": "prompts/fp4-independent-warmup.json",
+        "references": "prompts/fp4-reference.json",
+        "concurrency": 1,
+        "prompt_lengths": [
+          512,
+          2048,
+          8192
+        ],
+        "output_tokens": 128,
+        "temperature": 0,
+        "seed": 20260904,
+        "enable_thinking": false,
+        "ignore_eos": true,
+        "max_context": 16384,
+        "max_num_batched_tokens": 4096,
+        "max_prefill_chunk_tokens": 4096,
+        "kv_cache_bytes": 2147483648,
+        "kv_cache_dtype": "BF16",
+        "prefix_caching": false,
+        "mtp": false
+      },
+      "protocol": [
+        "4 reference requests (max_tokens=48, normal EOS)",
+        "9 nonstreaming logprob requests (3 per length, max_tokens=128, ignore EOS)",
+        "5 independent warmup requests",
+        "57 conditioning requests (3 warmups + 54 measured-shaped requests)",
+        "57 measured-stage requests (3 discarded warmups + 3 rounds x 6 requests x 3 lengths)"
+      ],
+      "aggregation": "input_tokens * 1000 / arithmetic mean TTFT_ms; decode = 1000 / arithmetic mean TPOT_ms, using all 18 measured requests per length. TPOT ends at the finish_reason SSE event.",
+      "runs": {
+        "mistralrs": "source/fp4/mistralrs",
+        "vllm": "source/fp4/vllm"
+      },
+      "software": {
+        "mistralrs_source_commit": "3f6f8cb24f08184c76e05df20acf08918cee7587",
+        "mistralrs_measured_base_commit": "ee47d306f1d375fe83d33679df1e6e579d8b4dc1",
+        "mistralrs_binary_sha256": "14896314fb1d326137754fc648ede883a6ed139ee2277e2fcbc2f62015bffa32",
+        "mistralrs_features": [
+          "cuda",
+          "flash-attn",
+          "cutile"
+        ],
+        "mistralrs_cuda_toolkit": "13.3",
+        "mistralrs_compat_libcuda": "610.57.04",
+        "candle_revision": "66a8cf184a5a519671454066b1b9efd446ec9f5c",
+        "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+        "llvm": "23.1.1",
+        "candle_core_codegen_units": 1,
+        "vllm_commit": "8244d1c44348ae8a5bbfc9f1b607021652283ed4",
+        "vllm_image": "eugr/spark-vllm-b12x@sha256:57c24fc397c66d4d28a7d0d5f1d792934fd01a70f4574cff6315fb7bc329d5cb",
+        "flashinfer_commit": "9b9ed3bb703a8d2ec6d212ea0a80164552b9eb57",
+        "vllm_cuda": "13.0.2",
+        "torch": "2.13.0+cu130",
+        "triton": "3.7.1"
+      },
+      "launch": {
+        "mistralrs": "source/fp4/mistralrs/launch.sh",
+        "vllm": "source/fp4/vllm/launch.sh",
+        "vllm_arguments": [
+          "exact",
+          "device"
+        ],
+        "mistralrs_api_model_alias": "default"
+      },
+      "precision_note": "Original checkpoint weights and BF16 output head in both engines. Routed NVFP4 experts: mistral.rs A4 decode/A4 prefill, vLLM A16 decode/A4 prefill. Dense MXFP8: mistral.rs uses A16 for C1 decode and A8 for prefill; vLLM automatically selects between A16 and A8. Same weights, not activation-precision-matched.",
+      "placement": {
+        "mistralrs": "File-mapped host PLE table, CPU gather for prefill, mapped GPU lookup for decode.",
+        "vllm": "Resident device PLE table, allocator fraction 0.9, GPU utilization setting 0.85."
+      },
+      "measurement_environment": "One GPU server, no profiler during timed measurement. Competing CI processes paused during the measured sweep and resumed afterward. Memory samples are system-wide, not process attribution.",
+      "memory_limit": "Bracketing memory samples include time just outside the sweep; the final mistral.rs sample follows CI resume. Nonzero swap counters must not be attributed solely to inference."
+    }
+  },
+  "source_policy": "Source captures are retained byte-for-byte. Absolute paths and historical artifact references inside them describe the original machine; portable runners use repository-relative fixtures. Raw contains canonical comparisons, their warmups, repeatability evidence, and provenance. Development experiments remain in Git history.",
+  "sha256": {
+    "prompts/fp4-independent-warmup.json": "5178aa72f9c9ee00f97b90dcd18e24acfbeb6387f01b12055b9a495e8869a2c4",
+    "prompts/fp4-reference.json": "f7b47e25b8104684759d1b572e15b1fbdb0fb27a381fad3716e8024b93193367",
+    "prompts/fp4.json": "04d0560b4e013c34baf727dd2c79f5e285af7da9af9e6fad5945807b547033f4",
+    "prompts/gguf.json": "049f78cd048bd286deb0deb54bb5715b0b80397ddee98a9bd49eed45cbc69f44",
+    "source/fp4/mistralrs/committed-source-verification.json": "cd084ebdae93523b4138e2bffddf9aa1dfcb0aafb215c59bed7cd4443f602667",
+    "source/fp4/mistralrs/conditioning/requests.jsonl": "4e91c300372f4526b7bb6b620e67e6251527b9a3ef4612e542c684c5c8877429",
+    "source/fp4/mistralrs/conditioning/rounds.jsonl": "d82f47addf313892a94df0f559696215aa043537dcf9be17c8bade44efbbaf63",
+    "source/fp4/mistralrs/conditioning/summary.json": "1382eb7c0dd87f2768300d01b3346bc529cae2f8e751a467064ad5b26268429d",
+    "source/fp4/mistralrs/independent-prewarm/requests.jsonl": "7be98fe4eda63d85262b5042bb249995a1142cf8fdd370000de0ae226544517e",
+    "source/fp4/mistralrs/independent-prewarm/rounds.jsonl": "b7f0fe0b4e27a18826a9f9c6230c3c76045a25ed4b9c3d8a8b0818410e007011",
+    "source/fp4/mistralrs/independent-prewarm/summary.json": "c3679948ff72dfde8c984798394851ae61e0a963f56cb5d2ddc19844047bdd9c",
+    "source/fp4/mistralrs/launch.sh": "9b125bf8384238d445986f1016ff3a713990610a0120c8fe9a583a393ee9180e",
+    "source/fp4/mistralrs/measured/requests.jsonl": "1deecae158750ada536bb132332d1d915a365dd0e004d4cfef25ec88f4d181b0",
+    "source/fp4/mistralrs/measured/rounds.jsonl": "64ca88f9bc378eb9952f01326e3a3f04071f71a424e0f2aec655f42c2216a217",
+    "source/fp4/mistralrs/measured/summary.json": "441d9f28aae5802d6d7f02646173062ad6ab7dc5e327b799c4c9d14e99f56049",
+    "source/fp4/mistralrs/memory.jsonl": "039d0cfb914374a4a8a59b013ea163920d790def32d1cbc3359d892221cfa248",
+    "source/fp4/mistralrs/precommit-validation.json": "50716629de7e52405fa0ecb16c798fadd9b34f09f24001e03fe1587405380bd9",
+    "source/fp4/mistralrs/reference.json": "45694562baf548a30f066b658c5a31b646f12066b25d447b2515bf7a9f5590ba",
+    "source/fp4/mistralrs/repeat-logprobs/responses.jsonl": "1d1a634b6fbe7ee26a467969ebf517664701863c6bdfa71682069a580956c547",
+    "source/fp4/mistralrs/repeat-logprobs/summary.json": "bea5a87be2ba40b58cdeba85fdafa0d1097366e3074c3bd107ed3e766825aadf",
+    "source/fp4/mistralrs/server.log": "39820347a8233664dfe6449b4be0796a851354f7bc3efe3133df63129445ed6c",
+    "source/fp4/mistralrs/source-manifest.json": "66c2b5847cab44a837319d5869514c2a4074eac1c1319776f5f023795ea04503",
+    "source/fp4/vllm/conditioning/requests.jsonl": "716b55c2697eecb8be186723e1bb5167f889a6ebeca171ddd9495bcefbe7e7bc",
+    "source/fp4/vllm/conditioning/rounds.jsonl": "4f7dcab02c9f4fe5f00b2b0033630b9a5a67daf921965945cb361ad11fdfcfbe",
+    "source/fp4/vllm/conditioning/summary.json": "ded539e8f463f608d445dd16ec13f38fe4b4da73d58b91797abcfb47fc193e63",
+    "source/fp4/vllm/image-build-metadata.yaml": "4d61f0a04904bc66c5a33d981cb249398f33bd46df4d08613705ece24548ebbe",
+    "source/fp4/vllm/independent-prewarm/requests.jsonl": "f841a763cf53024fe3b0fcd1ed851f8532b9e5c4fa853ee206cdcd45df43edc5",
+    "source/fp4/vllm/independent-prewarm/rounds.jsonl": "989f1ac49e2f0c097311507684dabe486e7e47da73d1452b8718dce590537cfa",
+    "source/fp4/vllm/independent-prewarm/summary.json": "992c8c5e59235b8e8f70a7d0e60ab9488ac352b6186b7934b2c45b4d9e5a15b6",
+    "source/fp4/vllm/launch.sh": "8df7912d939fa271048b75a3978d9e36a1d92be33cb722dbb88c757221e74c44",
+    "source/fp4/vllm/measured/requests.jsonl": "8c774125be3340a7824cfcea547c0a4de89c2e9f44b76bf744c3af9bda8c8dbb",
+    "source/fp4/vllm/measured/rounds.jsonl": "c60c08238092fb724f9a120ccabf2d58b59b2b1e05a5de87f3342953febf8afe",
+    "source/fp4/vllm/measured/summary.json": "9040b7eaf222b37c290ae1cb5a1e8204a7c2be0c98c02a17a74b4640cf965bd4",
+    "source/fp4/vllm/memory.jsonl": "d1be33bdd791aba1fff12062c5dce5d8faf7f7155ce7a314b4216ebfa8836c4e",
+    "source/fp4/vllm/reference.json": "98dbdb49b5fa97d03054d9c0d77463c4efad31a9a5bb238483cb6506e4a53407",
+    "source/fp4/vllm/repeat-logprobs/responses.jsonl": "2a6991e633243cec2023d45f955bdd8ed059d549b4d136cb071f2d7ee28135a3",
+    "source/fp4/vllm/repeat-logprobs/summary.json": "bea5a87be2ba40b58cdeba85fdafa0d1097366e3074c3bd107ed3e766825aadf",
+    "source/fp4/vllm/server.log": "84b7d8637c733c85ce957d8ac8a6c6f77c3177d3100aa423a28db4bd2742e59d",
+    "source/gguf/final-source-verification.json": "f1c37cc775961ff0a1e850e28f884538a48d7bde4ee5fc28b0bee5f0273e34f8",
+    "source/gguf/llama-chunk8192-metadata.json": "8193b446bd878954882c2f87d356ca1e7b6457267b2bfbb63c5169f6b9638f4a",
+    "source/gguf/llama-chunk8192-serving.json": "d250bbc7ee254a7b2f101532641c1a6a73b5206c3d77f33f2aed84f6192e9d31",
+    "source/gguf/llama-chunk8192-warmup-serving.json": "f5c31138cea4de1770496fccec875834a215eb5a9ab40bd1482bb886d0d85878",
+    "source/gguf/llama-clean-metadata.json": "a203fb5be1369a8d5c980992b8191dc25d16cf51e4e908b9c78f1929c400ed9c",
+    "source/gguf/llama-clean-serving.json": "d62079e00a22f6ef5479327f0dfb609439454fa48ab44771277822a2ca4be895",
+    "source/gguf/llama-verify-paired512-metadata.json": "920526cf0ed254e0e6998265d09b99a4edb9f4401b801c41ad496d4174c1589c",
+    "source/gguf/llama-verify-paired512-serving.json": "4888585908dee1dfb03489ebb11603a8ef42e36cae906858898aa433e00e7f6b",
+    "source/gguf/llama-verify-paired512-warmup-serving.json": "72fe7436c8b033a4b53023656c49467767bdaa8836b0bb422ba52366c5890c1a",
+    "source/gguf/llama-verify-paired8192-metadata.json": "c399ae122199af1a15dcb52feb6708da95e02ba2be7700702740f4dc238f2536",
+    "source/gguf/llama-verify-paired8192-serving.json": "8437e8e2842cf8cac15be9a650c637b7db922ddc6050c968221940c5bc1b071a",
+    "source/gguf/llama-verify-paired8192-warmup-serving.json": "aaf4d2623ad304a544ecd061d9b18f64d9a9e8e3a3bc55bb1a4f9c7f85106d81",
+    "source/gguf/mrs-paired-8192-command.json": "06950227caad46d52eafa8a7655a3f35e162c3c425cc9d84aa4248dfa359a9ed",
+    "source/gguf/mrs-paired-8192-prewarm.json": "c9152026dd02aa1b22c398a060913d9c0efd6154f1ee124e65f1b340775d3c57",
+    "source/gguf/mrs-paired-8192-serving.json": "79764d6bf724591acf3b822c436759f03ed88a60e8fd15f364df5b21586a99d9",
+    "source/gguf/mrs-paired-8192-startup.json": "af4c1c8295fce459e883e6b27f676dbc1aed4c962a53da59b3b9591268a047d2",
+    "source/gguf/paired-final-compatibility.json": "1f9d48f68d2c46e41bef5510bc859080c80e80165ad3921fbc52f6e8765969a9",
+    "source/gguf/paired-source-manifest.json": "4c6b7854852965210c47068cd424cb77cf0e8349eea27d47eee572f619803cb1"
+  }
+}

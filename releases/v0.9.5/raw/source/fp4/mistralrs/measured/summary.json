@@ -1,0 +1,495 @@
+{
+  "schema_version": 1,
+  "engine": "mistralrs-fp4-final-measured",
+  "model": "default",
+  "base_url": "http://127.0.0.1:8239/v1",
+  "started_at": "2026-10-28T18:31:35.065183+00:00",
+  "workload": "/tmp/qwen38-fp4-vllm/workload-c1.json",
+  "workload_sha256": "04d0560b4e013c34baf727dd2c79f5e285af7da9af9e6fad5945807b547033f4",
+  "measurement": {
+    "scheduling": "closed loop, shared queue, at most C requests in flight",
+    "ttft": "request start to first nonempty content or reasoning SSE delta",
+    "e2e": "request start to finish_reason SSE event",
+    "tpot": "(e2e - ttft) / (server completion_tokens - 1)",
+    "throughput": "sum of server token usage / entire round wall time",
+    "prefix_cache": "must be disabled in each server launch",
+    "temperature": 0,
+    "ignore_eos": true,
+    "chat_template_kwargs": {
+      "enable_thinking": false
+    }
+  },
+  "rounds": [
+    {
+      "id": "p512-c1-warmup--1",
+      "phase": "warmup",
+      "repetition": -1,
+      "input_tokens": 512,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "engine": "mistralrs-fp4-final-measured",
+      "completed_at": "2026-10-28T18:31:40.100336+00:00",
+      "requested": 1,
+      "completed": 1,
+      "failed": 0,
+      "duration_seconds": 5.0343914340483025,
+      "success": true,
+      "requests_per_second": 0.19863374016506907,
+      "output_tokens_per_second": 25.42511874112884,
+      "total_tokens_per_second": 127.1255937056442,
+      "ttft_ms": {
+        "mean": 234.2501119710505,
+        "p50": 234.2501119710505,
+        "p95": 234.2501119710505,
+        "min": 234.2501119710505,
+        "max": 234.2501119710505
+      },
+      "e2e_ms": {
+        "mean": 5034.177447902039,
+        "p50": 5034.177447902039,
+        "p95": 5034.177447902039,
+        "min": 5034.177447902039,
+        "max": 5034.177447902039
+      },
+      "tpot_ms": {
+        "mean": 37.79470343252746,
+        "p50": 37.79470343252746,
+        "p95": 37.79470343252746,
+        "min": 37.79470343252746,
+        "max": 37.79470343252746
+      }
+    },
+    {
+      "id": "p512-c1-measured-0",
+      "phase": "measured",
+      "repetition": 0,
+      "input_tokens": 512,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "engine": "mistralrs-fp4-final-measured",
+      "completed_at": "2026-10-28T18:32:10.284908+00:00",
+      "requested": 6,
+      "completed": 6,
+      "failed": 0,
+      "duration_seconds": 30.184200534014963,
+      "success": true,
+      "requests_per_second": 0.19877949039062748,
+      "output_tokens_per_second": 25.443774770000317,
+      "total_tokens_per_second": 127.21887385000159,
+      "ttft_ms": {
+        "mean": 232.8330686626335,
+        "p50": 232.25461947731674,
+        "p95": 238.3496030815877,
+        "min": 228.71805692557245,
+        "max": 239.94303110521287
+      },
+      "e2e_ms": {
+        "mean": 5030.487984341259,
+        "p50": 5031.994515971746,
+        "p95": 5035.647439246532,
+        "min": 5020.547466003336,
+        "max": 5036.100944969803
+      },
+      "tpot_ms": {
+        "mean": 37.776810359674215,
+        "p50": 37.77422038214941,
+        "p95": 37.8233271476347,
+        "min": 37.730940228958765,
+        "max": 37.83128336236966
+      }
+    },
+    {
+      "id": "p512-c1-measured-1",
+      "phase": "measured",
+      "repetition": 1,
+      "input_tokens": 512,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "engine": "mistralrs-fp4-final-measured",
+      "completed_at": "2026-10-28T18:32:40.505910+00:00",
+      "requested": 6,
+      "completed": 6,
+      "failed": 0,
+      "duration_seconds": 30.22060642892029,
+      "success": true,
+      "requests_per_second": 0.19854002645883917,
+      "output_tokens_per_second": 25.413123386731414,
+      "total_tokens_per_second": 127.06561693365707,
+      "ttft_ms": {
+        "mean": 235.7586285021777,
+        "p50": 236.24162800842896,
+        "p95": 236.93997247028165,
+        "min": 233.04952203761786,
+        "max": 237.0365799870342
+      },
+      "e2e_ms": {
+        "mean": 5036.603766978563,
+        "p50": 5034.754438442178,
+        "p95": 5048.3128821942955,
+        "min": 5029.1953480336815,
+        "max": 5051.730299950577
+      },
+      "tpot_ms": {
+        "mean": 37.801930224223504,
+        "p50": 37.78923041321059,
+        "p95": 37.8904931907685,
+        "min": 37.7469534250563,
+        "max": 37.91954459835166
+      }
+    },
+    {
+      "id": "p512-c1-measured-2",
+      "phase": "measured",
+      "repetition": 2,
+      "input_tokens": 512,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "engine": "mistralrs-fp4-final-measured",
+      "completed_at": "2026-10-28T18:33:10.750078+00:00",
+      "requested": 6,
+      "completed": 6,
+      "failed": 0,
+      "duration_seconds": 30.243758360971697,
+      "success": true,
+      "requests_per_second": 0.1983880418692522,
+      "output_tokens_per_second": 25.393669359264283,
+      "total_tokens_per_second": 126.96834679632143,
+      "ttft_ms": {
+        "mean": 235.89071817696095,
+        "p50": 235.59940699487925,
+        "p95": 240.5720545211807,
+        "min": 232.509971014224,
+        "max": 242.0431770151481
+      },
+      "e2e_ms": {
+        "mean": 5040.42500333162,
+        "p50": 5041.514005511999,
+        "p95": 5048.5321897722315,
+        "min": 5028.897047974169,
+        "max": 5048.6166790360585
+      },
+      "tpot_ms": {
+        "mean": 37.83097862326503,
+        "p50": 37.84805300002038,
+        "p95": 37.8861859251514,
+        "min": 37.74088139345092,
+        "max": 37.89673243304641
+      }
+    },
+    {
+      "id": "p2048-c1-warmup--1",
+      "phase": "warmup",
+      "repetition": -1,
+      "input_tokens": 2048,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "engine": "mistralrs-fp4-final-measured",
+      "completed_at": "2026-10-28T18:33:16.304491+00:00",
+      "requested": 1,
+      "completed": 1,
+      "failed": 0,
+      "duration_seconds": 5.553720908937976,
+      "success": true,
+      "requests_per_second": 0.18005946218698762,
+      "output_tokens_per_second": 23.047611159934416,
+      "total_tokens_per_second": 391.8093897188851,
+      "ttft_ms": {
+        "mean": 680.5353340459988,
+        "p50": 680.5353340459988,
+        "p95": 680.5353340459988,
+        "min": 680.5353340459988,
+        "max": 680.5353340459988
+      },
+      "e2e_ms": {
+        "mean": 5553.439851035364,
+        "p50": 5553.439851035364,
+        "p95": 5553.439851035364,
+        "min": 5553.439851035364,
+        "max": 5553.439851035364
+      },
+      "tpot_ms": {
+        "mean": 38.369326905428075,
+        "p50": 38.369326905428075,
+        "p95": 38.369326905428075,
+        "min": 38.369326905428075,
+        "max": 38.369326905428075
+      }
+    },
+    {
+      "id": "p2048-c1-measured-0",
+      "phase": "measured",
+      "repetition": 0,
+      "input_tokens": 2048,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "engine": "mistralrs-fp4-final-measured",
+      "completed_at": "2026-10-28T18:33:49.625307+00:00",
+      "requested": 6,
+      "completed": 6,
+      "failed": 0,
+      "duration_seconds": 33.32015198597219,
+      "success": true,
+      "requests_per_second": 0.18007120743404786,
+      "output_tokens_per_second": 23.049114551558127,
+      "total_tokens_per_second": 391.8349473764882,
+      "ttft_ms": {
+        "mean": 686.0586945161534,
+        "p50": 686.8557489942759,
+        "p95": 688.9888153236825,
+        "min": 680.1969750085846,
+        "max": 689.525347086601
+      },
+      "e2e_ms": {
+        "mean": 5553.157447720878,
+        "p50": 5550.84376456216,
+        "p95": 5567.313128587557,
+        "min": 5537.937585962936,
+        "max": 5569.468212081119
+      },
+      "tpot_ms": {
+        "mean": 38.32361222995846,
+        "p50": 38.324571669736045,
+        "p95": 38.422566313318555,
+        "min": 38.19879722840145,
+        "max": 38.444464976759996
+      }
+    },
+    {
+      "id": "p2048-c1-measured-1",
+      "phase": "measured",
+      "repetition": 1,
+      "input_tokens": 2048,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "engine": "mistralrs-fp4-final-measured",
+      "completed_at": "2026-10-28T18:34:22.919236+00:00",
+      "requested": 6,
+      "completed": 6,
+      "failed": 0,
+      "duration_seconds": 33.2934595500119,
+      "success": true,
+      "requests_per_second": 0.18021557630522222,
+      "output_tokens_per_second": 23.067593767068445,
+      "total_tokens_per_second": 392.14909404016356,
+      "ttft_ms": {
+        "mean": 684.4810880138539,
+        "p50": 683.5631009889767,
+        "p95": 690.0619180232752,
+        "min": 680.287646013312,
+        "max": 691.1126950290054
+      },
+      "e2e_ms": {
+        "mean": 5548.736654842894,
+        "p50": 5545.085486955941,
+        "p95": 5564.053414040245,
+        "min": 5534.935662988573,
+        "max": 5566.590560018085
+      },
+      "tpot_ms": {
+        "mean": 38.30122493566173,
+        "p50": 38.28775185008174,
+        "p95": 38.38863223034882,
+        "min": 38.20812828402497,
+        "max": 38.38958948810299
+      }
+    },
+    {
+      "id": "p2048-c1-measured-2",
+      "phase": "measured",
+      "repetition": 2,
+      "input_tokens": 2048,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "engine": "mistralrs-fp4-final-measured",
+      "completed_at": "2026-10-28T18:34:56.193719+00:00",
+      "requested": 6,
+      "completed": 6,
+      "failed": 0,
+      "duration_seconds": 33.273675155011006,
+      "success": true,
+      "requests_per_second": 0.18032273177062624,
+      "output_tokens_per_second": 23.08130966664016,
+      "total_tokens_per_second": 392.3822643328827,
+      "ttft_ms": {
+        "mean": 684.240081483343,
+        "p50": 683.1106010358781,
+        "p95": 690.390157426009,
+        "min": 678.2602419843897,
+        "max": 691.7040639091283
+      },
+      "e2e_ms": {
+        "mean": 5545.41467948972,
+        "p50": 5547.119184979238,
+        "p95": 5555.101449514041,
+        "min": 5532.8016499988735,
+        "max": 5555.657209013589
+      },
+      "tpot_ms": {
+        "mean": 38.276965338632884,
+        "p50": 38.27743897284198,
+        "p95": 38.348589730027356,
+        "min": 38.21693018892795,
+        "max": 38.364555259550535
+      }
+    },
+    {
+      "id": "p8192-c1-warmup--1",
+      "phase": "warmup",
+      "repetition": -1,
+      "input_tokens": 8192,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "engine": "mistralrs-fp4-final-measured",
+      "completed_at": "2026-10-28T18:35:03.847149+00:00",
+      "requested": 1,
+      "completed": 1,
+      "failed": 0,
+      "duration_seconds": 7.652900701039471,
+      "success": true,
+      "requests_per_second": 0.13066940746587408,
+      "output_tokens_per_second": 16.725684155631882,
+      "total_tokens_per_second": 1087.1694701160723,
+      "ttft_ms": {
+        "mean": 2771.066076005809,
+        "p50": 2771.066076005809,
+        "p95": 2771.066076005809,
+        "min": 2771.066076005809,
+        "max": 2771.066076005809
+      },
+      "e2e_ms": {
+        "mean": 7652.69623498898,
+        "p50": 7652.69623498898,
+        "p95": 7652.69623498898,
+        "min": 7652.69623498898,
+        "max": 7652.69623498898
+      },
+      "tpot_ms": {
+        "mean": 38.43803274789899,
+        "p50": 38.43803274789899,
+        "p95": 38.43803274789899,
+        "min": 38.43803274789899,
+        "max": 38.43803274789899
+      }
+    },
+    {
+      "id": "p8192-c1-measured-0",
+      "phase": "measured",
+      "repetition": 0,
+      "input_tokens": 8192,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "engine": "mistralrs-fp4-final-measured",
+      "completed_at": "2026-10-28T18:35:49.736105+00:00",
+      "requested": 6,
+      "completed": 6,
+      "failed": 0,
+      "duration_seconds": 45.88843034603633,
+      "success": true,
+      "requests_per_second": 0.13075191186002852,
+      "output_tokens_per_second": 16.73624471808365,
+      "total_tokens_per_second": 1087.8559066754372,
+      "ttft_ms": {
+        "mean": 2762.5288001533286,
+        "p50": 2760.717700002715,
+        "p95": 2781.416062702192,
+        "min": 2745.3467909945175,
+        "max": 2787.018814939074
+      },
+      "e2e_ms": {
+        "mean": 7647.906221973244,
+        "p50": 7643.273275520187,
+        "p95": 7678.357682976639,
+        "min": 7627.240894944407,
+        "max": 7685.576869989745
+      },
+      "tpot_ms": {
+        "mean": 38.46753875448752,
+        "p50": 38.44943391727503,
+        "p95": 38.558595435231865,
+        "min": 38.38274728297806,
+        "max": 38.57132326811552
+      }
+    },
+    {
+      "id": "p8192-c1-measured-1",
+      "phase": "measured",
+      "repetition": 1,
+      "input_tokens": 8192,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "engine": "mistralrs-fp4-final-measured",
+      "completed_at": "2026-10-28T18:36:35.644469+00:00",
+      "requested": 6,
+      "completed": 6,
+      "failed": 0,
+      "duration_seconds": 45.90778984094504,
+      "success": true,
+      "requests_per_second": 0.13069677326632298,
+      "output_tokens_per_second": 16.72918697808934,
+      "total_tokens_per_second": 1087.3971535758074,
+      "ttft_ms": {
+        "mean": 2764.8393788258545,
+        "p50": 2763.581348990556,
+        "p95": 2776.687664736528,
+        "min": 2754.440060001798,
+        "max": 2778.086213977076
+      },
+      "e2e_ms": {
+        "mean": 7651.146985959106,
+        "p50": 7651.014580449555,
+        "p95": 7665.509085956728,
+        "min": 7636.257381993346,
+        "max": 7665.752182947472
+      },
+      "tpot_ms": {
+        "mean": 38.47486304829332,
+        "p50": 38.49412940165732,
+        "p95": 38.522180548858074,
+        "min": 38.36298436953092,
+        "max": 38.52225706259918
+      }
+    },
+    {
+      "id": "p8192-c1-measured-2",
+      "phase": "measured",
+      "repetition": 2,
+      "input_tokens": 8192,
+      "output_tokens": 128,
+      "concurrency": 1,
+      "engine": "mistralrs-fp4-final-measured",
+      "completed_at": "2026-10-28T18:37:21.528111+00:00",
+      "requested": 6,
+      "completed": 6,
+      "failed": 0,
+      "duration_seconds": 45.883036075974815,
+      "success": true,
+      "requests_per_second": 0.13076728379667335,
+      "output_tokens_per_second": 16.73821232597419,
+      "total_tokens_per_second": 1087.9838011883223,
+      "ttft_ms": {
+        "mean": 2762.103590668024,
+        "p50": 2758.6458830046467,
+        "p95": 2771.9604312442243,
+        "min": 2756.7571359686553,
+        "max": 2773.093646974303
+      },
+      "e2e_ms": {
+        "mean": 7647.017987833048,
+        "p50": 7641.608070989605,
+        "p95": 7664.756185025908,
+        "min": 7636.929542990401,
+        "max": 7668.282157042995
+      },
+      "tpot_ms": {
+        "mean": 38.46389289106318,
+        "p50": 38.445368201075865,
+        "p95": 38.548641047059135,
+        "min": 38.42528607864959,
+        "max": 38.58048325188194
+      }
+    }
+  ],
+  "updated_at": "2026-10-28T18:37:21.528221+00:00",
+  "completed_at": "2026-10-28T18:37:21.528851+00:00",
+  "success": true
+}

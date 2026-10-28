@@ -1,8 +1,0 @@
-
-running 3 tests
-test layers::gated_add::tests::shared_expert_gate_matches_f64_reference_on_graph_replay ... ok
-test layers::gated_add::tests::sigmoid_gated_add_preserves_dtype_rounding_and_broadcast_fallbacks ... ok
-test layers::gated_add::tests::sigmoid_gated_add_replays_offsets_and_strided_fallbacks ... ok
-
-test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 1868 filtered out; finished in 1.00s
-

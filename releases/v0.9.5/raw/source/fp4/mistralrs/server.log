@@ -1,0 +1,201 @@
+2026-10-28T18:10:23.762408Z  INFO mistralrs_quant::utils::log: DType selected is BF16.
+2026-10-28T18:10:24.088073Z  INFO mistralrs_core::pipeline::loaders::auto_device_map: Reserving 2231 MiB on the primary device and 1455 MiB on mapped devices for activations (predicted).
+2026-10-28T18:10:24.088303Z  INFO mistralrs_core::pipeline::loaders::auto_device_map: Using paged execution limits for automatic device mapping max_num_seqs=1 max_num_batched_tokens=4096 max_prefill_chunk_tokens=4096
+2026-10-28T18:10:24.088309Z  INFO mistralrs_core::pipeline::loaders::auto_device_map: The following sub-models will not be device mapped and will be loaded on cuda[0]: vision
+2026-10-28T18:10:24.088376Z  WARN mistralrs_core::pipeline::loaders::auto_device_map: Model and KV allocations exceed the unified memory budget after runtime reservations device=cuda[0] model_mib=100229 activation_mib=2231 kv_mib=2047 post_load_mib=0 usable_mib=96036
+2026-10-28T18:10:24.088380Z  INFO mistralrs_core::pipeline::loaders::auto_device_map: Retrying automatic device mapping with optional layer allocations kept in existing file mappings optional_mib=27465
+2026-10-28T18:10:24.092033Z  INFO mistralrs_core::pipeline::loaders::auto_device_map: Reserving 2231 MiB on the primary device and 1455 MiB on mapped devices for activations (predicted).
+2026-10-28T18:10:24.092100Z  INFO mistralrs_core::pipeline::loaders::auto_device_map: Using paged execution limits for automatic device mapping max_num_seqs=1 max_num_batched_tokens=4096 max_prefill_chunk_tokens=4096
+2026-10-28T18:10:24.092102Z  INFO mistralrs_core::pipeline::loaders::auto_device_map: The following sub-models will not be device mapped and will be loaded on cuda[0]: vision
+2026-10-28T18:10:24.093022Z  INFO mistralrs_quant::utils::log: Model has 48 repeating layers.
+2026-10-28T18:10:24.093059Z  INFO mistralrs_quant::utils::log: Loading model according to the following repeating layer mappings:
+2026-10-28T18:10:24.093178Z  INFO mistralrs_quant::utils::log: Layers 0-47: cuda[0] (122 GB)
+2026-10-28T18:10:24.097887Z  INFO mistralrs_quant::utils::log: FlashAttention is enabled.
+2026-10-28T18:10:24.099679Z  INFO mistralrs_core::pipeline::multimodal: Loading model weights.
+2026-10-28T18:15:23.103177Z  INFO mistralrs_core::pipeline: Preloaded 755 Candle CUDA PTX functions.
+2026-10-28T18:17:58.834974Z  INFO mistralrs_quant::cutile::gdn_prefill: Warming cuTile GDN prefill kernels.
+2026-10-28T18:18:07.153345Z  INFO mistralrs_quant::cutile::qsa: Warming cuTile QSA kernels.
+2026-10-28T18:18:19.366219Z  WARN mistralrs_core::vision_models::qwen4_exp::ple: Qwen4-Exp PLE table does not fit in device memory; prompt rows are gathered on the CPU; decode uses mapped GPU access persistent_budget_bytes=26869006336 execution_budget_bytes=46195834880 table_bytes=28800138240 preparation_bytes=2147483648
+2026-10-28T18:18:54.098242Z  INFO mistralrs_core::paged_attention: Memory plan Cuda { gpu_id: 0 }: physical 124610 MiB, engine limit 108226 MiB, existing occupancy 79951 MiB, physically available 44658 MiB, live allocation budget 28274 MiB, model allocation budget 15144 MiB, runtime reservation 2232 MiB, runtime initialization allowance 0 MiB, KV budget 12913 MiB (2147483648 bytes of shared KV cache)
+2026-10-28T18:18:54.100466Z  INFO mistralrs_core::paged_attention: Allocating 2048 MiB logical shared BF16 KV cache (estimated allocation 2048 MiB): 71648 usable tokens, 2240 blocks of 32 tokens
+2026-10-28T18:18:54.229883Z  INFO mistralrs_core::paged_attention::cache_allocation: Validated KV cache allocation device=Cuda { gpu_id: 0 } blocks=2240 usable_tokens=71648 runtime_budget_mib=12787 runtime_reservation_mib=2232
+2026-10-28T18:18:54.734151Z  INFO mistralrs_server_core::mistralrs_for_server_builder: Model loaded.
+2026-10-28T18:18:54.735516Z  INFO mistralrs_core: mistral.rs version: 0.9.5
+2026-10-28T18:18:54.736318Z  INFO mistralrs_core: git revision: ee47d306f1d375fe83d33679df1e6e579d8b4dc1
+2026-10-28T18:18:54.825409Z  INFO mistralrs_core: Preloaded 755 Candle CUDA PTX functions.
+2026-10-28T18:18:54.830517Z  INFO mistralrs_core: Pipeline input modalities are [📝 Text, 🖼️ Vision, 🎬 Video]
+2026-10-28T18:18:54.830743Z  INFO mistralrs_core: Pipeline output modalities are [📝 Text]
+2026-10-28T18:18:54.840817Z  INFO mistralrs_core::paged_attention::scheduler: Configured PagedAttention scheduler max_num_seqs=1 max_num_batched_tokens=4096 max_prefill_chunk_tokens=4096 max_decode_steps_before_prefill=8
+2026-10-28T18:18:56.030149Z  INFO mistralrs_core::pipeline::multimodal: Captured 1 CUDA decode graphs through batch bucket 1 in 1.18s
+2026-10-28T18:18:56.030263Z  INFO mistralrs_core::pipeline::cuda_graph: CUDA graphs reserve 0 MiB; 41585 MiB of memory available after startup.
+2026-10-28T18:18:56.178988Z  INFO mistralrs::commands::serve: Server listening on http://127.0.0.1:8239
+2026-10-28T18:18:56.179286Z  INFO mistralrs::commands::serve: OpenAI-compatible API: http://127.0.0.1:8239/v1
+2026-10-28T18:18:56.179519Z  INFO mistralrs::commands::serve: Anthropic-compatible API: http://127.0.0.1:8239
+2026-10-28T18:18:56.179520Z  INFO mistralrs::commands::serve: Swagger UI docs: http://127.0.0.1:8239/docs
+2026-10-28T18:23:44.854477Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 129.00 (prefill 125.00, decode 4.00), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:23:49.854789Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 18.20 (prefill 0.00, decode 18.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:23:54.855055Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 7.20 (prefill 0.00, decode 7.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:23:59.855469Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 423.60 (prefill 409.60, decode 14.00), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:24:04.855627Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 11.40 (prefill 0.00, decode 11.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:24:09.855763Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 819.20 (prefill 819.20, decode 0.00), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:24:14.856265Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 836.80 (prefill 819.20, decode 17.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:24:19.856926Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 124.60 (prefill 102.40, decode 22.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:24:24.857247Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 430.60 (prefill 409.60, decode 21.00), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:24:29.857711Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 834.60 (prefill 819.20, decode 15.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:24:34.858512Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 838.80 (prefill 819.20, decode 19.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:24:39.859143Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 125.60 (prefill 102.40, decode 23.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:24:44.859952Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 430.60 (prefill 409.60, decode 21.00), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:24:49.860544Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 831.60 (prefill 819.20, decode 12.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:24:54.861080Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 841.60 (prefill 819.20, decode 22.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:24:59.861365Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1645.40 (prefill 1638.40, decode 7.00), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:25:04.861636Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 20.00 (prefill 0.00, decode 20.00), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:25:09.862224Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1647.80 (prefill 1638.40, decode 9.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:25:14.862585Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 836.60 (prefill 819.20, decode 17.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:25:19.862872Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 832.60 (prefill 819.20, decode 13.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:25:24.863249Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 429.60 (prefill 409.60, decode 20.00), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:25:29.863646Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 124.80 (prefill 102.40, decode 22.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:25:34.863884Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 125.40 (prefill 102.40, decode 23.00), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:25:39.864461Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 22.80 (prefill 0.00, decode 22.80), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:25:44.864827Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 127.80 (prefill 102.40, decode 25.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:25:49.865750Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 125.20 (prefill 102.40, decode 22.80), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:25:54.866743Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 124.40 (prefill 102.40, decode 22.00), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:25:59.867673Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 126.00 (prefill 102.40, decode 23.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:26:04.868611Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 124.80 (prefill 102.40, decode 22.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:26:09.869584Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 125.80 (prefill 102.40, decode 23.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:26:14.870502Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 126.20 (prefill 102.40, decode 23.80), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:26:19.870922Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 126.80 (prefill 102.40, decode 24.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:26:24.871491Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 125.40 (prefill 102.40, decode 23.00), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:26:29.871659Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 126.20 (prefill 102.40, decode 23.80), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:26:34.871917Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 124.40 (prefill 102.40, decode 22.00), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:26:39.872107Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 126.60 (prefill 102.40, decode 24.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:26:44.872594Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 24.00 (prefill 0.00, decode 24.00), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:26:49.873345Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 126.20 (prefill 102.40, decode 23.80), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:26:54.874324Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 125.80 (prefill 102.40, decode 23.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:26:59.875255Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 126.80 (prefill 102.40, decode 24.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:27:04.875447Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 126.80 (prefill 102.40, decode 24.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:27:09.876321Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 125.60 (prefill 102.40, decode 23.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:27:14.877300Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 125.60 (prefill 102.40, decode 23.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:27:19.877855Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 430.20 (prefill 409.60, decode 20.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:27:24.878721Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 431.00 (prefill 409.60, decode 21.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:27:29.879757Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 430.20 (prefill 409.60, decode 20.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:27:34.880272Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 23.60 (prefill 0.00, decode 23.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:27:39.880671Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 433.00 (prefill 409.60, decode 23.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:27:44.881591Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 431.60 (prefill 409.60, decode 22.00), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:27:49.882435Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 430.80 (prefill 409.60, decode 21.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:27:54.883058Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 430.80 (prefill 409.60, decode 21.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:27:59.883368Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 430.00 (prefill 409.60, decode 20.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:28:04.883730Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 430.60 (prefill 409.60, decode 21.00), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:28:09.884431Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 23.20 (prefill 0.00, decode 23.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:28:14.884689Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 433.20 (prefill 409.60, decode 23.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:28:19.885402Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 431.00 (prefill 409.60, decode 21.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:28:24.885709Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 431.00 (prefill 409.60, decode 21.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:28:29.886843Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 431.00 (prefill 409.60, decode 21.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:28:34.887280Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 431.80 (prefill 409.60, decode 22.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:28:39.887665Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 430.40 (prefill 409.60, decode 20.80), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:28:44.888520Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 21.60 (prefill 0.00, decode 21.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:28:49.889441Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 434.00 (prefill 409.60, decode 24.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:28:54.890365Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 431.80 (prefill 409.60, decode 22.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:28:59.891269Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 431.60 (prefill 409.60, decode 22.00), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:29:04.892228Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 431.60 (prefill 409.60, decode 22.00), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:29:09.892558Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1649.40 (prefill 1638.40, decode 11.00), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:29:14.893174Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 25.40 (prefill 0.00, decode 25.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:29:19.894074Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1650.00 (prefill 1638.40, decode 11.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:29:24.894372Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 833.00 (prefill 819.20, decode 13.80), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:29:29.895027Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 842.20 (prefill 819.20, decode 23.00), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:29:34.895961Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1650.00 (prefill 1638.40, decode 11.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:29:39.896298Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 835.40 (prefill 819.20, decode 16.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:29:44.897200Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 840.40 (prefill 819.20, decode 21.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:29:49.898107Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1650.00 (prefill 1638.40, decode 11.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:29:54.898464Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 837.20 (prefill 819.20, decode 18.00), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:29:59.899390Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 837.40 (prefill 819.20, decode 18.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:30:04.900336Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1649.60 (prefill 1638.40, decode 11.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:30:09.900905Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 21.40 (prefill 0.00, decode 21.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:30:14.901287Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1653.20 (prefill 1638.40, decode 14.80), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:30:19.901657Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1649.80 (prefill 1638.40, decode 11.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:30:24.901811Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 24.60 (prefill 0.00, decode 24.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:30:29.901953Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1650.80 (prefill 1638.40, decode 12.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:30:34.902102Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 832.20 (prefill 819.20, decode 13.00), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:30:39.902249Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 843.00 (prefill 819.20, decode 23.80), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:30:44.903199Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1649.80 (prefill 1638.40, decode 11.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:30:49.904056Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 834.80 (prefill 819.20, decode 15.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:30:54.904947Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 838.60 (prefill 819.20, decode 19.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:30:59.905834Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1649.40 (prefill 1638.40, decode 11.00), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:31:04.906273Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 839.60 (prefill 819.20, decode 20.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:31:09.907274Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 834.80 (prefill 819.20, decode 15.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:31:14.908205Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1649.80 (prefill 1638.40, decode 11.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:31:19.908678Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 23.80 (prefill 0.00, decode 23.80), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:31:24.909642Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1652.00 (prefill 1638.40, decode 13.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:31:29.910301Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 831.00 (prefill 819.20, decode 11.80), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:31:34.911183Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 844.40 (prefill 819.20, decode 25.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:31:39.912045Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 126.80 (prefill 102.40, decode 24.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:31:44.912972Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 127.80 (prefill 102.40, decode 25.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:31:49.913892Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 127.60 (prefill 102.40, decode 25.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:31:54.914762Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 127.60 (prefill 102.40, decode 25.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:31:59.915884Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 127.60 (prefill 102.40, decode 25.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:32:04.916784Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 127.60 (prefill 102.40, decode 25.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:32:09.917755Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 127.80 (prefill 102.40, decode 25.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:32:14.918680Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 127.60 (prefill 102.40, decode 25.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:32:19.919098Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 127.40 (prefill 102.40, decode 25.00), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:32:24.919972Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 127.60 (prefill 102.40, decode 25.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:32:29.920563Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 127.80 (prefill 102.40, decode 25.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:32:34.921207Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 127.60 (prefill 102.40, decode 25.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:32:39.921692Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 127.60 (prefill 102.40, decode 25.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:32:44.922615Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 127.60 (prefill 102.40, decode 25.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:32:49.923177Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 127.60 (prefill 102.40, decode 25.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:32:54.923376Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 127.60 (prefill 102.40, decode 25.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:32:59.924266Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 127.60 (prefill 102.40, decode 25.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:33:04.925155Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 127.60 (prefill 102.40, decode 25.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:33:09.926081Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 127.60 (prefill 102.40, decode 25.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:33:14.926686Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 432.20 (prefill 409.60, decode 22.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:33:19.927586Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 432.00 (prefill 409.60, decode 22.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:33:24.927779Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 432.20 (prefill 409.60, decode 22.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:33:29.928355Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 432.00 (prefill 409.60, decode 22.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:33:34.929267Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 432.20 (prefill 409.60, decode 22.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:33:39.929923Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 432.20 (prefill 409.60, decode 22.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:33:44.930140Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 432.00 (prefill 409.60, decode 22.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:33:49.930621Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 24.60 (prefill 0.00, decode 24.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:33:54.931477Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 433.60 (prefill 409.60, decode 24.00), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:33:59.932415Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 432.00 (prefill 409.60, decode 22.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:34:04.933063Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 432.20 (prefill 409.60, decode 22.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:34:09.934009Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 432.20 (prefill 409.60, decode 22.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:34:14.934670Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 432.20 (prefill 409.60, decode 22.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:34:19.935509Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 432.20 (prefill 409.60, decode 22.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:34:24.935819Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 432.00 (prefill 409.60, decode 22.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:34:29.936480Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 432.20 (prefill 409.60, decode 22.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:34:34.937050Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 432.20 (prefill 409.60, decode 22.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:34:39.937362Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 24.20 (prefill 0.00, decode 24.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:34:44.937769Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 434.00 (prefill 409.60, decode 24.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:34:49.938117Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 432.20 (prefill 409.60, decode 22.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:34:54.939024Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 432.20 (prefill 409.60, decode 22.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:34:59.939975Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1650.00 (prefill 1638.40, decode 11.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:35:04.940168Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 839.60 (prefill 819.20, decode 20.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:35:09.941036Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 836.40 (prefill 819.20, decode 17.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:35:14.941320Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1650.20 (prefill 1638.40, decode 11.80), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:35:19.941910Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 841.00 (prefill 819.20, decode 21.80), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:35:24.942112Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 835.00 (prefill 819.20, decode 15.80), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:35:29.943045Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1650.00 (prefill 1638.40, decode 11.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:35:34.943617Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 23.40 (prefill 0.00, decode 23.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:35:39.944520Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1652.80 (prefill 1638.40, decode 14.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:35:44.945150Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1649.80 (prefill 1638.40, decode 11.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:35:49.945796Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 25.00 (prefill 0.00, decode 25.00), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:35:54.946843Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1651.00 (prefill 1638.40, decode 12.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:35:59.947752Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 832.00 (prefill 819.20, decode 12.80), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:36:04.947999Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 844.20 (prefill 819.20, decode 25.00), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:36:09.948934Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1650.00 (prefill 1638.40, decode 11.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:36:14.949662Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 833.40 (prefill 819.20, decode 14.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:36:19.950258Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 842.60 (prefill 819.20, decode 23.40), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:36:24.951194Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1650.00 (prefill 1638.40, decode 11.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:36:29.951521Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 835.00 (prefill 819.20, decode 15.80), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:36:34.952132Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 840.80 (prefill 819.20, decode 21.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:36:39.952770Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1650.00 (prefill 1638.40, decode 11.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:36:44.953287Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 836.80 (prefill 819.20, decode 17.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:36:49.954233Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 839.20 (prefill 819.20, decode 20.00), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:36:54.954416Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1650.00 (prefill 1638.40, decode 11.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:36:59.954960Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 838.40 (prefill 819.20, decode 19.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:37:04.955893Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 837.80 (prefill 819.20, decode 18.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:37:09.956786Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 1650.00 (prefill 1638.40, decode 11.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:37:14.957323Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 839.80 (prefill 819.20, decode 20.60), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:37:19.957474Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 836.40 (prefill 819.20, decode 17.20), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:37:24.958321Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 8.20 (prefill 0.00, decode 8.20), Prefix cache hitrate 0.00%, 0 running, 0 waiting
+2026-10-28T18:38:19.962794Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 819.20 (prefill 819.20, decode 0.00), Prefix cache hitrate 0.00%, 1 running, 0 waiting
+2026-10-28T18:38:24.963336Z  INFO mistralrs_core::engine::logger: Throughput (T/s) 825.40 (prefill 819.20, decode 6.20), Prefix cache hitrate 0.00%, 0 running, 0 waiting

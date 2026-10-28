@@ -1,0 +1,10 @@
+{
+  "commit": "3f6f8cb24f08184c76e05df20acf08918cee7587",
+  "measured_base_commit": "ee47d306f1d375fe83d33679df1e6e579d8b4dc1",
+  "measured_binary_sha256": "14896314fb1d326137754fc648ede883a6ed139ee2277e2fcbc2f62015bffa32",
+  "method": "Every non-release file in the measured dirty-tree manifest matches this commit; every non-release change from the measured base to this commit is listed in that manifest.",
+  "verified_files": 78,
+  "all_listed_source_hashes_match": true,
+  "all_changed_source_paths_listed": true,
+  "binary_built_before_commit": true
+}
