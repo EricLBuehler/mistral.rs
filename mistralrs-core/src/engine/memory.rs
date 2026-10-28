@@ -83,6 +83,8 @@ pub(super) struct ForwardMemoryShape {
     pub query_tokens: usize,
     pub sequences: usize,
     pub has_encoder_input: bool,
+    // None retains the loader's conservative encoder reservation.
+    pub encoder_activation_bytes: Option<usize>,
     pub extra_logit_tokens: usize,
 }
 
@@ -145,7 +147,11 @@ pub(super) fn forward_workspace_bytes(
         };
         if primary && shape.has_encoder_input {
             let encoder = non_attention
-                .checked_add(plan.encoder_activation_bytes)
+                .checked_add(
+                    shape
+                        .encoder_activation_bytes
+                        .unwrap_or(plan.encoder_activation_bytes),
+                )
                 .ok_or_else(|| candle_core::Error::msg("encoder workspace size overflow"))?;
             Ok(text.max(encoder))
         } else {
@@ -503,6 +509,33 @@ mod tests {
                 mapped: 70
             }
         );
+    }
+
+    #[test]
+    fn multimodal_workspace_uses_request_estimate_with_static_fallback() {
+        let mut plan = asymmetric_plan();
+        plan.encoder_activation_bytes = 10_000;
+        let shape = ForwardMemoryShape {
+            query_tokens: 10,
+            sequences: 1,
+            has_encoder_input: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            forward_workspace_bytes(Some(plan), shape, 20, true)
+                .unwrap()
+                .primary,
+            10_060
+        );
+        for bytes in [200, 20_000] {
+            let request = ForwardMemoryShape {
+                encoder_activation_bytes: Some(bytes),
+                ..shape
+            };
+            let workspace = forward_workspace_bytes(Some(plan), request, 20, true).unwrap();
+            assert_eq!(workspace.primary, bytes + 60);
+            assert_eq!(workspace.mapped, 70);
+        }
     }
 
     #[test]

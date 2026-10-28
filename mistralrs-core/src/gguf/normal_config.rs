@@ -3006,6 +3006,7 @@ mod tests {
             NormalLoaderType::Lfm2 | NormalLoaderType::Lfm2Moe => {
                 assert_deserializes::<models::lfm2::Config>(loader, config)
             }
+            NormalLoaderType::Lfm3 => assert_deserializes::<models::lfm3::Config>(loader, config),
         }
     }
 

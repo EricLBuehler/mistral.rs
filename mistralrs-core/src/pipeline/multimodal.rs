@@ -13,8 +13,8 @@ use super::{
 };
 use super::{
     DiffusionGemmaLoader, Gemma3nLoader, Gemma4Loader, Idefics2Loader, Idefics3Loader, LLaVALoader,
-    LLaVANextLoader, Lfm2VlLoader, Mistral3Loader, MultimodalLoaderType, MuseGlimmerLoader,
-    Phi3VLoader, Qwen2_5VLLoader, VoxtralLoader,
+    LLaVANextLoader, Lfm2VlLoader, Lfm3VlLoader, Mistral3Loader, MultimodalLoaderType,
+    MuseGlimmerLoader, Phi3VLoader, Qwen2_5VLLoader, VoxtralLoader,
 };
 use crate::attention::ATTENTION_CHUNK_SIZE;
 #[cfg(feature = "cuda")]
@@ -378,6 +378,7 @@ impl MultimodalLoaderBuilder {
             Some(MultimodalLoaderType::LLaVANext) => Box::new(LLaVANextLoader),
             Some(MultimodalLoaderType::LLaVA) => Box::new(LLaVALoader),
             Some(MultimodalLoaderType::Lfm2Vl) => Box::new(Lfm2VlLoader),
+            Some(MultimodalLoaderType::Lfm3Vl) => Box::new(Lfm3VlLoader),
             Some(MultimodalLoaderType::VLlama) => Box::new(VLlamaLoader),
             Some(MultimodalLoaderType::Qwen2VL) => Box::new(Qwen2VLLoader),
             Some(MultimodalLoaderType::Idefics3) => Box::new(Idefics3Loader),
@@ -468,6 +469,7 @@ pub(super) fn supports_dynamic_lora_loader(loader: &MultimodalLoaderType) -> boo
             | MultimodalLoaderType::Mistral3
             | MultimodalLoaderType::Llama4
             | MultimodalLoaderType::Lfm2Vl
+            | MultimodalLoaderType::Lfm3Vl
             | MultimodalLoaderType::Gemma4
             | MultimodalLoaderType::MuseGlimmer
     )
@@ -1770,6 +1772,12 @@ impl MetadataMixin for MultimodalPipeline {
     }
     fn get_metadata(&self) -> Arc<GeneralMetadata> {
         self.metadata.clone()
+    }
+    fn encoder_activation_memory_bytes(
+        &self,
+        seq: &Sequence,
+    ) -> candle_core::Result<Option<usize>> {
+        self.model.encoder_activation_memory_bytes(seq)
     }
     fn name(&self) -> String {
         self.model_id.clone()

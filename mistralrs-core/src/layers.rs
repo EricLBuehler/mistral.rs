@@ -408,8 +408,8 @@ fn rms_norm_forward_add(
         }
     }
 
-    let sum = (x + residual)?;
-    let normed = candle_nn::ops::rms_norm(&sum.contiguous()?, weight, eps as f32)?;
+    let sum = mistralrs_quant::elementwise::broadcast_add(x, residual)?;
+    let normed = crate::ops::rms_norm(&sum, weight, eps as f32)?;
     Ok((sum, normed))
 }
 
@@ -422,7 +422,7 @@ impl Module for RmsNorm {
             return Ok(out);
         }
 
-        candle_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
+        crate::ops::rms_norm(x, &self.weight, self.eps as f32)
     }
 }
 
@@ -463,10 +463,10 @@ fn rms_norm_forward_residual(
         }
     }
 
-    let normed = candle_nn::ops::rms_norm(&x.contiguous()?, weight, eps as f32)?;
-    let out = (residual + normed)?;
+    let normed = crate::ops::rms_norm(x, weight, eps as f32)?;
+    let out = mistralrs_quant::elementwise::broadcast_add(residual, &normed)?;
     if let Some(scale) = scale {
-        out.broadcast_mul(scale)
+        mistralrs_quant::elementwise::broadcast_mul(&out, scale)
     } else {
         Ok(out)
     }
@@ -505,7 +505,7 @@ fn rms_norm_forward_residual_then_rms_norm(
     }
 
     let xs = rms_norm_forward_residual(x, residual, residual_weight, residual_eps, scale)?;
-    let normed = candle_nn::ops::rms_norm(&xs.contiguous()?, norm_weight, norm_eps as f32)?;
+    let normed = crate::ops::rms_norm(&xs, norm_weight, norm_eps as f32)?;
     Ok((xs, normed))
 }
 
@@ -621,7 +621,7 @@ impl GemmaRmsNorm {
 
 impl Module for GemmaRmsNorm {
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        candle_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
+        crate::ops::rms_norm(x, &self.weight, self.eps as f32)
     }
 }
 
@@ -650,7 +650,7 @@ impl Module for F32RmsNorm {
         let mut xs = xs.to_dtype(DType::F32)?;
         let var = xs.powf(2.)?.mean_keepdim(D::Minus1)?;
         xs = xs.broadcast_mul(&(&var + self.eps)?.recip()?.sqrt()?)?;
-        xs.to_dtype(initial_type)?.broadcast_mul(&self.w)
+        mistralrs_quant::elementwise::broadcast_mul(&xs.to_dtype(initial_type)?, &self.w)
     }
 }
 
@@ -678,7 +678,7 @@ impl QRmsNorm {
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        candle_nn::ops::rms_norm(&x.contiguous()?, &self.weight, self.eps as f32)
+        crate::ops::rms_norm(x, &self.weight, self.eps as f32)
     }
 }
 
@@ -2902,8 +2902,8 @@ pub fn qk_rms_norm_rope(
         return Ok((q, k));
     }
 
-    let q = candle_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
-    let k = candle_nn::ops::rms_norm(&k.contiguous()?, k_weight, k_eps as f32)?;
+    let q = crate::ops::rms_norm(q, q_weight, q_eps as f32)?;
+    let k = crate::ops::rms_norm(k, k_weight, k_eps as f32)?;
     apply_rotary_qk(&q, &k, cos_cache, sin_cache, positions, is_gpt_neox)
 }
 
@@ -2941,9 +2941,9 @@ pub fn qkv_rms_norm_rope(
         return Ok((q, k, v));
     }
 
-    let q = candle_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
-    let k = candle_nn::ops::rms_norm(&k.contiguous()?, k_weight, k_eps as f32)?;
-    let v = candle_nn::ops::rms_norm(&v.contiguous()?, v_weight, v_eps as f32)?;
+    let q = crate::ops::rms_norm(q, q_weight, q_eps as f32)?;
+    let k = crate::ops::rms_norm(k, k_weight, k_eps as f32)?;
+    let v = crate::ops::rms_norm(v, v_weight, v_eps as f32)?;
     let (q, k) = apply_rotary_qk(&q, &k, cos_cache, sin_cache, positions, is_gpt_neox)?;
     Ok((q, k, v))
 }
@@ -2973,7 +2973,7 @@ pub fn q_rms_norm_rope(
         return Ok(q);
     }
 
-    let q = candle_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
+    let q = crate::ops::rms_norm(q, q_weight, q_eps as f32)?;
     apply_rotary_q(&q, cos_cache, sin_cache, positions, is_gpt_neox)
 }
 
@@ -3045,8 +3045,8 @@ pub fn qk_rms_norm_mrope_layout(
         };
     }
 
-    let q = candle_nn::ops::rms_norm(&q.contiguous()?, q_weight, q_eps as f32)?;
-    let k = candle_nn::ops::rms_norm(&k.contiguous()?, k_weight, k_eps as f32)?;
+    let q = crate::ops::rms_norm(q, q_weight, q_eps as f32)?;
+    let k = crate::ops::rms_norm(k, k_weight, k_eps as f32)?;
     apply_rotary_preselected_qk(&q, &k, &cos, &sin, is_gpt_neox)
 }
 

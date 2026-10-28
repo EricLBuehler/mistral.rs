@@ -32,12 +32,11 @@ use crate::{
 };
 
 pub(crate) mod config;
-pub(crate) mod inputs_processor;
-mod text;
+pub(crate) mod text;
 pub(crate) mod vision;
 
+pub(crate) use crate::vision_models::grid_processor::GridProcessor as Qwen3VLProcessor;
 pub(crate) use config::Config;
-pub(crate) use inputs_processor::Qwen3VLProcessor;
 
 pub struct Qwen3VLModel {
     text: Qwen3VLTextModel,
@@ -999,21 +998,7 @@ impl Qwen3VLModel {
     }
 }
 
-pub(crate) struct Qwen3VLVisionSpecificArgs {
-    pub input_ids_full: Tensor,
-    pub pixel_values_videos: Option<Tensor>,
-    pub image_grid_thw: Option<Tensor>, // Some when pixel values are provided
-    pub video_grid_thw: Option<Tensor>, // Some when pixel values are provided
-    pub rope_img_grid_thw: Option<Tensor>,
-    pub rope_vid_grid_thw: Option<Tensor>,
-    pub seqlens: Vec<usize>,
-    pub continuous_img_pad: Vec<Vec<(usize, usize)>>,
-    pub continuous_vid_pad: Vec<Vec<(usize, usize)>>,
-    pub image_hashes: Vec<u64>,
-    pub video_hashes: Vec<u64>,
-    pub(crate) packed_layout: Option<PackedMultimodalLayout>,
-    pub(crate) prompt_position_ids: Option<Tensor>,
-}
+pub(crate) use super::grid_processor::GridVisionSpecificArgs as Qwen3VLVisionSpecificArgs;
 
 impl crate::speculative::SpeculativeTargetMixin for Qwen3VLModel {}
 

@@ -75,9 +75,9 @@ pub use loaders::{
     FluxLoader, GLM4Loader, GLM4MoeLiteLoader, GLM4MoeLoader, Gemma2Loader, Gemma3Loader,
     Gemma3nLoader, Gemma4Loader, GemmaLoader, GptOssLoader, GraniteMoeHybridLoader,
     HunYuanDenseV1Loader, HunYuanMoEV1Loader, Idefics2Loader, Idefics3Loader, LLaVALoader,
-    LLaVANextLoader, Lfm2Loader, Lfm2VlLoader, LlamaLoader, Loader, LocalModelPaths,
-    MiniCpmOLoader, Mistral3Loader, MistralLoader, MixtralLoader, ModelKind, ModelPaths,
-    MultimodalLoaderType, MultimodalModel, MultimodalModelLoader, MuseGlimmerLoader,
+    LLaVANextLoader, Lfm2Loader, Lfm2VlLoader, Lfm3Loader, Lfm3VlLoader, LlamaLoader, Loader,
+    LocalModelPaths, MiniCpmOLoader, Mistral3Loader, MistralLoader, MixtralLoader, ModelKind,
+    ModelPaths, MultimodalLoaderType, MultimodalModel, MultimodalModelLoader, MuseGlimmerLoader,
     NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader,
     Phi3Loader, Phi3VLoader, Phi3_5MoELoader, Phi4MMLoader, PrettyName, QuantizationKind,
     Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader, Qwen3EmbeddingLoader, Qwen3Loader, Qwen3MoELoader,
@@ -1415,6 +1415,12 @@ pub trait MetadataMixin {
     /// an eager step plus a capture when the batch composition changes.
     fn precapture_cuda_decode_graphs(&self, _ctx: &DecodeGraphPrecaptureCtx) {}
     fn get_metadata(&self) -> Arc<GeneralMetadata>;
+    fn encoder_activation_memory_bytes(
+        &self,
+        _seq: &Sequence,
+    ) -> candle_core::Result<Option<usize>> {
+        Ok(None)
+    }
     fn generation_defaults(&self) -> Option<crate::ModelGenerationDefaults> {
         None
     }

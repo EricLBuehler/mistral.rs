@@ -220,7 +220,7 @@ impl QuantMethod for UnquantLinear {
                     #[cfg(not(feature = "accelerate"))]
                     {
                         let matmul_result = a.matmul(&w.t()?)?;
-                        matmul_result.broadcast_add(&b)
+                        crate::elementwise::broadcast_add(&matmul_result, &b)
                     }
                 }
             }

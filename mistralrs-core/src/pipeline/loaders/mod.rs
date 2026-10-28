@@ -1355,3 +1355,8 @@ mod auto_device_map_quantization_tests {
         Ok(())
     }
 }
+
+mod lfm3;
+mod lfm3_vl;
+pub use lfm3::Lfm3Loader;
+pub use lfm3_vl::Lfm3VlLoader;
