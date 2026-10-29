@@ -480,10 +480,10 @@ impl QuantMethod for GgufMatMul {
             }
         }
 
-        // Fallback: Candle QMatMul requires F32
+        // Fallback: Candle QMatMul requires a contiguous F32 input
         let original_dtype = a.dtype();
         let a_f32 = if original_dtype == DType::F32 {
-            a.clone()
+            a.contiguous()?
         } else {
             a.to_dtype(DType::F32)?
         };
@@ -852,6 +852,25 @@ mod tests {
                 [[0.25, -0.5]]
             );
         }
+        Ok(())
+    }
+
+    #[test]
+    fn forward_accepts_non_contiguous_f32_input() -> Result<()> {
+        let device = Device::Cpu;
+        let weight = Tensor::ones((2, TEST_EMBEDDING_DIM), DType::F32, &device)?;
+        let layer = GgufMatMul::from_qtensor(QTensor::quantize(&weight, GgmlDType::Q8_0)?, None);
+        // The last position of a two-sequence batch, as the logits selection
+        // narrows it before the LM head.
+        let hidden = Tensor::ones((2, 3, TEST_EMBEDDING_DIM), DType::F32, &device)?;
+        let last = hidden.narrow(1, 2, 1)?;
+        assert!(!last.is_contiguous());
+        let output = layer.forward_raw(&last)?;
+        assert_eq!(output.dims(), &[2, 1, 2]);
+        assert_eq!(
+            output.to_vec3::<f32>()?,
+            layer.forward_raw(&last.contiguous()?)?.to_vec3::<f32>()?
+        );
         Ok(())
     }
 
