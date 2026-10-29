@@ -3,31 +3,398 @@ use crate::{mxfp8::Mxfp8Linear, QuantMethod};
 use candle_core::Device;
 use cutile::cutile_compiler::specialization::DivHint;
 
+const SMALL_BATCH_TOLERANCE: f32 = 0.02;
+const BENCH_WARMUP: usize = 5;
+const BENCH_TARGET_CALLS: usize = 100;
+const BENCH_MIN_GRAPH_REPLAYS: usize = 2;
+const BENCH_CACHE_MULTIPLIER: usize = 2;
+
+fn small_batch_operands(
+    rows: usize,
+    n: usize,
+    k: usize,
+    dtype: DType,
+    device: &Device,
+) -> Result<(QuantizedActivation, Tensor, Tensor)> {
+    let weight = Tensor::from_vec(
+        (0..n * k)
+            .map(|i| F8E4M3::from_f32(((i * 13 % 47) as f32 - 23.0) * 0.125))
+            .collect::<Vec<_>>(),
+        (n, k),
+        device,
+    )?;
+    let scales = Tensor::from_vec(
+        (0..n * k / MXFP8_BLOCK_SIZE)
+            .map(|i| 123 + (i % 7) as u8)
+            .collect::<Vec<_>>(),
+        (n, k / MXFP8_BLOCK_SIZE),
+        device,
+    )?;
+    let input = Tensor::from_vec(
+        (0..rows * k)
+            .map(|i| ((i * 19 % 97) as f32 - 48.0) * 0.03125)
+            .collect::<Vec<_>>(),
+        (rows, k),
+        device,
+    )?
+    .to_dtype(dtype)?;
+    let layer = Mxfp8Linear::from_parts(weight.clone(), scales.clone(), None, dtype)?;
+    Ok((layer.quantize_activation(&input)?, weight, scales))
+}
+
 #[test]
-fn warmup_covers_row_specializations_and_dispatch_boundaries() {
-    let key = |rows, n, k| {
-        let cfg = config(rows, n, k);
-        (
-            cfg.bm,
-            cfg.bk,
-            cfg.static_k,
-            cfg.group_m,
-            cfg.blocks_per_sm,
-            DivHint::from_value(rows as i32).divisor,
-        )
-    };
-    for n in [1, 128, 129, 3968, 4096, 8064, 8192, 16384] {
-        for k in [160, 1024, 2016, 2048, 2560, 6144] {
-            let warmed = WARM_ROWS
-                .into_iter()
-                .map(|rows| key(rows, n, k))
-                .collect::<HashSet<_>>();
-            for rows in 2..=8192 {
+fn split_k_matches_unsplit_for_partial_tiles_and_dtypes() -> Result<()> {
+    let device = Device::new_cuda_with_stream(0)?;
+    if !super::super::block_scaled_mma_supported(device.as_cuda_device()?) {
+        return Ok(());
+    }
+    let multiprocessors = device_multiprocessor_count(device.as_cuda_device()?);
+    for dtype in [DType::BF16, DType::F16, DType::F32] {
+        for (rows, n, k) in [(2, 96, 640), (3, 129, 1056), (8, 257, 2560), (17, 65, 160)] {
+            let (input, weight, scales) = small_batch_operands(rows, n, k, dtype, &device)?;
+            let expected = forward(&input, &weight, &scales)?
+                .to_dtype(DType::F32)?
+                .flatten_all()?
+                .to_vec1::<f32>()?;
+            for (bn, splits) in [(64, 2), (128, 4)] {
+                let cfg = Config {
+                    bn,
+                    splits,
+                    ..config(rows, n, k, multiprocessors)
+                };
+                let actual = forward_config(&input, &weight, &scales, Some(cfg))?;
+                assert_eq!(actual.dtype(), dtype);
+                assert_eq!(actual.dims(), [rows, n]);
+                let actual = actual
+                    .to_dtype(DType::F32)?
+                    .flatten_all()?
+                    .to_vec1::<f32>()?;
+                for (index, (&actual, &expected)) in actual.iter().zip(&expected).enumerate() {
+                    assert!(
+                        (actual - expected).abs() <= SMALL_BATCH_TOLERANCE * expected.abs().max(1.0),
+                        "{dtype:?} rows={rows} n={n} k={k} bn={bn} splits={splits} index={index}: {actual} != {expected}"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn split_k_graph_replay_reads_new_inputs_with_temporary_workspace() -> Result<()> {
+    use candle_core::cuda::cudarc::driver::sys;
+    let device = Device::new_cuda_with_stream(0)?;
+    if !super::super::block_scaled_mma_supported(device.as_cuda_device()?) {
+        return Ok(());
+    }
+    let multiprocessors = device_multiprocessor_count(device.as_cuda_device()?);
+    let (rows, n, k) = (17, 129, 1056);
+    for dtype in [DType::BF16, DType::F16, DType::F32] {
+        let weight = Tensor::from_vec(vec![F8E4M3::from_f32(1.0); n * k], (n, k), &device)?;
+        let scales = Tensor::from_vec(
+            vec![127u8; n * k / MXFP8_BLOCK_SIZE],
+            (n, k / MXFP8_BLOCK_SIZE),
+            &device,
+        )?;
+        let layer = Mxfp8Linear::from_parts(weight.clone(), scales.clone(), None, dtype)?;
+        let input = Tensor::ones((rows, k), dtype, &device)?;
+        let cfg = Config {
+            bm: MIN_TILE_M,
+            bn: 64,
+            splits: 4,
+            ..config(rows, n, k, multiprocessors)
+        };
+        let launch = || {
+            forward_config(
+                &layer.quantize_activation(&input)?,
+                &weight,
+                &scales,
+                Some(cfg),
+            )
+        };
+        let _ = launch()?;
+        device.synchronize()?;
+        let compiled = cutile::tile_kernel::jit_compile_count();
+        let stream = device.as_cuda_device()?.cuda_stream();
+        let tracking = stream.context().is_event_tracking();
+        if tracking {
+            unsafe { stream.context().disable_event_tracking() };
+        }
+        if let Err(error) =
+            stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+        {
+            if tracking {
+                unsafe { stream.context().enable_event_tracking() };
+            }
+            return Err(candle_core::Error::wrap(error));
+        }
+        let output = launch();
+        let graph = stream.end_capture(
+            sys::CUgraphInstantiate_flags::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH,
+        );
+        if tracking {
+            unsafe { stream.context().enable_event_tracking() };
+        }
+        let output = output?;
+        let graph = graph.map_err(candle_core::Error::wrap)?.unwrap();
+        assert_eq!(cutile::tile_kernel::jit_compile_count(), compiled);
+        for multiplier in [1.0f32, -0.5, 2.0, 0.25] {
+            let values = (0..rows * k)
+                .map(|i| [1.0, -2.0, 0.5][(i / k) % 3] * multiplier)
+                .collect::<Vec<_>>();
+            input.slice_set(
+                &Tensor::from_vec(values, (rows, k), &device)?.to_dtype(dtype)?,
+                0,
+                0,
+            )?;
+            let scratch = Tensor::full(
+                -1.0f32,
+                (rows.div_ceil(cfg.bm) * cfg.bm * cfg.splits, n),
+                &device,
+            )?;
+            graph.launch().map_err(candle_core::Error::wrap)?;
+            let actual = output.to_dtype(DType::F32)?.to_vec2::<f32>()?;
+            for (row, values) in actual.iter().enumerate() {
+                let expected = [1.0, -2.0, 0.5][row % 3] * multiplier * k as f32;
                 assert!(
-                    warmed.contains(&key(rows, n, k)),
-                    "missing rows={rows} n={n} k={k}"
+                    values.iter().all(|&value| value == expected),
+                    "{dtype:?} row={row}"
                 );
             }
+            std::hint::black_box(&scratch);
+        }
+    }
+    Ok(())
+}
+
+fn graph_time<T>(device: &Device, calls: usize, launch: impl Fn() -> Result<T>) -> Result<f64> {
+    use candle_core::cuda::cudarc::driver::sys;
+    let _ = launch()?;
+    device.synchronize()?;
+    let stream = device.as_cuda_device()?.cuda_stream();
+    let tracking = stream.context().is_event_tracking();
+    if tracking {
+        unsafe { stream.context().disable_event_tracking() };
+    }
+    let begin = stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED);
+    if let Err(error) = begin {
+        if tracking {
+            unsafe { stream.context().enable_event_tracking() };
+        }
+        return Err(candle_core::Error::wrap(error));
+    }
+    let output = launch();
+    let graph = stream.end_capture(
+        sys::CUgraphInstantiate_flags::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH,
+    );
+    if tracking {
+        unsafe { stream.context().enable_event_tracking() };
+    }
+    let output = output?;
+    let graph = graph.map_err(candle_core::Error::wrap)?.unwrap();
+    for _ in 0..BENCH_WARMUP.div_ceil(calls) {
+        graph.launch().map_err(candle_core::Error::wrap)?;
+    }
+    device.synchronize()?;
+    let start = stream
+        .record_event(Some(sys::CUevent_flags::CU_EVENT_DEFAULT))
+        .map_err(candle_core::Error::wrap)?;
+    let iterations = BENCH_TARGET_CALLS
+        .div_ceil(calls)
+        .max(BENCH_MIN_GRAPH_REPLAYS);
+    for _ in 0..iterations {
+        graph.launch().map_err(candle_core::Error::wrap)?;
+    }
+    let end = stream
+        .record_event(Some(sys::CUevent_flags::CU_EVENT_DEFAULT))
+        .map_err(candle_core::Error::wrap)?;
+    end.synchronize().map_err(candle_core::Error::wrap)?;
+    std::hint::black_box((&output, &graph));
+    Ok(
+        f64::from(start.elapsed_ms(&end).map_err(candle_core::Error::wrap)?) * 1_000.0
+            / (iterations * calls) as f64,
+    )
+}
+
+#[test]
+#[ignore]
+fn benchmark_small_batch_mxfp8_geometry() -> Result<()> {
+    benchmark_shapes(
+        &[
+            (96, 2560),
+            (640, 2560),
+            (1280, 2560),
+            (2560, 640),
+            (2560, 6144),
+            (13312, 2560),
+            (16384, 2560),
+        ],
+        &[2, 4, 8],
+        &[
+            (64, 1),
+            (64, 2),
+            (64, 4),
+            (64, 8),
+            (128, 1),
+            (128, 2),
+            (128, 4),
+            (128, 8),
+        ],
+    )
+}
+
+#[test]
+#[ignore]
+fn benchmark_underfilled_mxfp8_boundaries() -> Result<()> {
+    benchmark_shapes(
+        &[
+            (32, 2560),
+            (64, 2560),
+            (128, 2560),
+            (192, 2560),
+            (256, 2560),
+            (512, 2560),
+            (1024, 2560),
+            (1536, 2560),
+            (2048, 2560),
+            (96, 512),
+            (96, 1024),
+            (96, 2048),
+            (96, 4096),
+            (96, 6144),
+            (640, 1024),
+            (640, 4096),
+            (1280, 1024),
+            (1280, 4096),
+            (1536, 640),
+            (1536, 6144),
+        ],
+        &[8],
+        &[(128, 1), (64, 1), (64, 4)],
+    )
+}
+
+fn benchmark_shapes(
+    shapes: &[(usize, usize)],
+    row_counts: &[usize],
+    configurations: &[(usize, usize)],
+) -> Result<()> {
+    use candle_core::cuda::cudarc::driver::sys::CUdevice_attribute;
+    let device = Device::new_cuda_with_stream(0)?;
+    let multiprocessors = device_multiprocessor_count(device.as_cuda_device()?);
+    let cache_bytes = device
+        .as_cuda_device()?
+        .cuda_stream()
+        .context()
+        .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE)
+        .map_err(candle_core::Error::wrap)? as usize;
+    println!("cache,rows,n,k,bn,splits,weight_sets,working_set_bytes,time_us");
+    for &(n, k) in shapes {
+        for &rows in row_counts {
+            let (input, weight, scales) = small_batch_operands(rows, n, k, DType::BF16, &device)?;
+            let weight_bytes = n * k + n * k / MXFP8_BLOCK_SIZE;
+            let count = (cache_bytes * BENCH_CACHE_MULTIPLIER).div_ceil(weight_bytes);
+            let weights = (0..count)
+                .map(|_| Ok((weight.copy()?, scales.copy()?)))
+                .collect::<Result<Vec<_>>>()?;
+            for &(bn, splits) in configurations {
+                let cfg = Config {
+                    bn,
+                    splits,
+                    ..config(rows, n, k, multiprocessors)
+                };
+                let us = graph_time(&device, 1, || {
+                    forward_config(&input, &weight, &scales, Some(cfg))
+                })?;
+                println!("warm,{rows},{n},{k},{bn},{splits},1,{weight_bytes},{us:.3}");
+                let us = graph_time(&device, count, || {
+                    weights
+                        .iter()
+                        .map(|(weight, scales)| forward_config(&input, weight, scales, Some(cfg)))
+                        .collect::<Result<Vec<_>>>()
+                })?;
+                let working_set = count * weight_bytes;
+                println!("rotating,{rows},{n},{k},{bn},{splits},{count},{working_set},{us:.3}");
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn warmup_covers_row_specializations_and_dispatch_boundaries() {
+    for multiprocessors in [24, 48, 96, 132] {
+        let key = |rows, n, k| {
+            let cfg = config(rows, n, k, multiprocessors);
+            (
+                cfg.bm,
+                cfg.bn,
+                cfg.bk,
+                cfg.splits,
+                cfg.static_k,
+                cfg.group_m,
+                cfg.blocks_per_sm,
+                DivHint::from_value(rows as i32).divisor,
+            )
+        };
+        for n in [
+            1, 128, 129, 256, 257, 768, 769, 1536, 1537, 3968, 4096, 8064, 8192, 16384,
+        ] {
+            for k in [160, 1024, 2016, 2048, 2560, 6144] {
+                let warmed = WARM_ROWS
+                    .into_iter()
+                    .map(|rows| key(rows, n, k))
+                    .collect::<HashSet<_>>();
+                for rows in 2..=8192 {
+                    assert!(
+                        warmed.contains(&key(rows, n, k)),
+                        "missing rows={rows} n={n} k={k}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn small_batches_only_split_underfilled_grids_with_sufficient_reduction_work() {
+    let split_min_k = TILE_K * SMALL_BATCH_SPLITS * SMALL_BATCH_MIN_K_TILES_PER_SPLIT;
+    for multiprocessors in [24, 48, 96, 132] {
+        let narrow_max_n = multiprocessors / SMALL_BATCH_NARROW_SM_DIVISOR * TILE_N;
+        let split_max_n = multiprocessors / SMALL_BATCH_SPLIT_SM_DIVISOR / SMALL_BATCH_SPLITS
+            * SMALL_BATCH_TILE_N;
+        for rows in [2, SMALL_BATCH_MAX_ROWS] {
+            assert_eq!(
+                config(rows, narrow_max_n, split_min_k, multiprocessors).bn,
+                SMALL_BATCH_TILE_N
+            );
+            assert_eq!(
+                config(rows, narrow_max_n + 1, split_min_k, multiprocessors).bn,
+                TILE_N
+            );
+            assert_eq!(
+                config(rows, split_max_n, split_min_k, multiprocessors).splits,
+                SMALL_BATCH_SPLITS
+            );
+            assert_eq!(
+                config(rows, split_max_n + 1, split_min_k, multiprocessors).splits,
+                1
+            );
+            assert_eq!(
+                config(
+                    rows,
+                    split_max_n,
+                    split_min_k - MXFP8_BLOCK_SIZE,
+                    multiprocessors
+                )
+                .splits,
+                1
+            );
+        }
+        for rows in [1, SMALL_BATCH_MAX_ROWS + 1, 64, 2048] {
+            let cfg = config(rows, SMALL_BATCH_TILE_N, split_min_k, multiprocessors);
+            assert_eq!((cfg.bn, cfg.splits), (TILE_N, 1));
         }
     }
 }
@@ -35,12 +402,12 @@ fn warmup_covers_row_specializations_and_dispatch_boundaries() {
 #[test]
 fn static_k_is_limited_to_large_wide_prefill() {
     for (rows, n, k) in [(2047, 8192, 2048), (4096, 8064, 2048), (4096, 8192, 2016)] {
-        let cfg = config(rows, n, k);
+        let cfg = config(rows, n, k, 48);
         assert!(!cfg.static_k);
         assert_eq!(cfg.bk, TILE_K);
     }
     for rows in [2048, 2049, 4095, 4096, 4097, 8192] {
-        let cfg = config(rows, 8192, 2048);
+        let cfg = config(rows, 8192, 2048, 48);
         assert!(cfg.static_k);
         assert_eq!(
             (cfg.bm, cfg.bk, cfg.group_m, cfg.blocks_per_sm),
@@ -58,6 +425,17 @@ fn warmed_offset_scale_views_capture_without_jit() -> Result<()> {
         return Ok(());
     }
     let cases = [
+        (
+            129,
+            2080,
+            DType::BF16,
+            vec![
+                (2, DType::BF16),
+                (3, DType::BF16),
+                (4, DType::BF16),
+                (8, DType::BF16),
+            ],
+        ),
         (
             129,
             160,

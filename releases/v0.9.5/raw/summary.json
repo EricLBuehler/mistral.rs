@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "manifest_sha256": "bd74caf29f8b7d2548ebb874b326609d43697fe3d4fbb3a2d721ecea350e37a5",
+  "manifest_sha256": "02bf5a3b842f296f0ac8ad0a9f50280120b5d61d2f05b5a656c89431aa693ce3",
   "comparisons": {
     "gguf": {
       "aggregation": "Median of three measured requests per length per run; select the highest llama.cpp median independently for each length and metric across four controls.",
@@ -622,6 +622,401 @@
             }
           }
         }
+      }
+    },
+    "fp4_concurrency": {
+      "aggregation": "Aggregate output throughput is the median of three whole-round output-token rates per concurrency. Each round has max(6, 3*C) requests. TTFT and TPOT are arithmetic means over measured requests; per-request decode is 1000 / mean TPOT_ms. Closed-loop rounds include ramp and drain. TPOT ends at the finish_reason SSE event.",
+      "precision_note": "Same official checkpoint and original BF16 output head. Routed expert prefill is A4 in both engines; decode is A4 in mistral.rs and A16 in vLLM. Dense MXFP8 uses A16 for mistral.rs C1 decode and A8 for batched decode/prefill; vLLM selects its own backend. This is not activation-precision-matched.",
+      "cells": [
+        {
+          "concurrency": 1,
+          "prompt_tokens": 2048,
+          "mistralrs": {
+            "requests": 18,
+            "ttft_ms": 677.4496071027695,
+            "tpot_ms": 38.4105272571355,
+            "output_tokens_s": 23.038165593686532,
+            "decode_tokens_s": 26.034529370180167,
+            "rounds": [
+              {
+                "repetition": 0,
+                "output_tokens_s": 23.038165593686532
+              },
+              {
+                "repetition": 1,
+                "output_tokens_s": 23.05343471163152
+              },
+              {
+                "repetition": 2,
+                "output_tokens_s": 23.02552332713121
+              }
+            ]
+          },
+          "baseline": {
+            "requests": 18,
+            "ttft_ms": 767.3483354996683,
+            "tpot_ms": 39.407990687237096,
+            "output_tokens_s": 22.17290138496034,
+            "decode_tokens_s": 25.375564258947765,
+            "rounds": [
+              {
+                "repetition": 0,
+                "output_tokens_s": 22.17290138496034
+              },
+              {
+                "repetition": 1,
+                "output_tokens_s": 22.179665733042903
+              },
+              {
+                "repetition": 2,
+                "output_tokens_s": 22.170838244537862
+              }
+            ]
+          },
+          "gain_percent": {
+            "output_tokens_s": 3.902349961801077,
+            "ttft_ms": 11.715504450577862,
+            "decode_tokens_s": 2.596849096666065
+          }
+        },
+        {
+          "concurrency": 2,
+          "prompt_tokens": 2048,
+          "mistralrs": {
+            "requests": 18,
+            "ttft_ms": 1233.908518553815,
+            "tpot_ms": 47.53800778029884,
+            "output_tokens_s": 35.14236131418525,
+            "decode_tokens_s": 21.035799493777475,
+            "rounds": [
+              {
+                "repetition": 0,
+                "output_tokens_s": 35.02349613821917
+              },
+              {
+                "repetition": 1,
+                "output_tokens_s": 35.389542613143625
+              },
+              {
+                "repetition": 2,
+                "output_tokens_s": 35.14236131418525
+              }
+            ]
+          },
+          "baseline": {
+            "requests": 18,
+            "ttft_ms": 1414.3097248355236,
+            "tpot_ms": 48.37158405912954,
+            "output_tokens_s": 33.825729174434976,
+            "decode_tokens_s": 20.673294444473797,
+            "rounds": [
+              {
+                "repetition": 0,
+                "output_tokens_s": 33.825729174434976
+              },
+              {
+                "repetition": 1,
+                "output_tokens_s": 34.09402429470521
+              },
+              {
+                "repetition": 2,
+                "output_tokens_s": 33.59525529408698
+              }
+            ]
+          },
+          "gain_percent": {
+            "output_tokens_s": 3.8923983957908748,
+            "ttft_ms": 12.75542429736799,
+            "decode_tokens_s": 1.7534943464251773
+          }
+        },
+        {
+          "concurrency": 4,
+          "prompt_tokens": 2048,
+          "mistralrs": {
+            "requests": 36,
+            "ttft_ms": 2018.5686215538428,
+            "tpot_ms": 65.51959218493192,
+            "output_tokens_s": 49.47217761388825,
+            "decode_tokens_s": 15.262610261331544,
+            "rounds": [
+              {
+                "repetition": 0,
+                "output_tokens_s": 49.47217761388825
+              },
+              {
+                "repetition": 1,
+                "output_tokens_s": 49.74519355995068
+              },
+              {
+                "repetition": 2,
+                "output_tokens_s": 49.1943010444074
+              }
+            ]
+          },
+          "baseline": {
+            "requests": 36,
+            "ttft_ms": 2201.1411293901297,
+            "tpot_ms": 65.5871828979701,
+            "output_tokens_s": 48.482581244723605,
+            "decode_tokens_s": 15.246881415163658,
+            "rounds": [
+              {
+                "repetition": 0,
+                "output_tokens_s": 48.405889151544
+              },
+              {
+                "repetition": 1,
+                "output_tokens_s": 48.67599520618648
+              },
+              {
+                "repetition": 2,
+                "output_tokens_s": 48.482581244723605
+              }
+            ]
+          },
+          "gain_percent": {
+            "output_tokens_s": 2.0411379587433665,
+            "ttft_ms": 8.294448065984405,
+            "decode_tokens_s": 0.10316107103871541
+          }
+        },
+        {
+          "concurrency": 8,
+          "prompt_tokens": 2048,
+          "mistralrs": {
+            "requests": 72,
+            "ttft_ms": 2846.4583756318057,
+            "tpot_ms": 99.81673776811672,
+            "output_tokens_s": 66.13544479918349,
+            "decode_tokens_s": 10.018359869895669,
+            "rounds": [
+              {
+                "repetition": 0,
+                "output_tokens_s": 65.07394248319453
+              },
+              {
+                "repetition": 1,
+                "output_tokens_s": 66.34714619117554
+              },
+              {
+                "repetition": 2,
+                "output_tokens_s": 66.13544479918349
+              }
+            ]
+          },
+          "baseline": {
+            "requests": 72,
+            "ttft_ms": 3711.0950671388614,
+            "tpot_ms": 94.69941215390932,
+            "output_tokens_s": 64.96331562978689,
+            "decode_tokens_s": 10.559727639858624,
+            "rounds": [
+              {
+                "repetition": 0,
+                "output_tokens_s": 65.20289496519048
+              },
+              {
+                "repetition": 1,
+                "output_tokens_s": 64.96331562978689
+              },
+              {
+                "repetition": 2,
+                "output_tokens_s": 64.54842026882513
+              }
+            ]
+          },
+          "gain_percent": {
+            "output_tokens_s": 1.804293943487023,
+            "ttft_ms": 23.298694209244918,
+            "decode_tokens_s": -5.126720957456465
+          }
+        }
+      ],
+      "runs": {
+        "mistralrs": {
+          "source": "source/fp4-concurrency/mistralrs",
+          "cells": {
+            "1": {
+              "requests": 18,
+              "ttft_ms": 677.4496071027695,
+              "tpot_ms": 38.4105272571355,
+              "output_tokens_s": 23.038165593686532,
+              "decode_tokens_s": 26.034529370180167,
+              "rounds": [
+                {
+                  "repetition": 0,
+                  "output_tokens_s": 23.038165593686532
+                },
+                {
+                  "repetition": 1,
+                  "output_tokens_s": 23.05343471163152
+                },
+                {
+                  "repetition": 2,
+                  "output_tokens_s": 23.02552332713121
+                }
+              ]
+            },
+            "2": {
+              "requests": 18,
+              "ttft_ms": 1233.908518553815,
+              "tpot_ms": 47.53800778029884,
+              "output_tokens_s": 35.14236131418525,
+              "decode_tokens_s": 21.035799493777475,
+              "rounds": [
+                {
+                  "repetition": 0,
+                  "output_tokens_s": 35.02349613821917
+                },
+                {
+                  "repetition": 1,
+                  "output_tokens_s": 35.389542613143625
+                },
+                {
+                  "repetition": 2,
+                  "output_tokens_s": 35.14236131418525
+                }
+              ]
+            },
+            "4": {
+              "requests": 36,
+              "ttft_ms": 2018.5686215538428,
+              "tpot_ms": 65.51959218493192,
+              "output_tokens_s": 49.47217761388825,
+              "decode_tokens_s": 15.262610261331544,
+              "rounds": [
+                {
+                  "repetition": 0,
+                  "output_tokens_s": 49.47217761388825
+                },
+                {
+                  "repetition": 1,
+                  "output_tokens_s": 49.74519355995068
+                },
+                {
+                  "repetition": 2,
+                  "output_tokens_s": 49.1943010444074
+                }
+              ]
+            },
+            "8": {
+              "requests": 72,
+              "ttft_ms": 2846.4583756318057,
+              "tpot_ms": 99.81673776811672,
+              "output_tokens_s": 66.13544479918349,
+              "decode_tokens_s": 10.018359869895669,
+              "rounds": [
+                {
+                  "repetition": 0,
+                  "output_tokens_s": 65.07394248319453
+                },
+                {
+                  "repetition": 1,
+                  "output_tokens_s": 66.34714619117554
+                },
+                {
+                  "repetition": 2,
+                  "output_tokens_s": 66.13544479918349
+                }
+              ]
+            }
+          }
+        },
+        "vllm": {
+          "source": "source/fp4-concurrency/vllm",
+          "cells": {
+            "1": {
+              "requests": 18,
+              "ttft_ms": 767.3483354996683,
+              "tpot_ms": 39.407990687237096,
+              "output_tokens_s": 22.17290138496034,
+              "decode_tokens_s": 25.375564258947765,
+              "rounds": [
+                {
+                  "repetition": 0,
+                  "output_tokens_s": 22.17290138496034
+                },
+                {
+                  "repetition": 1,
+                  "output_tokens_s": 22.179665733042903
+                },
+                {
+                  "repetition": 2,
+                  "output_tokens_s": 22.170838244537862
+                }
+              ]
+            },
+            "2": {
+              "requests": 18,
+              "ttft_ms": 1414.3097248355236,
+              "tpot_ms": 48.37158405912954,
+              "output_tokens_s": 33.825729174434976,
+              "decode_tokens_s": 20.673294444473797,
+              "rounds": [
+                {
+                  "repetition": 0,
+                  "output_tokens_s": 33.825729174434976
+                },
+                {
+                  "repetition": 1,
+                  "output_tokens_s": 34.09402429470521
+                },
+                {
+                  "repetition": 2,
+                  "output_tokens_s": 33.59525529408698
+                }
+              ]
+            },
+            "4": {
+              "requests": 36,
+              "ttft_ms": 2201.1411293901297,
+              "tpot_ms": 65.5871828979701,
+              "output_tokens_s": 48.482581244723605,
+              "decode_tokens_s": 15.246881415163658,
+              "rounds": [
+                {
+                  "repetition": 0,
+                  "output_tokens_s": 48.405889151544
+                },
+                {
+                  "repetition": 1,
+                  "output_tokens_s": 48.67599520618648
+                },
+                {
+                  "repetition": 2,
+                  "output_tokens_s": 48.482581244723605
+                }
+              ]
+            },
+            "8": {
+              "requests": 72,
+              "ttft_ms": 3711.0950671388614,
+              "tpot_ms": 94.69941215390932,
+              "output_tokens_s": 64.96331562978689,
+              "decode_tokens_s": 10.559727639858624,
+              "rounds": [
+                {
+                  "repetition": 0,
+                  "output_tokens_s": 65.20289496519048
+                },
+                {
+                  "repetition": 1,
+                  "output_tokens_s": 64.96331562978689
+                },
+                {
+                  "repetition": 2,
+                  "output_tokens_s": 64.54842026882513
+                }
+              ]
+            }
+          }
+        }
+      },
+      "validation": {
+        "serial_reference_matches": 4,
+        "concurrent_reference_matches": 8,
+        "measured_requests_per_engine": 144
       }
     }
   }

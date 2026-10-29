@@ -1,0 +1,32 @@
+{
+  "created_at": "2026-10-28T19:56:32.780349+00:00",
+  "source_commit": "b56b9c0b47e4f99b0d96a8fbcc2b2d6e2cd6cabe",
+  "binary_sha256": "14896314fb1d326137754fc648ede883a6ed139ee2277e2fcbc2f62015bffa32",
+  "model": "nvidia/Qwen3.8-Flash-Next-FP4-Local",
+  "model_revision": "b9ce18a6887e18c089fdea8509a33e63429a3300",
+  "workload_sha256": "721e7ac632258dfa142cd69f7414068c64aef302fcae09d702878a25ab471c75",
+  "max_sequences": 8,
+  "kv_bytes": 2147483648,
+  "kv_dtype": "BF16",
+  "max_model_len": 16384,
+  "batch_tokens": 4096,
+  "chunk_tokens": 4096,
+  "concurrencies": [
+    1,
+    2,
+    4,
+    8
+  ],
+  "input_tokens": 2048,
+  "output_tokens": 128,
+  "repetitions": 3,
+  "requests_per_worker": 3,
+  "protocol": [
+    "4 sequential references",
+    "8 concurrent reference requests",
+    "159 conditioning requests",
+    "159 measured-stage requests (15 warmups +144 measured)"
+  ],
+  "precision_note": "Same checkpoint and BF16 output head. Routed expert decode A4 in mistral.rs and A16 in vLLM; both expert prefill A4.",
+  "profiler_attached": false
+}

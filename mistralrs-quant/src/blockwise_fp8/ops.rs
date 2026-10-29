@@ -1030,7 +1030,7 @@ pub fn fp8_blockwise_matmul(
     let input = if input.layout().start_offset() * input.dtype().size_in_bytes() % 16 == 0 {
         input
     } else {
-        input.copy()?
+        input.force_contiguous()?
     };
     let weight = weight.contiguous()?;
     let scales = scales.contiguous()?;
@@ -2213,6 +2213,60 @@ mod tests {
     #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
     use crate::blockwise_fp8::deepgemm;
     use crate::blockwise_fp8::ops;
+
+    #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+    #[test]
+    fn fp8_blockwise_matmul_preserves_misaligned_input_views() -> Result<()> {
+        const COLUMNS: usize = 128;
+        const REDUCTION: usize = 256;
+        const GROUP: usize = 128;
+        const ROWS: [usize; 2] = [1, 3];
+        const OFFSETS: [usize; 3] = [1, 7, 8];
+
+        let device = Device::new_cuda_with_stream(0)?;
+        let weight = Tensor::from_vec(
+            (0..COLUMNS * REDUCTION)
+                .map(|index| F8E4M3::from_f32((index % 13) as f32 / 2.0 - 3.0))
+                .collect::<Vec<_>>(),
+            (COLUMNS, REDUCTION),
+            &device,
+        )?;
+        let scales = Tensor::new(&[[0.25f32, 0.5]], &device)?;
+        for dtype in [DType::BF16, DType::F16] {
+            for rows in ROWS {
+                let input = Tensor::from_vec(
+                    (0..rows * REDUCTION)
+                        .map(|index| {
+                            ((index * 17 + index / REDUCTION * 7) % 113) as f32 / 32.0 - 1.75
+                        })
+                        .collect::<Vec<_>>(),
+                    (rows, REDUCTION),
+                    &device,
+                )?
+                .to_dtype(dtype)?;
+                let expected =
+                    ops::fp8_blockwise_matmul(&input, &weight, &scales, &[GROUP, GROUP])?
+                        .to_dtype(DType::F32)?
+                        .to_vec2::<f32>()?;
+                for offset in OFFSETS {
+                    let prefix = Tensor::full(-19f32, offset, &device)?.to_dtype(dtype)?;
+                    let view = Tensor::cat(&[&prefix, &input.flatten_all()?], 0)?
+                        .narrow(0, offset, rows * REDUCTION)?
+                        .reshape((rows, REDUCTION))?;
+                    assert_eq!(view.layout().start_offset(), offset);
+                    let actual =
+                        ops::fp8_blockwise_matmul(&view, &weight, &scales, &[GROUP, GROUP])?
+                            .to_dtype(DType::F32)?
+                            .to_vec2::<f32>()?;
+                    assert_eq!(
+                        actual, expected,
+                        "dtype={dtype:?} rows={rows} offset={offset}"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
 
     #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
     #[test]

@@ -1180,7 +1180,37 @@ impl IsqModel for Model {
     }
 }
 
-impl crate::speculative::SpeculativeTargetMixin for Model {}
+impl crate::speculative::SpeculativeTargetMixin for Model {
+    fn reserve_recurrent_decode_deferred_storage(&self) -> Result<bool> {
+        crate::gdn::reserve_deferred_decode_state(
+            &mut self.kv_cache.hybrid(),
+            self.layers
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, layer)| match &layer.layer_impl {
+                    LayerImpl::LinearAttention(gdn) => Some((idx, gdn)),
+                    LayerImpl::FullAttention(_) => None,
+                }),
+            self.dtype,
+        )
+    }
+
+    fn disable_recurrent_decode_deferred_storage(&self) -> Result<bool> {
+        self.kv_cache.hybrid().disable_gdn_deferred_state()
+    }
+
+    fn flush_recurrent_state_for_current_batch(&self) -> Result<()> {
+        self.kv_cache
+            .hybrid()
+            .materialize_deferred_state_for_current_batch()
+    }
+
+    fn flush_recurrent_speculative_transitions(&self, sequence_ids: &[usize]) -> Result<()> {
+        let cache = self.kv_cache.hybrid();
+        let slots = cache.recurrent_slots_for_sequences(sequence_ids);
+        cache.materialize_deferred_state_for_slots(&slots)
+    }
+}
 
 impl NormalModel for Model {
     fn forward(

@@ -15,11 +15,11 @@ pub struct RmsNormGated {
 
 impl RmsNormGated {
     #[cfg(test)]
-    pub(crate) fn from_parts(weight: Tensor, eps: f64) -> Self {
+    pub(crate) fn from_parts(weight: Tensor, eps: f64, activation: GdnGateActivation) -> Self {
         Self {
             weight,
             eps,
-            activation: GdnGateActivation::Silu,
+            activation,
         }
     }
 

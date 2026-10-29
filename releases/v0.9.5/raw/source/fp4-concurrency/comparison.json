@@ -1,0 +1,894 @@
+{
+  "candidate_root": "/tmp/qwen38-fp4-batch-gdn-final-20261029",
+  "baseline_root": "/tmp/qwen38-fp4-c1-c8-20261028",
+  "workload_sha256": "721e7ac632258dfa142cd69f7414068c64aef302fcae09d702878a25ab471c75",
+  "protocol": {
+    "equal_manifest_fields": [
+      "model",
+      "model_revision",
+      "workload_sha256",
+      "max_sequences",
+      "kv_bytes",
+      "kv_dtype",
+      "max_model_len",
+      "batch_tokens",
+      "chunk_tokens",
+      "concurrencies",
+      "input_tokens",
+      "output_tokens",
+      "repetitions",
+      "requests_per_worker",
+      "protocol",
+      "profiler_attached"
+    ],
+    "workload_bytes_equal": true,
+    "launch_equal_except_binary": true,
+    "candidate_binary_sha256": "0db790830256383e1aaaaf8319e9c50cda72947f6793401646a744bb32dd2282",
+    "baseline_binary_sha256": "14896314fb1d326137754fc648ede883a6ed139ee2277e2fcbc2f62015bffa32",
+    "monitoring_difference": "Candidate samples metrics in its5s memory-monitor loop; baseline used a separate5s watcher. Metrics are sampled observations."
+  },
+  "engines": {
+    "candidate": {
+      "started_at": "2026-10-29T02:12:05.888837+00:00",
+      "completed_at": "2026-10-29T02:19:23.135519+00:00",
+      "workload_sha256": "721e7ac632258dfa142cd69f7414068c64aef302fcae09d702878a25ab471c75",
+      "successful_stage_requests": 159,
+      "successful_measured_requests": 144,
+      "cells": {
+        "1": {
+          "measured_requests": 18,
+          "aggregate_output_tokens_s": 23.038165593686532,
+          "round_output_tokens_s": [
+            23.038165593686532,
+            23.05343471163152,
+            23.02552332713121
+          ],
+          "round_output_tokens_s_min": 23.02552332713121,
+          "round_output_tokens_s_max": 23.05343471163152,
+          "ttft_ms_mean": 677.4496071027695,
+          "tpot_ms_mean": 38.4105272571355,
+          "per_request_decode_tokens_s": 26.034529370180167,
+          "conditioning_text_matches": 18,
+          "conditioning_text_comparisons": 18,
+          "metrics": {
+            "samples": 19,
+            "first_sample": "2026-10-29T02:12:16.051424+00:00",
+            "latest_sample": "2026-10-29T02:13:47.027126+00:00",
+            "seconds_before_first_sample": 4.606097,
+            "seconds_after_latest_sample": 4.433279,
+            "running_max_observed": 1.0,
+            "waiting_max_observed": 0.0,
+            "kv_usage_peak_percent_observed": 3.037070120589549,
+            "kv_blocks_available_min_observed": 2171.0,
+            "preemption_counter_present": false,
+            "preemption_counter_min_observed": null,
+            "preemption_counter_max_observed": null,
+            "preemption_note": "Sampled cumulative counter, not exact interval count. The mistral.rs counter is registered on its first preemption and can be absent when none occurred. Unsampled gaps are not covered."
+          }
+        },
+        "2": {
+          "measured_requests": 18,
+          "aggregate_output_tokens_s": 35.14236131418525,
+          "round_output_tokens_s": [
+            35.02349613821917,
+            35.389542613143625,
+            35.14236131418525
+          ],
+          "round_output_tokens_s_min": 35.02349613821917,
+          "round_output_tokens_s_max": 35.389542613143625,
+          "ttft_ms_mean": 1233.908518553815,
+          "tpot_ms_mean": 47.53800778029884,
+          "per_request_decode_tokens_s": 21.035799493777475,
+          "conditioning_text_matches": 10,
+          "conditioning_text_comparisons": 18,
+          "metrics": {
+            "samples": 13,
+            "first_sample": "2026-10-29T02:14:02.200274+00:00",
+            "latest_sample": "2026-10-29T02:15:02.927377+00:00",
+            "seconds_before_first_sample": 3.462274,
+            "seconds_after_latest_sample": 1.296806,
+            "running_max_observed": 2.0,
+            "waiting_max_observed": 0.0,
+            "kv_usage_peak_percent_observed": 6.074140241179098,
+            "kv_blocks_available_min_observed": 2103.0,
+            "preemption_counter_present": false,
+            "preemption_counter_min_observed": null,
+            "preemption_counter_max_observed": null,
+            "preemption_note": "Sampled cumulative counter, not exact interval count. The mistral.rs counter is registered on its first preemption and can be absent when none occurred. Unsampled gaps are not covered."
+          }
+        },
+        "4": {
+          "measured_requests": 36,
+          "aggregate_output_tokens_s": 49.47217761388825,
+          "round_output_tokens_s": [
+            49.47217761388825,
+            49.74519355995068,
+            49.1943010444074
+          ],
+          "round_output_tokens_s_min": 49.1943010444074,
+          "round_output_tokens_s_max": 49.74519355995068,
+          "ttft_ms_mean": 2018.5686215538428,
+          "tpot_ms_mean": 65.51959218493192,
+          "per_request_decode_tokens_s": 15.262610261331544,
+          "conditioning_text_matches": 18,
+          "conditioning_text_comparisons": 36,
+          "metrics": {
+            "samples": 18,
+            "first_sample": "2026-10-29T02:15:18.113125+00:00",
+            "latest_sample": "2026-10-29T02:16:44.131159+00:00",
+            "seconds_before_first_sample": 3.634708,
+            "seconds_after_latest_sample": 3.496506,
+            "running_max_observed": 4.0,
+            "waiting_max_observed": 0.0,
+            "kv_usage_peak_percent_observed": 12.148280482358196,
+            "kv_blocks_available_min_observed": 1967.0,
+            "preemption_counter_present": false,
+            "preemption_counter_min_observed": null,
+            "preemption_counter_max_observed": null,
+            "preemption_note": "Sampled cumulative counter, not exact interval count. The mistral.rs counter is registered on its first preemption and can be absent when none occurred. Unsampled gaps are not covered."
+          }
+        },
+        "8": {
+          "measured_requests": 72,
+          "aggregate_output_tokens_s": 66.13544479918349,
+          "round_output_tokens_s": [
+            65.07394248319453,
+            66.34714619117554,
+            66.13544479918349
+          ],
+          "round_output_tokens_s_min": 65.07394248319453,
+          "round_output_tokens_s_max": 66.34714619117554,
+          "ttft_ms_mean": 2846.4583756318057,
+          "tpot_ms_mean": 99.81673776811672,
+          "per_request_decode_tokens_s": 10.018359869895669,
+          "conditioning_text_matches": 55,
+          "conditioning_text_comparisons": 72,
+          "metrics": {
+            "samples": 28,
+            "first_sample": "2026-10-29T02:17:04.389281+00:00",
+            "latest_sample": "2026-10-29T02:19:21.071867+00:00",
+            "seconds_before_first_sample": 1.21707,
+            "seconds_after_latest_sample": 2.061859,
+            "running_max_observed": 8.0,
+            "waiting_max_observed": 0.0,
+            "kv_usage_peak_percent_observed": 24.29656096471639,
+            "kv_blocks_available_min_observed": 1695.0,
+            "preemption_counter_present": false,
+            "preemption_counter_min_observed": null,
+            "preemption_counter_max_observed": null,
+            "preemption_note": "Sampled cumulative counter, not exact interval count. The mistral.rs counter is registered on its first preemption and can be absent when none occurred. Unsampled gaps are not covered."
+          }
+        }
+      },
+      "references": {
+        "serial_requests": 4,
+        "c8_requests": 8,
+        "c8_answers_matching_serial": 8,
+        "all_c8_answers_match": true
+      },
+      "metrics": {
+        "samples": 87,
+        "first_sample": "2026-10-29T02:12:05.937335+00:00",
+        "latest_sample": "2026-10-29T02:19:21.071867+00:00",
+        "seconds_before_first_sample": 0.048498,
+        "seconds_after_latest_sample": 2.063652,
+        "running_max_observed": 8.0,
+        "waiting_max_observed": 0.0,
+        "kv_usage_peak_percent_observed": 24.29656096471639,
+        "kv_blocks_available_min_observed": 1695.0,
+        "preemption_counter_present": false,
+        "preemption_counter_min_observed": null,
+        "preemption_counter_max_observed": null,
+        "preemption_note": "Sampled cumulative counter, not exact interval count. The mistral.rs counter is registered on its first preemption and can be absent when none occurred. Unsampled gaps are not covered."
+      },
+      "memory": {
+        "sample_from": "2026-10-29T02:12:00.892196+00:00",
+        "sample_to": "2026-10-29T02:19:21.068744+00:00",
+        "samples_bracket_measurement": false,
+        "minimum_available_gib": 38.74913024902344,
+        "global_swap_in_mib": 28.06640625,
+        "global_swap_out_mib": 0.0,
+        "temperature_c_mean": 70.65517241379311,
+        "sm_clock_mhz_mean": 2492.5287356321837
+      }
+    },
+    "saved_mistralrs": {
+      "started_at": "2026-10-28T20:14:21.020514+00:00",
+      "completed_at": "2026-10-28T20:22:36.237251+00:00",
+      "workload_sha256": "721e7ac632258dfa142cd69f7414068c64aef302fcae09d702878a25ab471c75",
+      "successful_stage_requests": 159,
+      "successful_measured_requests": 144,
+      "cells": {
+        "1": {
+          "measured_requests": 18,
+          "aggregate_output_tokens_s": 23.078259168041026,
+          "round_output_tokens_s": [
+            23.061145129252264,
+            23.078872856131238,
+            23.078259168041026
+          ],
+          "round_output_tokens_s_min": 23.061145129252264,
+          "round_output_tokens_s_max": 23.078872856131238,
+          "ttft_ms_mean": 675.8598134232064,
+          "tpot_ms_mean": 38.359188471149984,
+          "per_request_decode_tokens_s": 26.069373202514484,
+          "conditioning_text_matches": 18,
+          "conditioning_text_comparisons": 18,
+          "metrics": {
+            "samples": 20,
+            "first_sample": "2026-10-28T20:14:30.987239+00:00",
+            "latest_sample": "2026-10-28T20:16:06.068160+00:00",
+            "seconds_before_first_sample": 4.421252,
+            "seconds_after_latest_sample": 0.357016,
+            "running_max_observed": 1.0,
+            "waiting_max_observed": 0.0,
+            "kv_usage_peak_percent_observed": 3.037070120589549,
+            "kv_blocks_available_min_observed": 2171.0,
+            "preemption_counter_present": false,
+            "preemption_counter_min_observed": null,
+            "preemption_counter_max_observed": null,
+            "preemption_note": "Sampled cumulative counter, not exact interval count. The mistral.rs counter is registered on its first preemption and can be absent when none occurred. Unsampled gaps are not covered."
+          }
+        },
+        "2": {
+          "measured_requests": 18,
+          "aggregate_output_tokens_s": 32.26937701603283,
+          "round_output_tokens_s": [
+            32.339232820106815,
+            32.13374484758324,
+            32.26937701603283
+          ],
+          "round_output_tokens_s_min": 32.13374484758324,
+          "round_output_tokens_s_max": 32.339232820106815,
+          "ttft_ms_mean": 1120.2823501597677,
+          "tpot_ms_mean": 53.63399308540085,
+          "per_request_decode_tokens_s": 18.64489183954121,
+          "conditioning_text_matches": 8,
+          "conditioning_text_comparisons": 18,
+          "metrics": {
+            "samples": 14,
+            "first_sample": "2026-10-28T20:16:16.075567+00:00",
+            "latest_sample": "2026-10-28T20:17:21.174175+00:00",
+            "seconds_before_first_sample": 1.764237,
+            "seconds_after_latest_sample": 4.586527,
+            "running_max_observed": 2.0,
+            "waiting_max_observed": 0.0,
+            "kv_usage_peak_percent_observed": 6.074140241179098,
+            "kv_blocks_available_min_observed": 2103.0,
+            "preemption_counter_present": false,
+            "preemption_counter_min_observed": null,
+            "preemption_counter_max_observed": null,
+            "preemption_note": "Sampled cumulative counter, not exact interval count. The mistral.rs counter is registered on its first preemption and can be absent when none occurred. Unsampled gaps are not covered."
+          }
+        },
+        "4": {
+          "measured_requests": 36,
+          "aggregate_output_tokens_s": 43.42437279995331,
+          "round_output_tokens_s": [
+            43.544029837390184,
+            43.15184079993369,
+            43.42437279995331
+          ],
+          "round_output_tokens_s_min": 43.15184079993369,
+          "round_output_tokens_s_max": 43.544029837390184,
+          "ttft_ms_mean": 2134.550399415376,
+          "tpot_ms_mean": 76.07133856360689,
+          "per_request_decode_tokens_s": 13.145555459943067,
+          "conditioning_text_matches": 27,
+          "conditioning_text_comparisons": 36,
+          "metrics": {
+            "samples": 21,
+            "first_sample": "2026-10-28T20:17:41.201108+00:00",
+            "latest_sample": "2026-10-28T20:19:21.278793+00:00",
+            "seconds_before_first_sample": 3.743904,
+            "seconds_after_latest_sample": 2.421568,
+            "running_max_observed": 4.0,
+            "waiting_max_observed": 0.0,
+            "kv_usage_peak_percent_observed": 12.148280482358196,
+            "kv_blocks_available_min_observed": 1967.0,
+            "preemption_counter_present": false,
+            "preemption_counter_min_observed": null,
+            "preemption_counter_max_observed": null,
+            "preemption_note": "Sampled cumulative counter, not exact interval count. The mistral.rs counter is registered on its first preemption and can be absent when none occurred. Unsampled gaps are not covered."
+          }
+        },
+        "8": {
+          "measured_requests": 72,
+          "aggregate_output_tokens_s": 53.241446608578784,
+          "round_output_tokens_s": [
+            52.869285500338904,
+            53.241446608578784,
+            53.369787129078894
+          ],
+          "round_output_tokens_s_min": 52.869285500338904,
+          "round_output_tokens_s_max": 53.369787129078894,
+          "ttft_ms_mean": 2837.2652302641654,
+          "tpot_ms_mean": 129.06172380596837,
+          "per_request_decode_tokens_s": 7.748230617959217,
+          "conditioning_text_matches": 48,
+          "conditioning_text_comparisons": 72,
+          "metrics": {
+            "samples": 34,
+            "first_sample": "2026-10-28T20:19:46.301992+00:00",
+            "latest_sample": "2026-10-28T20:22:31.480202+00:00",
+            "seconds_before_first_sample": 3.434384,
+            "seconds_after_latest_sample": 4.755239,
+            "running_max_observed": 8.0,
+            "waiting_max_observed": 2.0,
+            "kv_usage_peak_percent_observed": 24.29656096471639,
+            "kv_blocks_available_min_observed": 1695.0,
+            "preemption_counter_present": false,
+            "preemption_counter_min_observed": null,
+            "preemption_counter_max_observed": null,
+            "preemption_note": "Sampled cumulative counter, not exact interval count. The mistral.rs counter is registered on its first preemption and can be absent when none occurred. Unsampled gaps are not covered."
+          }
+        }
+      },
+      "references": {
+        "serial_requests": 4,
+        "c8_requests": 8,
+        "c8_answers_matching_serial": 8,
+        "all_c8_answers_match": true
+      },
+      "metrics": {
+        "samples": 98,
+        "first_sample": "2026-10-28T20:14:25.982785+00:00",
+        "latest_sample": "2026-10-28T20:22:31.480202+00:00",
+        "seconds_before_first_sample": 4.962271,
+        "seconds_after_latest_sample": 4.757049,
+        "running_max_observed": 8.0,
+        "waiting_max_observed": 2.0,
+        "kv_usage_peak_percent_observed": 24.29656096471639,
+        "kv_blocks_available_min_observed": 1695.0,
+        "preemption_counter_present": false,
+        "preemption_counter_min_observed": null,
+        "preemption_counter_max_observed": null,
+        "preemption_note": "Sampled cumulative counter, not exact interval count. The mistral.rs counter is registered on its first preemption and can be absent when none occurred. Unsampled gaps are not covered."
+      },
+      "memory": {
+        "sample_from": "2026-10-28T20:14:17.352693+00:00",
+        "sample_to": "2026-10-28T20:22:37.517186+00:00",
+        "samples_bracket_measurement": true,
+        "minimum_available_gib": 38.520137786865234,
+        "global_swap_in_mib": 343.8828125,
+        "global_swap_out_mib": 0.0,
+        "temperature_c_mean": 69.93877551020408,
+        "sm_clock_mhz_mean": 2493.704081632653
+      }
+    },
+    "saved_vllm": {
+      "started_at": "2026-10-28T20:44:41.851140+00:00",
+      "completed_at": "2026-10-28T20:52:10.417260+00:00",
+      "workload_sha256": "721e7ac632258dfa142cd69f7414068c64aef302fcae09d702878a25ab471c75",
+      "successful_stage_requests": 159,
+      "successful_measured_requests": 144,
+      "cells": {
+        "1": {
+          "measured_requests": 18,
+          "aggregate_output_tokens_s": 22.17290138496034,
+          "round_output_tokens_s": [
+            22.17290138496034,
+            22.179665733042903,
+            22.170838244537862
+          ],
+          "round_output_tokens_s_min": 22.170838244537862,
+          "round_output_tokens_s_max": 22.179665733042903,
+          "ttft_ms_mean": 767.3483354996683,
+          "tpot_ms_mean": 39.407990687237096,
+          "per_request_decode_tokens_s": 25.375564258947765,
+          "conditioning_text_matches": 18,
+          "conditioning_text_comparisons": 18,
+          "metrics": {
+            "samples": 21,
+            "first_sample": "2026-10-28T20:44:48.643017+00:00",
+            "latest_sample": "2026-10-28T20:46:28.834170+00:00",
+            "seconds_before_first_sample": 1.017239,
+            "seconds_after_latest_sample": 2.695692,
+            "running_max_observed": 1.0,
+            "waiting_max_observed": 0.0,
+            "kv_usage_peak_percent_observed": 9.145427286356822,
+            "kv_blocks_available_min_observed": null,
+            "preemption_counter_present": true,
+            "preemption_counter_min_observed": 0.0,
+            "preemption_counter_max_observed": 0.0,
+            "preemption_note": "Sampled cumulative counter, not exact interval count. The mistral.rs counter is registered on its first preemption and can be absent when none occurred. Unsampled gaps are not covered."
+          }
+        },
+        "2": {
+          "measured_requests": 18,
+          "aggregate_output_tokens_s": 33.825729174434976,
+          "round_output_tokens_s": [
+            33.825729174434976,
+            34.09402429470521,
+            33.59525529408698
+          ],
+          "round_output_tokens_s_min": 33.59525529408698,
+          "round_output_tokens_s_max": 34.09402429470521,
+          "ttft_ms_mean": 1414.3097248355236,
+          "tpot_ms_mean": 48.37158405912954,
+          "per_request_decode_tokens_s": 20.673294444473797,
+          "conditioning_text_matches": 2,
+          "conditioning_text_comparisons": 18,
+          "metrics": {
+            "samples": 13,
+            "first_sample": "2026-10-28T20:46:43.867820+00:00",
+            "latest_sample": "2026-10-28T20:47:43.967826+00:00",
+            "seconds_before_first_sample": 4.847702,
+            "seconds_after_latest_sample": 3.144379,
+            "running_max_observed": 2.0,
+            "waiting_max_observed": 0.0,
+            "kv_usage_peak_percent_observed": 18.290854572713645,
+            "kv_blocks_available_min_observed": null,
+            "preemption_counter_present": true,
+            "preemption_counter_min_observed": 0.0,
+            "preemption_counter_max_observed": 0.0,
+            "preemption_note": "Sampled cumulative counter, not exact interval count. The mistral.rs counter is registered on its first preemption and can be absent when none occurred. Unsampled gaps are not covered."
+          }
+        },
+        "4": {
+          "measured_requests": 36,
+          "aggregate_output_tokens_s": 48.482581244723605,
+          "round_output_tokens_s": [
+            48.405889151544,
+            48.67599520618648,
+            48.482581244723605
+          ],
+          "round_output_tokens_s_min": 48.405889151544,
+          "round_output_tokens_s_max": 48.67599520618648,
+          "ttft_ms_mean": 2201.1411293901297,
+          "tpot_ms_mean": 65.5871828979701,
+          "per_request_decode_tokens_s": 15.246881415163658,
+          "conditioning_text_matches": 2,
+          "conditioning_text_comparisons": 36,
+          "metrics": {
+            "samples": 19,
+            "first_sample": "2026-10-28T20:47:58.999215+00:00",
+            "latest_sample": "2026-10-28T20:49:29.170570+00:00",
+            "seconds_before_first_sample": 1.381898,
+            "seconds_after_latest_sample": 3.416428,
+            "running_max_observed": 4.0,
+            "waiting_max_observed": 0.0,
+            "kv_usage_peak_percent_observed": 36.58170914542729,
+            "kv_blocks_available_min_observed": null,
+            "preemption_counter_present": true,
+            "preemption_counter_min_observed": 0.0,
+            "preemption_counter_max_observed": 0.0,
+            "preemption_note": "Sampled cumulative counter, not exact interval count. The mistral.rs counter is registered on its first preemption and can be absent when none occurred. Unsampled gaps are not covered."
+          }
+        },
+        "8": {
+          "measured_requests": 72,
+          "aggregate_output_tokens_s": 64.96331562978689,
+          "round_output_tokens_s": [
+            65.20289496519048,
+            64.96331562978689,
+            64.54842026882513
+          ],
+          "round_output_tokens_s_min": 64.54842026882513,
+          "round_output_tokens_s_max": 65.20289496519048,
+          "ttft_ms_mean": 3711.0950671388614,
+          "tpot_ms_mean": 94.69941215390932,
+          "per_request_decode_tokens_s": 10.559727639858624,
+          "conditioning_text_matches": 2,
+          "conditioning_text_comparisons": 72,
+          "metrics": {
+            "samples": 29,
+            "first_sample": "2026-10-28T20:49:49.215139+00:00",
+            "latest_sample": "2026-10-28T20:52:09.540520+00:00",
+            "seconds_before_first_sample": 0.795483,
+            "seconds_after_latest_sample": 0.87586,
+            "running_max_observed": 8.0,
+            "waiting_max_observed": 3.0,
+            "kv_usage_peak_percent_observed": 73.16341829085458,
+            "kv_blocks_available_min_observed": null,
+            "preemption_counter_present": true,
+            "preemption_counter_min_observed": 0.0,
+            "preemption_counter_max_observed": 0.0,
+            "preemption_note": "Sampled cumulative counter, not exact interval count. The mistral.rs counter is registered on its first preemption and can be absent when none occurred. Unsampled gaps are not covered."
+          }
+        }
+      },
+      "references": {
+        "serial_requests": 4,
+        "c8_requests": 8,
+        "c8_answers_matching_serial": 8,
+        "all_c8_answers_match": true
+      },
+      "metrics": {
+        "samples": 90,
+        "first_sample": "2026-10-28T20:44:43.634279+00:00",
+        "latest_sample": "2026-10-28T20:52:09.540520+00:00",
+        "seconds_before_first_sample": 1.783139,
+        "seconds_after_latest_sample": 0.87674,
+        "running_max_observed": 8.0,
+        "waiting_max_observed": 3.0,
+        "kv_usage_peak_percent_observed": 73.16341829085458,
+        "kv_blocks_available_min_observed": null,
+        "preemption_counter_present": true,
+        "preemption_counter_min_observed": 0.0,
+        "preemption_counter_max_observed": 0.0,
+        "preemption_note": "Sampled cumulative counter, not exact interval count. The mistral.rs counter is registered on its first preemption and can be absent when none occurred. Unsampled gaps are not covered."
+      },
+      "memory": {
+        "sample_from": "2026-10-28T20:44:40.682569+00:00",
+        "sample_to": "2026-10-28T20:52:11.012509+00:00",
+        "samples_bracket_measurement": true,
+        "minimum_available_gib": 11.946174621582031,
+        "global_swap_in_mib": 41.4296875,
+        "global_swap_out_mib": 0.0,
+        "temperature_c_mean": 68.36363636363636,
+        "sm_clock_mhz_mean": 2494.6022727272725
+      }
+    }
+  },
+  "reference_checks": {
+    "reference.json": {
+      "requests": 4,
+      "text_matches_saved_vllm": 4,
+      "comparisons": [
+        {
+          "id": "arithmetic",
+          "text_matches_saved_vllm": true,
+          "tokens_match_saved_serial_mistralrs": true,
+          "max_logprob_difference_vs_saved_serial_mistralrs": 0.0
+        },
+        {
+          "id": "geography",
+          "text_matches_saved_vllm": true,
+          "tokens_match_saved_serial_mistralrs": true,
+          "max_logprob_difference_vs_saved_serial_mistralrs": 0.0
+        },
+        {
+          "id": "sequence",
+          "text_matches_saved_vllm": true,
+          "tokens_match_saved_serial_mistralrs": true,
+          "max_logprob_difference_vs_saved_serial_mistralrs": 0.0
+        },
+        {
+          "id": "code",
+          "text_matches_saved_vllm": true,
+          "tokens_match_saved_serial_mistralrs": true,
+          "max_logprob_difference_vs_saved_serial_mistralrs": 0.0
+        }
+      ]
+    },
+    "reference-c8.json": {
+      "requests": 8,
+      "text_matches_saved_vllm": 8,
+      "comparisons": [
+        {
+          "id": "arithmetic",
+          "text_matches_saved_vllm": true,
+          "tokens_match_saved_serial_mistralrs": true,
+          "max_logprob_difference_vs_saved_serial_mistralrs": 0.0009652480000000001
+        },
+        {
+          "id": "geography",
+          "text_matches_saved_vllm": true,
+          "tokens_match_saved_serial_mistralrs": true,
+          "max_logprob_difference_vs_saved_serial_mistralrs": 0.0007946858999999999
+        },
+        {
+          "id": "sequence",
+          "text_matches_saved_vllm": true,
+          "tokens_match_saved_serial_mistralrs": true,
+          "max_logprob_difference_vs_saved_serial_mistralrs": 0.0004160020000000004
+        },
+        {
+          "id": "code",
+          "text_matches_saved_vllm": true,
+          "tokens_match_saved_serial_mistralrs": true,
+          "max_logprob_difference_vs_saved_serial_mistralrs": 0.29481418000000004
+        },
+        {
+          "id": "arithmetic",
+          "text_matches_saved_vllm": true,
+          "tokens_match_saved_serial_mistralrs": true,
+          "max_logprob_difference_vs_saved_serial_mistralrs": 0.0009652480000000001
+        },
+        {
+          "id": "geography",
+          "text_matches_saved_vllm": true,
+          "tokens_match_saved_serial_mistralrs": true,
+          "max_logprob_difference_vs_saved_serial_mistralrs": 0.0007946858999999999
+        },
+        {
+          "id": "sequence",
+          "text_matches_saved_vllm": true,
+          "tokens_match_saved_serial_mistralrs": true,
+          "max_logprob_difference_vs_saved_serial_mistralrs": 0.0004160020000000004
+        },
+        {
+          "id": "code",
+          "text_matches_saved_vllm": true,
+          "tokens_match_saved_serial_mistralrs": true,
+          "max_logprob_difference_vs_saved_serial_mistralrs": 0.05284194000000009
+        }
+      ]
+    },
+    "all_text_checks_passed": true
+  },
+  "concurrency_checks": {
+    "conditioning": [
+      {
+        "round": "p2048-c1-warmup--1",
+        "phase": "warmup",
+        "limit": 1,
+        "peak_client_inflight": 1,
+        "mean_client_inflight": 1.0
+      },
+      {
+        "round": "p2048-c1-measured-0",
+        "phase": "measured",
+        "limit": 1,
+        "peak_client_inflight": 1,
+        "mean_client_inflight": 0.9999823716351691
+      },
+      {
+        "round": "p2048-c1-measured-1",
+        "phase": "measured",
+        "limit": 1,
+        "peak_client_inflight": 1,
+        "mean_client_inflight": 0.9999793757548112
+      },
+      {
+        "round": "p2048-c1-measured-2",
+        "phase": "measured",
+        "limit": 1,
+        "peak_client_inflight": 1,
+        "mean_client_inflight": 0.9999799646536915
+      },
+      {
+        "round": "p2048-c2-warmup--1",
+        "phase": "warmup",
+        "limit": 2,
+        "peak_client_inflight": 2,
+        "mean_client_inflight": 1.9941895730304997
+      },
+      {
+        "round": "p2048-c2-measured-0",
+        "phase": "measured",
+        "limit": 2,
+        "peak_client_inflight": 2,
+        "mean_client_inflight": 1.998271513885102
+      },
+      {
+        "round": "p2048-c2-measured-1",
+        "phase": "measured",
+        "limit": 2,
+        "peak_client_inflight": 2,
+        "mean_client_inflight": 1.9999712425830913
+      },
+      {
+        "round": "p2048-c2-measured-2",
+        "phase": "measured",
+        "limit": 2,
+        "peak_client_inflight": 2,
+        "mean_client_inflight": 1.9982195896661579
+      },
+      {
+        "round": "p2048-c4-warmup--1",
+        "phase": "warmup",
+        "limit": 4,
+        "peak_client_inflight": 4,
+        "mean_client_inflight": 3.9910098906264437
+      },
+      {
+        "round": "p2048-c4-measured-0",
+        "phase": "measured",
+        "limit": 4,
+        "peak_client_inflight": 4,
+        "mean_client_inflight": 3.9969818270873048
+      },
+      {
+        "round": "p2048-c4-measured-1",
+        "phase": "measured",
+        "limit": 4,
+        "peak_client_inflight": 4,
+        "mean_client_inflight": 3.9967890413827156
+      },
+      {
+        "round": "p2048-c4-measured-2",
+        "phase": "measured",
+        "limit": 4,
+        "peak_client_inflight": 4,
+        "mean_client_inflight": 3.993884700565876
+      },
+      {
+        "round": "p2048-c8-warmup--1",
+        "phase": "warmup",
+        "limit": 8,
+        "peak_client_inflight": 8,
+        "mean_client_inflight": 7.959159355872757
+      },
+      {
+        "round": "p2048-c8-measured-0",
+        "phase": "measured",
+        "limit": 8,
+        "peak_client_inflight": 8,
+        "mean_client_inflight": 7.981068128596386
+      },
+      {
+        "round": "p2048-c8-measured-1",
+        "phase": "measured",
+        "limit": 8,
+        "peak_client_inflight": 8,
+        "mean_client_inflight": 7.985451392880216
+      },
+      {
+        "round": "p2048-c8-measured-2",
+        "phase": "measured",
+        "limit": 8,
+        "peak_client_inflight": 8,
+        "mean_client_inflight": 7.985605060346154
+      }
+    ],
+    "measured": [
+      {
+        "round": "p2048-c1-warmup--1",
+        "phase": "warmup",
+        "limit": 1,
+        "peak_client_inflight": 1,
+        "mean_client_inflight": 1.0
+      },
+      {
+        "round": "p2048-c1-measured-0",
+        "phase": "measured",
+        "limit": 1,
+        "peak_client_inflight": 1,
+        "mean_client_inflight": 0.9999786583242266
+      },
+      {
+        "round": "p2048-c1-measured-1",
+        "phase": "measured",
+        "limit": 1,
+        "peak_client_inflight": 1,
+        "mean_client_inflight": 0.9999784509491645
+      },
+      {
+        "round": "p2048-c1-measured-2",
+        "phase": "measured",
+        "limit": 1,
+        "peak_client_inflight": 1,
+        "mean_client_inflight": 0.999979799467325
+      },
+      {
+        "round": "p2048-c2-warmup--1",
+        "phase": "warmup",
+        "limit": 2,
+        "peak_client_inflight": 2,
+        "mean_client_inflight": 1.9944394667615566
+      },
+      {
+        "round": "p2048-c2-measured-0",
+        "phase": "measured",
+        "limit": 2,
+        "peak_client_inflight": 2,
+        "mean_client_inflight": 1.9981061828223403
+      },
+      {
+        "round": "p2048-c2-measured-1",
+        "phase": "measured",
+        "limit": 2,
+        "peak_client_inflight": 2,
+        "mean_client_inflight": 1.9999560651794541
+      },
+      {
+        "round": "p2048-c2-measured-2",
+        "phase": "measured",
+        "limit": 2,
+        "peak_client_inflight": 2,
+        "mean_client_inflight": 1.9981506864304692
+      },
+      {
+        "round": "p2048-c4-warmup--1",
+        "phase": "warmup",
+        "limit": 4,
+        "peak_client_inflight": 4,
+        "mean_client_inflight": 3.9908878742010545
+      },
+      {
+        "round": "p2048-c4-measured-0",
+        "phase": "measured",
+        "limit": 4,
+        "peak_client_inflight": 4,
+        "mean_client_inflight": 3.9943627455346955
+      },
+      {
+        "round": "p2048-c4-measured-1",
+        "phase": "measured",
+        "limit": 4,
+        "peak_client_inflight": 4,
+        "mean_client_inflight": 3.996904940182989
+      },
+      {
+        "round": "p2048-c4-measured-2",
+        "phase": "measured",
+        "limit": 4,
+        "peak_client_inflight": 4,
+        "mean_client_inflight": 3.99694477773649
+      },
+      {
+        "round": "p2048-c8-warmup--1",
+        "phase": "warmup",
+        "limit": 8,
+        "peak_client_inflight": 8,
+        "mean_client_inflight": 7.956439200810364
+      },
+      {
+        "round": "p2048-c8-measured-0",
+        "phase": "measured",
+        "limit": 8,
+        "peak_client_inflight": 8,
+        "mean_client_inflight": 7.985645060403299
+      },
+      {
+        "round": "p2048-c8-measured-1",
+        "phase": "measured",
+        "limit": 8,
+        "peak_client_inflight": 8,
+        "mean_client_inflight": 7.985816106877449
+      },
+      {
+        "round": "p2048-c8-measured-2",
+        "phase": "measured",
+        "limit": 8,
+        "peak_client_inflight": 8,
+        "mean_client_inflight": 7.985614325048254
+      }
+    ]
+  },
+  "vs_saved_mistralrs": {
+    "1": {
+      "aggregate_output_gain_percent": -0.17372876377961255,
+      "per_request_decode_gain_percent": -0.13365811315692033,
+      "ttft_reduction_percent": -0.23522536005073924,
+      "tpot_reduction_percent": -0.13383699716202901
+    },
+    "2": {
+      "aggregate_output_gain_percent": 8.903129108209939,
+      "per_request_decode_gain_percent": 12.823392459513983,
+      "ttft_reduction_percent": -10.142636664573224,
+      "tpot_reduction_percent": 11.36589866690596
+    },
+    "4": {
+      "aggregate_output_gain_percent": 13.927212816166312,
+      "per_request_decode_gain_percent": 16.104719255413237,
+      "ttft_reduction_percent": 5.433546000754963,
+      "tpot_reduction_percent": 13.870856722012515
+    },
+    "8": {
+      "aggregate_output_gain_percent": 24.217971170841746,
+      "per_request_decode_gain_percent": 29.298679451727196,
+      "ttft_reduction_percent": -0.32401431031474637,
+      "tpot_reduction_percent": 22.65968962402719
+    }
+  },
+  "vs_saved_vllm": {
+    "1": {
+      "aggregate_output_gain_percent": 3.902349961801077,
+      "per_request_decode_gain_percent": 2.596849096666065,
+      "ttft_reduction_percent": 11.715504450577862,
+      "tpot_reduction_percent": 2.5311197366493565
+    },
+    "2": {
+      "aggregate_output_gain_percent": 3.8923983957908748,
+      "per_request_decode_gain_percent": 1.7534943464251773,
+      "ttft_reduction_percent": 12.75542429736799,
+      "tpot_reduction_percent": 1.7232767854195807
+    },
+    "4": {
+      "aggregate_output_gain_percent": 2.0411379587433665,
+      "per_request_decode_gain_percent": 0.10316107103871541,
+      "ttft_reduction_percent": 8.294448065984405,
+      "tpot_reduction_percent": 0.10305475864593738
+    },
+    "8": {
+      "aggregate_output_gain_percent": 1.804293943487023,
+      "per_request_decode_gain_percent": -5.126720957456465,
+      "ttft_reduction_percent": 23.298694209244918,
+      "tpot_reduction_percent": -5.403756473050247
+    }
+  },
+  "baseline_files_preserved": true
+}

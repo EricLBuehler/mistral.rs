@@ -1408,6 +1408,7 @@ extern "C" {
         num_v_heads: i32,
         tiled_v_heads: i32,
         norm_eps: f32,
+        sigmoid_gate: i32,
         stream: i64,
     );
     pub(crate) fn gdn_flush_deferred_state_value_major_128(

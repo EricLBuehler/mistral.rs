@@ -157,10 +157,51 @@ fn value_major_dispatch_uses_the_measured_sm90_crossover() {
 }
 
 #[test]
-fn deferred_decode_dispatch_uses_the_measured_batch_boundary() {
-    assert!(!deferred_decode_batch_supported(4));
-    assert!(!deferred_decode_batch_supported(7));
-    assert!(deferred_decode_batch_supported(8));
+fn deferred_decode_dispatch_preserves_single_token_and_large_batches() {
+    for value_heads in [32, 48, 64] {
+        for multiprocessors in [48, 80, 132] {
+            assert!(!deferred_decode_batch_supported(
+                1,
+                value_heads,
+                multiprocessors
+            ));
+            assert!(deferred_decode_batch_supported(
+                8,
+                value_heads,
+                multiprocessors
+            ));
+            assert!(deferred_decode_batch_supported(
+                32,
+                value_heads,
+                multiprocessors
+            ));
+        }
+    }
+}
+
+#[test]
+fn deferred_decode_dispatch_uses_two_waves_for_intermediate_batches() {
+    for (batch, heads, multiprocessors, expected) in [
+        (2, 32, 48, false),
+        (2, 48, 48, true),
+        (2, 64, 48, true),
+        (3, 32, 48, true),
+        (3, 48, 80, false),
+        (3, 64, 80, true),
+        (4, 32, 48, true),
+        (4, 32, 80, false),
+        (4, 48, 80, true),
+        (4, 48, 132, false),
+        (5, 32, 80, true),
+        (6, 48, 132, true),
+        (7, 32, 132, false),
+        (7, 48, 132, true),
+    ] {
+        assert_eq!(
+            deferred_decode_batch_supported(batch, heads, multiprocessors),
+            expected
+        );
+    }
 }
 
 #[test]

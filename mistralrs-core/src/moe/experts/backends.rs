@@ -913,10 +913,8 @@ impl CutileExpertsWeights {
             Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
             _ => candle_core::bail!("topk_ids must be a cuda tensor"),
         };
-        assert_eq!(ti_layout.start_offset(), 0, "expected contiguous topk_ids");
-
         let (sids, eids, ntpp, em) = mistralrs_quant::moe::cuda::moe_align(
-            ti_slice,
+            &ti_slice.slice(ti_layout.start_offset()..ti_layout.start_offset() + num_valid),
             num_tokens,
             num_experts,
             topk,
@@ -952,11 +950,8 @@ impl CutileExpertsWeights {
             Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
             _ => candle_core::bail!("topk_weights must be a cuda tensor"),
         };
-        assert_eq!(
-            tw_layout.start_offset(),
-            0,
-            "expected contiguous topk_weights"
-        );
+        let tw_view =
+            tw_slice.slice(tw_layout.start_offset()..tw_layout.start_offset() + num_valid);
 
         let ic3 = mistralrs_quant::cutile::cutile_grouped_gemm(
             &ic2,
@@ -964,7 +959,7 @@ impl CutileExpertsWeights {
             &sids,
             &eids,
             &ntpp,
-            Some(tw_slice),
+            Some(&tw_view),
             em,
             num_valid,
             1,
@@ -993,9 +988,8 @@ impl CutileExpertsWeights {
             Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
             _ => candle_core::bail!("topk_ids must be a cuda tensor"),
         };
-        assert_eq!(ti_layout.start_offset(), 0, "expected contiguous topk_ids");
         let (sids, eids, ntpp, em) = mistralrs_quant::moe::cuda::moe_align(
-            ti_slice,
+            &ti_slice.slice(ti_layout.start_offset()..ti_layout.start_offset() + num_valid),
             num_tokens,
             num_experts,
             topk,
@@ -1031,18 +1025,15 @@ impl CutileExpertsWeights {
             Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
             _ => candle_core::bail!("topk_weights must be a cuda tensor"),
         };
-        assert_eq!(
-            tw_layout.start_offset(),
-            0,
-            "expected contiguous topk_weights"
-        );
+        let tw_view =
+            tw_slice.slice(tw_layout.start_offset()..tw_layout.start_offset() + num_valid);
         let down = mistralrs_quant::cutile::cutile_grouped_gemm(
             &down_inputs.reshape((num_valid, inter))?,
             &self.w.down,
             &sids,
             &eids,
             &ntpp,
-            Some(tw_slice),
+            Some(&tw_view),
             em,
             num_valid,
             1,

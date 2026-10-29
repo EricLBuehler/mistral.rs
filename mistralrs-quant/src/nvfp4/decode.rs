@@ -5,12 +5,14 @@ use float8::F8E4M3;
 use half::{bf16, f16};
 
 use crate::{
-    cutile::Nvfp4GemmArgs,
+    cutile::{
+        device_multiprocessor_count, nvfp4_gemv_geometry, nvfp4_grouped_min_tokens, Nvfp4GemmArgs,
+    },
     utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream},
     NVFP4_BLOCK_SIZE,
 };
 
-const MAX_TOKENS: usize = 1;
+const MAX_TOKENS: usize = 32;
 const MAX_ROUTES: usize = u16::MAX as usize;
 
 #[repr(C)]
@@ -47,11 +49,36 @@ pub(super) fn supports(
     dtype: DType,
     args: Nvfp4GemmArgs<'_>,
 ) -> bool {
+    let multiprocessors = if tokens > 1 {
+        args.weights
+            .device()
+            .as_cuda_device()
+            .map(device_multiprocessor_count)
+            .unwrap_or(1)
+    } else {
+        1
+    };
+    supports_on_device(tokens, routes, dtype, args, multiprocessors)
+}
+
+fn supports_on_device(
+    tokens: usize,
+    routes: usize,
+    dtype: DType,
+    args: Nvfp4GemmArgs<'_>,
+    multiprocessors: usize,
+) -> bool {
     let dims = args.weights.dims();
     let n = dims[dims.len() - 2];
     let k = dims[dims.len() - 1] * 2;
-    tokens == MAX_TOKENS
-        && (1..=MAX_ROUTES).contains(&routes)
+    (1..=MAX_TOKENS).contains(&tokens)
+        && routes
+            .checked_mul(tokens)
+            .is_some_and(|routes| (1..=MAX_ROUTES).contains(&routes))
+        && (tokens == 1
+            || (dims.len() == 3
+                && tokens < nvfp4_grouped_min_tokens(dims[0], routes)
+                && tokens * routes * n.div_ceil(nvfp4_gemv_geometry(n, k).0) > multiprocessors))
         && n >= k
         && k > 0
         && matches!(dtype, DType::BF16 | DType::F16)
@@ -177,8 +204,9 @@ pub(super) fn forward(
         _ => unreachable!(),
     };
     let output = Tensor::from((Storage::Cuda(output), (routes, n)));
-    if indices.is_some() {
-        output.reshape((1, routes, n))
+    if let Some(indices) = indices.as_ref() {
+        let (tokens, topk) = indices.dims2()?;
+        output.reshape((tokens, topk, n))
     } else {
         Ok(output)
     }

@@ -1,7 +1,7 @@
 //! The fused MoE grouped-GEMM cuTile kernel (bf16), its host-side launch (`cutile_grouped_gemm`), and its JIT warmup.
 #![allow(clippy::too_many_arguments, clippy::missing_safety_doc)]
 
-use candle_core::cuda::cudarc::driver::CudaSlice;
+use candle_core::cuda::cudarc::driver::{CudaSlice, DevicePtr};
 use candle_core::{CudaDevice, DType, Device, Result, Storage, Tensor};
 use cutile::cuda_async::device_buffer::DevicePointer;
 use cutile::cuda_async::device_operation::DeviceOp;
@@ -421,7 +421,7 @@ pub fn cutile_grouped_gemm(
     sorted_token_ids: &CudaSlice<i32>,
     expert_ids: &CudaSlice<i32>,
     num_tokens_post_pad: &CudaSlice<i32>,
-    topk_weights: Option<&CudaSlice<f32>>,
+    topk_weights: Option<&dyn DevicePtr<f32>>,
     em: usize,
     num_valid_tokens: usize,
     top_k: usize,
@@ -452,7 +452,7 @@ fn cutile_grouped_gemm_inner(
     sorted_token_ids: &CudaSlice<i32>,
     expert_ids: &CudaSlice<i32>,
     num_tokens_post_pad: &CudaSlice<i32>,
-    topk_weights: Option<&CudaSlice<f32>>,
+    topk_weights: Option<&dyn DevicePtr<f32>>,
     em: usize,
     num_valid_tokens: usize,
     top_k: usize,
@@ -492,7 +492,7 @@ fn cutile_grouped_gemm_inner(
     let tw_guard;
     let tw_addr = match topk_weights {
         Some(tw) => {
-            let (addr, guard) = slice_ptr_on_stream(tw, 0, &stream);
+            let (addr, guard) = tw.device_ptr(&stream);
             tw_guard = Some(guard);
             addr
         }
@@ -712,7 +712,7 @@ pub(super) struct MoeAlign {
 impl MoeAlign {
     pub(super) fn build(
         dev: &CudaDevice,
-        topk_ids: &CudaSlice<u32>,
+        topk_ids: &impl DevicePtr<u32>,
         m: usize,
         num_experts: usize,
         top_k: usize,
@@ -793,7 +793,7 @@ impl Bf16Tuner {
         let (experts, top_k) = (sets[0].num_experts, sets[0].top_k);
         let ops = self.operands(m)?;
         if !ops.align.contains_key(&cfg.bm) {
-            let align = MoeAlign::build(&dev, &ops.topk_ids, m, experts, top_k, cfg.bm)?;
+            let align = MoeAlign::build(&dev, ops.topk_ids.as_ref(), m, experts, top_k, cfg.bm)?;
             ops.align.insert(cfg.bm, Arc::new(align));
         }
         let align = ops.align[&cfg.bm].clone();
@@ -825,7 +825,7 @@ impl Bf16Tuner {
                 &align.sids,
                 &align.eids,
                 &align.ntpp,
-                Some(&tw),
+                Some(tw.as_ref()),
                 align.em,
                 num_valid,
                 1,

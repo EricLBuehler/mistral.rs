@@ -520,6 +520,20 @@ fn text_model_vb(vb: ShardedVarBuilder) -> Result<ShardedVarBuilder> {
 }
 
 impl Qwen3_5MoeTextModel {
+    pub(super) fn reserve_recurrent_decode_deferred_storage(&self) -> Result<bool> {
+        crate::gdn::reserve_deferred_decode_state(
+            &mut self.cache.hybrid(),
+            self.layers
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, layer)| match &layer.layer_impl {
+                    LayerImpl::LinearAttention(gdn) => Some((idx, gdn)),
+                    LayerImpl::FullAttention(_) => None,
+                }),
+            self.dtype,
+        )
+    }
+
     pub fn new(
         cfg: &TextConfig,
         vb: ShardedVarBuilder,

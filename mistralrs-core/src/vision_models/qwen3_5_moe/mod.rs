@@ -420,7 +420,28 @@ impl Qwen3_5MoeModel {
     }
 }
 
-impl crate::speculative::SpeculativeTargetMixin for Qwen3_5MoeModel {}
+impl crate::speculative::SpeculativeTargetMixin for Qwen3_5MoeModel {
+    fn reserve_recurrent_decode_deferred_storage(&self) -> Result<bool> {
+        self.text.reserve_recurrent_decode_deferred_storage()
+    }
+
+    fn disable_recurrent_decode_deferred_storage(&self) -> Result<bool> {
+        self.text.cache.hybrid().disable_gdn_deferred_state()
+    }
+
+    fn flush_recurrent_state_for_current_batch(&self) -> Result<()> {
+        self.text
+            .cache
+            .hybrid()
+            .materialize_deferred_state_for_current_batch()
+    }
+
+    fn flush_recurrent_speculative_transitions(&self, sequence_ids: &[usize]) -> Result<()> {
+        let cache = self.text.cache.hybrid();
+        let slots = cache.recurrent_slots_for_sequences(sequence_ids);
+        cache.materialize_deferred_state_for_slots(&slots)
+    }
+}
 
 impl crate::block_diffusion::BlockDiffusionMixin for Qwen3_5MoeModel {}
 

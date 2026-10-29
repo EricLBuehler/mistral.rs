@@ -42,7 +42,11 @@ pub use nvfp4::{
     cutile_nvfp4, cutile_nvfp4_gather, cutile_nvfp4_prequantized, cutile_nvfp4_quantize,
     nvfp4_supported, register_nvfp4_routing, register_nvfp4_shape, Nvfp4GemmArgs,
 };
-pub(crate) use nvfp4::{cutile_nvfp4_gather_calibrated, try_cutile_nvfp4_gather_shared};
+pub(crate) use nvfp4::{
+    cutile_nvfp4_gather_calibrated, grouped_min_tokens as nvfp4_grouped_min_tokens,
+    try_cutile_nvfp4_gather_shared,
+};
+pub(crate) use nvfp4_gemv::geometry as nvfp4_gemv_geometry;
 pub(crate) use nvfp4_glu::{launch as cutile_nvfp4_glu, GluQuantArgs};
 pub use qsa::{
     cutile_qsa_attention, cutile_qsa_score, register_qsa_shape, QsaAttentionArgs, QsaPaged,
@@ -120,15 +124,28 @@ pub fn device_compute_major(dev: &candle_core::CudaDevice) -> i32 {
 
 pub fn device_multiprocessor_count(dev: &candle_core::CudaDevice) -> usize {
     use candle_core::cuda::cudarc::driver::{result, sys};
+    use std::{
+        collections::HashMap,
+        sync::{Mutex, OnceLock},
+    };
+
+    static COUNTS: OnceLock<Mutex<HashMap<i32, usize>>> = OnceLock::new();
     let cu_device = dev.cuda_stream().context().cu_device();
-    let count = unsafe {
-        result::device::get_attribute(
-            cu_device,
-            sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT,
-        )
-    }
-    .unwrap_or(1);
-    usize::try_from(count).unwrap_or(1).max(1)
+    *COUNTS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap()
+        .entry(cu_device)
+        .or_insert_with(|| {
+            let count = unsafe {
+                result::device::get_attribute(
+                    cu_device,
+                    sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT,
+                )
+            }
+            .unwrap_or(1);
+            usize::try_from(count).unwrap_or(1).max(1)
+        })
 }
 
 pub fn device_supported(dev: &candle_core::CudaDevice) -> bool {

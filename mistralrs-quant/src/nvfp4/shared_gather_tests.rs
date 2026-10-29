@@ -296,3 +296,134 @@ fn shared_expert_gather_graph_replays_current_inputs_and_routes() -> Result<()> 
     }
     Ok(())
 }
+
+#[test]
+fn shared_expert_decode_warmup_and_graph_replay() -> Result<()> {
+    const DECODE_EXPERTS: usize = 128;
+    const DECODE_TOPK: usize = 4;
+    const DECODE_N: usize = 256;
+    const DECODE_K: usize = 1024;
+
+    let _lock = CUDA_TEST_LOCK.lock().unwrap();
+    let device = Device::new_cuda_with_stream(0)?;
+    let dev = device.as_cuda_device()?;
+    if !crate::cutile::nvfp4_supported(dev) {
+        return Ok(());
+    }
+    let first_rows = crate::cutile::device_multiprocessor_count(dev)
+        .div_ceil(DECODE_TOPK)
+        .max(2);
+    let dense_rows = crate::cutile::nvfp4_grouped_min_tokens(DECODE_EXPERTS, DECODE_TOPK);
+    if first_rows >= dense_rows {
+        return Ok(());
+    }
+    crate::cutile::register_nvfp4_routing(&device, DECODE_EXPERTS, DECODE_TOPK)?;
+    let stream = dev.cuda_stream();
+    let _cache = dev.enable_cuda_graph_htod_cache();
+    for dtype in [DType::BF16, DType::F16] {
+        let layers = PROJECTION_SEEDS
+            .map(|seed| {
+                Nvfp4Layer::from_normalized_parts(
+                    Nvfp4LayerParts {
+                        weight: Tensor::full(
+                            0x22u8,
+                            (DECODE_EXPERTS, DECODE_N, DECODE_K / 2),
+                            &device,
+                        )?,
+                        scales: Tensor::full(
+                            F8E4M3::from_f32(0.5),
+                            (DECODE_EXPERTS, DECODE_N, DECODE_K / NVFP4_BLOCK_SIZE),
+                            &device,
+                        )?,
+                        global_scales: Tensor::from_vec(
+                            (0..DECODE_EXPERTS * DECODE_N)
+                                .map(|index| (index / DECODE_N + seed + 1) as f32 / GLOBAL_DIVISOR)
+                                .collect::<Vec<_>>(),
+                            (DECODE_EXPERTS, DECODE_N),
+                            &device,
+                        )?,
+                        input_scale: Some(Tensor::ones(DECODE_EXPERTS, DType::F32, &device)?),
+                        activation: Nvfp4ActivationMode::DynamicBlock,
+                        bias: None,
+                        dtype,
+                    },
+                    true,
+                )
+            })
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
+        let layers: [Nvfp4Layer; 2] = layers.try_into().ok().unwrap();
+        crate::cutile::warmup_moe_kernels(&device, true)?;
+        let compiled = cutile::tile_kernel::jit_compile_count();
+        for rows in [first_rows, first_rows + 1, 16, 32]
+            .into_iter()
+            .filter(|&rows| rows >= first_rows && rows < dense_rows)
+        {
+            for routes in [1, DECODE_TOPK] {
+                let make_input = |phase: usize| {
+                    Tensor::from_vec(
+                        (0..rows * routes * DECODE_K)
+                            .map(|index| ((index / DECODE_K + phase) % 3 + 1) as f32)
+                            .collect::<Vec<_>>(),
+                        (rows, routes, DECODE_K),
+                        &device,
+                    )?
+                    .to_dtype(dtype)
+                };
+                let make_indices = |phase: usize| {
+                    Tensor::from_vec(
+                        (0..rows * DECODE_TOPK)
+                            .map(|index| {
+                                ((index / DECODE_TOPK * 3 + index % DECODE_TOPK + phase)
+                                    % DECODE_EXPERTS) as u32
+                            })
+                            .collect::<Vec<_>>(),
+                        (rows, DECODE_TOPK),
+                        &device,
+                    )
+                };
+                let source = make_input(0)?;
+                let routing = make_indices(0)?;
+                device.synchronize()?;
+                let tracking = stream.context().is_event_tracking();
+                if tracking {
+                    unsafe { stream.context().disable_event_tracking() };
+                }
+                if let Err(error) =
+                    stream.begin_capture(sys::CUstreamCaptureMode::CU_STREAM_CAPTURE_MODE_RELAXED)
+                {
+                    if tracking {
+                        unsafe { stream.context().enable_event_tracking() };
+                    }
+                    return Err(candle_core::Error::wrap(error));
+                }
+                let outputs = shared(&source, &routing, &layers);
+                let graph = stream.end_capture(
+                    sys::CUgraphInstantiate_flags::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH,
+                );
+                if tracking {
+                    unsafe { stream.context().enable_event_tracking() };
+                }
+                let outputs = outputs?;
+                let graph = graph.map_err(candle_core::Error::wrap)?.unwrap();
+                assert_eq!(
+                    cutile::tile_kernel::jit_compile_count(),
+                    compiled,
+                    "decode warmup missed rows={rows} routes={routes}"
+                );
+                for phase in REPLAY_PHASES {
+                    source.slice_set(&make_input(phase)?, 0, 0)?;
+                    routing.slice_set(&make_indices(phase)?, 0, 0)?;
+                    graph.launch().map_err(candle_core::Error::wrap)?;
+                    device.synchronize()?;
+                    for (output, layer) in outputs.iter().zip(&layers) {
+                        compare(output, &layer.gather_forward(&source, &routing)?)?;
+                    }
+                }
+                assert_eq!(cutile::tile_kernel::jit_compile_count(), compiled);
+                drop(graph);
+            }
+        }
+    }
+    Ok(())
+}

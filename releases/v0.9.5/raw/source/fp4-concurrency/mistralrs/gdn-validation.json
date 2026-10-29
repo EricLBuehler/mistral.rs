@@ -1,0 +1,208 @@
+{
+  "status": "passed",
+  "build": "build-final.log",
+  "cargo_check": "check.log",
+  "cpu_tests_passed": 59,
+  "gpu_tests_passed": 3,
+  "tests": [
+    {
+      "label": "dispatch",
+      "filter": "cuda::gdn::dispatch_tests::",
+      "gpu": false,
+      "started_at": "2026-10-29T01:30:24.004231+00:00",
+      "elapsed_seconds": 0.43018331204075366,
+      "command": [
+        "bash",
+        "/tmp/qwen38-fp4-batch-opt/cuda-env.sh",
+        "/tmp/qwen38-fp4-batch-opt/gdn-lifecycle/binaries/mistralrs-core-tests",
+        "cuda::gdn::dispatch_tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "passed": true,
+      "counts": [
+        [
+          "9",
+          "0",
+          "0"
+        ]
+      ],
+      "log": "/tmp/qwen38-fp4-batch-opt/gdn-lifecycle/dispatch.log"
+    },
+    {
+      "label": "gdn-layer",
+      "filter": "gdn::layer::tests::",
+      "gpu": false,
+      "started_at": "2026-10-29T01:31:02.782534+00:00",
+      "elapsed_seconds": 0.07537066494114697,
+      "command": [
+        "bash",
+        "/tmp/qwen38-fp4-batch-opt/cuda-env.sh",
+        "/tmp/qwen38-fp4-batch-opt/gdn-lifecycle/binaries/mistralrs-core-tests",
+        "gdn::layer::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "passed": true,
+      "counts": [
+        [
+          "7",
+          "0",
+          "0"
+        ]
+      ],
+      "log": "/tmp/qwen38-fp4-batch-opt/gdn-lifecycle/gdn-layer.log"
+    },
+    {
+      "label": "speculative-lifecycle",
+      "filter": "speculative::target::tests::",
+      "gpu": false,
+      "started_at": "2026-10-29T01:31:02.858125+00:00",
+      "elapsed_seconds": 0.08667410898488015,
+      "command": [
+        "bash",
+        "/tmp/qwen38-fp4-batch-opt/cuda-env.sh",
+        "/tmp/qwen38-fp4-batch-opt/gdn-lifecycle/binaries/mistralrs-core-tests",
+        "speculative::target::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "passed": true,
+      "counts": [
+        [
+          "3",
+          "0",
+          "0"
+        ]
+      ],
+      "log": "/tmp/qwen38-fp4-batch-opt/gdn-lifecycle/speculative-lifecycle.log"
+    },
+    {
+      "label": "speculative-transition",
+      "filter": "speculative::gdn_transitions::tests::",
+      "gpu": false,
+      "started_at": "2026-10-29T01:31:02.945023+00:00",
+      "elapsed_seconds": 0.06609315203968436,
+      "command": [
+        "bash",
+        "/tmp/qwen38-fp4-batch-opt/cuda-env.sh",
+        "/tmp/qwen38-fp4-batch-opt/gdn-lifecycle/binaries/mistralrs-core-tests",
+        "speculative::gdn_transitions::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "exit_code": 0,
+      "passed": true,
+      "counts": [
+        [
+          "3",
+          "0",
+          "1"
+        ]
+      ],
+      "log": "/tmp/qwen38-fp4-batch-opt/gdn-lifecycle/speculative-transition.log"
+    },
+    {
+      "label": "pool-cuda",
+      "filter": "deferred_pool_gather_snapshot_and_slot_reuse_materialize_exactly",
+      "gpu": true,
+      "started_at": "2026-10-29T01:31:03.011328+00:00",
+      "elapsed_seconds": 0.7607940309680998,
+      "command": [
+        "bash",
+        "/tmp/qwen38-fp4-batch-opt/cuda-env.sh",
+        "/tmp/qwen38-fp4-batch-opt/gdn-lifecycle/binaries/mistralrs-core-tests",
+        "deferred_pool_gather_snapshot_and_slot_reuse_materialize_exactly",
+        "--test-threads=1",
+        "--nocapture",
+        "--ignored"
+      ],
+      "exit_code": 0,
+      "passed": true,
+      "counts": [
+        [
+          "1",
+          "0",
+          "0"
+        ]
+      ],
+      "log": "/tmp/qwen38-fp4-batch-opt/gdn-lifecycle/pool-cuda.log"
+    },
+    {
+      "label": "layer-cuda",
+      "filter": "deferred_layer_cached_fallback_prefill_and_rollback_match_eager",
+      "gpu": true,
+      "started_at": "2026-10-29T01:31:03.772372+00:00",
+      "elapsed_seconds": 0.7337434189394116,
+      "command": [
+        "bash",
+        "/tmp/qwen38-fp4-batch-opt/cuda-env.sh",
+        "/tmp/qwen38-fp4-batch-opt/gdn-lifecycle/binaries/mistralrs-core-tests",
+        "deferred_layer_cached_fallback_prefill_and_rollback_match_eager",
+        "--test-threads=1",
+        "--nocapture",
+        "--ignored"
+      ],
+      "exit_code": 0,
+      "passed": true,
+      "counts": [
+        [
+          "1",
+          "0",
+          "0"
+        ]
+      ],
+      "log": "/tmp/qwen38-fp4-batch-opt/gdn-lifecycle/layer-cuda.log"
+    },
+    {
+      "label": "graph-cleanup",
+      "filter": "graph_memory_cleanup_returns_allocator_to_baseline",
+      "gpu": true,
+      "started_at": "2026-10-29T01:31:04.506461+00:00",
+      "elapsed_seconds": 0.5011522030690685,
+      "command": [
+        "bash",
+        "/tmp/qwen38-fp4-batch-opt/cuda-env.sh",
+        "/tmp/qwen38-fp4-batch-opt/gdn-lifecycle/binaries/mistralrs-core-tests",
+        "graph_memory_cleanup_returns_allocator_to_baseline",
+        "--test-threads=1",
+        "--nocapture",
+        "--ignored"
+      ],
+      "exit_code": 0,
+      "passed": true,
+      "counts": [
+        [
+          "1",
+          "0",
+          "0"
+        ]
+      ],
+      "log": "/tmp/qwen38-fp4-batch-opt/gdn-lifecycle/graph-cleanup.log"
+    },
+    {
+      "label": "hybrid-cache",
+      "filter": "kv_cache::hybrid_cache::",
+      "gpu": false,
+      "passed": true,
+      "counts": [
+        [
+          "37",
+          "0",
+          "1"
+        ]
+      ],
+      "log": "/tmp/qwen38-fp4-batch-opt/gdn-lifecycle/hybrid-cache.log",
+      "binary_generation": "final"
+    }
+  ],
+  "final_binaries": "binaries.json",
+  "initial_gpu_binary_hashes": "binaries-initial.json",
+  "final_source": "provenance-final/sources.json",
+  "initial_source": "provenance/sources.json",
+  "post_gpu_changes": "Only the CPU snapshot fixture copy and unused binding removal changed GDN-owned files after GPU tests; quant alignment follow-up is validated separately by the NVFP4 agent.",
+  "slot_released": true
+}

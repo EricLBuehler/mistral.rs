@@ -1,0 +1,11 @@
+{
+  "binary": "/tmp/qwen38-fp4-batch-opt/mistralrs-gdn-final",
+  "binary_sha256": "0db790830256383e1aaaaf8319e9c50cda72947f6793401646a744bb32dd2282",
+  "source_patch_sha256": "24c31ef33cfc3e4f8bb4bdfaee5d4444c58decac8772bd2111e785aa937b65fe",
+  "git_head": "b56b9c0b47e4f99b0d96a8fbcc2b2d6e2cd6cabe",
+  "excluded_experiments": [
+    "partial_embedding_residency",
+    "nvfp4_runtime_autotuning",
+    "mixed_prefill_decode"
+  ]
+}

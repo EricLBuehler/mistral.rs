@@ -2,7 +2,8 @@
   "schema_version": 1,
   "measurement_dates_utc": [
     "2026-10-27",
-    "2026-10-28"
+    "2026-10-28",
+    "2026-10-29"
   ],
   "hardware": {
     "gpu": "NVIDIA GB10",
@@ -13,7 +14,7 @@
     "driver": "580.126.09",
     "l2_bytes": 25165824
   },
-  "scope": "Single NVIDIA GB10, C1, warmed text generation, no speculative decoding. Two checkpoints and separate measurement protocols; not a GGUF-versus-FP4 quantization comparison.",
+  "scope": "Single NVIDIA GB10, warmed text generation, no speculative decoding. Historical C1 GGUF/FP4 prompt-length comparisons plus a separate official FP4 concurrency sweep at C1, C2, C4, and C8; not a GGUF-versus-FP4 quantization comparison.",
   "comparisons": {
     "gguf": {
       "models": {
@@ -203,6 +204,82 @@
       },
       "measurement_environment": "One GPU server, no profiler during timed measurement. Competing CI processes paused during the measured sweep and resumed afterward. Memory samples are system-wide, not process attribution.",
       "memory_limit": "Bracketing memory samples include time just outside the sweep; the final mistral.rs sample follows CI resume. Nonzero swap counters must not be attributed solely to inference."
+    },
+    "fp4_concurrency": {
+      "model": "nvidia/Qwen3.8-Flash-Next-FP4-Local",
+      "revision": "b9ce18a6887e18c089fdea8509a33e63429a3300",
+      "workload": {
+        "prompts": "prompts/fp4-concurrency.json",
+        "concurrencies": [
+          1,
+          2,
+          4,
+          8
+        ],
+        "input_tokens": 2048,
+        "output_tokens": 128,
+        "temperature": 0,
+        "seed": 20260904,
+        "enable_thinking": false,
+        "ignore_eos": true,
+        "max_sequences": 8,
+        "max_context": 16384,
+        "max_num_batched_tokens": 4096,
+        "max_prefill_chunk_tokens": 4096,
+        "kv_cache_bytes": 2147483648,
+        "kv_cache_dtype": "BF16",
+        "prefix_caching": false,
+        "mtp": false
+      },
+      "protocol": [
+        "4 sequential references",
+        "8 concurrent reference requests",
+        "159 conditioning requests",
+        "159 measured-stage requests (15 warmups +144 measured)"
+      ],
+      "aggregation": "Aggregate output throughput is the median of three whole-round output-token rates per concurrency. Each round has max(6, 3*C) requests. TTFT and TPOT are arithmetic means over measured requests; per-request decode is 1000 / mean TPOT_ms. Closed-loop rounds include ramp and drain. TPOT ends at the finish_reason SSE event.",
+      "runs": {
+        "mistralrs": "source/fp4-concurrency/mistralrs",
+        "vllm": "source/fp4-concurrency/vllm"
+      },
+      "starting_mistralrs": "source/fp4-concurrency/starting-mistralrs",
+      "software": {
+        "mistralrs_source_commit": null,
+        "mistralrs_measured_base_commit": "b56b9c0b47e4f99b0d96a8fbcc2b2d6e2cd6cabe",
+        "mistralrs_binary_sha256": "0db790830256383e1aaaaf8319e9c50cda72947f6793401646a744bb32dd2282",
+        "mistralrs_features": [
+          "cuda",
+          "flash-attn",
+          "cutile"
+        ],
+        "mistralrs_cuda_toolkit": "13.3",
+        "mistralrs_compat_libcuda": "610.57.04",
+        "candle_revision": "66a8cf184a5a519671454066b1b9efd446ec9f5c",
+        "rustc": "1.99.1 (58cf8f9c3 2026-10-13)",
+        "llvm": "23.1.1",
+        "candle_core_codegen_units": 1,
+        "vllm_commit": "8244d1c44348ae8a5bbfc9f1b607021652283ed4",
+        "vllm_image": "eugr/spark-vllm-b12x@sha256:57c24fc397c66d4d28a7d0d5f1d792934fd01a70f4574cff6315fb7bc329d5cb",
+        "flashinfer_commit": "9b9ed3bb703a8d2ec6d212ea0a80164552b9eb57",
+        "vllm_cuda": "13.0.2",
+        "torch": "2.13.0+cu130",
+        "triton": "3.7.1",
+        "mistralrs_source_verification": "source/fp4-concurrency/mistralrs/source-verification.json",
+        "measured_source_patch": "source/fp4-concurrency/mistralrs/measured-source.patch"
+      },
+      "launch": {
+        "mistralrs": "source/fp4-concurrency/mistralrs/launch.sh",
+        "vllm": "source/fp4-concurrency/vllm/launch.sh"
+      },
+      "precision_note": "Same official checkpoint and original BF16 output head. Routed expert prefill is A4 in both engines; decode is A4 in mistral.rs and A16 in vLLM. Dense MXFP8 uses A16 for mistral.rs C1 decode and A8 for batched decode/prefill; vLLM selects its own backend. This is not activation-precision-matched.",
+      "measurement_environment": "One GPU server at a time; no profiler or concurrent compiler during the measured sweep. The vLLM run is the saved October 28 baseline; final mistral.rs was measured October 29 UTC. Memory counters are system-wide.",
+      "correctness": "Four serial and eight concurrent reference answers match saved vLLM. All 159 conditioning and 159 measured-stage requests per engine pass request validation; 144 requests contribute to measured cells. Long-output repeat counts are descriptive because scheduling changes batch composition and expert routing.",
+      "graph_validation": {
+        "mistralrs_resident_entries_after_measured": 16,
+        "capture_failures": 0,
+        "memory_pressure_evictions": 0
+      },
+      "source_note": "The dirty-tree measurement is reconstructable from its base commit and retained patch. Source file hashes bridge the measured implementation to the code committed with this report. Historical C1 length-sweep results retain their original source identity."
     }
   },
   "source_policy": "Source captures are retained byte-for-byte. Absolute paths and historical artifact references inside them describe the original machine; portable runners use repository-relative fixtures. Raw contains canonical comparisons, their warmups, repeatability evidence, and provenance. Development experiments remain in Git history.",
@@ -262,6 +339,58 @@
     "source/gguf/mrs-paired-8192-serving.json": "79764d6bf724591acf3b822c436759f03ed88a60e8fd15f364df5b21586a99d9",
     "source/gguf/mrs-paired-8192-startup.json": "af4c1c8295fce459e883e6b27f676dbc1aed4c962a53da59b3b9591268a047d2",
     "source/gguf/paired-final-compatibility.json": "1f9d48f68d2c46e41bef5510bc859080c80e80165ad3921fbc52f6e8765969a9",
-    "source/gguf/paired-source-manifest.json": "4c6b7854852965210c47068cd424cb77cf0e8349eea27d47eee572f619803cb1"
+    "source/gguf/paired-source-manifest.json": "4c6b7854852965210c47068cd424cb77cf0e8349eea27d47eee572f619803cb1",
+    "source/fp4-concurrency/comparison.json": "1ed885ce94079ca8f37cad077ddd3b51c6d1802792876a0f4a6a84a3e49dbc5a",
+    "source/fp4-concurrency/mistralrs/build-manifest.json": "fd2f5bac0e9d09afcfffbfa1a3f38b1fc769578925e5f57fddb42e549d699904",
+    "source/fp4-concurrency/mistralrs/capture-manifest.json": "f2e7c347d4ce40035a945ba7833612293d2c07c2e7d2932137f1eca3951adf8b",
+    "source/fp4-concurrency/mistralrs/cargo-check.log": "75d6007cdbc0ae066ea3a61d7e498e723ec8df20cd5ee92d46da9f515218f531",
+    "source/fp4-concurrency/mistralrs/conditioning/requests.jsonl": "b9af3e5b56c8219e7e661910390e863855485e03a435678d6d57fe2d28bdca8e",
+    "source/fp4-concurrency/mistralrs/conditioning/rounds.jsonl": "6f182d39f432143f0544fc6a9c8c867aeea2997117e4d7bf67122a15824d6cb6",
+    "source/fp4-concurrency/mistralrs/conditioning/summary.json": "db52b08f71d2aa334a4881d3ff23cc35015b41798e0b91227a4874944036ceb0",
+    "source/fp4-concurrency/mistralrs/gdn-validation.json": "6e98f6f899b3e9f007c5a29e9cfd6ed155223ff4f7ecb33304f48d15fb176a58",
+    "source/fp4-concurrency/mistralrs/graph-gates/after-conditioning.json": "b9131f212778b567c1d4081505f9187b0c83d0cbd3ae72eb3084fea30911e9b3",
+    "source/fp4-concurrency/mistralrs/graph-gates/after-conditioning.prom": "adeedbaef0416a501e489ccec5e1a5a33dbfec200793ec311124af6e0a79fad2",
+    "source/fp4-concurrency/mistralrs/graph-gates/after-measured.json": "48b6e32b7615df971976c0a9912dba084d271a4171fa11911c3add660ad9100b",
+    "source/fp4-concurrency/mistralrs/graph-gates/after-measured.prom": "aa5b482ec4dd4345116ade92f01f9626891384139d25a06318e61d28284b6fcf",
+    "source/fp4-concurrency/mistralrs/graph-gates/after-reference.json": "a14ec296ab348e50a609a200f4728c64be28ab78d60a7159453f28f207c00917",
+    "source/fp4-concurrency/mistralrs/graph-gates/after-reference.prom": "d6e1ed08da1ee2b39e02cbe3ea8ab56fc4b51aa661db0b80e768f2eadd0d3002",
+    "source/fp4-concurrency/mistralrs/graph-gates/startup.json": "b7420e1a34255e691e080b80135aabbb99e582a602853323c6d35a65c05b354d",
+    "source/fp4-concurrency/mistralrs/graph-gates/startup.prom": "f7ce96cdc64bbcf4b9750ef6bbdc3da51e8397882aa595f9dfe5ff1634b9f111",
+    "source/fp4-concurrency/mistralrs/launch.json": "1928d16db0dbf7b3d1e9c0549e438f0d45829da24018302f9b8d2afb47db6c10",
+    "source/fp4-concurrency/mistralrs/launch.sh": "2cd0599242433e2ee7d4faa78b1e869ba33500f925b522eb6bf296eee5ff24a4",
+    "source/fp4-concurrency/mistralrs/measured/requests.jsonl": "fdf81245cc39f1b0b4aa96b283f75a7df3612c80683f123c7ed21157d6699aa5",
+    "source/fp4-concurrency/mistralrs/measured/rounds.jsonl": "7a640535885eeb985bec742c8f18587d2f35b9dd2910b3a5ac86db9e19122d39",
+    "source/fp4-concurrency/mistralrs/measured/summary.json": "0a2c965f5a5ec11f6c4e9a70c7c2a0350fb3b9793046eedc29ce8f3606cd79b6",
+    "source/fp4-concurrency/mistralrs/measured-source.patch": "24c31ef33cfc3e4f8bb4bdfaee5d4444c58decac8772bd2111e785aa937b65fe",
+    "source/fp4-concurrency/mistralrs/measurement-complete.json": "8369b72dfd8b3f85a45abc103f6001e36aedde0403850f482e904ffe2ae024af",
+    "source/fp4-concurrency/mistralrs/memory.jsonl": "18cfd6e3a56ff744c3dc11c35de282ff97adbb73fbc260a15a30b29736d6e191",
+    "source/fp4-concurrency/mistralrs/reference-c8-comparison.json": "c319f6985f5151cc1280313924da6b45c5150830439428ee4c8241cbe158c89e",
+    "source/fp4-concurrency/mistralrs/reference-c8.json": "99665b3cebaa9b505631f5f50f22e1a00d975c5375139deef32827eeaf7f56a3",
+    "source/fp4-concurrency/mistralrs/reference.json": "eb679a88b2189e6f45d7cee22ea670060ae05c2f78b0be2452b97391d7115676",
+    "source/fp4-concurrency/mistralrs/release-build.log": "bff461523a1246b506f62629980ff57052a4ab67ff6b39b2e41b99a3ab89ac09",
+    "source/fp4-concurrency/mistralrs/server.log": "91ac8979f11c7a76e9ba94fff5fe1672ede6da579b0b8a9865caaf53abd1a431",
+    "source/fp4-concurrency/mistralrs/shutdown.json": "fa7bb6b0480037da97c3090fe3323ce4ca269f51b6adbcd5632cbbb8431d2498",
+    "source/fp4-concurrency/mistralrs/source-verification.json": "c61115f703e9fe54e1157e8c0dca0acb45784a5bd002f720e62b91f7f912231d",
+    "source/fp4-concurrency/starting-mistralrs/capture-manifest.json": "065c98edf836078be2ba3ed45d06521dd6bfdf0ede9db15c68eb57f2adc62bb1",
+    "source/fp4-concurrency/starting-mistralrs/launch.sh": "e80de6bebec392eedf407b004c4f3b6014ad1d9433ad1edeaf9c70da7519be77",
+    "source/fp4-concurrency/starting-mistralrs/measured/requests.jsonl": "a6fac9bc6c7a20916c2f4ba3997b0e672ce9303a31692edd21eb97ca6a6d8b44",
+    "source/fp4-concurrency/starting-mistralrs/measured/rounds.jsonl": "7bae8452cabb9f94e4b908868d70bfe03b0057640f9aa24273936c18f77f8186",
+    "source/fp4-concurrency/starting-mistralrs/measured/summary.json": "08a66d7472a33cd4490b67bd46288cbf4f169224dec5ea51f9db408e9991edb1",
+    "source/fp4-concurrency/vllm/capture-manifest.json": "065c98edf836078be2ba3ed45d06521dd6bfdf0ede9db15c68eb57f2adc62bb1",
+    "source/fp4-concurrency/vllm/conditioning/requests.jsonl": "690db46d096d00ab92638e8f4a105db888588818c0c2d2c2d3dda4c2a7bad090",
+    "source/fp4-concurrency/vllm/conditioning/rounds.jsonl": "656fb3cf982028e24d709761ae066374f93a3c63cded154a4fa4879ed5deb7b7",
+    "source/fp4-concurrency/vllm/conditioning/summary.json": "e502463d8502b8c2d60c7e4e11909a42cb217a2f798d5ac8fac938150086b3eb",
+    "source/fp4-concurrency/vllm/launch.json": "a0f10524978b40efec4b1059a1ce96029e373a1204cc7e1e9ce415cbfd535b34",
+    "source/fp4-concurrency/vllm/launch.sh": "6ea5d54ee5960011ff74632552c54d501342e0b9896b8e624438b2e34ab2e182",
+    "source/fp4-concurrency/vllm/measured/requests.jsonl": "194c367d792bce0a96630f1afc0b5b17f40c48b6b39445a279d6ea595f4d0f38",
+    "source/fp4-concurrency/vllm/measured/rounds.jsonl": "2b355d678f86e957dfe0ffd774f4a7a2e8d98eaa19b55f77769414cdc8cab640",
+    "source/fp4-concurrency/vllm/measured/summary.json": "c10331ddba103b9c8b6787906c7b681d90c7146e096a576d683d12bebea25542",
+    "source/fp4-concurrency/vllm/memory.jsonl": "6f9261a9ece85fb9d4557de769d884753f9385a66ec16d6ff70eee6336908a78",
+    "source/fp4-concurrency/vllm/reference-c8-comparison.json": "c319f6985f5151cc1280313924da6b45c5150830439428ee4c8241cbe158c89e",
+    "source/fp4-concurrency/vllm/reference-c8.json": "62768cb73660f78769cf799b8f852dfe25d0e09f7d907c5522d5685ddd212f98",
+    "source/fp4-concurrency/vllm/reference.json": "e1df3b5abee202b08223302914d60bd080035f174897356b8a40f411767728d0",
+    "source/fp4-concurrency/vllm/server.log": "59d61af37c7712805c21859b787734991a21f3d68d4fdd2a2e35cc68977aa221",
+    "source/fp4-concurrency/vllm/shutdown.json": "3ae039d4caf5cd199b8eb02fd15ebb136cc37c5061aab905e9d1a8d832b51e72",
+    "prompts/fp4-concurrency.json": "721e7ac632258dfa142cd69f7414068c64aef302fcae09d702878a25ab471c75"
   }
 }

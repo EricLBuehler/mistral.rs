@@ -18,6 +18,8 @@ GGUF_REPETITIONS = 3
 FP4_REPETITIONS = 3
 FP4_REQUESTS_PER_ROUND = 6
 RATE_KEYS = ("prefill_tokens_s", "decode_tokens_s")
+CONCURRENCIES = (1, 2, 4, 8)
+CONCURRENCY_METRICS = ("output_tokens_s", "ttft_ms", "decode_tokens_s")
 
 
 def read_json(path):
@@ -334,6 +336,149 @@ def fp4(manifest, results):
     }
 
 
+def fp4_concurrency(manifest, results):
+    fixture_path = RAW / manifest["workload"]["prompts"]
+    fixture = read_json(fixture_path)
+    prompts = {p["id"]: p for r in fixture["rounds"] for p in r["prompts"]}
+    runs = {}
+    references = {}
+    for engine, relative_root in manifest["runs"].items():
+        root = RAW / relative_root
+        summary = read_json(root / "measured/summary.json")
+        assert summary["success"] and summary["workload_sha256"] == sha256(fixture_path)
+        rows = read_jsonl(root / "measured/requests.jsonl")
+        rounds = read_jsonl(root / "measured/rounds.jsonl")
+        conditioning = read_jsonl(root / "conditioning/requests.jsonl")
+        assert len(rows) == len(conditioning) == len(prompts) == 159
+        assert len({r["request_id"] for r in rows}) == len(rows)
+        assert all(r["success"] for r in conditioning)
+        for index, row in enumerate(rows):
+            assert row["success"] and row["http_status"] == 200
+            assert row["finish_reason"] == "length"
+            assert row["usage"]["prompt_tokens"] == row["input_tokens"] == 2048
+            assert (
+                row["usage"]["completion_tokens"]
+                == row["output_tokens"]
+                == OUTPUT_TOKENS
+            )
+            assert row["prompt_sha256"] == prompts[row["request_id"]]["rendered_sha256"]
+            close(
+                row["tpot_ms"], (row["e2e_ms"] - row["ttft_ms"]) / (OUTPUT_TOKENS - 1)
+            )
+            times = row["content_chunk_times_ms"]
+            assert times and times == sorted(times)
+            close(times[0], row["ttft_ms"])
+            assert times[-1] <= row["e2e_ms"]
+            results.append(
+                normalized(
+                    "fp4_concurrency",
+                    engine,
+                    engine,
+                    Path(relative_root) / "measured/requests.jsonl",
+                    index,
+                    {
+                        "phase": row["phase"],
+                        "request_id": row["request_id"],
+                        "repetition": row["repetition"],
+                        "concurrency": row["concurrency"],
+                        "prompt_tokens": row["input_tokens"],
+                        "output_tokens": row["output_tokens"],
+                        "prompt_sha256": row["prompt_sha256"],
+                        "ttft_ms": row["ttft_ms"],
+                        "tpot_ms": row["tpot_ms"],
+                        "decode_tokens_s": 1000 / row["tpot_ms"],
+                    },
+                )
+            )
+        cells = {}
+        for concurrency in CONCURRENCIES:
+            measured = [
+                r
+                for r in rows
+                if r["phase"] == "measured" and r["concurrency"] == concurrency
+            ]
+            measured_rounds = [
+                r
+                for r in rounds
+                if r["phase"] == "measured" and r["concurrency"] == concurrency
+            ]
+            count = max(FP4_REQUESTS_PER_ROUND, FP4_REPETITIONS * concurrency)
+            assert len(measured) == FP4_REPETITIONS * count
+            assert sorted(r["repetition"] for r in measured_rounds) == list(
+                range(FP4_REPETITIONS)
+            )
+            for round_ in measured_rounds:
+                assert round_["success"] and round_["failed"] == 0
+                assert round_["requested"] == round_["completed"] == count
+                subset = [r for r in measured if r["round_id"] == round_["id"]]
+                assert len(subset) == count
+                close(
+                    round_["output_tokens_per_second"],
+                    sum(r["usage"]["completion_tokens"] for r in subset)
+                    / round_["duration_seconds"],
+                )
+            ttft = statistics.mean(r["ttft_ms"] for r in measured)
+            tpot = statistics.mean(r["tpot_ms"] for r in measured)
+            cells[concurrency] = {
+                "requests": len(measured),
+                "ttft_ms": ttft,
+                "tpot_ms": tpot,
+                "output_tokens_s": statistics.median(
+                    r["output_tokens_per_second"] for r in measured_rounds
+                ),
+                "decode_tokens_s": 1000 / tpot,
+                "rounds": [
+                    {
+                        "repetition": r["repetition"],
+                        "output_tokens_s": r["output_tokens_per_second"],
+                    }
+                    for r in measured_rounds
+                ],
+            }
+        references[engine] = {}
+        for filename, count in (("reference.json", 4), ("reference-c8.json", 8)):
+            answers = read_json(root / filename)
+            assert len(answers) == count
+            references[engine][filename] = [
+                (
+                    r["id"],
+                    r["request"]["messages"],
+                    r["response"]["choices"][0]["message"]["content"],
+                )
+                for r in answers
+            ]
+        runs[engine] = {"source": relative_root, "cells": cells}
+    assert references["mistralrs"] == references["vllm"]
+    cells = []
+    for concurrency in CONCURRENCIES:
+        ours = runs["mistralrs"]["cells"][concurrency]
+        baseline = runs["vllm"]["cells"][concurrency]
+        gains = {
+            key: 100 * (ours[key] / baseline[key] - 1) for key in CONCURRENCY_METRICS
+        }
+        gains["ttft_ms"] *= -1
+        cells.append(
+            {
+                "concurrency": concurrency,
+                "prompt_tokens": 2048,
+                "mistralrs": ours,
+                "baseline": baseline,
+                "gain_percent": gains,
+            }
+        )
+    return {
+        "aggregation": manifest["aggregation"],
+        "precision_note": manifest["precision_note"],
+        "cells": cells,
+        "runs": runs,
+        "validation": {
+            "serial_reference_matches": 4,
+            "concurrent_reference_matches": 8,
+            "measured_requests_per_engine": 144,
+        },
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -352,6 +497,9 @@ def main():
         "comparisons": {
             "gguf": gguf(manifest["comparisons"]["gguf"], results),
             "fp4": fp4(manifest["comparisons"]["fp4"], results),
+            "fp4_concurrency": fp4_concurrency(
+                manifest["comparisons"]["fp4_concurrency"], results
+            ),
         },
     }
     csv_file = io.StringIO(newline="")
@@ -360,20 +508,24 @@ def main():
         [
             "comparison",
             "prompt_tokens",
+            "concurrency",
             "metric",
-            "mistralrs_tokens_s",
-            "baseline_tokens_s",
+            "unit",
+            "mistralrs",
+            "baseline",
             "gain_percent",
         ]
     )
     for name, comparison in summary["comparisons"].items():
         for cell in comparison["cells"]:
-            for key in RATE_KEYS:
+            for key in CONCURRENCY_METRICS if name == "fp4_concurrency" else RATE_KEYS:
                 writer.writerow(
                     [
                         name,
                         cell["prompt_tokens"],
+                        cell.get("concurrency", 1),
                         key,
+                        "ms" if key == "ttft_ms" else "tokens/s",
                         cell["mistralrs"][key],
                         cell["baseline"][key],
                         cell["gain_percent"][key],

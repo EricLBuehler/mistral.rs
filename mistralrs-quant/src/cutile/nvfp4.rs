@@ -13,6 +13,10 @@ const SMALL_MATMUL_MAX_K: usize = 8192;
 const SMALL_MATMUL_MAX_ELEMENTS: usize = 32 * 1024 * 1024;
 const GROUPED_MIN_TOKENS: usize = 4;
 const GROUPED_MIN_ROUTES_PER_EXPERT: usize = 2;
+const SHARED_MIN_PROJECTIONS: usize = 2;
+const SHARED_MIN_TOKENS: usize = 2;
+const SHARED_MIN_K_TILES: usize = 4;
+const SHARED_MIN_OUTPUT_WAVES: usize = 4;
 const MAX_KERNEL_DIMENSION: usize = i32::MAX as usize;
 // cuTile specializes dynamic dimensions by powers of two capped at 16.
 const MAX_DIMENSION_DIVISOR: usize = 16;
@@ -261,7 +265,26 @@ pub(crate) fn try_cutile_nvfp4_gather_shared(
     let shape = validate_input(x, Some(indices), first)?;
     let (experts, n, k, _) = shape;
     let (tokens, topk) = indices.dims2()?;
-    if tokens < grouped_min_tokens(experts, topk) {
+    let dev = x.device().as_cuda_device()?;
+    let geometry = super::nvfp4_matmul::routed_geometry(
+        tokens,
+        n,
+        k,
+        first.activation_global_scale.is_some(),
+        super::nvfp4_matmul::matmul_device(dev).compute_major,
+    );
+    if tokens < grouped_min_tokens(experts, topk)
+        && (projections.len() < SHARED_MIN_PROJECTIONS
+            || first.activation_global_scale.is_none()
+            || tokens
+                < shared_grouped_min_tokens(
+                    n,
+                    k,
+                    topk,
+                    super::device_multiprocessor_count(dev),
+                    geometry,
+                ))
+    {
         return Ok(None);
     }
     for &projection in projections {
@@ -275,14 +298,6 @@ pub(crate) fn try_cutile_nvfp4_gather_shared(
             return Ok(None);
         }
     }
-    let dev = x.device().as_cuda_device()?;
-    let geometry = super::nvfp4_matmul::routed_geometry(
-        tokens,
-        n,
-        k,
-        first.activation_global_scale.is_some(),
-        super::nvfp4_matmul::matmul_device(dev).compute_major,
-    );
     validate_kernel_dimensions(&[crate::moe::cuda::moe_align_em(
         tokens,
         topk,
@@ -456,10 +471,25 @@ fn dimension_divisor(value: usize) -> usize {
     (1usize << value.trailing_zeros()).min(MAX_DIMENSION_DIVISOR)
 }
 
-fn grouped_min_tokens(experts: usize, topk: usize) -> usize {
+pub(crate) fn grouped_min_tokens(experts: usize, topk: usize) -> usize {
     (experts * GROUPED_MIN_ROUTES_PER_EXPERT)
         .div_ceil(topk)
         .max(GROUPED_MIN_TOKENS)
+}
+
+fn shared_grouped_min_tokens(
+    n: usize,
+    k: usize,
+    topk: usize,
+    multiprocessors: usize,
+    geometry: super::nvfp4_matmul::RoutedGeometry,
+) -> usize {
+    if n >= k || k < SHARED_MIN_K_TILES * geometry.k {
+        return usize::MAX;
+    }
+    SHARED_MIN_TOKENS.max(multiprocessors.div_ceil(topk)).max(
+        (SHARED_MIN_OUTPUT_WAVES * multiprocessors).div_ceil(topk * n.div_ceil(geometry.columns)),
+    )
 }
 
 fn dense_warmup_rows() -> Vec<usize> {
@@ -488,8 +518,16 @@ fn grouped_warmup_rows(
     topk: usize,
     geometry: impl Fn(usize) -> super::nvfp4_matmul::RoutedGeometry,
 ) -> Vec<usize> {
+    grouped_warmup_rows_from(experts, topk, grouped_min_tokens(experts, topk), geometry)
+}
+
+fn grouped_warmup_rows_from(
+    experts: usize,
+    topk: usize,
+    start: usize,
+    geometry: impl Fn(usize) -> super::nvfp4_matmul::RoutedGeometry,
+) -> Vec<usize> {
     let period = super::nvfp4_matmul::MAX_ROUTED_ROWS * MAX_DIMENSION_DIVISOR;
-    let start = grouped_min_tokens(experts, topk);
     let mut seen = HashSet::new();
     [
         start,
@@ -560,16 +598,44 @@ impl RegisteredShape {
             topks.push(1);
         }
         for topk in topks {
+            let grouped_start = grouped_min_tokens(experts, topk);
+            let shared_start = if self.activation_global_scale.is_some() {
+                shared_grouped_min_tokens(
+                    n,
+                    k,
+                    topk,
+                    super::device_multiprocessor_count(device.as_cuda_device()?),
+                    geometry(1),
+                )
+            } else {
+                usize::MAX
+            };
             for rows in ROUTED_GEMV_WARMUP_ROWS
                 .into_iter()
                 .chain(grouped_warmup_rows(experts, topk, geometry))
+                .chain(
+                    grouped_warmup_rows_from(
+                        experts,
+                        topk,
+                        grouped_start.min(shared_start),
+                        geometry,
+                    )
+                    .into_iter()
+                    .filter(|&rows| rows < grouped_start),
+                )
             {
                 let indices = Tensor::zeros((rows, topk), DType::U32, device)?;
                 let x = Tensor::zeros((rows, k), self.activation_dtype, device)?;
                 launch(&x, Some(&indices), self.args(), true)?;
+                if rows >= shared_start && rows < grouped_start {
+                    super::nvfp4_matmul::launch_gather(&x, &indices, self.args(), true, true)?;
+                }
                 if topk > 1 {
                     let x = Tensor::zeros((rows, topk, k), self.activation_dtype, device)?;
                     launch(&x, Some(&indices), self.args(), true)?;
+                    if rows >= shared_start && rows < grouped_start {
+                        super::nvfp4_matmul::launch_gather(&x, &indices, self.args(), true, true)?;
+                    }
                 }
             }
         }
@@ -621,6 +687,72 @@ mod tests {
         (4097, 8208),
         (4096, 14336),
     ];
+
+    #[test]
+    fn shared_grouping_requires_reduction_work_and_parallelism() {
+        use super::super::nvfp4_matmul::routed_geometry;
+        for (n, k, topk, multiprocessors, expected) in [
+            (256, 1024, 2, 48, 24),
+            (256, 1024, 4, 48, 12),
+            (640, 2560, 10, 48, 5),
+            (640, 2560, 10, 132, 14),
+            (32, 1024, 4, 48, 48),
+            (256, 512, 4, 48, usize::MAX),
+            (1024, 1024, 4, 48, usize::MAX),
+            (4096, 1024, 4, 48, usize::MAX),
+        ] {
+            assert_eq!(
+                shared_grouped_min_tokens(
+                    n,
+                    k,
+                    topk,
+                    multiprocessors,
+                    routed_geometry(1, n, k, true, 12)
+                ),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn shared_grouped_warmup_covers_small_batch_specializations() {
+        use super::super::nvfp4_matmul::routed_geometry;
+        for (n, k) in [(256, 1024), (640, 2560), (1024, 4096)] {
+            for (experts, topk) in [(128, 2), (256, 4), (512, 10)] {
+                for multiprocessors in [16, 48, 132] {
+                    let geometry = |tokens| routed_geometry(tokens, n, k, true, 12);
+                    let start = shared_grouped_min_tokens(n, k, topk, multiprocessors, geometry(1));
+                    let dense_start = grouped_min_tokens(experts, topk);
+                    let key = |tokens| {
+                        let cfg = geometry(tokens);
+                        let em = crate::moe::cuda::moe_align_em(tokens, topk, experts, cfg.rows);
+                        (
+                            cfg,
+                            dimension_divisor(tokens * topk),
+                            dimension_divisor(em),
+                            dimension_divisor(em.div_ceil(cfg.rows)),
+                        )
+                    };
+                    let keys: HashSet<_> =
+                        grouped_warmup_rows_from(experts, topk, start.min(dense_start), geometry)
+                            .into_iter()
+                            .map(key)
+                            .collect();
+                    for tokens in start..dense_start {
+                        assert!(
+                            keys.contains(&key(tokens)),
+                            "tokens={tokens} experts={experts} topk={topk}"
+                        );
+                    }
+                    for tokens in [16, 32] {
+                        if tokens >= start {
+                            assert!(keys.contains(&key(tokens)));
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn kernel_metadata_rejects_overflow_before_launch() -> Result<()> {

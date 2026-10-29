@@ -1,0 +1,8 @@
+{
+  "time": "2026-10-29T02:04:23.726750+00:00",
+  "label": "after-reference",
+  "resident_entries": 8.0,
+  "captures": 8.0,
+  "capture_failures": 0,
+  "memory_pressure_evictions": 0
+}

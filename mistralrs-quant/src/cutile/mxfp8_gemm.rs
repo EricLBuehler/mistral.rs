@@ -31,9 +31,15 @@ const STATIC_K_MIN_INNER: usize = 2048;
 const STATIC_K_TILE_M: usize = 128;
 const STATIC_K_TILE_K: usize = 64;
 const MAX_POINTER_ALIGNMENT: usize = 16;
-const WARM_ROWS: [usize; 28] = [
-    2, 3, 4, 5, 8, 9, 16, 17, 18, 20, 24, 32, 33, 34, 36, 40, 48, 64, 1985, 1986, 1988, 1992, 2000,
-    2049, 2050, 2052, 2056, 2064,
+const SMALL_BATCH_MAX_ROWS: usize = 8;
+const SMALL_BATCH_TILE_N: usize = 64;
+const SMALL_BATCH_NARROW_SM_DIVISOR: usize = 8;
+const SMALL_BATCH_SPLITS: usize = 4;
+const SMALL_BATCH_MIN_K_TILES_PER_SPLIT: usize = 4;
+const SMALL_BATCH_SPLIT_SM_DIVISOR: usize = 3;
+const WARM_ROWS: [usize; 30] = [
+    2, 3, 4, 5, 8, 9, 10, 12, 16, 17, 18, 20, 24, 32, 33, 34, 36, 40, 48, 64, 1985, 1986, 1988,
+    1992, 2000, 2049, 2050, 2052, 2056, 2064,
 ];
 
 #[cutile::module]
@@ -50,6 +56,7 @@ mod kernels {
         const GROUP_M: i32,
         const LATENCY: i32,
         const K_TILES: i32,
+        const SPLITS: i32,
     >(
         mut y: MappedPartitionMut<O, { [BM, BN] }, { [GROUP_M, 1] }>,
         x: &Tensor<f8e4m3fn, { [-1, -1] }>,
@@ -70,9 +77,26 @@ mod kernels {
             K_TILES
         };
         for index in y.iter_indices() {
-            let (m, n) = index.components();
+            let (output_m, n) = index.components();
+            let m = if SPLITS == 1 {
+                output_m
+            } else {
+                output_m / SPLITS
+            };
+            let split = if SPLITS == 1 { 0 } else { output_m % SPLITS };
+            let start = if SPLITS == 1 {
+                0
+            } else {
+                split * groups / SPLITS
+            };
+            let steps = if SPLITS == 1 {
+                groups
+            } else {
+                (split + 1) * groups / SPLITS - start
+            };
             let mut accumulator: Tile<f32, { [BM, BN] }> = constant(0.0f32, const_shape![BM, BN]);
-            for group in 0..groups {
+            for step in 0..steps {
+                let group = start + step;
                 let a: Tile<f8e4m3fn, { [BM, BK] }> = px.load_pipelined::<LATENCY>([m, group]);
                 let b: Tile<f8e4m3fn, { [BN, BK] }> = pw.load_pipelined::<LATENCY>([n, group]);
                 let bt: Tile<f8e4m3fn, { [BK, BN] }> = permute(b, transpose);
@@ -85,18 +109,37 @@ mod kernels {
             y.store(output, index);
         }
     }
+
+    #[cutile::entry(unchecked_accesses = false)]
+    fn reduce_partials<O: ElementType, const BM: i32, const BN: i32, const SPLITS: i32>(
+        mut y: MappedPartitionMut<O, { [BM, BN] }, { [1, 1] }>,
+        partial: &Tensor<f32, { [-1, -1] }>,
+    ) {
+        let partial = partial.partition(const_shape![BM, BN]);
+        for index in y.iter_indices() {
+            let (m, n) = index.components();
+            let mut sum: Tile<f32, { [BM, BN] }> = constant(0.0f32, const_shape![BM, BN]);
+            for split in 0..SPLITS {
+                sum = sum + partial.load([m * SPLITS + split, n]);
+            }
+            let output: Tile<O, { [BM, BN] }> = convert_tile(sum);
+            y.store(output, index);
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
 struct Config {
     bm: usize,
+    bn: usize,
     bk: usize,
+    splits: usize,
     static_k: bool,
     group_m: usize,
     blocks_per_sm: usize,
 }
 
-fn config(rows: usize, columns: usize, inner: usize) -> Config {
+fn config(rows: usize, columns: usize, inner: usize, multiprocessors: usize) -> Config {
     let static_k =
         rows >= STATIC_K_MIN_ROWS && columns >= STATIC_K_MIN_COLUMNS && inner >= STATIC_K_MIN_INNER;
     let bm = if static_k {
@@ -109,9 +152,26 @@ fn config(rows: usize, columns: usize, inner: usize) -> Config {
     let row_tiles = rows.div_ceil(bm);
     let column_tiles = columns.div_ceil(TILE_N);
     let large_rows = static_k || row_tiles >= LARGE_ROW_TILES;
+    let narrow_batch = (2..=SMALL_BATCH_MAX_ROWS).contains(&rows)
+        && column_tiles <= multiprocessors / SMALL_BATCH_NARROW_SM_DIVISOR;
+    let splits = if narrow_batch
+        && columns.div_ceil(SMALL_BATCH_TILE_N) * SMALL_BATCH_SPLITS
+            <= multiprocessors / SMALL_BATCH_SPLIT_SM_DIVISOR
+        && inner >= TILE_K * SMALL_BATCH_SPLITS * SMALL_BATCH_MIN_K_TILES_PER_SPLIT
+    {
+        SMALL_BATCH_SPLITS
+    } else {
+        1
+    };
     Config {
         bm,
+        bn: if narrow_batch {
+            SMALL_BATCH_TILE_N
+        } else {
+            TILE_N
+        },
         bk: if static_k { STATIC_K_TILE_K } else { TILE_K },
+        splits,
         static_k,
         group_m: if large_rows && column_tiles >= LARGE_COLUMN_TILES {
             16
@@ -171,6 +231,15 @@ struct Tiles<T: cutile::DType> {
     scale_offset: usize,
 }
 
+#[derive(Clone, Copy)]
+struct DispatchCtx<'a> {
+    rows: usize,
+    n: usize,
+    dev: &'a CudaDevice,
+    compile_only: bool,
+    cfg: Config,
+}
+
 fn dispatch<T: cutile::DType>(
     tiles: Tiles<T>,
     rows: usize,
@@ -179,12 +248,113 @@ fn dispatch<T: cutile::DType>(
     compile_only: bool,
 ) -> Result<()> {
     let k = tiles.weight.size() / n;
-    let cfg = config(rows, n, k);
-    let count = rows.div_ceil(cfg.bm) * n.div_ceil(TILE_N);
+    let cfg = config(rows, n, k, device_multiprocessor_count(dev));
+    dispatch_config(
+        tiles,
+        DispatchCtx {
+            rows,
+            n,
+            dev,
+            compile_only,
+            cfg,
+        },
+    )
+}
+
+fn dispatch_config<T: cutile::DType>(tiles: Tiles<T>, ctx: DispatchCtx<'_>) -> Result<()> {
+    let DispatchCtx {
+        rows,
+        n,
+        dev,
+        compile_only,
+        cfg,
+    } = ctx;
+    if cfg.splits == 1 {
+        return dispatch_gemm(tiles, ctx);
+    }
+    let partial_rows = rows.div_ceil(cfg.bm) * cfg.bm * cfg.splits;
+    let stream = dev.cuda_stream();
+    let cutile_stream = context::stream(dev);
+    let mut partial_storage = if compile_only {
+        None
+    } else {
+        Some(unsafe { dev.alloc::<f32>(partial_rows * n)? })
+    };
+    let partial_guard;
+    let partial_pointer = if let Some(storage) = &mut partial_storage {
+        let (pointer, guard) = slice_ptr_mut_on_stream(storage, 0, &stream);
+        partial_guard = Some(guard);
+        Some(pointer)
+    } else {
+        partial_guard = None;
+        None
+    };
+    let partial_tensor = || {
+        if let Some(pointer) = partial_pointer {
+            Ok(unsafe { borrowed(pointer, stream.context().ordinal(), partial_rows, n) })
+        } else {
+            unsafe { cutile::api::meta::<f32>(&[partial_rows, n]).async_on(&cutile_stream) }
+                .map_err(|error| {
+                    candle_core::Error::msg(format!("cuTile MXFP8 metadata: {error:?}"))
+                })
+        }
+    };
+    let output = tiles.output;
+    dispatch_gemm(
+        Tiles {
+            output: partial_tensor()?,
+            activation: tiles.activation,
+            weight: tiles.weight,
+            activation_scales: tiles.activation_scales,
+            weight_scales: tiles.weight_scales,
+            scale_offset: tiles.scale_offset,
+        },
+        DispatchCtx {
+            rows: partial_rows,
+            ..ctx
+        },
+    )?;
+    let blocks = rows.div_ceil(cfg.bm) * n.div_ceil(cfg.bn);
+    let mapped = output
+        .partition([cfg.bm, cfg.bn])
+        .map([1, 1], blocks as u32);
+    let partial = partial_tensor()?;
+    let launcher = kernels::reduce_partials(mapped, &partial).generics(vec![
+        T::DTYPE.as_str().to_owned(),
+        cfg.bm.to_string(),
+        cfg.bn.to_string(),
+        cfg.splits.to_string(),
+    ]);
+    catch_cutile_panic("MXFP8 split-K reduction", || {
+        if compile_only {
+            launcher.compile_on(&cutile_stream).map_err(|error| {
+                candle_core::Error::msg(format!("cuTile MXFP8 reduction compile: {error:?}"))
+            })?;
+        } else {
+            unsafe { launcher.async_on(&cutile_stream) }.map_err(|error| {
+                candle_core::Error::msg(format!("cuTile MXFP8 reduction launch: {error:?}"))
+            })?;
+        }
+        Ok(())
+    })?;
+    drop(partial_guard);
+    Ok(())
+}
+
+fn dispatch_gemm<T: cutile::DType>(tiles: Tiles<T>, ctx: DispatchCtx<'_>) -> Result<()> {
+    let DispatchCtx {
+        rows,
+        n,
+        dev,
+        compile_only,
+        cfg,
+    } = ctx;
+    let k = tiles.weight.size() / n;
+    let count = rows.div_ceil(cfg.bm) * n.div_ceil(cfg.bn);
     let blocks = (device_multiprocessor_count(dev) * cfg.blocks_per_sm).clamp(1, count);
     let mapped = tiles
         .output
-        .partition([cfg.bm, TILE_N])
+        .partition([cfg.bm, cfg.bn])
         .map([cfg.group_m, 1], blocks as u32);
     let scale_elements = tiles.weight_scales.size();
     let flat_scales = tiles
@@ -211,12 +381,13 @@ fn dispatch<T: cutile::DType>(
     .generics(vec![
         T::DTYPE.as_str().to_owned(),
         cfg.bm.to_string(),
-        TILE_N.to_string(),
+        cfg.bn.to_string(),
         cfg.bk.to_string(),
         (cfg.bk / MXFP8_BLOCK_SIZE).to_string(),
         cfg.group_m.to_string(),
         LOAD_LATENCY.to_string(),
         if cfg.static_k { k.div_ceil(cfg.bk) } else { 0 }.to_string(),
+        cfg.splits.to_string(),
     ]);
     let stream = context::stream(dev);
     catch_cutile_panic("MXFP8 GEMM", || {
@@ -251,6 +422,15 @@ pub(crate) fn forward(
     activation: &QuantizedActivation,
     weight: &Tensor,
     scales: &Tensor,
+) -> Result<Tensor> {
+    forward_config(activation, weight, scales, None)
+}
+
+fn forward_config(
+    activation: &QuantizedActivation,
+    weight: &Tensor,
+    scales: &Tensor,
+    config_override: Option<Config>,
 ) -> Result<Tensor> {
     let (rows, k) = activation.quantized().dims2()?;
     let (n, weight_k) = weight.dims2()?;
@@ -327,7 +507,20 @@ pub(crate) fn forward(
                     ),
                 }
             };
-            dispatch(tiles, rows, n, dev, false)?;
+            if let Some(cfg) = config_override {
+                dispatch_config(
+                    tiles,
+                    DispatchCtx {
+                        rows,
+                        n,
+                        dev,
+                        compile_only: false,
+                        cfg,
+                    },
+                )?;
+            } else {
+                dispatch(tiles, rows, n, dev, false)?;
+            }
             drop(yg);
             CudaStorage::wrap_cuda_slice(output, dev.clone())
         }};

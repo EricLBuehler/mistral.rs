@@ -1143,12 +1143,7 @@ pub(super) fn prepare_gather(
         matmul_device(dev).compute_major,
     );
     let indices = indices.contiguous()?;
-    let indices = if indices.layout().start_offset() == 0 {
-        indices
-    } else {
-        indices.copy()?
-    };
-    let (id_storage, _) = indices.storage_and_layout();
+    let (id_storage, id_layout) = indices.storage_and_layout();
     let Storage::Cuda(id_cuda) = &*id_storage else {
         candle_core::bail!("cuTile NVFP4 grouped indices must be CUDA tensors")
     };
@@ -1163,7 +1158,9 @@ pub(super) fn prepare_gather(
     } else {
         super::fused_moe::MoeAlign::build(
             dev,
-            id_cuda.as_cuda_slice::<u32>()?,
+            &id_cuda
+                .as_cuda_slice::<u32>()?
+                .slice(id_layout.start_offset()..id_layout.start_offset() + routes),
             tokens,
             experts,
             topk,

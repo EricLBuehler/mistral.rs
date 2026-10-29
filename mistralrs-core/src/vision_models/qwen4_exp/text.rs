@@ -676,6 +676,18 @@ impl Qwen4ExpTextModel {
             .reserve(&mut self.cache.hybrid())
     }
 
+    pub(super) fn reserve_recurrent_decode_deferred_storage(&self) -> Result<bool> {
+        crate::gdn::reserve_deferred_decode_state(
+            &mut self.cache.hybrid(),
+            self.gdn_transition_layers().layers,
+            self.dtype,
+        )
+    }
+
+    pub(super) fn disable_recurrent_decode_deferred_storage(&self) -> Result<bool> {
+        self.cache.hybrid().disable_gdn_deferred_state()
+    }
+
     pub(super) fn apply_current_recurrent_transitions(&self) -> Result<bool> {
         self.gdn_transition_layers()
             .apply_pending_for_current_batch(&self.cache.hybrid())
@@ -694,6 +706,7 @@ impl Qwen4ExpTextModel {
         {
             candle_core::bail!("Qwen4-Exp pending recurrent transitions cannot be applied");
         }
+        cache.materialize_deferred_state_for_current_batch()?;
         Ok(())
     }
 
@@ -711,6 +724,7 @@ impl Qwen4ExpTextModel {
         {
             candle_core::bail!("Qwen4-Exp pending recurrent transitions cannot be applied");
         }
+        cache.materialize_deferred_state_for_slots(&slots)?;
         Ok(())
     }
 

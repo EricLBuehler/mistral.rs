@@ -50,6 +50,8 @@ pub(crate) const GDN_SPEC_CHECKPOINT_MAX_K: usize = 256;
 pub(crate) const GDN_SPEC_FUSED_MAX_TOKENS: usize = 8;
 pub(crate) const GDN_CHANNEL_BLOCK_SIZE: usize = 256;
 pub(crate) const GDN_DEFERRED_DECODE_MIN_BATCH: usize = 8;
+const GDN_DEFERRED_DECODE_OCCUPANCY_MIN_BATCH: usize = 2;
+const GDN_DEFERRED_DECODE_MIN_SM_WAVES: usize = 2;
 pub(crate) const GDN_DEFERRED_STATE_DEPTH: usize = 4;
 #[cfg(feature = "cuda")]
 #[allow(dead_code)]
@@ -289,8 +291,34 @@ pub(crate) fn recurrent_state_dtype_supported(dtype: DType) -> bool {
     matches!(dtype, DType::F16 | DType::BF16 | DType::F32)
 }
 
-pub(crate) fn deferred_decode_batch_supported(batch_size: usize) -> bool {
+pub(crate) fn deferred_decode_batch_supported(
+    batch_size: usize,
+    value_heads: usize,
+    multiprocessor_count: usize,
+) -> bool {
     batch_size >= GDN_DEFERRED_DECODE_MIN_BATCH
+        || (batch_size >= GDN_DEFERRED_DECODE_OCCUPANCY_MIN_BATCH
+            && batch_size * value_heads >= GDN_DEFERRED_DECODE_MIN_SM_WAVES * multiprocessor_count)
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn deferred_decode_supported(
+    device: &Device,
+    batch_size: usize,
+    value_heads: usize,
+) -> Result<bool> {
+    if batch_size >= GDN_DEFERRED_DECODE_MIN_BATCH {
+        return Ok(true);
+    }
+    if batch_size < GDN_DEFERRED_DECODE_OCCUPANCY_MIN_BATCH {
+        return Ok(false);
+    }
+    let properties = gdn_cuda_device_properties(device.as_cuda_device()?)?;
+    Ok(deferred_decode_batch_supported(
+        batch_size,
+        value_heads,
+        properties.multiprocessor_count,
+    ))
 }
 
 #[cfg(any(feature = "cuda", test))]
@@ -4321,6 +4349,7 @@ pub struct GdnDeferredRecurrence<'a> {
     pub gate: &'a Tensor,
     pub norm_weight: &'a Tensor,
     pub norm_eps: f64,
+    pub gate_activation: GdnGateActivation,
     pub num_k_heads: usize,
     pub num_v_heads: usize,
     pub head_k_dim: usize,
@@ -4354,6 +4383,7 @@ pub fn deferred_recurrence_rmsnorm_gate_cuda(
         gate,
         norm_weight,
         norm_eps,
+        gate_activation,
         num_k_heads,
         num_v_heads,
         head_k_dim,
@@ -4647,6 +4677,7 @@ pub fn deferred_recurrence_rmsnorm_gate_cuda(
                                 num_v_heads as i32,
                                 i32::from(tiled_v_heads),
                                 norm_eps as f32,
+                                gate_activation.sigmoid_flag(),
                                 stream.cu_stream() as i64,
                             );
                         }
@@ -6259,3 +6290,8 @@ mod dispatch_tests;
 #[allow(clippy::cast_precision_loss)]
 #[path = "gdn_tests.rs"]
 mod tests;
+
+#[cfg(all(test, feature = "cuda"))]
+#[allow(clippy::cast_precision_loss)]
+#[path = "gdn_deferred_tests.rs"]
+mod deferred_tests;
