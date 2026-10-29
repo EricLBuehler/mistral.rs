@@ -222,9 +222,7 @@ fn strip_tool_call_segments(message: &str, format: ToolCallFormat) -> String {
             strip_delimited_segments(message, "<｜tool▁call▁begin｜>", "<｜tool▁call▁end｜>")
         }
         ToolCallFormat::MistralNemo => strip_from_first(message, "[TOOL_CALLS]"),
-        ToolCallFormat::Hunyuan => {
-            strip_delimited_segments(message, "<tool_calls>", "</tool_calls>")
-        }
+        ToolCallFormat::Hunyuan => strip_hunyuan_segments(message),
         ToolCallFormat::Llama => strip_from_first(message, "<|python_tag|>"),
         ToolCallFormat::Liquid => {
             strip_delimited_segments(message, "<|tool_call_start|>", "<|tool_call_end|>")
@@ -240,6 +238,23 @@ fn strip_from_first(message: &str, start: &str) -> String {
     message
         .find(start)
         .map_or_else(|| message.to_string(), |pos| message[..pos].to_string())
+}
+
+/// Like `strip_delimited_segments`, but locates the closing tag with `hunyuan::locate_call` so a
+/// tag inside a string argument doesn't end the segment early.
+fn strip_hunyuan_segments(message: &str) -> String {
+    let mut rest = message;
+    let mut out = String::new();
+    while let Some(start_pos) = rest.find(hunyuan::START) {
+        out.push_str(&rest[..start_pos]);
+        let after_start = &rest[start_pos + hunyuan::START.len()..];
+        match hunyuan::locate_call(after_start) {
+            Some((_, end_of_tag)) => rest = &after_start[end_of_tag..],
+            None => return out,
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 fn strip_delimited_segments(message: &str, start: &str, end: &str) -> String {
