@@ -3608,6 +3608,7 @@ mod tests {
                 Some(bos.to_string()),
                 Some(eos.to_string()),
                 Some(unk.to_string()),
+                None,
                 Vec::new(),
             ) {
                 Ok(v) => v,

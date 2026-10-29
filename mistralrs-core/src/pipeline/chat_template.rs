@@ -170,6 +170,13 @@ impl ChatTemplate {
             Either::Right(ref added) => Some(added.content.clone()),
         }
     }
+
+    pub fn pad_tok(&self) -> Option<String> {
+        match self.pad_token.as_ref()?.0 {
+            Either::Left(ref lit) => Some(lit.clone()),
+            Either::Right(ref added) => Some(added.content.clone()),
+        }
+    }
 }
 
 pub fn calculate_eos_tokens(
@@ -720,6 +727,7 @@ pub fn apply_chat_template_to(
     bos_tok: Option<String>,
     eos_tok: Option<String>,
     unk_tok: Option<String>,
+    pad_tok: Option<String>,
     tools: Vec<Tool>,
 ) -> Result<String> {
     let mut env = Environment::new();
@@ -866,6 +874,7 @@ pub fn apply_chat_template_to(
             bos_token => bos_tok,
             eos_token => eos_tok,
             unk_token => unk_tok,
+            pad_token => pad_tok,
             date_string => date_string,
             enable_thinking => reasoning_controls.enable_thinking,
             reasoning_effort => &reasoning_effort_value,
@@ -878,6 +887,7 @@ pub fn apply_chat_template_to(
             bos_token => bos_tok,
             eos_token => eos_tok,
             unk_token => unk_tok,
+            pad_token => pad_tok,
             xml_tools => tools.clone(), // SmolLM3
             tools => tools,
             builtin_tools => builtin_tools,
@@ -956,6 +966,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             Vec::new(),
         )
         .unwrap_err();
@@ -984,6 +995,7 @@ mod tests {
             None,
             None,
             &template,
+            None,
             None,
             None,
             None,
@@ -1078,6 +1090,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             Vec::new(),
         )
         .unwrap();
@@ -1098,6 +1111,7 @@ mod tests {
             None,
             None,
             &template,
+            None,
             None,
             None,
             None,
@@ -1124,11 +1138,68 @@ mod tests {
             None,
             None,
             None,
+            None,
             Vec::new(),
         )
         .unwrap();
 
         assert_eq!(rendered, "<atem:function_calls><atem:invoke");
+    }
+
+    #[test]
+    fn pad_token_is_bound_into_template_context() {
+        let template = ChatTemplateValue(Either::Left(
+            "PAD={% if pad_token is defined %}{{ pad_token }}{% else %}UNDEFINED{% endif %}|BOS={{ bos_token }}"
+                .to_string(),
+        ));
+
+        let rendered = apply_chat_template_to(
+            vec![user_text_message("hello")],
+            false,
+            None,
+            None,
+            &template,
+            Some("<s>".to_string()),
+            None,
+            None,
+            Some("<pad>".to_string()),
+            Vec::new(),
+        )
+        .unwrap();
+
+        assert_eq!(rendered, "PAD=<pad>|BOS=<s>");
+    }
+
+    #[test]
+    fn pad_token_is_bound_in_chat_template_context() {
+        let ct: ChatTemplate = serde_json::from_value(serde_json::json!({
+            "bos_token": "<s>",
+            "eos_token": "</s>",
+            "unk_token": "<unk>",
+            "pad_token": "<pad>",
+            "chat_template": "{% if pad_token is defined %}PAD={{ pad_token }}{% else %}PAD-UNDEFINED{% endif %}|{% if bos_token is defined %}BOS={{ bos_token }}{% endif %}"
+        }))
+        .unwrap();
+
+        assert!(ct.pad_token.is_some());
+
+        let template = ct.chat_template.as_ref().unwrap();
+
+        let out = apply_chat_template_to(
+            vec![user_text_message("hi")],
+            false,
+            None,
+            None,
+            template,
+            ct.bos_tok(),
+            ct.eos_tok(),
+            ct.unk_tok(),
+            ct.pad_tok(),
+            Vec::new(),
+        )
+        .unwrap();
+
+        assert_eq!(out, "PAD=<pad>|BOS=<s>");
     }
 
     #[test]
@@ -1147,6 +1218,7 @@ mod tests {
             Some("<bos>".to_string()),
             None,
             None,
+            None,
             vec![],
         )
         .unwrap();
@@ -1157,6 +1229,7 @@ mod tests {
             None,
             &template,
             Some("<bos>".to_string()),
+            None,
             None,
             None,
             vec![],
@@ -1184,6 +1257,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             vec![],
         )
         .unwrap();
@@ -1207,6 +1281,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             vec![],
         )
         .unwrap();
@@ -1216,6 +1291,7 @@ mod tests {
             None,
             Some(ReasoningEffort::Off),
             &template,
+            None,
             None,
             None,
             None,
