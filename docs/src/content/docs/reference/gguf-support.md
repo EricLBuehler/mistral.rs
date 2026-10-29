@@ -42,6 +42,7 @@ Fine-tunes and model sizes within a family use the same entry.
 | LFM2 and LFM2.5 dense | `lfm2` |
 | LFM2 and LFM2.5 MoE | `lfm2moe` |
 | LFM3 | `lfm3` |
+| Kolibri-1 | `kolibri1` |
 
 Some GGUF architectures cover more than one model family. Repository files and GGUF metadata are
 used together to select the family. For a standalone file that cannot be identified unambiguously,
