@@ -46,6 +46,7 @@ impl RmsNormGated {
         self.eps
     }
 
+    #[cfg(feature = "cuda")]
     pub(crate) fn activation(&self) -> GdnGateActivation {
         self.activation
     }

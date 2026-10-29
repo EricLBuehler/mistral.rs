@@ -3638,7 +3638,7 @@ mod tests {
                     max_num_batched_tokens: 64,
                     max_prefill_chunk_tokens: 32,
                 })?
-                .with_automatic_recurrent_prefix_capacity(16);
+                .with_recurrent_prefix_capacity(crate::PrefixCacheCapacity::Auto);
             config.reserve_activation_memory(100, 80);
             let (persistent, transient) = crate::paged_attention::optional_weight_reservation(
                 &config,
@@ -3726,7 +3726,7 @@ mod tests {
                 .unwrap()
                 .with_base_device_memory_reservation(100)
                 .unwrap()
-                .with_recurrent_prefix_capacity(2);
+                .with_recurrent_prefix_capacity(crate::PrefixCacheCapacity::Fixed(2));
 
         let reservations =
             paged_attention_memory_reservations(&cache, &config, &Device::Cpu).unwrap();

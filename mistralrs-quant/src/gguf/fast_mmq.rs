@@ -14,21 +14,24 @@ use candle_core::{
     CudaDevice, CudaStorage, DType, Device, Result, Shape, Storage, Tensor,
 };
 
-use super::ffi;
+use super::{ffi, q8_1};
+use crate::cuda_device::{cuda_device_info, CudaDeviceInfo};
 use crate::{
     utils::{slice_ptr, slice_ptr_mut_on_stream, slice_ptr_on_stream},
     GluActivationType,
 };
 
-const QK8_1: usize = 32;
-const BLOCK_Q8_1_MMQ_SIZE: usize = 4 * QK8_1 + 4 * 4; // 128 qs + 16 scale bytes = 144
-const MATRIX_ROW_PADDING: usize = 512;
 const MMQ_X_MAX: usize = 128;
 const MMQ_Y_MAX: usize = 128;
-const COMPACT_CAPABILITY: i32 = 1210;
 const COMPACT_COLUMNS: usize = 16;
 const COMPACT_WIDE_COLUMNS: i32 = 128;
 const COMPACT_MEDIUM_COLUMNS: i32 = 64;
+// Q2_K's MMA x-tile row (2*32 + 32 + 4 ints) is the widest compact format.
+const COMPACT_MAX_TILE_X_K: usize = 100;
+// Mirrors mmq_get_nbytes_shared for 128x128 tiles: ids + x tile + Q8_1 y tile.
+const COMPACT_MAX_SHARED_BYTES: usize = MMQ_X_MAX * std::mem::size_of::<i32>()
+    + MMQ_Y_MAX * COMPACT_MAX_TILE_X_K * std::mem::size_of::<i32>()
+    + MMQ_X_MAX * q8_1::MMQ_BLOCK_BYTES;
 
 #[inline]
 fn pad(p: usize, q: usize) -> usize {
@@ -243,6 +246,11 @@ fn mmq_moe_launcher(dtype: GgmlDType) -> Option<MmqMoeLauncher> {
     Some(f)
 }
 
+// Compact tiles are 128 wide, which the dp4a MMQ fallback cannot run.
+fn compact_mmq_supported(info: &CudaDeviceInfo) -> bool {
+    info.has_int8_mma() && info.smem_optin >= COMPACT_MAX_SHARED_BYTES
+}
+
 struct GroupedMmqLaunch {
     dtype: GgmlDType,
     activations: *const std::ffi::c_void,
@@ -255,7 +263,7 @@ struct GroupedMmqLaunch {
     output_stride: usize,
     experts: usize,
     max_cols: usize,
-    device: DeviceInfo,
+    device: CudaDeviceInfo,
     stream: *mut std::ffi::c_void,
 }
 
@@ -267,10 +275,9 @@ impl GroupedMmqLaunch {
         }
         let workspace_bytes = (self.assignments / COMPACT_COLUMNS + self.experts + 1)
             * std::mem::size_of::<[i32; 2]>();
-        if self.device.cc != COMPACT_CAPABILITY
+        if !compact_mmq_supported(&self.device)
             || self.assignments / COMPACT_COLUMNS + self.experts > u16::MAX as usize
-            || workspace_bytes
-                > self.device.nsm as usize * MMQ_X_MAX * MMQ_Y_MAX * std::mem::size_of::<f32>()
+            || workspace_bytes > fixup_capacity(&self.device)
         {
             return None;
         }
@@ -331,10 +338,10 @@ impl GroupedMmqLaunch {
                     self.output_stride as i64,
                     self.experts as i64,
                     self.max_cols as i64,
-                    self.device.cc,
-                    self.device.nsm,
-                    self.device.smpbo,
-                    self.device.warp_size,
+                    self.device.cc_code(),
+                    self.device.sms as i32,
+                    self.device.smem_optin as i64,
+                    self.device.warp_size as i32,
                     self.stream,
                 );
             }
@@ -370,73 +377,8 @@ type WsMap = Mutex<HashMap<WorkspaceKey, &'static Mutex<WorkspaceSlot>>>;
 static MMQ_WORKSPACE: OnceLock<WsMap> = OnceLock::new();
 static FIXUP_WORKSPACE: OnceLock<WsMap> = OnceLock::new();
 
-#[derive(Clone, Copy)]
-struct DeviceInfo {
-    cc: i32,
-    nsm: i32,
-    smpbo: i64,
-    warp_size: i32,
-}
-
-static DEVICE_INFO: OnceLock<Mutex<HashMap<candle_core::cuda::DeviceId, DeviceInfo>>> =
-    OnceLock::new();
-
-fn get_device_info(dev: &CudaDevice) -> DeviceInfo {
-    use candle_core::cuda::cudarc::driver::{result, sys};
-    let map = DEVICE_INFO.get_or_init(|| Mutex::new(HashMap::new()));
-    let key = dev.id();
-    let mut guard = map.lock().unwrap();
-    if let Some(info) = guard.get(&key) {
-        return *info;
-    }
-    let cu_device = dev.cuda_stream().context().cu_device();
-    let major = unsafe {
-        result::device::get_attribute(
-            cu_device,
-            sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
-        )
-    }
-    .unwrap_or(8);
-    let minor = unsafe {
-        result::device::get_attribute(
-            cu_device,
-            sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR,
-        )
-    }
-    .unwrap_or(0);
-    let nsm = unsafe {
-        result::device::get_attribute(
-            cu_device,
-            sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT,
-        )
-    }
-    .unwrap_or(1);
-    let smpbo = unsafe {
-        result::device::get_attribute(
-            cu_device,
-            sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN,
-        )
-    }
-    .unwrap_or(49152);
-    let warp_size = unsafe {
-        result::device::get_attribute(
-            cu_device,
-            sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_WARP_SIZE,
-        )
-    }
-    .unwrap_or(32);
-    let info = DeviceInfo {
-        cc: major * 100 + minor * 10,
-        nsm,
-        smpbo: smpbo as i64,
-        warp_size,
-    };
-    guard.insert(key, info);
-    info
-}
-
-fn fixup_workspace_bytes(dev: &CudaDevice) -> usize {
-    get_device_info(dev).nsm as usize * MMQ_X_MAX * MMQ_Y_MAX * std::mem::size_of::<f32>()
+fn fixup_capacity(info: &CudaDeviceInfo) -> usize {
+    info.sms * MMQ_X_MAX * MMQ_Y_MAX * std::mem::size_of::<f32>()
 }
 
 fn workspace_ensure<'a>(
@@ -479,7 +421,7 @@ struct DenseMmqRun<'a> {
     fixup_ptr: *mut std::ffi::c_void,
     quantize: QuantizeLauncher,
     launcher: MmqLauncher,
-    device_info: DeviceInfo,
+    device_info: CudaDeviceInfo,
     k: usize,
     k_padded: usize,
     batch_size: usize,
@@ -531,10 +473,10 @@ impl DenseMmqRun<'_> {
                         self.batch_size as i64,
                         (self.k / self.qk) as i64,
                         nrows as i64,
-                        self.device_info.cc,
-                        self.device_info.nsm,
-                        self.device_info.smpbo,
-                        self.device_info.warp_size,
+                        self.device_info.cc_code(),
+                        self.device_info.sms as i32,
+                        self.device_info.smem_optin as i64,
+                        self.device_info.warp_size as i32,
                         self.type_x,
                         stream_ptr,
                     );
@@ -559,7 +501,7 @@ struct DenseGluDownRun<'a> {
     fixup_ptr: *mut std::ffi::c_void,
     quantize: QuantizeGluLauncher,
     launcher: MmqLauncher,
-    device_info: DeviceInfo,
+    device_info: CudaDeviceInfo,
     k: usize,
     k_padded: usize,
     batch_size: usize,
@@ -611,10 +553,10 @@ impl DenseGluDownRun<'_> {
                     self.batch_size as i64,
                     (self.k / self.qk) as i64,
                     nrows as i64,
-                    self.device_info.cc,
-                    self.device_info.nsm,
-                    self.device_info.smpbo,
-                    self.device_info.warp_size,
+                    self.device_info.cc_code(),
+                    self.device_info.sms as i32,
+                    self.device_info.smem_optin as i64,
+                    self.device_info.warp_size as i32,
                     self.type_x,
                     stream_ptr,
                 );
@@ -628,7 +570,7 @@ impl DenseGluDownRun<'_> {
     }
 }
 
-fn shared_lhs(weights: &[&QTensor], xs: &Tensor) -> Result<Vec<Tensor>> {
+pub(crate) fn shared_lhs(weights: &[&QTensor], xs: &Tensor) -> Result<Vec<Tensor>> {
     let Some(first) = weights.first() else {
         candle_core::bail!("fast_mmq shared_lhs: at least one weight is required");
     };
@@ -699,16 +641,16 @@ fn shared_lhs(weights: &[&QTensor], xs: &Tensor) -> Result<Vec<Tensor>> {
     };
 
     let stream = dev.cuda_stream();
-    let k_padded = pad(pad(k, MATRIX_ROW_PADDING), 4 * QK8_1);
-    let blocks_per_row = k_padded / (4 * QK8_1);
-    let workspace_main = batch_size * blocks_per_row * BLOCK_Q8_1_MMQ_SIZE;
-    let workspace_extra = MMQ_X_MAX * BLOCK_Q8_1_MMQ_SIZE;
+    let k_padded = pad(pad(k, q8_1::ROW_PADDING), 4 * q8_1::BLOCK_ELEMENTS);
+    let blocks_per_row = k_padded / (4 * q8_1::BLOCK_ELEMENTS);
+    let workspace_main = batch_size * blocks_per_row * q8_1::MMQ_BLOCK_BYTES;
+    let workspace_extra = MMQ_X_MAX * q8_1::MMQ_BLOCK_BYTES;
     let workspace_bytes = workspace_main + workspace_extra;
     let mut workspace = workspace_ensure(&MMQ_WORKSPACE, &dev, workspace_bytes, &stream)?;
     let (scratch_ptr, _scratch_guard) = workspace.ptr_mut();
     let scratch_ptr = scratch_ptr as *mut std::ffi::c_void;
 
-    let fixup_bytes = fixup_workspace_bytes(&dev);
+    let fixup_bytes = fixup_capacity(&cuda_device_info(&dev));
     let mut fixup_workspace = workspace_ensure(&FIXUP_WORKSPACE, &dev, fixup_bytes, &stream)?;
     let (fixup_ptr, _fixup_guard) = fixup_workspace.ptr_mut();
     let fixup_ptr = fixup_ptr as *mut std::ffi::c_void;
@@ -722,7 +664,7 @@ fn shared_lhs(weights: &[&QTensor], xs: &Tensor) -> Result<Vec<Tensor>> {
         fixup_ptr,
         quantize: quantize_launcher(ds_layout_for(dtype)),
         launcher: mmq_launcher(dtype).expect("supports() checked"),
-        device_info: get_device_info(&dev),
+        device_info: cuda_device_info(&dev),
         k,
         k_padded,
         batch_size,
@@ -807,16 +749,16 @@ fn down_from_glu(
     };
 
     let stream = dev.cuda_stream();
-    let k_padded = pad(pad(k, MATRIX_ROW_PADDING), 4 * QK8_1);
-    let blocks_per_row = k_padded / (4 * QK8_1);
-    let workspace_main = batch_size * blocks_per_row * BLOCK_Q8_1_MMQ_SIZE;
-    let workspace_extra = MMQ_X_MAX * BLOCK_Q8_1_MMQ_SIZE;
+    let k_padded = pad(pad(k, q8_1::ROW_PADDING), 4 * q8_1::BLOCK_ELEMENTS);
+    let blocks_per_row = k_padded / (4 * q8_1::BLOCK_ELEMENTS);
+    let workspace_main = batch_size * blocks_per_row * q8_1::MMQ_BLOCK_BYTES;
+    let workspace_extra = MMQ_X_MAX * q8_1::MMQ_BLOCK_BYTES;
     let workspace_bytes = workspace_main + workspace_extra;
     let mut workspace = workspace_ensure(&MMQ_WORKSPACE, &dev, workspace_bytes, &stream)?;
     let (scratch_ptr, _scratch_guard) = workspace.ptr_mut();
     let scratch_ptr = scratch_ptr as *mut std::ffi::c_void;
 
-    let fixup_bytes = fixup_workspace_bytes(&dev);
+    let fixup_bytes = fixup_capacity(&cuda_device_info(&dev));
     let mut fixup_workspace = workspace_ensure(&FIXUP_WORKSPACE, &dev, fixup_bytes, &stream)?;
     let (fixup_ptr, _fixup_guard) = fixup_workspace.ptr_mut();
     let fixup_ptr = fixup_ptr as *mut std::ffi::c_void;
@@ -830,7 +772,7 @@ fn down_from_glu(
         fixup_ptr,
         quantize: quantize_glu_launcher(ds_layout_for(dtype)),
         launcher: mmq_launcher(dtype).expect("supports() checked"),
-        device_info: get_device_info(&dev),
+        device_info: cuda_device_info(&dev),
         k,
         k_padded,
         batch_size,
@@ -865,32 +807,6 @@ fn down_from_glu(
 pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
     let mut outputs = shared_lhs(&[w], xs)?;
     Ok(outputs.pop().expect("one weight produces one output"))
-}
-
-/// Compute two projections with one activation quantization pass.
-pub(crate) fn fused_pair(
-    left_w: &QTensor,
-    right_w: &QTensor,
-    xs: &Tensor,
-) -> Result<(Tensor, Tensor)> {
-    let mut outputs = shared_lhs(&[left_w, right_w], xs)?;
-    let right = outputs.pop().expect("two weights produce two outputs");
-    let left = outputs.pop().expect("two weights produce two outputs");
-    Ok((left, right))
-}
-
-/// Compute Q, K, and V projections with one activation quantization pass.
-pub(crate) fn fused_qkv(
-    q_w: &QTensor,
-    k_w: &QTensor,
-    v_w: &QTensor,
-    xs: &Tensor,
-) -> Result<(Tensor, Tensor, Tensor)> {
-    let mut outputs = shared_lhs(&[q_w, k_w, v_w], xs)?;
-    let v = outputs.pop().expect("three weights produce three outputs");
-    let k = outputs.pop().expect("three weights produce three outputs");
-    let q = outputs.pop().expect("three weights produce three outputs");
-    Ok((q, k, v))
 }
 
 /// Compute gate and up projections with one activation quantization pass.
@@ -996,17 +912,17 @@ pub fn grouped(
 
     let stream = dev.cuda_stream();
     let stream_ptr = stream.cu_stream() as *mut std::ffi::c_void;
-    let k_padded = pad(pad(k, MATRIX_ROW_PADDING), 4 * QK8_1);
+    let k_padded = pad(pad(k, q8_1::ROW_PADDING), 4 * q8_1::BLOCK_ELEMENTS);
 
-    let blocks_per_row = k_padded / (4 * QK8_1);
-    let workspace_main = total_assignments * blocks_per_row * BLOCK_Q8_1_MMQ_SIZE;
-    let workspace_extra = MMQ_X_MAX * BLOCK_Q8_1_MMQ_SIZE;
+    let blocks_per_row = k_padded / (4 * q8_1::BLOCK_ELEMENTS);
+    let workspace_main = total_assignments * blocks_per_row * q8_1::MMQ_BLOCK_BYTES;
+    let workspace_extra = MMQ_X_MAX * q8_1::MMQ_BLOCK_BYTES;
     let workspace_bytes = workspace_main + workspace_extra;
     let mut workspace = workspace_ensure(&MMQ_WORKSPACE, dev, workspace_bytes, &stream)?;
     let (scratch_ptr, _scratch_guard) = workspace.ptr_mut();
     let scratch_ptr = scratch_ptr as *mut std::ffi::c_void;
 
-    let fixup_bytes = fixup_workspace_bytes(dev);
+    let fixup_bytes = fixup_capacity(&cuda_device_info(dev));
     let mut fixup_workspace = workspace_ensure(&FIXUP_WORKSPACE, dev, fixup_bytes, &stream)?;
     let (fixup_ptr, _fixup_guard) = fixup_workspace.ptr_mut();
     let fixup_ptr = fixup_ptr as *mut std::ffi::c_void;
@@ -1014,7 +930,7 @@ pub fn grouped(
     let out = unsafe { dev.alloc::<f32>(total_assignments * nrows)? };
 
     let weight_ptr = weight.device_ptr()? as *const std::ffi::c_void;
-    let di = get_device_info(dev);
+    let di = cuda_device_info(dev);
 
     let quantize = quantize_launcher(ds_layout_for(dtype));
 
@@ -1197,17 +1113,17 @@ fn grouped_from_glu(run: GroupedGluRun<'_>) -> Result<Tensor> {
 
     let stream = dev.cuda_stream();
     let stream_ptr = stream.cu_stream() as *mut std::ffi::c_void;
-    let k_padded = pad(pad(k, MATRIX_ROW_PADDING), 4 * QK8_1);
+    let k_padded = pad(pad(k, q8_1::ROW_PADDING), 4 * q8_1::BLOCK_ELEMENTS);
 
-    let blocks_per_row = k_padded / (4 * QK8_1);
-    let workspace_main = total_assignments * blocks_per_row * BLOCK_Q8_1_MMQ_SIZE;
-    let workspace_extra = MMQ_X_MAX * BLOCK_Q8_1_MMQ_SIZE;
+    let blocks_per_row = k_padded / (4 * q8_1::BLOCK_ELEMENTS);
+    let workspace_main = total_assignments * blocks_per_row * q8_1::MMQ_BLOCK_BYTES;
+    let workspace_extra = MMQ_X_MAX * q8_1::MMQ_BLOCK_BYTES;
     let workspace_bytes = workspace_main + workspace_extra;
     let mut workspace = workspace_ensure(&MMQ_WORKSPACE, dev, workspace_bytes, &stream)?;
     let (scratch_ptr, _scratch_guard) = workspace.ptr_mut();
     let scratch_ptr = scratch_ptr as *mut std::ffi::c_void;
 
-    let fixup_bytes = fixup_workspace_bytes(dev);
+    let fixup_bytes = fixup_capacity(&cuda_device_info(dev));
     let mut fixup_workspace = workspace_ensure(&FIXUP_WORKSPACE, dev, fixup_bytes, &stream)?;
     let (fixup_ptr, _fixup_guard) = fixup_workspace.ptr_mut();
     let fixup_ptr = fixup_ptr as *mut std::ffi::c_void;
@@ -1215,7 +1131,7 @@ fn grouped_from_glu(run: GroupedGluRun<'_>) -> Result<Tensor> {
     let out = unsafe { dev.alloc::<f32>(total_assignments * nrows)? };
 
     let weight_ptr = weight.device_ptr()? as *const std::ffi::c_void;
-    let di = get_device_info(dev);
+    let di = cuda_device_info(dev);
 
     let quantize = quantize_glu_f32_launcher(ds_layout_for(dtype));
 
@@ -1465,17 +1381,17 @@ pub fn grouped_pair_packed(
 
     let stream = dev.cuda_stream();
     let stream_ptr = stream.cu_stream() as *mut std::ffi::c_void;
-    let k_padded = pad(pad(k, MATRIX_ROW_PADDING), 4 * QK8_1);
+    let k_padded = pad(pad(k, q8_1::ROW_PADDING), 4 * q8_1::BLOCK_ELEMENTS);
 
-    let blocks_per_row = k_padded / (4 * QK8_1);
-    let workspace_main = total_assignments * blocks_per_row * BLOCK_Q8_1_MMQ_SIZE;
-    let workspace_extra = MMQ_X_MAX * BLOCK_Q8_1_MMQ_SIZE;
+    let blocks_per_row = k_padded / (4 * q8_1::BLOCK_ELEMENTS);
+    let workspace_main = total_assignments * blocks_per_row * q8_1::MMQ_BLOCK_BYTES;
+    let workspace_extra = MMQ_X_MAX * q8_1::MMQ_BLOCK_BYTES;
     let workspace_bytes = workspace_main + workspace_extra;
     let mut workspace = workspace_ensure(&MMQ_WORKSPACE, dev, workspace_bytes, &stream)?;
     let (scratch_ptr, _scratch_guard) = workspace.ptr_mut();
     let scratch_ptr = scratch_ptr as *mut std::ffi::c_void;
 
-    let fixup_bytes = fixup_workspace_bytes(dev);
+    let fixup_bytes = fixup_capacity(&cuda_device_info(dev));
     let mut fixup_workspace = workspace_ensure(&FIXUP_WORKSPACE, dev, fixup_bytes, &stream)?;
     let (fixup_ptr, _fixup_guard) = fixup_workspace.ptr_mut();
     let fixup_ptr = fixup_ptr as *mut std::ffi::c_void;
@@ -1484,7 +1400,7 @@ pub fn grouped_pair_packed(
 
     let gate_ptr = gate.device_ptr()? as *const std::ffi::c_void;
     let up_ptr = up.device_ptr()? as *const std::ffi::c_void;
-    let di = get_device_info(dev);
+    let di = cuda_device_info(dev);
 
     let quantize = quantize_launcher(ds_layout_for(dtype));
 

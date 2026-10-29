@@ -99,7 +99,7 @@ mod tests {
         allocation_budget_with_reservations, block_aligned_sliding_window_start,
         cache_prefix_capacity, kv_layer_buffer_bytes_per_block, max_cache_blocks,
         requested_cache_blocks, HybridPagedKvCacheConfig, KvCacheLayout, MemoryGoal,
-        ModelConfigMetadata, PagedAttentionConfig, PagedCacheType,
+        ModelConfigMetadata, PagedAttentionConfig, PagedCacheType, PrefixCacheCapacity,
     };
 
     #[test]
@@ -149,12 +149,19 @@ mod tests {
         assert_eq!(config.recurrent_checkpoint_lanes, 1);
         assert!(!config.recurrent_checkpoint_lanes_auto);
         assert_eq!(config.recurrent_prefix_capacity, 0);
+        let fixed = config
+            .clone()
+            .with_recurrent_prefix_capacity(PrefixCacheCapacity::Fixed(7));
+        assert_eq!(fixed.recurrent_prefix_capacity, 7);
+        assert!(!fixed.recurrent_prefix_capacity_auto);
+        let auto = config.with_recurrent_prefix_capacity(PrefixCacheCapacity::Auto);
         assert_eq!(
-            config
-                .with_recurrent_prefix_capacity(7)
-                .recurrent_prefix_capacity,
-            7
+            auto.recurrent_prefix_capacity,
+            crate::DEFAULT_PREFIX_CACHE_N
         );
+        assert!(auto.recurrent_prefix_capacity_auto);
+        assert_eq!(PrefixCacheCapacity::from(None), PrefixCacheCapacity::Auto);
+        assert!(PrefixCacheCapacity::from(Some(0)).is_disabled());
         Ok(())
     }
 
@@ -567,6 +574,37 @@ mod tests {
 }
 
 /// Shared cache capacity and runtime memory reservations.
+/// Prefix cache capacity: `Auto` retains up to `DEFAULT_PREFIX_CACHE_N` sequences within the memory budget,
+/// `Fixed(n)` retains exactly `n`, and `Fixed(0)` disables prefix caching.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PrefixCacheCapacity {
+    #[default]
+    Auto,
+    Fixed(usize),
+}
+
+impl PrefixCacheCapacity {
+    pub const DISABLED: Self = Self::Fixed(0);
+
+    /// Sequence count requested before any memory-budget reduction.
+    pub fn requested(self) -> usize {
+        match self {
+            Self::Auto => crate::DEFAULT_PREFIX_CACHE_N,
+            Self::Fixed(n) => n,
+        }
+    }
+
+    pub fn is_disabled(self) -> bool {
+        self == Self::DISABLED
+    }
+}
+
+impl From<Option<usize>> for PrefixCacheCapacity {
+    fn from(count: Option<usize>) -> Self {
+        count.map_or(Self::Auto, Self::Fixed)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct PagedAttentionConfig {
     pub(crate) block_size: Option<usize>,
@@ -812,15 +850,9 @@ impl PagedAttentionConfig {
         Ok(self)
     }
 
-    pub fn with_recurrent_prefix_capacity(mut self, capacity: usize) -> Self {
-        self.recurrent_prefix_capacity = capacity;
-        self.recurrent_prefix_capacity_auto = false;
-        self
-    }
-
-    pub fn with_automatic_recurrent_prefix_capacity(mut self, capacity: usize) -> Self {
-        self.recurrent_prefix_capacity = capacity;
-        self.recurrent_prefix_capacity_auto = true;
+    pub fn with_recurrent_prefix_capacity(mut self, capacity: PrefixCacheCapacity) -> Self {
+        self.recurrent_prefix_capacity = capacity.requested();
+        self.recurrent_prefix_capacity_auto = capacity == PrefixCacheCapacity::Auto;
         self
     }
 

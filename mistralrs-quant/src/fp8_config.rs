@@ -748,44 +748,11 @@ pub(crate) fn checkpoint_linear_b(
             )
         }
     };
-    let scale_shape = match vb.tensor_shape(scale_name) {
-        Some(shape) => shape.to_vec(),
-        None => spec.weight_scale.logical_shape([out_dim, in_dim])?,
-    };
-    let fused_partitions = fused_constituents(&vb.prefix()).map(|parts| parts.len());
-    let scale_hints = scale_shard(
-        spec.weight_scale,
-        [out_dim, in_dim],
-        &scale_shape,
-        hints,
-        fused_partitions,
-    )?;
-    let weight = vb.get_with_hints_dtype((out_dim, in_dim), "weight", hints, DType::F8E4M3)?;
-    let weight_scale = vb.get_with_hints_dtype(scale_shape, scale_name, scale_hints, DType::F32)?;
-    let weight_shape: [usize; 2] = weight.dims2().map(|(rows, cols)| [rows, cols])?;
-    let weight_scale = spec.weight_scale.normalize(weight_scale, weight_shape)?;
-    let activation_scale = if spec.activation == Fp8ActivationMode::StaticTensor {
-        let name = spec.scale_names.activation_name(&vb)?.ok_or_else(|| {
-            candle_core::Error::msg(format!(
-                "missing FP8 static activation scale at prefix `{}`; expected one of {}",
-                vb.prefix(),
-                spec.scale_names.activation.join(", ")
-            ))
-        })?;
-        let shape = vb
-            .tensor_shape(name)
-            .map(<[usize]>::to_vec)
-            .unwrap_or_default();
-        let scale_hints = tensor_scale_shard([out_dim, in_dim], &shape, hints, fused_partitions)?;
-        Some(spec.normalize_activation_scale(vb.get_with_hints_dtype(
-            shape,
-            name,
-            scale_hints,
-            DType::F32,
-        )?)?)
-    } else {
-        None
-    };
+    let CheckpointFp8Tensors {
+        weight,
+        weight_scale,
+        activation_scale,
+    } = load_checkpoint_fp8_tensors([out_dim, in_dim], spec, scale_name, hints, &vb)?;
     let bias = if bias {
         Some(vb.get((out_dim,), "bias")?)
     } else {
@@ -795,10 +762,7 @@ pub(crate) fn checkpoint_linear_b(
         .as_ref()
         .map(Tensor::dtype)
         .filter(|dtype| matches!(dtype, DType::F16 | DType::BF16 | DType::F32))
-        .unwrap_or_else(|| match vb.dtype() {
-            DType::F16 | DType::BF16 | DType::F32 => vb.dtype(),
-            _ => DType::BF16,
-        });
+        .unwrap_or_else(|| checkpoint_fp8_dequant_dtype(vb.dtype()));
 
     match spec.activation {
         Fp8ActivationMode::DynamicBlock(_) => {
@@ -831,6 +795,83 @@ pub(crate) fn checkpoint_linear_b(
             })
         }
     }
+}
+
+pub(crate) struct CheckpointFp8Tensors {
+    pub weight: Tensor,
+    pub weight_scale: Tensor,
+    pub activation_scale: Option<Tensor>,
+}
+
+pub(crate) fn checkpoint_fp8_dequant_dtype(dtype: DType) -> DType {
+    match dtype {
+        DType::F16 | DType::BF16 | DType::F32 => dtype,
+        _ => DType::BF16,
+    }
+}
+
+pub(crate) fn checkpoint_fp8_weight_scale_name(
+    vb: &crate::ShardedVarBuilder,
+    spec: Fp8LinearSpec,
+) -> CandleResult<Option<&'static str>> {
+    resolve_scale_name(vb, spec.scale_names.weight, "weight")
+}
+
+pub(crate) fn load_checkpoint_fp8_tensors(
+    weight_shape: [usize; 2],
+    spec: Fp8LinearSpec,
+    scale_name: &'static str,
+    hints: crate::Shard,
+    vb: &crate::ShardedVarBuilder,
+) -> CandleResult<CheckpointFp8Tensors> {
+    let scale_shape = match vb.tensor_shape(scale_name) {
+        Some(shape) => shape.to_vec(),
+        None => spec.weight_scale.logical_shape(weight_shape)?,
+    };
+    let fused_partitions = fused_constituents(&vb.prefix()).map(|parts| parts.len());
+    let scale_hints = scale_shard(
+        spec.weight_scale,
+        weight_shape,
+        &scale_shape,
+        hints,
+        fused_partitions,
+    )?;
+    let weight = vb.get_with_hints_dtype(
+        (weight_shape[0], weight_shape[1]),
+        "weight",
+        hints,
+        DType::F8E4M3,
+    )?;
+    let weight_scale = vb.get_with_hints_dtype(scale_shape, scale_name, scale_hints, DType::F32)?;
+    let local_shape: [usize; 2] = weight.dims2().map(|(rows, cols)| [rows, cols])?;
+    let weight_scale = spec.weight_scale.normalize(weight_scale, local_shape)?;
+    let activation_scale = if spec.activation == Fp8ActivationMode::StaticTensor {
+        let name = spec.scale_names.activation_name(vb)?.ok_or_else(|| {
+            candle_core::Error::msg(format!(
+                "missing FP8 static activation scale at prefix `{}`; expected one of {}",
+                vb.prefix(),
+                spec.scale_names.activation.join(", ")
+            ))
+        })?;
+        let shape = vb
+            .tensor_shape(name)
+            .map(<[usize]>::to_vec)
+            .unwrap_or_default();
+        let scale_hints = tensor_scale_shard(weight_shape, &shape, hints, fused_partitions)?;
+        Some(spec.normalize_activation_scale(vb.get_with_hints_dtype(
+            shape,
+            name,
+            scale_hints,
+            DType::F32,
+        )?)?)
+    } else {
+        None
+    };
+    Ok(CheckpointFp8Tensors {
+        weight,
+        weight_scale,
+        activation_scale,
+    })
 }
 
 fn unquantized_linear_b(

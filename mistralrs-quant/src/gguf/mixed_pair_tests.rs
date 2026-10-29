@@ -1,5 +1,5 @@
 use super::*;
-use crate::{try_fused_quantized_pair, GgufMatMul, QuantMethod, QuantMethodConfig, UnquantLinear};
+use crate::{forward_group, GgufMatMul, GroupKind, QuantMethod, QuantMethodConfig, UnquantLinear};
 use candle_core::{cuda::cudarc::driver::sys, Var};
 use std::sync::Arc;
 
@@ -45,6 +45,19 @@ fn values(tensor: &Tensor) -> Result<Vec<f32>> {
     tensor.to_dtype(DType::F32)?.flatten_all()?.to_vec1()
 }
 
+fn fused_pair(
+    input: &Tensor,
+    left: &dyn QuantMethod,
+    right: &dyn QuantMethod,
+) -> Result<Option<(Tensor, Tensor)>> {
+    Ok(
+        forward_group(input, &[left, right], GroupKind::Dense)?.map(|outputs| {
+            let [left, right]: [Tensor; 2] = outputs.try_into().expect("pair outputs");
+            (left, right)
+        }),
+    )
+}
+
 #[test]
 #[ignore = "requires a CUDA device"]
 fn mixed_pair_formats_graph_preserve_inputs_and_output_order() -> Result<()> {
@@ -54,12 +67,12 @@ fn mixed_pair_formats_graph_preserve_inputs_and_output_order() -> Result<()> {
     let _htod_cache = cuda.enable_cuda_graph_htod_cache();
     for format in FORMATS {
         let mut shapes = vec![(64, 3, 512), (96, 7, 2048)];
-        if is_sm121(cuda)? {
-            let rows = dense_pair_prefetch_rows(cuda)?.next_multiple_of(2);
+        if prefers_weight_prefetch(cuda) {
+            let rows = dense_pair_prefetch_rows(cuda).next_multiple_of(2);
             let columns = (DENSE_PAIR_PREFETCH_BYTES_PER_THREAD * DENSE_PAIR_THREADS)
                 .div_ceil(format.type_size())
                 * format.block_size();
-            let columns = columns.next_multiple_of(MATRIX_ROW_PADDING);
+            let columns = columns.next_multiple_of(q8_1::ROW_PADDING);
             shapes.push((rows, TEST_DENSE_ROWS, columns));
         }
         for (rows, dense_rows, columns) in shapes {
@@ -77,13 +90,10 @@ fn mixed_pair_formats_graph_preserve_inputs_and_output_order() -> Result<()> {
                 let input = backing.narrow(2, INPUT_OFFSET, columns)?;
                 let other = Tensor::ones(input.shape(), dtype, &device)?;
                 let run = || -> Result<Vec<Tensor>> {
-                    let pair =
-                        try_fused_quantized_pair(&input, &quant, &dense)?.expect("mixed pair");
-                    let reverse = try_fused_quantized_pair(&input, &dense, &quant)?
-                        .expect("reverse mixed pair");
+                    let pair = fused_pair(&input, &quant, &dense)?.expect("mixed pair");
+                    let reverse = fused_pair(&input, &dense, &quant)?.expect("reverse mixed pair");
                     let overwrite = quant.forward(&other)?;
-                    let repeat = try_fused_quantized_pair(&input, &quant, &dense)?
-                        .expect("repeated mixed pair");
+                    let repeat = fused_pair(&input, &quant, &dense)?.expect("repeated mixed pair");
                     Ok(vec![
                         pair.0, pair.1, reverse.0, reverse.1, overwrite, repeat.0, repeat.1,
                     ])
@@ -157,25 +167,25 @@ fn mixed_pair_declines_unsupported_tails_and_layouts() -> Result<()> {
     let dense_weight = Tensor::ones((TEST_DENSE_ROWS, TEST_COLUMNS), dtype, &device)?;
     let projection = dense(dense_weight.clone())?;
     let even = quant(GgmlDType::Q8_0, TEST_QUANT_ROWS, TEST_COLUMNS, &device)?;
-    assert!(try_fused_quantized_pair(&input, &even, &projection)?.is_some());
+    assert!(fused_pair(&input, &even, &projection)?.is_some());
     for rows in [1, TEST_QUANT_ROWS - 1, TEST_QUANT_ROWS + 1] {
         let odd = quant(GgmlDType::Q8_0, rows, TEST_COLUMNS, &device)?;
-        assert!(try_fused_quantized_pair(&input, &odd, &projection)?.is_none());
-        assert!(try_fused_quantized_pair(&input, &projection, &odd)?.is_none());
+        assert!(fused_pair(&input, &odd, &projection)?.is_none());
+        assert!(fused_pair(&input, &projection, &odd)?.is_none());
     }
     let multiple = Tensor::ones((2, TEST_COLUMNS), dtype, &device)?;
-    assert!(try_fused_quantized_pair(&multiple, &even, &projection)?.is_none());
+    assert!(fused_pair(&multiple, &even, &projection)?.is_none());
     let unaligned = Tensor::ones(TEST_DENSE_ROWS * TEST_COLUMNS + 1, dtype, &device)?
         .narrow(0, 1, TEST_DENSE_ROWS * TEST_COLUMNS)?
         .reshape((TEST_DENSE_ROWS, TEST_COLUMNS))?;
-    assert!(try_fused_quantized_pair(&input, &even, &dense(unaligned)?)?.is_none());
+    assert!(fused_pair(&input, &even, &dense(unaligned)?)?.is_none());
     let strided = Tensor::ones((TEST_COLUMNS, TEST_DENSE_ROWS), dtype, &device)?.t()?;
-    assert!(try_fused_quantized_pair(&input, &even, &dense(strided)?)?.is_none());
+    assert!(fused_pair(&input, &even, &dense(strided)?)?.is_none());
     let unaligned =
         Tensor::ones((1, TEST_COLUMNS + 1), dtype, &device)?.narrow(1, 1, TEST_COLUMNS)?;
-    assert!(try_fused_quantized_pair(&unaligned, &even, &projection)?.is_none());
+    assert!(fused_pair(&unaligned, &even, &projection)?.is_none());
     let unsupported = quant(GgmlDType::Q8K, TEST_QUANT_ROWS, TEST_COLUMNS, &device)?;
-    assert!(try_fused_quantized_pair(&input, &unsupported, &projection)?.is_none());
+    assert!(fused_pair(&input, &unsupported, &projection)?.is_none());
     Ok(())
 }
 
@@ -211,8 +221,7 @@ fn mixed_pair_orders_secondary_stream_allocations() -> Result<()> {
             (TEST_DENSE_ROWS, TEST_COLUMNS),
         ));
         let dense = dense(weight)?;
-        let actual = try_fused_quantized_pair(&input, &projection, &dense)?
-            .expect("same-context allocations");
+        let actual = fused_pair(&input, &projection, &dense)?.expect("same-context allocations");
         assert_eq!(values(&actual.0)?, values(&projection.forward(&input)?)?);
         assert_eq!(values(&actual.1)?, values(&dense.forward(&input)?)?);
         std::hint::black_box(delay);

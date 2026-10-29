@@ -603,33 +603,15 @@ pub(crate) fn afq_mm_op(
 
         return Ok(output);
     }
+    if lhs_indices.is_some() || rhs_indices.is_some() {
+        candle_core::bail!("AFQ indexed matmul is Metal-only; use AfqLayer::gather_forward");
+    }
     #[cfg(feature = "cuda")]
     if x.device().is_cuda() {
-        return cuda_backend::afq_mm_op(
-            x,
-            w,
-            scales,
-            biases,
-            lhs_indices,
-            rhs_indices,
-            group_size,
-            bits,
-            transpose,
-        );
+        return cuda_backend::afq_mm_op(x, w, scales, biases, group_size, bits, transpose);
     }
 
-    // CPU fallback for non-accelerated devices
-    cpu_backend::afq_mm_op(
-        x,
-        w,
-        scales,
-        biases,
-        lhs_indices,
-        rhs_indices,
-        group_size,
-        bits,
-        transpose,
-    )
+    cpu_backend::afq_mm_op(x, w, scales, biases, group_size, bits, transpose)
 }
 
 /// Stable wrapper around candle's `call_mlx_arg_sort` for u32 keys. Candle's
@@ -1753,14 +1735,11 @@ mod cpu_backend {
     }
 
     /// Very simple (and slow) matmul after full de‑quantisation.  Handles 2‑D tensors.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn afq_mm_op(
         x: &Tensor,
         w: &Tensor,
         scales: &Tensor,
         biases: &Tensor,
-        _lhs_indices: Option<&Tensor>,
-        _rhs_indices: Option<&Tensor>,
         group_size: usize,
         bits: usize,
         transpose: bool,
@@ -2946,29 +2925,15 @@ mod cuda_backend {
     }
 
     /// CUDA-accelerated AFQ fused matmul
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn afq_mm_op(
         x: &Tensor,
         w: &Tensor,
         scales: &Tensor,
         biases: &Tensor,
-        _lhs_indices: Option<&Tensor>,
-        _rhs_indices: Option<&Tensor>,
         group_size: usize,
         bits: usize,
         transpose: bool,
     ) -> Result<Tensor> {
-        // For indexed matmul, fall back to dequantize + matmul for now
-        if _lhs_indices.is_some() || _rhs_indices.is_some() {
-            let w_dequant =
-                afq_dequantize_op(w, scales, biases, group_size, bits)?.to_dtype(x.dtype())?;
-            return if transpose {
-                x.broadcast_matmul(&w_dequant.t()?)
-            } else {
-                x.broadcast_matmul(&w_dequant)
-            };
-        }
-
         if !transpose {
             // Non-transposed matmul: fall back to dequantize + matmul
             let w_dequant =

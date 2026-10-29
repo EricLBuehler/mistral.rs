@@ -9,6 +9,8 @@ use crate::{
     QuantizedSerdeType, Shard, ShardedVarBuilder, UqffReader, UqffTensor,
 };
 
+#[cfg(feature = "metal")]
+mod group;
 pub mod ops;
 
 #[cfg(feature = "cuda")]
@@ -246,17 +248,21 @@ impl QuantMethod for AfqLayer {
     }
 
     fn gather_forward_raw(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
-        let output = ops::afq_mm_op(
-            x,
-            &self.w_q,
-            &self.scales,
-            &self.biases,
-            None,
-            Some(indices),
-            self.group_size,
-            self.bits,
-            true,
-        )?;
+        let output = if x.device().is_metal() {
+            ops::afq_mm_op(
+                x,
+                &self.w_q,
+                &self.scales,
+                &self.biases,
+                None,
+                Some(indices),
+                self.group_size,
+                self.bits,
+                true,
+            )?
+        } else {
+            self.gather_by_expert(x, indices)?
+        };
         let Some(bias) = &self.bias else {
             return Ok(output);
         };
@@ -285,6 +291,15 @@ impl QuantMethod for AfqLayer {
 
     fn quantized_act_type(&self) -> Option<DType> {
         None
+    }
+
+    #[cfg(feature = "metal")]
+    fn group_member(
+        &self,
+        xs: &Tensor,
+        kind: crate::GroupKind<'_>,
+    ) -> Result<Option<crate::GroupMember>> {
+        self.afq_group_member(xs, kind)
     }
 
     fn afq_inner(&self) -> Option<crate::AfqInner> {
@@ -386,6 +401,70 @@ impl QuantMethod for AfqLayer {
 }
 
 impl AfqLayer {
+    // Route rows are grouped per expert on the host so each expert runs the dense qmm path once.
+    fn gather_by_expert(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        let in_dim = x.dim(candle_core::D::Minus1)?;
+        let out_dim = self.w_q.dim(candle_core::D::Minus2)?;
+        let routes = indices.elem_count();
+        let top_k = indices.dim(candle_core::D::Minus1)?;
+        let x_rank = x.rank();
+        let x_rows = x.elem_count() / in_dim;
+        let per_route = match x_rows {
+            r if r == routes => true,
+            r if r * top_k == routes => false,
+            _ => candle_core::bail!(
+                "AFQ gather_forward: input shape {:?} does not match indices shape {:?}",
+                x.dims(),
+                indices.dims()
+            ),
+        };
+        let x = x.reshape((x_rows, in_dim))?;
+        let ids = indices
+            .to_dtype(DType::U32)?
+            .flatten_all()?
+            .to_vec1::<u32>()?;
+
+        let mut routes_by_expert = vec![Vec::new(); self.w_q.dim(0)?];
+        for (route, &expert) in ids.iter().enumerate() {
+            routes_by_expert[expert as usize].push(route as u32);
+        }
+        let mut outputs = Vec::new();
+        let mut order = vec![0u32; routes];
+        let mut next = 0u32;
+        for (expert, expert_routes) in routes_by_expert.iter().enumerate() {
+            if expert_routes.is_empty() {
+                continue;
+            }
+            let rows = expert_routes
+                .iter()
+                .map(|&r| if per_route { r } else { r / top_k as u32 })
+                .collect::<Vec<_>>();
+            let rows = Tensor::from_vec(rows, expert_routes.len(), x.device())?;
+            outputs.push(ops::afq_mm_op(
+                &x.index_select(&rows, 0)?,
+                &self.w_q.get(expert)?,
+                &self.scales.get(expert)?,
+                &self.biases.get(expert)?,
+                None,
+                None,
+                self.group_size,
+                self.bits,
+                true,
+            )?);
+            for &route in expert_routes {
+                order[route as usize] = next;
+                next += 1;
+            }
+        }
+        let order = Tensor::from_vec(order, routes, x.device())?;
+        let mut out_shape = indices.dims().to_vec();
+        out_shape.resize(x_rank - 1, 1);
+        out_shape.push(out_dim);
+        Tensor::cat(&outputs, 0)?
+            .index_select(&order, 0)?
+            .reshape(out_shape)
+    }
+
     pub fn from_parts(
         w_q: Tensor,
         scales: Tensor,
@@ -700,5 +779,120 @@ mod tests {
             assert_eq!(shard.dequantize_w()?.dims(), [OUTPUT_SIZE, INPUT_SIZE / 2]);
         }
         Ok(())
+    }
+
+    const GATHER_EXPERTS: usize = 4;
+    const GATHER_OUT: usize = 64;
+    const GATHER_IN: usize = 128;
+    const GATHER_TOKENS: usize = 3;
+    const GATHER_TOPK: usize = 2;
+    const GATHER_IDS: [u32; GATHER_TOKENS * GATHER_TOPK] = [3, 1, 0, 2, 2, 3];
+
+    fn stacked_gather_layer(bits: AfqBits) -> Result<AfqLayer> {
+        let values = (0..GATHER_EXPERTS * GATHER_OUT * GATHER_IN)
+            .map(|i| ((i as f32) * 0.37).sin() * (1.0 + (i / (GATHER_OUT * GATHER_IN)) as f32))
+            .collect::<Vec<_>>();
+        let weight = Tensor::from_vec(
+            values,
+            (GATHER_EXPERTS, GATHER_OUT, GATHER_IN),
+            &Device::Cpu,
+        )?;
+        let (w_q, scales, biases) = ops::afq_quantize_op(&weight, AfqGroupSize::Med, bits)?;
+        Ok(AfqLayer::from_parts(
+            w_q,
+            scales,
+            biases,
+            None,
+            bits,
+            AfqGroupSize::Med,
+        ))
+    }
+
+    fn reference_gather(layer: &AfqLayer, x: &Tensor, per_route: bool) -> Result<Tensor> {
+        let w = layer
+            .dequantize_w()?
+            .to_device(&Device::Cpu)?
+            .to_dtype(DType::F32)?;
+        let x = x.to_device(&Device::Cpu)?.to_dtype(DType::F32)?;
+        let x = x.reshape((x.elem_count() / GATHER_IN, GATHER_IN))?;
+        let mut rows = Vec::new();
+        for (route, &expert) in GATHER_IDS.iter().enumerate() {
+            let x_row = if per_route {
+                route
+            } else {
+                route / GATHER_TOPK
+            };
+            rows.push(
+                x.narrow(0, x_row, 1)?
+                    .matmul(&w.get(expert as usize)?.t()?)?,
+            );
+        }
+        Tensor::cat(&rows, 0)?.reshape((GATHER_TOKENS, GATHER_TOPK, GATHER_OUT))
+    }
+
+    fn gather_input(rows: usize) -> Result<Tensor> {
+        let values = (0..rows * GATHER_IN)
+            .map(|i| ((i as f32) * 0.11).cos())
+            .collect::<Vec<_>>();
+        Tensor::from_vec(values, (rows, GATHER_IN), &Device::Cpu)
+    }
+
+    fn assert_close(got: &Tensor, expected: &Tensor, tol: f32) -> Result<()> {
+        assert_eq!(got.dims(), expected.dims());
+        let diff = (got.to_device(&Device::Cpu)?.to_dtype(DType::F32)? - expected)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        assert!(diff < tol, "max abs diff {diff}");
+        Ok(())
+    }
+
+    fn check_stacked_gather(device: &Device, dtype: DType, tol: f32) -> Result<()> {
+        for bits in [AfqBits::Four, AfqBits::Eight] {
+            let cpu = stacked_gather_layer(bits)?;
+            let layer = AfqLayer::from_parts(
+                cpu.w_q.to_device(device)?,
+                cpu.scales.to_dtype(dtype)?.to_device(device)?,
+                cpu.biases.to_dtype(dtype)?.to_device(device)?,
+                None,
+                bits,
+                AfqGroupSize::Med,
+            );
+            let ids = Tensor::from_vec(GATHER_IDS.to_vec(), (GATHER_TOKENS, GATHER_TOPK), device)?;
+
+            let shared = gather_input(GATHER_TOKENS)?;
+            let got = layer.gather_forward(
+                &shared
+                    .reshape((GATHER_TOKENS, 1, GATHER_IN))?
+                    .to_dtype(dtype)?
+                    .to_device(device)?,
+                &ids,
+            )?;
+            assert_close(&got, &reference_gather(&layer, &shared, false)?, tol)?;
+
+            let routed = gather_input(GATHER_TOKENS * GATHER_TOPK)?;
+            let got = layer.gather_forward(
+                &routed
+                    .reshape((GATHER_TOKENS, GATHER_TOPK, GATHER_IN))?
+                    .to_dtype(dtype)?
+                    .to_device(device)?,
+                &ids,
+            )?;
+            assert_close(&got, &reference_gather(&layer, &routed, true)?, tol)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn stacked_gather_honors_expert_ids_cpu() -> Result<()> {
+        check_stacked_gather(&Device::Cpu, DType::F32, 1e-3)
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn stacked_gather_honors_expert_ids_cuda() -> Result<()> {
+        let device = Device::new_cuda(0)?;
+        check_stacked_gather(&device, DType::F16, 0.25)?;
+        check_stacked_gather(&device, DType::BF16, 0.5)
     }
 }

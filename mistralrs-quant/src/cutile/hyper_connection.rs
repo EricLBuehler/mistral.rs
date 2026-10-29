@@ -10,12 +10,9 @@ use cutile::tile_kernel::{CompileOptions, TileKernel};
 use half::{bf16, f16};
 
 use super::warmup::{CutileKernel, WarmupProgress};
-use super::{
-    catch_cutile_panic, context, device_compute_major, jit_available, tileiras_capabilities,
-};
+use super::{blackwell_tile_features_supported, catch_cutile_panic, context};
 use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
 
-const SUPPORTED_COMPUTE_MAJOR: i32 = 12;
 const TILE_ROWS: usize = 64;
 const TILE_COLUMNS: usize = 128;
 const TILE_RANK: usize = 64;
@@ -24,8 +21,6 @@ const MIN_ROWS: usize = 512;
 const ALIGNMENT_ELEMENTS: usize = 8;
 const MIN_BLOCKS_PER_SM: usize = 2;
 const CACHE_BUDGET_PARTS: usize = 3;
-const MIN_CUDA_VERSION: u32 = 1303;
-const MIN_TILEIRAS_VERSION: (u32, u32) = (13, 3);
 const WARMUP_ROWS: [usize; 5] = [
     MIN_ROWS,
     MIN_ROWS + 1,
@@ -111,24 +106,10 @@ struct DeviceGeometry {
 
 impl DeviceGeometry {
     fn read(dev: &CudaDevice) -> Option<Self> {
-        use candle_core::cuda::cudarc::driver::sys::CUdevice_attribute;
-        let stream = dev.cuda_stream();
-        let context = stream.context();
-        let multiprocessors = usize::try_from(
-            context
-                .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)
-                .ok()?,
-        )
-        .ok()?;
-        let cache_bytes = usize::try_from(
-            context
-                .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE)
-                .ok()?,
-        )
-        .ok()?;
-        (multiprocessors > 0 && cache_bytes >= CACHE_BUDGET_PARTS).then_some(Self {
-            multiprocessors,
-            cache_budget: cache_bytes / CACHE_BUDGET_PARTS,
+        let info = crate::cuda_device::cuda_device_info(dev);
+        (info.l2_bytes >= CACHE_BUDGET_PARTS).then_some(Self {
+            multiprocessors: info.sms,
+            cache_budget: info.l2_bytes / CACHE_BUDGET_PARTS,
         })
     }
 
@@ -160,7 +141,6 @@ impl DeviceGeometry {
 
 static SHAPES: OnceLock<Mutex<Vec<RegisteredShape>>> = OnceLock::new();
 static READY: OnceLock<Mutex<HashMap<ShapeKey, DeviceGeometry>>> = OnceLock::new();
-static DEVICES: OnceLock<Mutex<HashMap<DeviceId, Option<DeviceGeometry>>>> = OnceLock::new();
 
 fn weight_shape(weight: &Tensor, streams: usize) -> Option<ShapeKey> {
     if streams == 0
@@ -197,10 +177,7 @@ fn weight_shape(weight: &Tensor, streams: usize) -> Option<ShapeKey> {
 }
 
 pub fn hc_prefill_supported(dev: &CudaDevice) -> bool {
-    device_compute_major(dev) == SUPPORTED_COMPUTE_MAJOR
-        && super::build_cuda_version_code().is_some_and(|version| version >= MIN_CUDA_VERSION)
-        && jit_available(dev)
-        && tileiras_capabilities().is_some_and(|caps| caps.version >= MIN_TILEIRAS_VERSION)
+    blackwell_tile_features_supported(dev)
 }
 
 pub fn register_hc_up_mix(weight: &Tensor, streams: usize) {
@@ -210,18 +187,10 @@ pub fn register_hc_up_mix(weight: &Tensor, streams: usize) {
     let Device::Cuda(dev) = weight.device() else {
         return;
     };
-    let hardware = {
-        let mut devices = DEVICES
-            .get_or_init(|| Mutex::new(HashMap::new()))
-            .lock()
-            .unwrap();
-        *devices.entry(dev.id()).or_insert_with(|| {
-            hc_prefill_supported(dev)
-                .then(|| DeviceGeometry::read(dev))
-                .flatten()
-        })
-    };
-    let Some(hardware) = hardware else {
+    let Some(hardware) = hc_prefill_supported(dev)
+        .then(|| DeviceGeometry::read(dev))
+        .flatten()
+    else {
         return;
     };
     if weight.elem_count() * weight.dtype().size_in_bytes() > hardware.cache_budget {

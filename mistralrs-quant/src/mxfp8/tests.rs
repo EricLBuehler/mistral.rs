@@ -386,7 +386,7 @@ fn native_prefill_preserves_shared_activation_and_packed_views() -> Result<()> {
                     .iter()
                     .map(AsRef::as_ref)
                     .collect::<Vec<_>>();
-                crate::try_forward_with_shared_activation_scheme(&input, &methods)?.unwrap()
+                crate::forward_shared_activation(&input, &methods)?.unwrap()
             };
             let separate = Tensor::cat(&shared, 1)?;
             assert_eq!(

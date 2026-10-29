@@ -39,7 +39,7 @@ impl GatedResidual {
             .to_dtype(DType::F32)?
             + 1.0)?;
         let packed = if with_inject {
-            ReplicatedLayer::new_packed_aligned(
+            ReplicatedLayer::new_packed(
                 &[
                     LoraLinearSpec::replicated(hc_hidden, cfg.rank),
                     LoraLinearSpec::replicated(hc_hidden, cfg.streams),
@@ -136,12 +136,15 @@ impl GatedResidual {
                 return Ok((self.mix_down(xn, &down)?, inject));
             }
         }
-        #[cfg(feature = "cuda")]
-        if let Some((down, inject)) = mistralrs_quant::try_fused_quantized_pair(
+        let inject = self.inject.as_deref().expect("block mixer has injection");
+        if let Some(outputs) = mistralrs_quant::forward_group(
             xn,
-            &*self.down,
-            self.inject.as_deref().expect("block mixer has injection"),
+            &[&*self.down, inject],
+            mistralrs_quant::GroupKind::Dense,
         )? {
+            let [down, inject]: [Tensor; 2] = outputs.try_into().map_err(|_| {
+                candle_core::Error::msg("block mixer pair returned the wrong output count")
+            })?;
             return Ok((self.mix_down(xn, &down)?, inject));
         }
         Ok((self.mix(xn)?, self.inject(xn)?))

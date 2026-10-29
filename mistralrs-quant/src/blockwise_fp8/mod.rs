@@ -1,7 +1,4 @@
-use std::{
-    borrow::Cow,
-    sync::{atomic::AtomicUsize, Arc},
-};
+use std::sync::{atomic::AtomicUsize, Arc};
 
 use candle_core::{quantized::GgmlDType, DType, Device, Result, Tensor};
 use candle_nn::Linear;
@@ -29,8 +26,8 @@ use crate::{
     hqq::{ISQ_HQQ_DEFAULT_OPT_STEPS, ISQ_HQQ_GROUP_SIZE},
     ActivationQuantizationScheme, ActivationScaleLayout, AfqBits, AfqGroupSize, AfqLayer,
     FP8Linear, Fp8ActivationScheme, GgufMatMul, HqqAxis, HqqBits, HqqConfig, HqqLayer, IsqType,
-    QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedActivation, QuantizedConfig,
-    QuantizedSerde, Shard, ShardedVarBuilder, UnquantLinear,
+    QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedActivation, QuantizedSerde, Shard,
+    UnquantLinear,
 };
 
 #[derive(Debug)]
@@ -65,8 +62,29 @@ static DEEPGEMM_FP8_PROVIDER_LOG: std::sync::Once = std::sync::Once::new();
 static DEEPGEMM_FP8_FALLBACK_LOG: std::sync::Once = std::sync::Once::new();
 #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
 const FP8_SM90_PROVIDER_ENV: &str = "MISTRALRS_FP8_SM90_PROVIDER";
+// The fused GLU quantizer kernel emits one F32 scale per 128 columns.
+#[cfg(feature = "cuda")]
+const FUSED_GLU_QUANT_BLOCK_COLUMNS: usize = 128;
 #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
 static TENSOR_CORE_GEMV_PROVIDER_LOG: std::sync::Once = std::sync::Once::new();
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DynamicFp8Provider {
+    Legacy,
+    CutlassSm90,
+    TensorCoreGemv,
+}
+
+// The tensor-core GEMV covers non-Hopper parts; on SM90 the CUTLASS GEMM serves every row count.
+fn select_dynamic_provider(cutlass_sm90: bool, tensor_core_gemv: bool) -> DynamicFp8Provider {
+    if cutlass_sm90 {
+        DynamicFp8Provider::CutlassSm90
+    } else if tensor_core_gemv {
+        DynamicFp8Provider::TensorCoreGemv
+    } else {
+        DynamicFp8Provider::Legacy
+    }
+}
 
 impl BlockwiseFp8Provider {
     fn supports_shared_activation(&self) -> bool {
@@ -154,42 +172,61 @@ impl BlockwiseFP8Linear {
             }
         }
         #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
-        if ops::cutlass_fp8_blockwise_supported(
+        let cutlass_sm90 = ops::cutlass_fp8_blockwise_supported(
             &self.weight,
             &self.weight_scale_inv,
             &self.weight_block_size,
-        ) {
-            let Device::Cuda(dev) = self.weight.device() else {
-                unreachable!()
-            };
-            let _ = ops::prepare_cutlass_fp8(dev)?;
-            self.provider = BlockwiseFp8Provider::CutlassSm90;
-            CUTLASS_FP8_PROVIDER_LOG.call_once(|| {
-                tracing::info!(
-                    "Using CUTLASS SM90 blockwise FP8 GEMM with dynamic 1x128 activations"
-                );
-            });
-        }
+        );
+        #[cfg(not(all(feature = "cuda", has_cutlass_fp8_sm90_kernels)))]
+        let cutlass_sm90 = false;
         #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
-        if self.dequant_dtype == DType::BF16
+        let tensor_core_gemv = self.dequant_dtype == DType::BF16
             && mma::weight_supported(
                 &self.weight,
                 &self.weight_scale_inv,
                 &self.weight_block_size,
-            )
-        {
-            self.provider = BlockwiseFp8Provider::TensorCoreGemv;
-            #[cfg(feature = "cutile")]
-            if let (Device::Cuda(dev), Ok((n, k))) = (self.weight.device(), self.weight.dims2()) {
-                if crate::cutile::fp8_gemm_supported(dev, n, k) {
-                    crate::cutile::register_fp8_gemm_shape(&self.weight, &self.weight_scale_inv);
-                }
+            );
+        #[cfg(not(all(feature = "cuda", has_blockwise_fp8_kernels)))]
+        let tensor_core_gemv = false;
+
+        match select_dynamic_provider(cutlass_sm90, tensor_core_gemv) {
+            DynamicFp8Provider::Legacy => {}
+            #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
+            DynamicFp8Provider::CutlassSm90 => {
+                let Device::Cuda(dev) = self.weight.device() else {
+                    unreachable!()
+                };
+                let _ = ops::prepare_cutlass_fp8(dev)?;
+                self.provider = BlockwiseFp8Provider::CutlassSm90;
+                CUTLASS_FP8_PROVIDER_LOG.call_once(|| {
+                    tracing::info!(
+                        "Using CUTLASS SM90 blockwise FP8 GEMM with dynamic 1x128 activations"
+                    );
+                });
             }
-            TENSOR_CORE_GEMV_PROVIDER_LOG.call_once(|| {
-                tracing::info!(
-                    "Using FP8 tensor-core W8A8 GEMV for decode with dynamic 1x128 activations"
-                );
-            });
+            #[cfg(not(all(feature = "cuda", has_cutlass_fp8_sm90_kernels)))]
+            DynamicFp8Provider::CutlassSm90 => unreachable!(),
+            #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+            DynamicFp8Provider::TensorCoreGemv => {
+                self.provider = BlockwiseFp8Provider::TensorCoreGemv;
+                #[cfg(feature = "cutile")]
+                if let (Device::Cuda(dev), Ok((n, k))) = (self.weight.device(), self.weight.dims2())
+                {
+                    if crate::cutile::fp8_gemm_supported(dev, n, k) {
+                        crate::cutile::register_fp8_gemm_shape(
+                            &self.weight,
+                            &self.weight_scale_inv,
+                        );
+                    }
+                }
+                TENSOR_CORE_GEMV_PROVIDER_LOG.call_once(|| {
+                    tracing::info!(
+                        "Using FP8 tensor-core W8A8 GEMV for decode with dynamic 1x128 activations"
+                    );
+                });
+            }
+            #[cfg(not(all(feature = "cuda", has_blockwise_fp8_kernels)))]
+            DynamicFp8Provider::TensorCoreGemv => unreachable!(),
         }
         Ok(())
     }
@@ -246,6 +283,185 @@ impl BlockwiseFP8Linear {
     }
 }
 
+impl BlockwiseFP8Linear {
+    #[cfg(feature = "cuda")]
+    fn forward_packed_glu(
+        &self,
+        input: &Tensor,
+        split_size: usize,
+        activation: GluActivationType,
+    ) -> Result<Option<Tensor>> {
+        #[cfg(all(has_blockwise_fp8_kernels, feature = "cutile"))]
+        if matches!(self.provider, BlockwiseFp8Provider::TensorCoreGemv) {
+            if self.activation_scheme != Some(Fp8ActivationScheme::Dynamic)
+                || input.dtype() != DType::BF16
+            {
+                return Ok(None);
+            }
+            let Some((&packed_features, batch_dims)) = input.dims().split_last() else {
+                return Ok(None);
+            };
+            let Device::Cuda(dev) = input.device() else {
+                return Ok(None);
+            };
+            let (n, k) = self.weight.dims2()?;
+            let rows = batch_dims
+                .iter()
+                .try_fold(1usize, |rows, dim| rows.checked_mul(*dim))
+                .ok_or_else(|| {
+                    candle_core::Error::msg("fused split GLU activation shape overflows usize")
+                })?;
+            if packed_features != split_size.saturating_mul(2)
+                || k != split_size
+                || rows <= mma::MMA_GEMV_MAX_ROWS
+                || !crate::cutile::fp8_gemm_supported(dev, n, k)
+            {
+                return Ok(None);
+            }
+            let block_rows = crate::cutile::FP8_GEMM_BLOCK_ROWS;
+            let padded_rows = rows.div_ceil(block_rows) * block_rows;
+            let input = input.reshape((rows, packed_features))?;
+            let (quantized, scales) = crate::utils::fused_split_glu_quantized_bf16(
+                &input,
+                split_size,
+                self.weight_block_size[1],
+                padded_rows,
+                activation,
+            )?;
+            let result = crate::cutile::cutile_fp8_gemm(
+                &quantized,
+                &scales,
+                &self.weight,
+                &self.weight_scale_inv,
+                dev,
+            )?
+            .narrow(0, 0, rows)?;
+            let mut output_shape = batch_dims.to_vec();
+            output_shape.push(result.dim(1)?);
+            let result = result.reshape(output_shape)?;
+            return match &self.bias {
+                Some(bias) => result.broadcast_add(bias).map(Some),
+                None => Ok(Some(result)),
+            };
+        }
+        #[cfg(all(has_cutlass_fp8_sm90_kernels, has_deepgemm_fp8_sm90_provider))]
+        {
+            let BlockwiseFp8Provider::DeepGemmSm90(prepared) = &self.provider else {
+                return Ok(None);
+            };
+            if self.activation_scheme != Some(Fp8ActivationScheme::Dynamic)
+                || input.dtype() != DType::BF16
+                || !input.device().is_cuda()
+            {
+                return Ok(None);
+            }
+            let Some((&packed_features, batch_dims)) = input.dims().split_last() else {
+                return Ok(None);
+            };
+            if packed_features != split_size.saturating_mul(2) {
+                return Ok(None);
+            }
+            let rows = batch_dims
+                .iter()
+                .try_fold(1usize, |rows, dim| rows.checked_mul(*dim))
+                .ok_or_else(|| {
+                    candle_core::Error::msg("fused split GLU activation shape overflows usize")
+                })?;
+            if !deepgemm::serving_shape_supported(input.dtype(), rows) {
+                return Ok(None);
+            }
+            let scale_shape = deepgemm::activation_scale_shape(rows, split_size)?;
+            let input = input.reshape((rows, packed_features))?;
+            let (quantized, scales) = crate::utils::fused_split_glu_quantized_bf16(
+                &input,
+                split_size,
+                self.weight_block_size[1],
+                scale_shape[1],
+                activation,
+            )?;
+            let quantized = quantized.reshape((rows, split_size))?;
+            let result = deepgemm::matmul_prequantized(
+                prepared,
+                &quantized,
+                &scales,
+                &self.weight,
+                &self.weight_scale_inv,
+            )?;
+            let mut output_shape = batch_dims.to_vec();
+            output_shape.push(result.dim(1)?);
+            let result = result.reshape(output_shape)?;
+            match &self.bias {
+                Some(bias) => result.broadcast_add(bias).map(Some),
+                None => Ok(Some(result)),
+            }
+        }
+
+        #[cfg(not(all(has_cutlass_fp8_sm90_kernels, has_deepgemm_fp8_sm90_provider)))]
+        {
+            let _ = (input, split_size, activation);
+            Ok(None)
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    fn forward_split_glu(
+        &self,
+        gate: &Tensor,
+        value: &Tensor,
+        activation: GluActivationType,
+    ) -> Result<Option<Tensor>> {
+        if gate.dtype() != DType::BF16 || !gate.device().is_cuda() {
+            return Ok(None);
+        }
+        let Some(scheme) = self.activation_quantization_scheme_for(value) else {
+            return Ok(None);
+        };
+        if scheme.dtype != DType::F8E4M3
+            || scheme.block_shape != [1, FUSED_GLU_QUANT_BLOCK_COLUMNS]
+            || scheme.scale_encoding != crate::ActivationScaleEncoding::F32
+        {
+            return Ok(None);
+        }
+        let Some(scale_layout @ ActivationScaleLayout::GroupMajor { row_alignment }) =
+            self.preferred_activation_scale_layout_for(value)
+        else {
+            return Ok(None);
+        };
+        let Some((&columns, batch_dims)) = value.dims().split_last() else {
+            return Ok(None);
+        };
+        let rows = batch_dims
+            .iter()
+            .try_fold(1usize, |rows, dim| rows.checked_mul(*dim))
+            .ok_or_else(|| {
+                candle_core::Error::msg("fused GLU activation row count overflows usize")
+            })?;
+        if rows == 0 || columns == 0 {
+            return Ok(None);
+        }
+        let scale_stride_m = crate::aligned_activation_scale_rows(rows, row_alignment)?;
+        let Some((quantized, scales)) = crate::utils::fused_glu_quantized_bf16(
+            gate,
+            value,
+            scheme.block_shape[1],
+            scale_stride_m,
+            activation,
+        )?
+        else {
+            return Ok(None);
+        };
+        let quantized = QuantizedActivation::new_with_scale_layout(
+            quantized,
+            scales,
+            value.dims().to_vec(),
+            value.dtype(),
+            scheme,
+            scale_layout,
+        )?;
+        self.forward_quantized(&quantized).map(Some)
+    }
+}
+
 impl QuantMethod for BlockwiseFP8Linear {
     #[cfg(feature = "metal")]
     fn prepare_metal_kernels(&self, activation_dtype: DType) -> Result<()> {
@@ -297,6 +513,19 @@ impl QuantMethod for BlockwiseFP8Linear {
         }
     }
     fn dequantize_w(&self) -> Result<candle_core::Tensor> {
+        if self.weight.rank() == 3 {
+            let experts = (0..self.weight.dim(0)?)
+                .map(|expert| {
+                    ops::fp8_blockwise_dequantize(
+                        &self.weight.get(expert)?,
+                        &self.weight_scale_inv.get(expert)?,
+                        self.weight_block_size.to_vec(),
+                        self.dequant_dtype,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?;
+            return Tensor::stack(&experts, 0);
+        }
         ops::fp8_blockwise_dequantize(
             &self.weight,
             &self.weight_scale_inv,
@@ -528,21 +757,12 @@ impl QuantMethod for BlockwiseFP8Linear {
         let weight_selected = weight.index_select(&flat_indices, 0)?;
 
         // Reshape x for batched matmul
-        let x_expanded = if x.dims().len() == 3 && x.dim(1)? == 1 {
-            // x is (n_tokens, 1, hidden_dim) - broadcast to (n_tokens * n_experts_per_tok, 1, hidden_dim)
-            x.squeeze(1)?
-                .unsqueeze(1)?
-                .broadcast_as((n_tokens * n_experts_per_tok, 1, x.dim(2)?))?
-                .contiguous()?
-        } else if x.dims().len() == 3 {
-            // x is (n_tokens, n_experts_per_tok, hidden_dim)
-            x.reshape((n_tokens * n_experts_per_tok, 1, x.dim(2)?))?
-        } else {
-            // x is (n_tokens, hidden_dim)
-            x.unsqueeze(1)?
-                .broadcast_as((n_tokens * n_experts_per_tok, 1, x.dim(1)?))?
-                .contiguous()?
-        };
+        let hidden = x.dim(candle_core::D::Minus1)?;
+        let x_expanded = x
+            .reshape((n_tokens, (), hidden))?
+            .broadcast_as((n_tokens, n_experts_per_tok, hidden))?
+            .contiguous()?
+            .reshape((n_tokens * n_experts_per_tok, 1, hidden))?;
 
         // Batched matmul: (batch, 1, k) @ (batch, k, n).T = (batch, 1, n)
         // weight_selected is (batch, n, k), so we need to transpose last two dims
@@ -798,121 +1018,23 @@ impl QuantMethod for BlockwiseFP8Linear {
         }
     }
 
-    #[cfg(feature = "cuda")]
-    fn try_forward_fused_split_glu(
+    fn forward_glu(
         &self,
-        input: &Tensor,
-        split_size: usize,
-        activation: GluActivationType,
+        input: crate::GluInput<'_>,
+        activation: crate::GluActivationType,
     ) -> Result<Option<Tensor>> {
-        #[cfg(all(has_blockwise_fp8_kernels, feature = "cutile"))]
-        if matches!(self.provider, BlockwiseFp8Provider::TensorCoreGemv) {
-            if self.activation_scheme != Some(Fp8ActivationScheme::Dynamic)
-                || input.dtype() != DType::BF16
-            {
-                return Ok(None);
+        #[cfg(feature = "cuda")]
+        match input {
+            crate::GluInput::Packed { input, split_size } => {
+                self.forward_packed_glu(input, split_size, activation)
             }
-            let Some((&packed_features, batch_dims)) = input.dims().split_last() else {
-                return Ok(None);
-            };
-            let Device::Cuda(dev) = input.device() else {
-                return Ok(None);
-            };
-            let (n, k) = self.weight.dims2()?;
-            let rows = batch_dims
-                .iter()
-                .try_fold(1usize, |rows, dim| rows.checked_mul(*dim))
-                .ok_or_else(|| {
-                    candle_core::Error::msg("fused split GLU activation shape overflows usize")
-                })?;
-            if packed_features != split_size.saturating_mul(2)
-                || k != split_size
-                || rows <= mma::MMA_GEMV_MAX_ROWS
-                || !crate::cutile::fp8_gemm_supported(dev, n, k)
-            {
-                return Ok(None);
-            }
-            let block_rows = crate::cutile::FP8_GEMM_BLOCK_ROWS;
-            let padded_rows = rows.div_ceil(block_rows) * block_rows;
-            let input = input.reshape((rows, packed_features))?;
-            let (quantized, scales) = crate::utils::fused_split_glu_quantized_bf16(
-                &input,
-                split_size,
-                self.weight_block_size[1],
-                padded_rows,
-                activation,
-            )?;
-            let result = crate::cutile::cutile_fp8_gemm(
-                &quantized,
-                &scales,
-                &self.weight,
-                &self.weight_scale_inv,
-                dev,
-            )?
-            .narrow(0, 0, rows)?;
-            let mut output_shape = batch_dims.to_vec();
-            output_shape.push(result.dim(1)?);
-            let result = result.reshape(output_shape)?;
-            return match &self.bias {
-                Some(bias) => result.broadcast_add(bias).map(Some),
-                None => Ok(Some(result)),
-            };
-        }
-        #[cfg(all(has_cutlass_fp8_sm90_kernels, has_deepgemm_fp8_sm90_provider))]
-        {
-            let BlockwiseFp8Provider::DeepGemmSm90(prepared) = &self.provider else {
-                return Ok(None);
-            };
-            if self.activation_scheme != Some(Fp8ActivationScheme::Dynamic)
-                || input.dtype() != DType::BF16
-                || !input.device().is_cuda()
-            {
-                return Ok(None);
-            }
-            let Some((&packed_features, batch_dims)) = input.dims().split_last() else {
-                return Ok(None);
-            };
-            if packed_features != split_size.saturating_mul(2) {
-                return Ok(None);
-            }
-            let rows = batch_dims
-                .iter()
-                .try_fold(1usize, |rows, dim| rows.checked_mul(*dim))
-                .ok_or_else(|| {
-                    candle_core::Error::msg("fused split GLU activation shape overflows usize")
-                })?;
-            if !deepgemm::serving_shape_supported(input.dtype(), rows) {
-                return Ok(None);
-            }
-            let scale_shape = deepgemm::activation_scale_shape(rows, split_size)?;
-            let input = input.reshape((rows, packed_features))?;
-            let (quantized, scales) = crate::utils::fused_split_glu_quantized_bf16(
-                &input,
-                split_size,
-                self.weight_block_size[1],
-                scale_shape[1],
-                activation,
-            )?;
-            let quantized = quantized.reshape((rows, split_size))?;
-            let result = deepgemm::matmul_prequantized(
-                prepared,
-                &quantized,
-                &scales,
-                &self.weight,
-                &self.weight_scale_inv,
-            )?;
-            let mut output_shape = batch_dims.to_vec();
-            output_shape.push(result.dim(1)?);
-            let result = result.reshape(output_shape)?;
-            match &self.bias {
-                Some(bias) => result.broadcast_add(bias).map(Some),
-                None => Ok(Some(result)),
+            crate::GluInput::Split { gate, value } => {
+                self.forward_split_glu(gate, value, activation)
             }
         }
-
-        #[cfg(not(all(has_cutlass_fp8_sm90_kernels, has_deepgemm_fp8_sm90_provider)))]
+        #[cfg(not(feature = "cuda"))]
         {
-            let _ = (input, split_size, activation);
+            let _ = (input, activation);
             Ok(None)
         }
     }
@@ -1141,73 +1263,6 @@ pub fn blockwise_fp8_moe(
     Ok(Arc::new(layer))
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum BlockwiseFp8ModuleKind {
-    Missing,
-    Unquantized,
-    Quantized,
-}
-
-pub(crate) fn blockwise_fp8_module_kind(
-    config: &QuantizedConfig,
-    vb: &ShardedVarBuilder,
-) -> Result<BlockwiseFp8ModuleKind> {
-    let QuantizedConfig::Fp8 {
-        modules_to_not_convert,
-        ..
-    } = config
-    else {
-        candle_core::bail!("Unexpected quantization config.")
-    };
-
-    let has_weight = vb.contains_tensor("weight");
-    let has_scale = vb.contains_tensor("weight_scale_inv");
-    let prefix = vb.prefix();
-    let module_path = canonical_language_model_module_path(&prefix);
-    let is_excluded = modules_to_not_convert
-        .iter()
-        .any(|module| canonical_language_model_module_path(module) == module_path);
-
-    if is_excluded {
-        if has_scale {
-            candle_core::bail!(
-                "FP8-excluded module `{}` unexpectedly has `weight_scale_inv`",
-                vb.prefix()
-            );
-        }
-        return Ok(if has_weight {
-            BlockwiseFp8ModuleKind::Unquantized
-        } else {
-            BlockwiseFp8ModuleKind::Missing
-        });
-    }
-
-    if has_weight && !has_scale {
-        if !modules_to_not_convert.is_empty() {
-            candle_core::bail!(
-                "FP8 module `{}` has no `weight_scale_inv` and is not listed in `modules_to_not_convert`",
-                vb.prefix()
-            );
-        }
-        return Ok(BlockwiseFp8ModuleKind::Unquantized);
-    }
-
-    Ok(if has_weight && has_scale {
-        BlockwiseFp8ModuleKind::Quantized
-    } else {
-        BlockwiseFp8ModuleKind::Missing
-    })
-}
-
-fn canonical_language_model_module_path(path: &str) -> Cow<'_, str> {
-    for prefix in ["model.language_model.", "language_model.model."] {
-        if let Some(suffix) = path.strip_prefix(prefix) {
-            return Cow::Owned(format!("model.{suffix}"));
-        }
-    }
-    Cow::Borrowed(path)
-}
-
 pub(crate) fn scale_shard_from_weight_shard(
     weight_shape: [usize; 2],
     weight_block_size: [usize; 2],
@@ -1273,12 +1328,33 @@ pub(crate) fn scale_shard_from_weight_shard(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn sm90_dynamic_provider_keeps_cutlass_over_tensor_core_gemv() {
+        use super::{select_dynamic_provider, DynamicFp8Provider};
+        assert_eq!(
+            select_dynamic_provider(true, true),
+            DynamicFp8Provider::CutlassSm90
+        );
+        assert_eq!(
+            select_dynamic_provider(true, false),
+            DynamicFp8Provider::CutlassSm90
+        );
+        assert_eq!(
+            select_dynamic_provider(false, true),
+            DynamicFp8Provider::TensorCoreGemv
+        );
+        assert_eq!(
+            select_dynamic_provider(false, false),
+            DynamicFp8Provider::Legacy
+        );
+    }
+
     use std::collections::HashMap;
 
     use candle_core::{DType, Device, Tensor};
 
     use super::*;
-    use crate::ShardedSafeTensors;
+    use crate::{QuantizedConfig, ShardedSafeTensors};
 
     fn fp8_config(exclusions: &[&str]) -> QuantizedConfig {
         QuantizedConfig::Fp8 {
@@ -1466,7 +1542,13 @@ mod tests {
                 crate::utils::fused_split_glu(&input, SPLIT_SIZE, GluActivationType::Silu)?;
             let reference = layer.forward(&intermediate)?;
             let output = layer
-                .try_forward_fused_split_glu(&input, SPLIT_SIZE, GluActivationType::Silu)?
+                .forward_glu(
+                    crate::GluInput::Packed {
+                        input: &input,
+                        split_size: SPLIT_SIZE,
+                    },
+                    GluActivationType::Silu,
+                )?
                 .ok_or_else(|| candle_core::Error::msg("DeepGEMM fused GLU was not selected"))?;
             dev.synchronize()?;
             assert_eq!(output.dims(), [rows, OUTPUT_FEATURES]);
@@ -1478,7 +1560,13 @@ mod tests {
             crate::utils::fused_split_glu(&input, SPLIT_SIZE, GluActivationType::Silu)?;
         let reference = layer.forward(&intermediate)?;
         let output = layer
-            .try_forward_fused_split_glu(&input, SPLIT_SIZE, GluActivationType::Silu)?
+            .forward_glu(
+                crate::GluInput::Packed {
+                    input: &input,
+                    split_size: SPLIT_SIZE,
+                },
+                GluActivationType::Silu,
+            )?
             .ok_or_else(|| candle_core::Error::msg("DeepGEMM fused GLU was not selected"))?;
         dev.synchronize()?;
         assert_eq!(output.dims(), [2, 3, OUTPUT_FEATURES]);
@@ -1690,14 +1778,26 @@ mod tests {
                 GluActivationType::Silu,
             )?)?;
             let output = layer
-                .try_forward_fused_split_glu(&input, SPLIT_SIZE, GluActivationType::Silu)?
+                .forward_glu(
+                    crate::GluInput::Packed {
+                        input: &input,
+                        split_size: SPLIT_SIZE,
+                    },
+                    GluActivationType::Silu,
+                )?
                 .ok_or_else(|| candle_core::Error::msg("cuTile fused GLU was not selected"))?;
             assert_eq!(output.dims(), reference.dims());
             assert_close(&format!("shape {shape:?}"), &reference, &output)?;
         }
         let small = input_of(&[8, 2 * SPLIT_SIZE], 5)?;
         assert!(layer
-            .try_forward_fused_split_glu(&small, SPLIT_SIZE, GluActivationType::Silu)?
+            .forward_glu(
+                crate::GluInput::Packed {
+                    input: &small,
+                    split_size: SPLIT_SIZE
+                },
+                GluActivationType::Silu
+            )?
             .is_none());
         Ok(())
     }
@@ -2026,7 +2126,13 @@ mod tests {
             GluActivationType::Silu,
         )?)?;
         let warmup = layer
-            .try_forward_fused_split_glu(&graph_input, SPLIT_SIZE, GluActivationType::Silu)?
+            .forward_glu(
+                crate::GluInput::Packed {
+                    input: &graph_input,
+                    split_size: SPLIT_SIZE,
+                },
+                GluActivationType::Silu,
+            )?
             .ok_or_else(|| candle_core::Error::msg("DeepGEMM fused GLU was not selected"))?;
         drop(warmup);
         dev.synchronize()?;
@@ -2044,7 +2150,13 @@ mod tests {
             return Err(candle_core::Error::msg(error.to_string()));
         }
         let captured = layer
-            .try_forward_fused_split_glu(&graph_input, SPLIT_SIZE, GluActivationType::Silu)
+            .forward_glu(
+                crate::GluInput::Packed {
+                    input: &graph_input,
+                    split_size: SPLIT_SIZE,
+                },
+                GluActivationType::Silu,
+            )
             .and_then(|output| {
                 let output = output.ok_or_else(|| {
                     candle_core::Error::msg("DeepGEMM fused GLU was not selected")
@@ -2282,10 +2394,6 @@ mod tests {
             vb,
         )?;
         assert_eq!(layer.dequantize_w()?.dims(), &[8, 4]);
-        assert_ne!(
-            canonical_language_model_module_path("other.model.embed_tokens"),
-            canonical_language_model_module_path("model.embed_tokens")
-        );
         Ok(())
     }
 

@@ -27,8 +27,6 @@ use half::{bf16, f16};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::LazyLock;
-#[cfg(feature = "cuda")]
-use std::{collections::HashMap, sync::Mutex};
 
 /// Maximum batch size supported by the GEMV kernel
 pub const MAX_GEMV_BATCH_SIZE: usize = 8;
@@ -40,10 +38,6 @@ const WIDE_GEMV_MIN_OUTPUT_DIM: usize = 32_768;
 const WIDE_GEMV_MIN_INPUT_DIM: usize = 2_048;
 #[cfg(any(feature = "cuda", test))]
 const WIDE_GEMV_MAX_INPUT_DIM: usize = 8_192;
-#[cfg(any(feature = "cuda", test))]
-const WIDE_GEMV_COMPUTE_MAJOR: i32 = 12;
-#[cfg(any(feature = "cuda", test))]
-const WIDE_GEMV_COMPUTE_MINOR: i32 = 1;
 #[cfg(feature = "cuda")]
 const GEMV_VECTOR_ELEMENTS: usize = 2;
 #[cfg(any(feature = "cuda", test))]
@@ -52,11 +46,15 @@ const SM90_SPLIT_K_MIN_BATCH_REDUCTION: usize = 32_768;
 const SM90_SPLIT_K_MAX_GEMV_CTA_WAVES: usize = 4;
 
 #[cfg(any(feature = "cuda", test))]
+const HOPPER_COMPUTE_MAJOR: i32 = 9;
+
+#[cfg(any(feature = "cuda", test))]
 #[derive(Clone, Copy)]
 struct GemvDeviceInfo {
     compute_major: i32,
-    compute_minor: i32,
     multiprocessor_count: usize,
+    // cuBLAS loses to one-CTA-per-row streaming for wide LPDDR-bound decode projections on unified memory.
+    unified_memory: bool,
 }
 
 #[cfg(any(feature = "cuda", test))]
@@ -76,7 +74,7 @@ fn should_use_gemv_shape(
         return true;
     };
     let gemv_cta_waves = output_dim.div_ceil(device.multiprocessor_count);
-    let sm90_split_k = device.compute_major == 9
+    let sm90_split_k = device.compute_major == HOPPER_COMPUTE_MAJOR
         && is_bf16
         && batch_size == MAX_GEMV_BATCH_SIZE
         && batch_size.saturating_mul(input_dim) >= SM90_SPLIT_K_MIN_BATCH_REDUCTION
@@ -100,43 +98,17 @@ fn should_use_wide_gemv_shape(
         && output_dim
             .checked_mul(input_dim)
             .is_some_and(|elements| elements <= i32::MAX as usize)
-        && device.is_some_and(|device| {
-            device.compute_major == WIDE_GEMV_COMPUTE_MAJOR
-                && device.compute_minor == WIDE_GEMV_COMPUTE_MINOR
-        })
+        && device.is_some_and(|device| device.unified_memory)
 }
 
 #[cfg(feature = "cuda")]
-static GEMV_DEVICE_INFO: LazyLock<Mutex<HashMap<candle_core::cuda::DeviceId, GemvDeviceInfo>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-#[cfg(feature = "cuda")]
-fn gemv_device_info(device: &CudaDevice) -> Option<GemvDeviceInfo> {
-    use candle_core::cuda::cudarc::driver::sys::CUdevice_attribute;
-
-    if let Some(info) = GEMV_DEVICE_INFO.lock().unwrap().get(&device.id()).copied() {
-        return Some(info);
+fn gemv_device_info(device: &CudaDevice) -> GemvDeviceInfo {
+    let info = crate::cuda_device::cuda_device_info(device);
+    GemvDeviceInfo {
+        compute_major: info.major,
+        multiprocessor_count: info.sms,
+        unified_memory: info.integrated,
     }
-    let stream = device.cuda_stream();
-    let context = stream.context();
-    let compute_major = context
-        .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR)
-        .ok()?;
-    let compute_minor = context
-        .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR)
-        .ok()?;
-    let multiprocessor_count = context
-        .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)
-        .ok()
-        .and_then(|count| usize::try_from(count).ok())
-        .filter(|&count| count != 0)?;
-    let info = GemvDeviceInfo {
-        compute_major,
-        compute_minor,
-        multiprocessor_count,
-    };
-    GEMV_DEVICE_INFO.lock().unwrap().insert(device.id(), info);
-    Some(info)
 }
 
 /// Controller for enabling/disabling custom GEMV kernel.
@@ -197,7 +169,7 @@ pub fn should_use_gemv(x: &Tensor, w: &Tensor) -> bool {
         output_dim,
         k,
         x.dtype() == DType::BF16,
-        gemv_device_info(device),
+        Some(gemv_device_info(device)),
     ) {
         return false;
     }
@@ -275,7 +247,7 @@ pub(crate) fn should_use_wide_gemv(x: &Tensor, w: &Tensor) -> bool {
         output_dim,
         input_dim,
         matches!(x.dtype(), DType::BF16 | DType::F16),
-        gemv_device_info(device),
+        Some(gemv_device_info(device)),
     ) && has_aligned_pairs(x, &stream)
         && has_aligned_pairs(w, &stream)
 }
@@ -583,16 +555,16 @@ mod policy_tests {
 
     #[test]
     fn wide_gemv_policy_stays_within_measured_hardware_and_shape_bounds() {
-        let sm121 = Some(GemvDeviceInfo {
-            compute_major: WIDE_GEMV_COMPUTE_MAJOR,
-            compute_minor: WIDE_GEMV_COMPUTE_MINOR,
+        let unified = Some(GemvDeviceInfo {
+            compute_major: 12,
             multiprocessor_count: 48,
+            unified_memory: true,
         });
         for input_dim in [WIDE_GEMV_MIN_INPUT_DIM, WIDE_GEMV_MAX_INPUT_DIM] {
             let largest_output = i32::MAX as usize / input_dim;
             for output_dim in [WIDE_GEMV_MIN_OUTPUT_DIM, largest_output] {
                 assert!(should_use_wide_gemv_shape(
-                    1, output_dim, input_dim, true, sm121
+                    1, output_dim, input_dim, true, unified
                 ));
             }
             assert!(!should_use_wide_gemv_shape(
@@ -600,7 +572,7 @@ mod policy_tests {
                 largest_output + 1,
                 input_dim,
                 true,
-                sm121
+                unified
             ));
         }
         for (batch, output, input, half) in [
@@ -634,19 +606,19 @@ mod policy_tests {
             (1, WIDE_GEMV_MIN_OUTPUT_DIM, WIDE_GEMV_MIN_INPUT_DIM, false),
         ] {
             assert!(!should_use_wide_gemv_shape(
-                batch, output, input, half, sm121
+                batch, output, input, half, unified
             ));
         }
-        for (major, minor) in [(9, 0), (10, 0), (12, 0), (12, 2)] {
+        for (compute_major, multiprocessor_count) in [(9, 132), (10, 148), (12, 84)] {
             assert!(!should_use_wide_gemv_shape(
                 1,
                 WIDE_GEMV_MIN_OUTPUT_DIM,
                 WIDE_GEMV_MIN_INPUT_DIM,
                 true,
                 Some(GemvDeviceInfo {
-                    compute_major: major,
-                    compute_minor: minor,
-                    multiprocessor_count: 48
+                    compute_major,
+                    multiprocessor_count,
+                    unified_memory: false,
                 }),
             ));
         }
@@ -687,8 +659,8 @@ mod policy_tests {
     fn sm90_long_reduction_uses_split_k_gemm_for_small_cta_grids() {
         let sm90 = Some(GemvDeviceInfo {
             compute_major: 9,
-            compute_minor: 0,
             multiprocessor_count: 132,
+            unified_memory: false,
         });
         assert!(!should_use_gemv_shape(8, 96, 5120, true, sm90));
         assert!(!should_use_gemv_shape(8, 512, 5120, true, sm90));
@@ -702,8 +674,8 @@ mod policy_tests {
             true,
             Some(GemvDeviceInfo {
                 compute_major: 8,
-                compute_minor: 0,
                 multiprocessor_count: 108,
+                unified_memory: false,
             })
         ));
         assert!(should_use_gemv_shape(
@@ -713,8 +685,8 @@ mod policy_tests {
             true,
             Some(GemvDeviceInfo {
                 compute_major: 9,
-                compute_minor: 0,
                 multiprocessor_count: 16,
+                unified_memory: false,
             })
         ));
     }
@@ -898,7 +870,7 @@ mod tests {
                     output_dim,
                     BENCH_INPUT_DIM,
                     true,
-                    gemv_device_info(device.as_cuda_device()?),
+                    Some(gemv_device_info(device.as_cuda_device()?)),
                 ) {
                     "gemv"
                 } else {

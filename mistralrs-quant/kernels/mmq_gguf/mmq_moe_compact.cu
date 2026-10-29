@@ -7,7 +7,6 @@ constexpr int COMPACT_MEDIUM_COLUMNS = 64;
 constexpr int COMPACT_ROWS = 128;
 constexpr int COMPACT_THREADS = 256;
 constexpr int COMPACT_WARP = 32;
-constexpr int COMPACT_CAPABILITY = 1210;
 constexpr int COMPACT_HEADER_WORDS = 2;
 
 __device__ __forceinline__ int compact_columns(int routed, int maximum) {
@@ -136,11 +135,25 @@ __global__ __launch_bounds__(COMPACT_THREADS,
 #undef COMPACT_TILE
 }
 
+static int compact_device_capability() {
+  static int capability[GGML_CUDA_MAX_DEVICES] = {};
+  int device;
+  cudaGetDevice(&device);
+  if (capability[device] == 0) {
+    int major;
+    int minor;
+    cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device);
+    cudaDeviceGetAttribute(&minor, cudaDevAttrComputeCapabilityMinor, device);
+    capability[device] = 100 * major + 10 * minor;
+  }
+  return capability[device];
+}
+
 template <ggml_type type, int wide_columns, bool need_check>
 void launch_compact_mmq(const CompactMmqArgs &args, void *workspace,
                         cudaStream_t stream) {
   const int bytes = mmq_get_nbytes_shared<type>(
-      wide_columns, COMPACT_ROWS, COMPACT_CAPABILITY, COMPACT_WARP,
+      wide_columns, COMPACT_ROWS, compact_device_capability(), COMPACT_WARP,
       COMPACT_THREADS / COMPACT_WARP);
   CUDA_SET_SHARED_MEMORY_LIMIT((compact_mmq<type, wide_columns, need_check>),
                                bytes);

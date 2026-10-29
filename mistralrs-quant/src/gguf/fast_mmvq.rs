@@ -10,22 +10,19 @@ use candle_core::{
     CudaDevice, CudaStorage, DType, Device, Result, Shape, Storage, Tensor,
 };
 
-use super::ffi;
+use super::{ffi, q8_1};
+use crate::cuda_device::cuda_device_info;
 use crate::{
     utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream},
     GluActivationType,
 };
 
-const Q8_1_BLOCK_SIZE: usize = 32;
-const Q8_1_TYPE_SIZE: usize = 36; // 2 halves (4 bytes) + QK8_1 int8 = 4 + 32 = 36
-const MATRIX_ROW_PADDING: usize = 512;
 const PREFETCH_MIN_COLS: usize = 2048;
 const DENSE_PAIR_MIN_COLUMNS: usize = 512;
 const DENSE_PAIR_THREADS: usize = 256;
 const DENSE_PAIR_PREFETCH_BYTES_PER_THREAD: usize = 32;
 const PREFETCH_MIN_WEIGHT_BYTES: usize = 8 * 1024 * 1024;
 const PREFETCH_LOW_BIT_MIN_COLS: usize = 4096;
-const SM121_CAPABILITY: (i32, i32) = (12, 1);
 
 fn use_single_row_prefetch(dtype: GgmlDType, columns: usize, weight_bytes: usize) -> bool {
     let block_bytes = dtype.type_size();
@@ -94,29 +91,13 @@ struct WorkspaceKey {
 type WsMap = Mutex<HashMap<WorkspaceKey, &'static Mutex<WorkspaceSlot>>>;
 
 static WORKSPACE: OnceLock<WsMap> = OnceLock::new();
-static SM121_DEVICES: OnceLock<Mutex<HashMap<candle_core::cuda::DeviceId, bool>>> = OnceLock::new();
 
-pub(super) fn is_sm121(dev: &CudaDevice) -> Result<bool> {
-    use candle_core::cuda::cudarc::driver::sys::CUdevice_attribute;
-
-    let mut devices = SM121_DEVICES
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .unwrap();
-    if let Some(&supported) = devices.get(&dev.id()) {
-        return Ok(supported);
+pub(super) fn prefers_weight_prefetch(dev: &CudaDevice) -> bool {
+    #[cfg(test)]
+    if prefetch_tests::FORCE_PLAIN.with(|flag| flag.get()) {
+        return false;
     }
-    let stream = dev.cuda_stream();
-    let context = stream.context();
-    let major = context
-        .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR)
-        .map_err(candle_core::Error::wrap)?;
-    let minor = context
-        .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR)
-        .map_err(candle_core::Error::wrap)?;
-    let supported = (major, minor) == SM121_CAPABILITY;
-    devices.insert(dev.id(), supported);
-    Ok(supported)
+    cuda_device_info(dev).prefers_l2_weight_prefetch()
 }
 
 fn workspace_ensure<'a>(
@@ -357,19 +338,6 @@ fn qkv_prefetch_launcher(input_ty: DType, dtype: GgmlDType) -> Option<FusedQkvLa
     })
 }
 
-/// Compute `w @ xs^T` where `w` is a Q8_1-quantizable GGUF weight tensor and
-/// `xs` is a contiguous BF16 / F16 / F32 activation on the same CUDA device.
-///
-/// The product of the leading input dimensions must be in `1..=8`.
-///
-/// Output has the same leading dimensions as `xs` with the last axis replaced
-/// by `w.shape().dims2()?.0` (nrows of the weight).
-///
-/// The output dtype matches the input dtype (BF16 → BF16, F16 → F16, F32 → F32).
-pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
-    plain_impl(w, xs, true)
-}
-
 fn prefetch_launcher(dtype: GgmlDType, output: DType) -> Option<PlainLauncher> {
     Some(match (dtype, output) {
         (GgmlDType::Q8_0, DType::BF16) => ffi::launch_mmvq_gguf_q8_0_bf16_prefetch,
@@ -400,7 +368,16 @@ fn prefetch_launcher(dtype: GgmlDType, output: DType) -> Option<PlainLauncher> {
     })
 }
 
-fn plain_impl(w: &QTensor, xs: &Tensor, allow_sm121: bool) -> Result<Tensor> {
+/// Compute `w @ xs^T` where `w` is a Q8_1-quantizable GGUF weight tensor and
+/// `xs` is a contiguous BF16 / F16 / F32 activation on the same CUDA device.
+///
+/// The product of the leading input dimensions must be in `1..=8`.
+///
+/// Output has the same leading dimensions as `xs` with the last axis replaced
+/// by `w.shape().dims2()?.0` (nrows of the weight).
+///
+/// The output dtype matches the input dtype (BF16 -> BF16, F16 -> F16, F32 -> F32).
+pub fn plain(w: &QTensor, xs: &Tensor) -> Result<Tensor> {
     let dtype = w.dtype();
     if !supports(dtype) {
         candle_core::bail!("fast_mmvq: unsupported quant dtype {dtype:?}");
@@ -431,14 +408,13 @@ fn plain_impl(w: &QTensor, xs: &Tensor, allow_sm121: bool) -> Result<Tensor> {
     if !matches!(input_ty, DType::BF16 | DType::F16 | DType::F32) {
         candle_core::bail!("fast_mmvq: input dtype must be BF16, F16, or F32, got {input_ty:?}");
     }
-    let prefetch = allow_sm121
-        && b_size == 1
+    let prefetch = b_size == 1
         && use_single_row_prefetch(
             dtype,
             ncols,
             nrows * ncols / dtype.block_size() * dtype.type_size(),
         )
-        && is_sm121(&dev)?;
+        && prefers_weight_prefetch(&dev);
 
     let stream = dev.cuda_stream();
     let xs = xs.contiguous()?;
@@ -449,15 +425,15 @@ fn plain_impl(w: &QTensor, xs: &Tensor, allow_sm121: bool) -> Result<Tensor> {
     let xs_offset = xs_layout.start_offset();
 
     let stream_ptr = stream.cu_stream() as *mut std::ffi::c_void;
-    let k_padded = pad(k, MATRIX_ROW_PADDING);
-    let num_blocks_per_row = k_padded / Q8_1_BLOCK_SIZE;
-    let dst_row_bytes = num_blocks_per_row * Q8_1_TYPE_SIZE;
+    let k_padded = pad(k, q8_1::ROW_PADDING);
+    let num_blocks_per_row = k_padded / q8_1::BLOCK_ELEMENTS;
+    let dst_row_bytes = num_blocks_per_row * q8_1::BLOCK_BYTES;
     let scratch_bytes = b_size * dst_row_bytes;
 
     let mut workspace = workspace_ensure(&dev, scratch_bytes, &stream)?;
     let (scratch_ptr, _scratch_guard) = workspace.ptr_mut();
     let scratch_ptr = scratch_ptr as *mut std::ffi::c_void;
-    let stride_col_y = (k_padded / Q8_1_BLOCK_SIZE) as i32;
+    let stride_col_y = (k_padded / q8_1::BLOCK_ELEMENTS) as i32;
     let stride_col_dst = nrows as i32;
     let (weight_ptr, _weight_guard) = w.device_ptr_with_guard(&stream)?;
     let weight_ptr = weight_ptr as *const std::ffi::c_void;
@@ -619,7 +595,7 @@ pub(crate) fn shared_lhs(weights: &[&QTensor], xs: &Tensor) -> Result<Vec<Tensor
             candle_core::bail!("shared MMVQ weights must match the input device and columns");
         }
     }
-    let sm121 = batch == 1 && is_sm121(dev)?;
+    let prefetch = batch == 1 && prefers_weight_prefetch(dev);
     let stream = dev.cuda_stream();
     let stream_ptr = stream.cu_stream() as *mut std::ffi::c_void;
     let xs = xs.contiguous()?;
@@ -627,9 +603,9 @@ pub(crate) fn shared_lhs(weights: &[&QTensor], xs: &Tensor) -> Result<Vec<Tensor
     let Storage::Cuda(storage) = &*storage else {
         unreachable!()
     };
-    let padded_columns = pad(columns, MATRIX_ROW_PADDING);
-    let stride = padded_columns / Q8_1_BLOCK_SIZE;
-    let mut workspace = workspace_ensure(dev, batch * stride * Q8_1_TYPE_SIZE, &stream)?;
+    let padded_columns = pad(columns, q8_1::ROW_PADDING);
+    let stride = padded_columns / q8_1::BLOCK_ELEMENTS;
+    let mut workspace = workspace_ensure(dev, batch * stride * q8_1::BLOCK_BYTES, &stream)?;
     let (scratch, _scratch_guard) = workspace.ptr_mut();
     let scratch = scratch as *mut std::ffi::c_void;
     macro_rules! launch {
@@ -652,7 +628,7 @@ pub(crate) fn shared_lhs(weights: &[&QTensor], xs: &Tensor) -> Result<Vec<Tensor
                     let (rows, _) = weight.shape().dims2()?;
                     let format = weight.dtype();
                     let bytes = rows * columns / format.block_size() * format.type_size();
-                    let launcher = if sm121 && use_single_row_prefetch(format, columns, bytes) {
+                    let launcher = if prefetch && use_single_row_prefetch(format, columns, bytes) {
                         prefetch_launcher(format, input_dtype).expect("supported dtype")
                     } else {
                         $plain(format).expect("supported dtype")
@@ -700,27 +676,9 @@ pub(crate) fn shared_lhs(weights: &[&QTensor], xs: &Tensor) -> Result<Vec<Tensor
     }
 }
 
-fn dense_pair_prefetch_rows(dev: &CudaDevice) -> Result<usize> {
-    use candle_core::cuda::cudarc::driver::sys::CUdevice_attribute;
-    static ROWS: OnceLock<Mutex<HashMap<candle_core::cuda::DeviceId, usize>>> = OnceLock::new();
-    let mut devices = ROWS
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .unwrap();
-    if let Some(&rows) = devices.get(&dev.id()) {
-        return Ok(rows);
-    }
-    let stream = dev.cuda_stream();
-    let context = stream.context();
-    let multiprocessors = context
-        .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)
-        .map_err(candle_core::Error::wrap)? as usize;
-    let threads = context
-        .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_THREADS_PER_MULTIPROCESSOR)
-        .map_err(candle_core::Error::wrap)? as usize;
-    let rows = multiprocessors * (threads / DENSE_PAIR_THREADS);
-    devices.insert(dev.id(), rows);
-    Ok(rows)
+fn dense_pair_prefetch_rows(dev: &CudaDevice) -> usize {
+    let info = cuda_device_info(dev);
+    info.sms * (info.threads_per_sm / DENSE_PAIR_THREADS)
 }
 
 pub(crate) fn try_dense_pair(
@@ -762,14 +720,14 @@ pub(crate) fn try_dense_pair(
     }
     let dev = xs.device().as_cuda_device()?;
     let weight_bytes = quant_rows * columns / format.block_size() * format.type_size();
-    let sm121 = is_sm121(dev)?;
-    if sm121 && use_single_row_prefetch(format, columns, weight_bytes) {
+    let prefetch_device = prefers_weight_prefetch(dev);
+    if prefetch_device && use_single_row_prefetch(format, columns, weight_bytes) {
         return Ok(None);
     }
     let row_bytes = weight_bytes / quant_rows;
-    let prefetch = sm121
+    let prefetch = prefetch_device
         && row_bytes >= DENSE_PAIR_PREFETCH_BYTES_PER_THREAD * DENSE_PAIR_THREADS
-        && quant_rows >= dense_pair_prefetch_rows(dev)?;
+        && quant_rows >= dense_pair_prefetch_rows(dev);
     let xs = xs.contiguous()?;
     let stream = dev.cuda_stream();
     let stream_ptr = stream.cu_stream() as *mut std::ffi::c_void;
@@ -780,10 +738,10 @@ pub(crate) fn try_dense_pair(
     else {
         unreachable!()
     };
-    let padded_columns = pad(columns, MATRIX_ROW_PADDING);
+    let padded_columns = pad(columns, q8_1::ROW_PADDING);
     let mut workspace = workspace_ensure(
         dev,
-        padded_columns / Q8_1_BLOCK_SIZE * Q8_1_TYPE_SIZE,
+        padded_columns / q8_1::BLOCK_ELEMENTS * q8_1::BLOCK_BYTES,
         &stream,
     )?;
     let (scratch, _scratch_guard) = workspace.ptr_mut();
@@ -924,15 +882,15 @@ pub fn fused_glu(
 
     let stream = dev.cuda_stream();
     let stream_ptr = stream.cu_stream() as *mut std::ffi::c_void;
-    let k_padded = pad(k, MATRIX_ROW_PADDING);
-    let num_blocks_per_row = k_padded / Q8_1_BLOCK_SIZE;
-    let dst_row_bytes = num_blocks_per_row * Q8_1_TYPE_SIZE;
+    let k_padded = pad(k, q8_1::ROW_PADDING);
+    let num_blocks_per_row = k_padded / q8_1::BLOCK_ELEMENTS;
+    let dst_row_bytes = num_blocks_per_row * q8_1::BLOCK_BYTES;
     let scratch_bytes = b_size * dst_row_bytes;
 
     let mut workspace = workspace_ensure(&dev, scratch_bytes, &stream)?;
     let (scratch_ptr, _scratch_guard) = workspace.ptr_mut();
     let scratch_ptr = scratch_ptr as *mut std::ffi::c_void;
-    let stride_col_y = (k_padded / Q8_1_BLOCK_SIZE) as i32;
+    let stride_col_y = (k_padded / q8_1::BLOCK_ELEMENTS) as i32;
     let stride_col_dst = nrows as i32;
     let (gate_ptr, _gate_guard) = gate_w.device_ptr_with_guard(&stream)?;
     let (up_ptr, _up_guard) = up_w.device_ptr_with_guard(&stream)?;
@@ -1149,12 +1107,14 @@ fn fused_qkv_optional(
 
     let weight_bytes =
         (q_nrows + k_nrows + v_nrows) * ncols / dtype.block_size() * dtype.type_size();
-    let launcher =
-        if b_size == 1 && use_single_row_prefetch(dtype, ncols, weight_bytes) && is_sm121(&dev)? {
-            qkv_prefetch_launcher(input_ty, dtype).expect("supported dtype")
-        } else {
-            launcher
-        };
+    let launcher = if b_size == 1
+        && use_single_row_prefetch(dtype, ncols, weight_bytes)
+        && prefers_weight_prefetch(&dev)
+    {
+        qkv_prefetch_launcher(input_ty, dtype).expect("supported dtype")
+    } else {
+        launcher
+    };
 
     let xs = xs.contiguous()?;
     let (xs_storage, xs_layout) = xs.storage_and_layout();
@@ -1165,15 +1125,15 @@ fn fused_qkv_optional(
 
     let stream = dev.cuda_stream();
     let stream_ptr = stream.cu_stream() as *mut std::ffi::c_void;
-    let k_padded = pad(k, MATRIX_ROW_PADDING);
-    let num_blocks_per_row = k_padded / Q8_1_BLOCK_SIZE;
-    let dst_row_bytes = num_blocks_per_row * Q8_1_TYPE_SIZE;
+    let k_padded = pad(k, q8_1::ROW_PADDING);
+    let num_blocks_per_row = k_padded / q8_1::BLOCK_ELEMENTS;
+    let dst_row_bytes = num_blocks_per_row * q8_1::BLOCK_BYTES;
     let scratch_bytes = b_size * dst_row_bytes;
 
     let mut workspace = workspace_ensure(&dev, scratch_bytes, &stream)?;
     let (scratch_ptr, _scratch_guard) = workspace.ptr_mut();
     let scratch_ptr = scratch_ptr as *mut std::ffi::c_void;
-    let stride_col_y = (k_padded / Q8_1_BLOCK_SIZE) as i32;
+    let stride_col_y = (k_padded / q8_1::BLOCK_ELEMENTS) as i32;
     let (q_ptr, _q_guard) = q_w.device_ptr_with_guard(&stream)?;
     let (k_ptr, _k_guard) = k_w.device_ptr_with_guard(&stream)?;
     let (v_ptr, _v_guard) = v_w.device_ptr_with_guard(&stream)?;
@@ -1352,8 +1312,8 @@ fn fused_qkv_optional(
 }
 
 #[cfg(test)]
-#[path = "mmvq_sm121_tests.rs"]
-mod sm121_tests;
+#[path = "mmvq_prefetch_tests.rs"]
+mod prefetch_tests;
 
 #[cfg(test)]
 #[path = "shared_mmvq_tests.rs"]

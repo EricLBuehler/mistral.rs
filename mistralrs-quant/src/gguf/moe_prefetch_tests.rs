@@ -1,10 +1,10 @@
 use super::*;
 use candle_core::{cuda::cudarc::driver::sys, Var};
 
-const DECODE_SM121_HIDDEN: usize = 768;
-const DECODE_SM121_INTERMEDIATE: usize = 512;
-const DECODE_SM121_EXPERTS: usize = 17;
-const DECODE_SM121_TOPK: usize = 3;
+const DECODE_HIDDEN: usize = 768;
+const DECODE_INTERMEDIATE: usize = 512;
+const DECODE_EXPERTS: usize = 17;
+const DECODE_TOPK: usize = 3;
 
 const ATOMIC_TOLERANCE: f32 = 1e-5;
 
@@ -38,13 +38,13 @@ fn staged_moe_preserves_cache_fitting_and_batched_dispatch() {
 }
 
 #[test]
-#[ignore = "requires an SM121 CUDA device"]
+#[ignore = "requires a CUDA device that prefers L2 weight prefetch"]
 fn staged_moe_launches_all_formats_and_rejects_unsupported_geometry() -> Result<()> {
     const BUFFER_BYTES: usize = 64 * 1024;
     const ROWS: usize = 35;
     let device = Device::new_cuda_with_stream(0)?;
     let cuda = device.as_cuda_device()?;
-    if !super::super::fast_mmvq::is_sm121(cuda)? {
+    if !super::super::fast_mmvq::prefers_weight_prefetch(cuda) {
         return Ok(());
     }
     let stream = cuda.cuda_stream();
@@ -110,43 +110,43 @@ fn weight(
     copies: usize,
 ) -> Result<QTensor> {
     let source = QTensor::quantize(
-        &super::super::fast_mmq::tests::patterned((DECODE_SM121_EXPERTS, rows, cols), salt, 0.03)?,
+        &super::super::fast_mmq::tests::patterned((DECODE_EXPERTS, rows, cols), salt, 0.03)?,
         quant,
     )?;
     let bytes = source.data()?.repeat(copies);
     super::super::archive::qtensor_from_gguf_data(
         quant,
         &bytes,
-        vec![DECODE_SM121_EXPERTS * copies, rows, cols],
+        vec![DECODE_EXPERTS * copies, rows, cols],
         device,
     )
 }
 
 #[test]
-#[ignore = "requires an SM121 CUDA device"]
-fn sm121_moe_graph_replay_matches_legacy_with_changing_routing() -> Result<()> {
+#[ignore = "requires a CUDA device that prefers L2 weight prefetch"]
+fn prefetch_moe_graph_replay_matches_legacy_with_changing_routing() -> Result<()> {
     replay_moe(false)
 }
 
 #[test]
-#[ignore = "requires an SM121 CUDA device"]
-fn sm121_staged_moe_large_banks_replay_matches_legacy() -> Result<()> {
+#[ignore = "requires a CUDA device that prefers L2 weight prefetch"]
+fn staged_moe_large_banks_replay_matches_legacy() -> Result<()> {
     replay_moe(true)
 }
 
 fn replay_moe(large_bank: bool) -> Result<()> {
     let device = Device::new_cuda_with_stream(0)?;
     let cuda = device.as_cuda_device()?;
-    if !super::super::fast_mmvq::is_sm121(cuda)? {
+    if !super::super::fast_mmvq::prefers_weight_prefetch(cuda) {
         return Ok(());
     }
     const STAGED_HIDDEN: usize = 1024;
     let hidden = if large_bank {
         STAGED_HIDDEN
     } else {
-        DECODE_SM121_HIDDEN
+        DECODE_HIDDEN
     };
-    let l2 = moe_l2_bytes(cuda)?;
+    let l2 = cuda_device_info(cuda).l2_bytes;
     let _htod_cache_guard = cuda.enable_cuda_graph_htod_cache();
     for gate_quant in [
         GgmlDType::Q4_0,
@@ -162,29 +162,28 @@ fn replay_moe(large_bank: bool) -> Result<()> {
         GgmlDType::Q6K,
     ] {
         let down_quant = gate_quant;
-        let base_bytes = DECODE_SM121_EXPERTS * DECODE_SM121_INTERMEDIATE * hidden
-            / gate_quant.block_size()
+        let base_bytes = DECODE_EXPERTS * DECODE_INTERMEDIATE * hidden / gate_quant.block_size()
             * gate_quant.type_size();
         let copies = if large_bank { l2 / base_bytes + 1 } else { 1 };
-        let experts = DECODE_SM121_EXPERTS * copies;
+        let experts = DECODE_EXPERTS * copies;
         let gate = weight(
             &device,
             gate_quant,
-            (DECODE_SM121_INTERMEDIATE, hidden),
+            (DECODE_INTERMEDIATE, hidden),
             17,
             copies,
         )?;
         let up = weight(
             &device,
             gate_quant,
-            (DECODE_SM121_INTERMEDIATE, hidden),
+            (DECODE_INTERMEDIATE, hidden),
             29,
             copies,
         )?;
         let down = weight(
             &device,
             down_quant,
-            (hidden, DECODE_SM121_INTERMEDIATE),
+            (hidden, DECODE_INTERMEDIATE),
             23,
             copies,
         )?;
@@ -193,11 +192,11 @@ fn replay_moe(large_bank: bool) -> Result<()> {
             large_bank,
         );
         for tokens in [1, 2] {
-            let mut ids = cuda.alloc_zeros::<u32>(tokens * DECODE_SM121_TOPK)?;
-            let mut legacy_ids = cuda.alloc_zeros::<u32>(3 * tokens * DECODE_SM121_TOPK)?;
+            let mut ids = cuda.alloc_zeros::<u32>(tokens * DECODE_TOPK)?;
+            let mut legacy_ids = cuda.alloc_zeros::<u32>(3 * tokens * DECODE_TOPK)?;
             for dtype in [DType::BF16, DType::F16, DType::F32] {
                 let input = Var::zeros((tokens, hidden), dtype, &device)?;
-                let routing = Var::zeros((tokens, DECODE_SM121_TOPK), DType::F32, &device)?;
+                let routing = Var::zeros((tokens, DECODE_TOPK), DType::F32, &device)?;
                 let project = |xs: &Tensor, ids: &CudaSlice<u32>, weights: &Tensor, batch| {
                     let (storage, _) = weights.storage_and_layout();
                     let Storage::Cuda(storage) = &*storage else {
@@ -215,7 +214,7 @@ fn replay_moe(large_bank: bool) -> Result<()> {
                             ids,
                             pointer as *const f32,
                             batch,
-                            DECODE_SM121_TOPK,
+                            DECODE_TOPK,
                             ACT_SILU,
                             cuda,
                         )
@@ -270,19 +269,15 @@ fn replay_moe(large_bank: bool) -> Result<()> {
                     input.set(
                         &Tensor::from_vec(values, (tokens, hidden), &device)?.to_dtype(dtype)?,
                     )?;
-                    let experts = (0..tokens * DECODE_SM121_TOPK)
+                    let experts = (0..tokens * DECODE_TOPK)
                         .map(|slot| ((case * 127 + slot * 37) % experts) as u32)
                         .collect::<Vec<_>>();
                     cuda.memcpy_htod(&experts, &mut ids)?;
                     cuda.memcpy_htod(&experts.repeat(3), &mut legacy_ids)?;
-                    let weights = (0..tokens * DECODE_SM121_TOPK)
+                    let weights = (0..tokens * DECODE_TOPK)
                         .map(|slot| (slot + case + 1) as f32 * scale)
                         .collect();
-                    routing.set(&Tensor::from_vec(
-                        weights,
-                        (tokens, DECODE_SM121_TOPK),
-                        &device,
-                    )?)?;
+                    routing.set(&Tensor::from_vec(weights, (tokens, DECODE_TOPK), &device)?)?;
                     graph.launch().map_err(candle_core::Error::msg)?;
                     device.synchronize()?;
                     // A larger batch selects the legacy kernels and overwrites the same decode workspaces.

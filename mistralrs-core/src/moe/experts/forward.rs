@@ -73,6 +73,6 @@ pub(super) struct MoEForwardConfig {
 #[cfg(feature = "cuda")]
 #[derive(Clone, Copy)]
 pub(super) enum MoECudaFastPath {
-    Decode,
-    GroupedPrefill,
+    PerAssignment,
+    Grouped,
 }

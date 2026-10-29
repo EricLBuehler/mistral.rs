@@ -1,8 +1,3 @@
-use std::{
-    collections::HashMap,
-    sync::{LazyLock, Mutex},
-};
-
 use candle_core::{
     backend::BackendStorage, CudaStorage, DType, Layout, Result, Shape, Storage, Tensor,
 };
@@ -13,17 +8,8 @@ use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
 
 use super::MXFP8_BLOCK_SIZE;
 
-const WMMA_MIN_COMPUTE_MAJOR: i32 = 8;
-static WMMA_SUPPORT: LazyLock<Mutex<HashMap<candle_core::cuda::DeviceId, bool>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
 fn wmma_supported(dev: &candle_core::CudaDevice) -> bool {
-    let mut supported = WMMA_SUPPORT.lock().unwrap();
-    *supported.entry(dev.id()).or_insert_with(|| {
-        cfg!(has_mxfp4_wmma_kernels) && dev.cuda_stream().context()
-            .attribute(candle_core::cuda::cudarc::driver::sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR)
-            .unwrap_or(0) >= WMMA_MIN_COMPUTE_MAJOR
-    })
+    cfg!(has_mxfp4_wmma_kernels) && crate::cuda_device::cuda_device_info(dev).has_bf16_mma()
 }
 
 macro_rules! ffi {

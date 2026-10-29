@@ -21,6 +21,11 @@ use super::forward::{MoEForward, MoEForwardConfig};
 
 #[cfg(feature = "cuda")]
 pub(crate) const GROUPED_PREFILL_MIN_TOKENS: usize = 32;
+// Below the floor, grouped MMQ needs routes / expected-touched-experts >= 5/4; Flash-Next on GB10 crosses at 24 tokens.
+#[cfg(feature = "cuda")]
+const GROUPED_MMQ_MIN_REUSE: f64 = 1.25;
+#[cfg(feature = "cuda")]
+const MMQ_TILE_ROWS: usize = 128;
 // Below this many routed (token, expert) rows the sorted Metal path's sort and unsort cost more than it saves.
 #[cfg(feature = "metal")]
 const METAL_SORTED_MIN_ROUTED_ROWS: usize = 64;
@@ -60,6 +65,12 @@ pub(super) struct FastExpertsWeights {
     pub(super) fused_down_proj: Arc<dyn QuantMethod>,
     /// Sharded across ranks (partial sums needing an all-reduce) vs replicated.
     pub(super) sharded: bool,
+}
+
+// Per-linear expert formats load without the router config, so their warmup reads the model's routing here.
+#[cfg(feature = "cutile")]
+fn register_cutile_moe_routing(cfg: &MoEExpertsConfig, device: &Device) -> Result<()> {
+    mistralrs_quant::cutile::register_moe_routing(device, cfg.num_experts, cfg.num_experts_per_tok)
 }
 
 fn should_stage_prequantized_on_cpu(experts_vb: &ShardedVarBuilder) -> bool {
@@ -681,8 +692,8 @@ mod tests {
         };
 
         assert!(matches!(
-            FastExpertsWeights::select_cuda_fast_path(&forward),
-            Some(MoECudaFastPath::GroupedPrefill)
+            fast.select_cuda_fast_path(&forward, config),
+            Some(MoECudaFastPath::Grouped)
         ));
         assert!(fast.grouped_lora_preserves_route_order());
         let actual = fast
@@ -721,6 +732,127 @@ mod tests {
     }
 }
 
+/// Routed GGUF expert batch as seen by the grouped-MMQ vs per-assignment GEMV cost rule.
+#[cfg(feature = "cuda")]
+#[derive(Clone, Copy, Debug)]
+pub(super) struct GroupedMmqShape {
+    pub tokens: usize,
+    pub experts: usize,
+    pub topk: usize,
+    pub gate_up_rows: usize,
+    pub expert_bytes: usize,
+}
+
+#[cfg(feature = "cuda")]
+fn count_f64(value: usize) -> f64 {
+    f64::from(u32::try_from(value).unwrap_or(u32::MAX))
+}
+
+#[cfg(feature = "cuda")]
+impl GroupedMmqShape {
+    fn expected_touched_experts(self) -> f64 {
+        let experts = count_f64(self.experts);
+        experts * (1.0 - (1.0 - 1.0 / experts).powf(count_f64(self.tokens * self.topk)))
+    }
+
+    // GEMV re-streams an expert per route, grouped once per touched expert: wins if re-reads miss L2 and tiles fill SMs.
+    pub(super) fn reuses_weights(
+        self,
+        device: mistralrs_quant::cuda_device::CudaDeviceInfo,
+    ) -> bool {
+        let touched = self.expected_touched_experts();
+        count_f64(self.tokens * self.topk) >= GROUPED_MMQ_MIN_REUSE * touched
+            && touched * count_f64(self.expert_bytes) > count_f64(device.l2_bytes)
+            && touched * count_f64(self.gate_up_rows.div_ceil(MMQ_TILE_ROWS))
+                >= count_f64(device.sms)
+    }
+}
+
+#[cfg(all(test, feature = "cuda"))]
+mod grouped_mmq_cost_tests {
+    use super::GroupedMmqShape;
+    use mistralrs_quant::cuda_device::CudaDeviceInfo;
+
+    const MIB: usize = 1 << 20;
+    const GB10: CudaDeviceInfo = CudaDeviceInfo {
+        major: 12,
+        minor: 1,
+        sms: 48,
+        threads_per_sm: 1536,
+        l2_bytes: 24 * MIB,
+        smem_optin: 99 * 1024,
+        warp_size: 32,
+        integrated: true,
+    };
+    const DISCRETE: CudaDeviceInfo = CudaDeviceInfo {
+        major: 9,
+        minor: 0,
+        sms: 132,
+        threads_per_sm: 2048,
+        l2_bytes: 50 * MIB,
+        smem_optin: 227 * 1024,
+        warp_size: 32,
+        integrated: false,
+    };
+    // Q4K gate/up [512, 640, 2560] + Q4_1 down [512, 2560, 640].
+    const FLASH_NEXT_EXPERT_BYTES: usize = 2 * 921_600 + 1_024_000;
+    // Q4K gate/up/down for hidden 2048, inter 768.
+    const QWEN3_30B_EXPERT_BYTES: usize = 3 * 884_736;
+    // Q4K gate/up/down for hidden 1024, inter 256.
+    const SMALL_EXPERT_BYTES: usize = 3 * 147_456;
+
+    fn first_grouped(
+        experts: usize,
+        topk: usize,
+        gate_up_rows: usize,
+        expert_bytes: usize,
+        device: CudaDeviceInfo,
+    ) -> Option<usize> {
+        (1..super::GROUPED_PREFILL_MIN_TOKENS).find(|&tokens| {
+            GroupedMmqShape {
+                tokens,
+                experts,
+                topk,
+                gate_up_rows,
+                expert_bytes,
+            }
+            .reuses_weights(device)
+        })
+    }
+
+    #[test]
+    fn flash_next_crosses_at_24_tokens() {
+        for device in [GB10, DISCRETE] {
+            assert_eq!(
+                first_grouped(512, 10, 1280, FLASH_NEXT_EXPERT_BYTES, device),
+                Some(24)
+            );
+        }
+    }
+
+    #[test]
+    fn denser_routing_crosses_earlier() {
+        for device in [GB10, DISCRETE] {
+            assert_eq!(
+                first_grouped(128, 8, 1536, QWEN3_30B_EXPERT_BYTES, device),
+                Some(8)
+            );
+        }
+    }
+
+    #[test]
+    fn l2_resident_experts_stay_on_gemv() {
+        assert_eq!(
+            first_grouped(64, 8, 512, SMALL_EXPERT_BYTES, GB10),
+            Some(18)
+        );
+        assert_eq!(
+            first_grouped(64, 8, 512, SMALL_EXPERT_BYTES, DISCRETE),
+            None
+        );
+    }
+}
+
 impl FastExpertsWeights {
     fn apply_immediate_isq(self, experts_vb: ShardedVarBuilder) -> Result<Self> {
         let keys = QuantizedExpertKeys::new(&experts_vb.prefix());
@@ -747,11 +879,7 @@ impl FastExpertsWeights {
         quantization_config: &Option<QuantizedConfig>,
     ) -> Result<FastExpertsWeights> {
         #[cfg(feature = "cutile")]
-        mistralrs_quant::cutile::register_nvfp4_routing(
-            vb.device(),
-            cfg.num_experts,
-            cfg.num_experts_per_tok,
-        )?;
+        register_cutile_moe_routing(cfg, vb.device())?;
         let experts_vb = vb.pp("experts");
         let read_vb = if should_stage_prequantized_on_cpu(&experts_vb) && !vb.device().is_cpu() {
             vb.set_device(Device::Cpu)
@@ -1069,8 +1197,13 @@ impl FastExpertsWeights {
         if forward.lora.is_some() {
             #[cfg(feature = "cuda")]
             if self.fused_gate_proj.stats_snapshot().is_none() {
-                match Self::select_cuda_fast_path(forward) {
-                    Some(MoECudaFastPath::Decode) => {
+                match self.select_cuda_fast_path(forward, config) {
+                    Some(MoECudaFastPath::Grouped) if self.grouped_lora_preserves_route_order() => {
+                        if let Some(result) = self.forward_grouped(forward, config)? {
+                            return Ok(result);
+                        }
+                    }
+                    Some(_) => {
                         if let Some(result) = self
                             .forward_decode_lora(forward, config)
                             .map_err(|err| err.context("moe experts LoRA fast decode"))?
@@ -1078,14 +1211,7 @@ impl FastExpertsWeights {
                             return Ok(result);
                         }
                     }
-                    Some(MoECudaFastPath::GroupedPrefill)
-                        if self.grouped_lora_preserves_route_order() =>
-                    {
-                        if let Some(result) = self.forward_grouped(forward, config)? {
-                            return Ok(result);
-                        }
-                    }
-                    _ => {}
+                    None => {}
                 }
             }
             return self.forward_gather_lora(forward, config);
@@ -1205,18 +1331,58 @@ impl FastExpertsWeights {
     }
 
     #[cfg(feature = "cuda")]
-    pub(super) fn select_cuda_fast_path(forward: &MoEForward) -> Option<MoECudaFastPath> {
-        if !forward.xs.device().is_cuda() {
+    pub(super) fn select_cuda_fast_path(
+        &self,
+        forward: &MoEForward,
+        config: MoEForwardConfig,
+    ) -> Option<MoECudaFastPath> {
+        let Device::Cuda(dev) = forward.xs.device() else {
+            return None;
+        };
+        let grouped = forward.shape.num_tokens >= GROUPED_PREFILL_MIN_TOKENS
+            || self
+                .grouped_mmq_shape(forward, config)
+                .is_some_and(|shape| {
+                    shape.reuses_weights(mistralrs_quant::cuda_device::cuda_device_info(dev))
+                });
+        Some(if grouped {
+            MoECudaFastPath::Grouped
+        } else {
+            MoECudaFastPath::PerAssignment
+        })
+    }
+
+    #[cfg(feature = "cuda")]
+    fn grouped_mmq_shape(
+        &self,
+        forward: &MoEForward,
+        config: MoEForwardConfig,
+    ) -> Option<GroupedMmqShape> {
+        let weights = [
+            self.fused_gate_proj.get_qtensor()?,
+            self.fused_up_proj.get_qtensor()?,
+            self.fused_down_proj.get_qtensor()?,
+        ];
+        if !weights
+            .iter()
+            .all(|weight| mistralrs_quant::supports_mmq(weight.dtype()))
+        {
             return None;
         }
-
-        if !forward.shape.phase.is_prefill()
-            || forward.shape.num_tokens < GROUPED_PREFILL_MIN_TOKENS
-        {
-            Some(MoECudaFastPath::Decode)
-        } else {
-            Some(MoECudaFastPath::GroupedPrefill)
-        }
+        let bytes: usize = weights
+            .iter()
+            .map(|weight| {
+                weight.shape().elem_count() / weight.dtype().block_size()
+                    * weight.dtype().type_size()
+            })
+            .sum();
+        Some(GroupedMmqShape {
+            tokens: forward.shape.num_tokens,
+            experts: config.num_experts,
+            topk: config.num_experts_per_tok,
+            gate_up_rows: weights[0].shape().dims()[1] + weights[1].shape().dims()[1],
+            expert_bytes: bytes / config.num_experts,
+        })
     }
 
     #[cfg(feature = "cuda")]
@@ -1225,11 +1391,11 @@ impl FastExpertsWeights {
         forward: &MoEForward,
         config: MoEForwardConfig,
     ) -> Result<Option<Tensor>> {
-        match Self::select_cuda_fast_path(forward) {
-            Some(MoECudaFastPath::Decode) => self
+        match self.select_cuda_fast_path(forward, config) {
+            Some(MoECudaFastPath::PerAssignment) => self
                 .forward_decode(forward, config)
                 .map_err(|err| err.context("moe experts fast decode")),
-            Some(MoECudaFastPath::GroupedPrefill) => self
+            Some(MoECudaFastPath::Grouped) => self
                 .forward_grouped(forward, config)
                 .map_err(|err| err.context("moe experts fast grouped")),
             None => Ok(None),
@@ -1244,7 +1410,7 @@ impl FastExpertsWeights {
                 &self.fused_down_proj,
             ]
             .iter()
-            .any(|projection| projection.name() == "NVFP4")
+            .any(|projection| projection.supports_flat_gather())
     }
 
     pub(super) fn forward_gather(
@@ -1263,12 +1429,13 @@ impl FastExpertsWeights {
                 forward
                     .xs_flat
                     .reshape((forward.shape.num_tokens, 1, forward.shape.hidden_dim))?;
-            let (gate, up) = if let Some(outputs) =
-                mistralrs_quant::try_gather_forward_with_shared_quantized_activation(
-                    &xs,
-                    forward.topk_ids,
-                    &[self.fused_gate_proj.as_ref(), self.fused_up_proj.as_ref()],
-                )? {
+            let (gate, up) = if let Some(outputs) = mistralrs_quant::forward_group(
+                &xs,
+                &[self.fused_gate_proj.as_ref(), self.fused_up_proj.as_ref()],
+                mistralrs_quant::GroupKind::Gather {
+                    indices: forward.topk_ids,
+                },
+            )? {
                 let mut outputs = outputs.into_iter();
                 (outputs.next().unwrap(), outputs.next().unwrap())
             } else {

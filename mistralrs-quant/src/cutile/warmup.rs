@@ -75,6 +75,55 @@ fn registered() -> [&'static dyn CutileKernel; 10] {
     ]
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct RegisteredRouting {
+    device: DeviceLocation,
+    experts: usize,
+    topk: usize,
+}
+
+static ROUTING: OnceLock<Mutex<Vec<RegisteredRouting>>> = OnceLock::new();
+
+/// Register routing before loading expert weights so fused-MoE warmup covers the model's top-k.
+pub fn register_moe_routing(device: &Device, experts: usize, topk: usize) -> Result<()> {
+    if experts == 0 || topk == 0 || topk > experts {
+        candle_core::bail!("MoE routing requires 1 <= topk <= experts")
+    }
+    if !device.is_cuda() {
+        return Ok(());
+    }
+    let entry = RegisteredRouting {
+        device: device.location(),
+        experts,
+        topk,
+    };
+    let mut routing = ROUTING
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap();
+    if !routing.contains(&entry) {
+        routing.push(entry);
+        mark_dirty();
+    }
+    Ok(())
+}
+
+pub(super) fn registered_moe_topks(device: &Device, experts: usize) -> Vec<usize> {
+    let topks: Vec<_> = ROUTING
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|entry| entry.device == device.location() && entry.experts == experts)
+        .map(|entry| entry.topk)
+        .collect();
+    if topks.is_empty() {
+        vec![1]
+    } else {
+        topks
+    }
+}
+
 static WARMED_LOCATIONS: OnceLock<Mutex<HashSet<DeviceLocation>>> = OnceLock::new();
 
 pub(super) fn mark_dirty() {

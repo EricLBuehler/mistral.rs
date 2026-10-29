@@ -249,7 +249,7 @@ fn mxfp4_grouped_moe_gemm(
     let flat_input = if input_has_topk_dim {
         input.reshape((total_work, k))?
     } else {
-        input.clone()
+        input.reshape((num_tokens, k))?
     };
 
     let mut sorted_input_indices: Vec<u32> = Vec::with_capacity(total_work);
@@ -349,7 +349,17 @@ pub fn mxfp4_indexed_moe_gemm(
     let (num_tokens, topk, k, input_has_topk_dim) = if input_dims.len() == 2 {
         (input_dims[0], indices_dims[1], input_dims[1], false)
     } else if input_dims.len() == 3 {
-        (input_dims[0], input_dims[1], input_dims[2], true)
+        let topk = indices_dims[1];
+        // [tokens, 1, K] is one row shared by every routed expert.
+        let has_topk_dim = input_dims[1] != 1 || topk == 1;
+        if has_topk_dim && input_dims[1] != topk {
+            candle_core::bail!(
+                "Input {:?} does not match indices {:?}",
+                input_dims,
+                indices_dims
+            );
+        }
+        (input_dims[0], topk, input_dims[2], has_topk_dim)
     } else {
         candle_core::bail!("Expected input to be rank 2 or 3, got {:?}", input_dims);
     };

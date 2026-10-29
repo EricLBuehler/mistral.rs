@@ -4,8 +4,6 @@ use std::{
     sync::{atomic::AtomicUsize, Arc, Mutex, MutexGuard},
 };
 
-#[cfg(feature = "metal")]
-use candle_core::D;
 use candle_core::{
     quantized::{GgmlDType, QMatMul, QTensor},
     DType, Device, Result, Tensor,
@@ -20,6 +18,8 @@ mod afq;
 mod bitsandbytes;
 mod blockwise_fp8;
 pub mod cublaslt;
+#[cfg(feature = "cuda")]
+pub mod cuda_device;
 #[cfg(test)]
 #[path = "build_support/cuda_headers.rs"]
 mod cuda_headers;
@@ -271,7 +271,7 @@ pub use lora::{
     RoutedLoraCudaWeightTable, RoutedLoraDirectLaunch, RoutedLoraGroupedLaunch,
 };
 pub use mxfp4::MXFP4Layer;
-pub use nvfp4::{Nvfp4InputCalibration, Nvfp4Layer, Nvfp4LayerParts};
+pub use nvfp4::{Nvfp4Layer, Nvfp4LayerParts};
 pub use pending_layer::{pending_isq_channel, PendingIsqLayer};
 pub use pertensor_fp8::{fp8_w8a16_linear, fp8_w8a8_linear, Fp8W8A8LinearArgs, PerTensorFP8Linear};
 pub use unquantized::UnquantLinear;
@@ -1649,7 +1649,10 @@ pub enum ActivationScaleLayout {
     GroupMajor { row_alignment: NonZeroUsize },
 }
 
-fn aligned_activation_scale_rows(rows: usize, row_alignment: NonZeroUsize) -> Result<usize> {
+pub(crate) fn aligned_activation_scale_rows(
+    rows: usize,
+    row_alignment: NonZeroUsize,
+) -> Result<usize> {
     let alignment = row_alignment.get();
     rows.checked_add(alignment - 1)
         .ok_or_else(|| {
@@ -1877,6 +1880,120 @@ impl FusedRmsNormQuantized {
     }
 }
 
+/// How a layer's input activation scales are calibrated; layers share one quantized activation only when equal.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ActivationCalibration {
+    Dynamic,
+    /// `source` pins the scale tensor's storage when only that exact storage may be shared.
+    Static {
+        global_scale: f32,
+        source: Option<candle_core::TensorId>,
+    },
+}
+
+impl ActivationCalibration {
+    pub fn global_scale(&self) -> Option<f32> {
+        match self {
+            Self::Dynamic => None,
+            Self::Static { global_scale, .. } => Some(*global_scale),
+        }
+    }
+}
+
+/// The fused operation requested from a group of layers that read the same input.
+#[derive(Clone, Copy, Debug)]
+pub enum GroupKind<'a> {
+    /// One output per member.
+    Dense,
+    /// Expert stacks routed by `indices`; one output per member.
+    Gather { indices: &'a Tensor },
+    /// Members `[gate, up]`; one output `act(gate(x)) * up(x)`.
+    Glu { activation: GluActivationType },
+    /// Members `[gate, up, down]`; one output `down(act(gate(x)) * up(x))`.
+    Ffn { activation: GluActivationType },
+}
+
+impl GroupKind<'_> {
+    fn accepts(&self, members: usize) -> bool {
+        match self {
+            Self::Dense | Self::Gather { .. } => members >= 2,
+            Self::Glu { .. } => members == 2,
+            Self::Ffn { .. } => members == 3,
+        }
+    }
+}
+
+/// Format-neutral description of a group member; formats compare keys to find compatible peers.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct GroupKey {
+    pub format: &'static str,
+    pub dtype: DType,
+    /// Logical weight shape `[experts, out, in]`, with `experts == 1` for dense layers.
+    pub shape: [usize; 3],
+    pub calibration: ActivationCalibration,
+}
+
+pub type GroupForward =
+    fn(&Tensor, &[GroupEntry<'_>], GroupKind<'_>) -> Result<Option<Vec<Tensor>>>;
+
+/// A layer's offer to join a fused group: its key, the format's grouped kernel, and format-private operands.
+#[derive(Clone, Debug)]
+pub struct GroupMember {
+    pub key: GroupKey,
+    pub forward: GroupForward,
+    pub operand: Arc<dyn std::any::Any + Send + Sync>,
+}
+
+#[derive(Debug)]
+pub struct GroupEntry<'a> {
+    pub method: &'a dyn QuantMethod,
+    pub member: Option<GroupMember>,
+}
+
+impl GroupEntry<'_> {
+    pub fn key(&self) -> Option<&GroupKey> {
+        self.member.as_ref().map(|member| &member.key)
+    }
+
+    pub fn operand<T: std::any::Any>(&self, format: &str) -> Option<&T> {
+        let member = self.member.as_ref()?;
+        if member.key.format != format {
+            return None;
+        }
+        member.operand.downcast_ref::<T>()
+    }
+}
+
+/// Input of a fused GLU projection: separate gate/value tensors or one `[.., 2 * split_size]` tensor.
+#[derive(Clone, Copy, Debug)]
+pub enum GluInput<'a> {
+    Split {
+        gate: &'a Tensor,
+        value: &'a Tensor,
+    },
+    Packed {
+        input: &'a Tensor,
+        split_size: usize,
+    },
+}
+
+impl GluInput<'_> {
+    pub fn halves(&self) -> Result<Option<(Tensor, Tensor)>> {
+        match *self {
+            Self::Split { gate, value } => Ok(Some((gate.clone(), value.clone()))),
+            Self::Packed { input, split_size } => {
+                if split_size == 0 || input.dims().last() != split_size.checked_mul(2).as_ref() {
+                    return Ok(None);
+                }
+                Ok(Some((
+                    input.narrow(candle_core::D::Minus1, 0, split_size)?,
+                    input.narrow(candle_core::D::Minus1, split_size, split_size)?,
+                )))
+            }
+        }
+    }
+}
+
 /// Quantized method for a quantized matmul.
 pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     fn new(method: QuantMethodConfig) -> Result<Self>
@@ -1920,6 +2037,11 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         }
     }
 
+    /// Whether `gather_forward` accepts flat `(tokens, 1, k)` routes with `(tokens, topk)` ids on every device.
+    fn supports_flat_gather(&self) -> bool {
+        false
+    }
+
     /// Raw gather matmul without dtype casting. Implementors override this.
     /// Callers should use `gather_forward` instead.
     fn gather_forward_raw(&self, _a: &Tensor, _indices: &Tensor) -> Result<Tensor> {
@@ -1929,18 +2051,9 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         )
     }
 
-    fn try_gather_forward_group(
-        &self,
-        _a: &Tensor,
-        _indices: &Tensor,
-        _methods: &[&dyn QuantMethod],
-    ) -> Result<Option<Vec<Tensor>>> {
+    /// Offer to join a fused group for `xs`; `None` when the format has no grouped kernel or prefers its own forward.
+    fn group_member(&self, _xs: &Tensor, _kind: GroupKind<'_>) -> Result<Option<GroupMember>> {
         Ok(None)
-    }
-
-    #[doc(hidden)]
-    fn nvfp4_expert_projection(&self) -> Option<&Nvfp4Layer> {
-        None
     }
 
     fn embedding_forward(&self, ids: &Tensor, output_dtype: DType) -> Result<Tensor> {
@@ -1955,30 +2068,12 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     }
 
     /// Get the underlying QTensor if this is a GGUF quantized layer.
-    /// Used for direct kernel access in grouped MoE prefill and CPU fused GEMV paths.
+    /// Used for direct kernel access in grouped MoE prefill paths.
     fn get_qtensor(&self) -> Option<Arc<candle_core::quantized::QTensor>> {
         None
     }
 
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
-    #[doc(hidden)]
-    fn prepare_gguf_affine_raw(
-        &self,
-        _flat_batch: usize,
-        _dtype: DType,
-        _device: &Device,
-    ) -> Result<bool> {
-        Ok(false)
-    }
-
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
-    #[doc(hidden)]
-    fn try_gguf_affine_forward_raw(&self, _a: &Tensor) -> Result<Option<Tensor>> {
-        Ok(None)
-    }
-
     /// If this is an AFQ layer, return its (w_q, scales, biases, bits, group_size).
-    /// Used by Metal fused QKV / gate-up paths.
     fn afq_inner(&self) -> Option<crate::afq::AfqInner> {
         None
     }
@@ -1999,13 +2094,8 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
             .map(|_| ActivationScaleLayout::RowMajor)
     }
 
-    #[doc(hidden)]
-    fn nvfp4_input_calibration(&self) -> Option<Nvfp4InputCalibration<'_>> {
-        None
-    }
-
-    fn activation_quantization_global_scale(&self) -> Option<f32> {
-        None
+    fn activation_calibration(&self) -> ActivationCalibration {
+        ActivationCalibration::Dynamic
     }
 
     fn quantize_activation(&self, _a: &Tensor) -> Result<QuantizedActivation> {
@@ -2019,20 +2109,10 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         )
     }
 
-    fn try_quantize_glu(
+    /// `self.forward(act(gate) * value)` with the GLU fused into this layer's activation quantization.
+    fn forward_glu(
         &self,
-        _gate: &Tensor,
-        _value: &Tensor,
-        _activation: GluActivationType,
-    ) -> Result<Option<QuantizedActivation>> {
-        Ok(None)
-    }
-
-    #[cfg(feature = "cuda")]
-    fn try_forward_fused_split_glu(
-        &self,
-        _input: &Tensor,
-        _split_size: usize,
+        _input: GluInput<'_>,
         _activation: GluActivationType,
     ) -> Result<Option<Tensor>> {
         Ok(None)
@@ -2110,62 +2190,247 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     }
 }
 
-pub fn try_gather_forward_with_shared_quantized_activation(
-    a: &Tensor,
-    indices: &Tensor,
-    methods: &[&dyn QuantMethod],
-) -> Result<Option<Vec<Tensor>>> {
-    if methods.len() < 2 {
-        return Ok(None);
-    }
-    methods[0].try_gather_forward_group(a, indices, methods)
-}
+// `output` needs a wrapper adding nothing to the inner output; `weights`/`group` need forward == inner forward.
+macro_rules! forward_quant_hooks {
+    ($($group:ident),+ : $acc:path) => {
+        $($crate::forward_quant_hooks!(@$group $acc);)+
+    };
+    (@meta $acc:path) => {
+        #[cfg(feature = "metal")]
+        fn prepare_metal_kernels(&self, activation_dtype: candle_core::DType) -> candle_core::Result<()> {
+            match $acc(self) {
+                Some(inner) => inner.prepare_metal_kernels(activation_dtype),
+                None => Ok(()),
+            }
+        }
 
-pub fn try_forward_with_shared_quantized_activation(
-    a: &Tensor,
-    methods: &[&dyn QuantMethod],
-) -> Result<Option<Vec<Tensor>>> {
-    if let Some(outputs) = try_forward_with_shared_activation_scheme(a, methods)? {
-        return Ok(Some(outputs));
-    }
-    #[cfg(feature = "cuda")]
-    if methods.len() > 1 && a.device().is_cuda() && fused_projections_allowed(a, methods) {
-        let tokens = a.elem_count() / a.dim(candle_core::D::Minus1)?;
-        if !(1..=gguf::fast_mmvq::MMVQ_MAX_BATCH).contains(&tokens) {
-            return Ok(None);
+        fn supports_flat_gather(&self) -> bool {
+            $acc(self).is_some_and(|inner| inner.supports_flat_gather())
         }
-        let Some(weights) = methods
-            .iter()
-            .map(|method| method.get_qtensor())
-            .collect::<Option<Vec<_>>>()
-        else {
-            return Ok(None);
-        };
-        if weights
-            .iter()
-            .any(|weight| !gguf::fast_mmvq::supports(weight.dtype()))
-        {
-            return Ok(None);
+
+        fn begin_track_stats(&self) -> candle_core::Result<()> {
+            match $acc(self) {
+                Some(inner) => inner.begin_track_stats(),
+                None => candle_core::bail!(
+                    "`{}` does not support tracking stats.",
+                    $crate::QuantizedSerde::name(self)
+                ),
+            }
         }
-        #[cfg(has_marlin_kernels)]
-        if tokens >= gguf::GGUF_AFFINE_MIN_BATCH {
-            for method in methods {
-                if method.prepare_gguf_affine_raw(tokens, a.dtype(), a.device())? {
-                    return Ok(None);
+
+        fn end_track_stats(&self) -> candle_core::Result<candle_core::Tensor> {
+            match $acc(self) {
+                Some(inner) => inner.end_track_stats(),
+                None => candle_core::bail!(
+                    "`{}` does not support tracking stats.",
+                    $crate::QuantizedSerde::name(self)
+                ),
+            }
+        }
+
+        fn stats_snapshot(&self) -> Option<(usize, usize)> {
+            $acc(self)?.stats_snapshot()
+        }
+
+        fn process_routed_stats(
+            &self,
+            x: &candle_core::Tensor,
+            ids: &candle_core::Tensor,
+        ) -> candle_core::Result<()> {
+            match $acc(self) {
+                Some(inner) => inner.process_routed_stats(x, ids),
+                None => Ok(()),
+            }
+        }
+    };
+    (@activation $acc:path) => {
+        fn activation_quantization_scheme(&self) -> Option<$crate::ActivationQuantizationScheme> {
+            $acc(self)?.activation_quantization_scheme()
+        }
+
+        fn activation_quantization_scheme_for(
+            &self,
+            a: &candle_core::Tensor,
+        ) -> Option<$crate::ActivationQuantizationScheme> {
+            $acc(self)?.activation_quantization_scheme_for(a)
+        }
+
+        fn preferred_activation_scale_layout_for(
+            &self,
+            a: &candle_core::Tensor,
+        ) -> Option<$crate::ActivationScaleLayout> {
+            $acc(self)?.preferred_activation_scale_layout_for(a)
+        }
+
+        fn activation_calibration(&self) -> $crate::ActivationCalibration {
+            $acc(self).map_or($crate::ActivationCalibration::Dynamic, |inner| {
+                inner.activation_calibration()
+            })
+        }
+
+        fn quantize_activation(
+            &self,
+            a: &candle_core::Tensor,
+        ) -> candle_core::Result<$crate::QuantizedActivation> {
+            match $acc(self) {
+                Some(inner) => inner.quantize_activation(a),
+                None => {
+                    candle_core::bail!(
+                    "{} does not support activation quantization",
+                    $crate::QuantizedSerde::name(self)
+                )
                 }
             }
         }
-        let weights = weights.iter().map(AsRef::as_ref).collect::<Vec<_>>();
-        return gguf::fast_mmvq::shared_lhs(&weights, a).map(Some);
+    };
+    (@output $acc:path) => {
+        fn forward_quantized(
+            &self,
+            a: &$crate::QuantizedActivation,
+        ) -> candle_core::Result<candle_core::Tensor> {
+            match $acc(self) {
+                Some(inner) => inner.forward_quantized(a),
+                None => candle_core::bail!(
+                    "{} does not support prequantized activation input",
+                    $crate::QuantizedSerde::name(self)
+                ),
+            }
+        }
+
+        fn forward_glu(
+            &self,
+            input: $crate::GluInput<'_>,
+            activation: $crate::GluActivationType,
+        ) -> candle_core::Result<Option<candle_core::Tensor>> {
+            match $acc(self) {
+                Some(inner) => inner.forward_glu(input, activation),
+                None => Ok(None),
+            }
+        }
+    };
+    (@weights $acc:path) => {
+        fn get_qtensor(&self) -> Option<std::sync::Arc<candle_core::quantized::QTensor>> {
+            $acc(self)?.get_qtensor()
+        }
+
+        fn afq_inner(&self) -> Option<$crate::AfqInner> {
+            $acc(self)?.afq_inner()
+        }
+
+        fn unquant_forward_weight(&self) -> Option<candle_core::Tensor> {
+            $acc(self)?.unquant_forward_weight()
+        }
+    };
+    (@group $acc:path) => {
+        fn group_member(
+            &self,
+            xs: &candle_core::Tensor,
+            kind: $crate::GroupKind<'_>,
+        ) -> candle_core::Result<Option<$crate::GroupMember>> {
+            match $acc(self) {
+                Some(inner) => inner.group_member(xs, kind),
+                None => Ok(None),
+            }
+        }
+    };
+}
+pub(crate) use forward_quant_hooks;
+
+/// Grouped kernels skip each member's `forward`, so no member may track stats or run LoRA; bias is format-owned.
+pub(crate) fn group_allowed(xs: &Tensor, members: &[&dyn QuantMethod]) -> bool {
+    matches!(xs.dtype(), DType::BF16 | DType::F16 | DType::F32)
+        && members
+            .iter()
+            .all(|m| m.stats_snapshot().is_none() && !m.is_dynamic_lora_active())
+}
+
+/// Outputs in member order (one for `Glu`/`Ffn`); `None` means callers run each member themselves.
+pub fn forward_group(
+    xs: &Tensor,
+    members: &[&dyn QuantMethod],
+    kind: GroupKind<'_>,
+) -> Result<Option<Vec<Tensor>>> {
+    if !kind.accepts(members.len()) || !group_allowed(xs, members) {
+        return Ok(None);
+    }
+    if let Some(outputs) = forward_group_shared_activation(xs, members, kind)? {
+        return Ok(Some(outputs));
+    }
+    let entries = members
+        .iter()
+        .map(|&method| {
+            Ok(GroupEntry {
+                method,
+                member: method.group_member(xs, kind)?,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    for (index, entry) in entries.iter().enumerate() {
+        let Some(member) = &entry.member else {
+            continue;
+        };
+        let tried = entries[..index].iter().any(|earlier| {
+            earlier
+                .key()
+                .is_some_and(|key| key.format == member.key.format)
+        });
+        if tried {
+            continue;
+        }
+        if let Some(outputs) = (member.forward)(xs, &entries, kind)? {
+            return Ok(Some(outputs));
+        }
     }
     Ok(None)
 }
 
-fn try_forward_with_shared_activation_scheme(
-    a: &Tensor,
-    methods: &[&dyn QuantMethod],
+fn forward_group_shared_activation(
+    xs: &Tensor,
+    members: &[&dyn QuantMethod],
+    kind: GroupKind<'_>,
 ) -> Result<Option<Vec<Tensor>>> {
-    let Some(first) = methods.first() else {
+    match kind {
+        GroupKind::Gather { .. } => Ok(None),
+        GroupKind::Dense => forward_shared_activation(xs, members),
+        GroupKind::Glu { activation } => {
+            let Some(outputs) = forward_shared_activation(xs, members)? else {
+                return Ok(None);
+            };
+            let [gate, up] = two_outputs(outputs)?;
+            Ok(Some(vec![fused_glu(&gate, &up, activation)?]))
+        }
+        GroupKind::Ffn { activation } => {
+            let Some(outputs) = forward_shared_activation(xs, &members[..2])? else {
+                return Ok(None);
+            };
+            let [gate, up] = two_outputs(outputs)?;
+            let down = members[2];
+            let input = GluInput::Split {
+                gate: &gate,
+                value: &up,
+            };
+            if let Some(output) = forward_fused_glu(down, input, activation)? {
+                return Ok(Some(vec![output]));
+            }
+            Ok(Some(vec![
+                down.forward(&fused_glu(&gate, &up, activation)?)?
+            ]))
+        }
+    }
+}
+
+fn two_outputs(outputs: Vec<Tensor>) -> Result<[Tensor; 2]> {
+    outputs.try_into().map_err(|_| {
+        candle_core::Error::msg("shared gate/up projection returned the wrong output count")
+    })
+}
+
+/// Quantize `a` once and feed it to every member, when all members agree on scheme, calibration and layout.
+pub(crate) fn forward_shared_activation(
+    a: &Tensor,
+    members: &[&dyn QuantMethod],
+) -> Result<Option<Vec<Tensor>>> {
+    let Some(first) = members.first() else {
         return Ok(Some(Vec::new()));
     };
     if !matches!(a.dtype(), DType::F16 | DType::BF16) {
@@ -2177,26 +2442,14 @@ fn try_forward_with_shared_activation_scheme(
     if first.preferred_activation_scale_layout_for(a) != Some(ActivationScaleLayout::RowMajor) {
         return Ok(None);
     }
-    let global_scale = first.activation_quantization_global_scale();
-    if methods.iter().skip(1).any(|method| {
-        method.activation_quantization_scheme_for(a) != Some(scheme)
-            || method.activation_quantization_global_scale() != global_scale
-            || method.preferred_activation_scale_layout_for(a)
+    let calibration = first.activation_calibration();
+    if members[1..].iter().any(|member| {
+        member.activation_quantization_scheme_for(a) != Some(scheme)
+            || member.activation_calibration() != calibration
+            || member.preferred_activation_scale_layout_for(a)
                 != Some(ActivationScaleLayout::RowMajor)
     }) {
         return Ok(None);
-    }
-    if scheme == nvfp4::NVFP4_ACTIVATION_SCHEME {
-        let Some(calibration) = first.nvfp4_input_calibration() else {
-            return Ok(None);
-        };
-        if methods.iter().skip(1).any(|method| {
-            method
-                .nvfp4_input_calibration()
-                .is_none_or(|other| !calibration.matches(other))
-        }) {
-            return Ok(None);
-        }
     }
     let activation = first.quantize_activation(a)?;
     if activation.scheme() != scheme {
@@ -2207,7 +2460,7 @@ fn try_forward_with_shared_activation_scheme(
             scheme
         );
     }
-    if activation.global_scale() != global_scale {
+    if activation.global_scale() != calibration.global_scale() {
         candle_core::bail!(
             "shared activation quantizer returned a different calibrated global scale"
         );
@@ -2219,471 +2472,39 @@ fn try_forward_with_shared_activation_scheme(
             activation.scale_layout()
         );
     }
-    methods
+    members
         .iter()
-        .map(|method| method.forward_quantized(&activation))
+        .map(|member| member.forward_quantized(&activation))
         .collect::<Result<Vec<_>>>()
         .map(Some)
 }
 
-pub fn try_forward_fused_quantized_glu(
-    gate: &Tensor,
-    value: &Tensor,
+/// `projection.forward(act(gate) * value)` through the projection's fused GLU quantizer, when it has one.
+pub fn forward_fused_glu(
     projection: &dyn QuantMethod,
+    input: GluInput<'_>,
     activation: GluActivationType,
 ) -> Result<Option<Tensor>> {
-    #[cfg(feature = "cuda")]
-    {
+    if projection.is_dynamic_lora_active() || projection.stats_snapshot().is_some() {
+        return Ok(None);
+    }
+    if let GluInput::Split { gate, value } = input {
         if !matches!(gate.dtype(), DType::BF16 | DType::F16)
             || gate.dtype() != value.dtype()
             || gate.shape() != value.shape()
             || !gate.device().same_device(value.device())
-            || !gate.device().is_cuda()
-            || projection.is_dynamic_lora_active()
-            || projection.stats_snapshot().is_some()
         {
             return Ok(None);
         }
-        if let Some(quantized) = projection.try_quantize_glu(gate, value, activation)? {
-            return projection.forward_quantized(&quantized).map(Some);
-        }
-        if gate.dtype() != DType::BF16 {
-            return Ok(None);
-        }
-        let Some(scheme) = projection.activation_quantization_scheme_for(value) else {
-            return Ok(None);
-        };
-        if scheme.dtype != DType::F8E4M3
-            || scheme.block_shape != [1, 128]
-            || scheme.scale_encoding != ActivationScaleEncoding::F32
-        {
-            return Ok(None);
-        }
-        let Some(scale_layout @ ActivationScaleLayout::GroupMajor { row_alignment }) =
-            projection.preferred_activation_scale_layout_for(value)
-        else {
-            return Ok(None);
-        };
-        let Some((&columns, batch_dims)) = value.dims().split_last() else {
-            return Ok(None);
-        };
-        let rows = batch_dims
-            .iter()
-            .try_fold(1usize, |rows, dim| rows.checked_mul(*dim))
-            .ok_or_else(|| {
-                candle_core::Error::msg("fused GLU activation row count overflows usize")
-            })?;
-        if rows == 0 || columns == 0 {
-            return Ok(None);
-        }
-        let scale_stride_m = aligned_activation_scale_rows(rows, row_alignment)?;
-        let Some((quantized, scales)) = utils::fused_glu_quantized_bf16(
-            gate,
-            value,
-            scheme.block_shape[1],
-            scale_stride_m,
-            activation,
-        )?
-        else {
-            return Ok(None);
-        };
-        let quantized = QuantizedActivation::new_with_scale_layout(
-            quantized,
-            scales,
-            value.dims().to_vec(),
-            value.dtype(),
-            scheme,
-            scale_layout,
-        )?;
-        projection.forward_quantized(&quantized).map(Some)
     }
-
-    #[cfg(not(feature = "cuda"))]
-    {
-        let _ = (gate, value, projection, activation);
-        Ok(None)
-    }
+    projection.forward_glu(input, activation)
 }
 
-impl Module for dyn QuantMethod {
-    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
-        QuantMethod::forward(self, xs)
-    }
+fn single_output(outputs: Option<Vec<Tensor>>) -> Option<Tensor> {
+    outputs.and_then(|mut outputs| outputs.pop())
 }
 
-#[cfg(feature = "cuda")]
-pub fn try_fused_quantized_ffn(
-    xs: &Tensor,
-    gate: &dyn QuantMethod,
-    up: &dyn QuantMethod,
-    down: &dyn QuantMethod,
-    activation: GluActivationType,
-) -> Result<Option<Tensor>> {
-    if !xs.device().is_cuda() {
-        return Ok(None);
-    }
-    if gate.stats_snapshot().is_some()
-        || up.stats_snapshot().is_some()
-        || down.stats_snapshot().is_some()
-    {
-        return Ok(None);
-    }
-    if gate.is_dynamic_lora_active() || up.is_dynamic_lora_active() || down.is_dynamic_lora_active()
-    {
-        return Ok(None);
-    }
-    if gate.has_bias() || up.has_bias() || down.has_bias() {
-        return Ok(None);
-    }
-    if !matches!(xs.dtype(), DType::BF16 | DType::F16 | DType::F32) {
-        return Ok(None);
-    }
-
-    if let Some(outputs) = try_forward_with_shared_activation_scheme(xs, &[gate, up])? {
-        let [gate_out, up_out]: [Tensor; 2] = outputs.try_into().map_err(|_| {
-            candle_core::Error::msg("shared gate/up projection returned the wrong output count")
-        })?;
-        if let Some(output) = try_forward_fused_quantized_glu(&gate_out, &up_out, down, activation)?
-        {
-            return Ok(Some(output));
-        }
-        let intermediate = fused_glu(&gate_out, &up_out, activation)?;
-        return Ok(Some(down.forward(&intermediate)?));
-    }
-
-    let (flat_batch, k) = match xs.dims() {
-        [batch, k] => (*batch, *k),
-        [batch, rows, k] => (*batch * *rows, *k),
-        _ => return Ok(None),
-    };
-    if flat_batch < gguf::GGUF_AFFINE_MIN_BATCH {
-        return Ok(None);
-    }
-
-    let Some(gate_q) = gate.get_qtensor() else {
-        return Ok(None);
-    };
-    let Some(up_q) = up.get_qtensor() else {
-        return Ok(None);
-    };
-    let Some(down_q) = down.get_qtensor() else {
-        return Ok(None);
-    };
-    if gate_q.shape() != up_q.shape() {
-        return Ok(None);
-    }
-    let (intermediate, gate_cols) = gate_q.shape().dims2()?;
-    let (_, down_cols) = down_q.shape().dims2()?;
-    if gate_cols != k || down_cols != intermediate {
-        return Ok(None);
-    }
-    if !gate_q.device().same_device(xs.device())
-        || !up_q.device().same_device(xs.device())
-        || !down_q.device().same_device(xs.device())
-    {
-        return Ok(None);
-    }
-
-    #[cfg(has_marlin_kernels)]
-    {
-        let gate_ready = gate.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
-        let up_ready = up.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
-        let down_ready = down.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
-        if gate_ready && up_ready && down_ready {
-            let gate_out = gate
-                .try_gguf_affine_forward_raw(xs)?
-                .expect("prepared GGUF affine gate projection");
-            let up_out = up
-                .try_gguf_affine_forward_raw(xs)?
-                .expect("prepared GGUF affine up projection");
-            let intermediate = fused_glu(&gate_out, &up_out, activation)?;
-            drop(gate_out);
-            drop(up_out);
-            let out = down
-                .try_gguf_affine_forward_raw(&intermediate)?
-                .expect("prepared GGUF affine down projection");
-            return Ok(Some(out));
-        }
-    }
-
-    if flat_batch <= gguf::fast_mmvq::MMVQ_MAX_BATCH {
-        return Ok(None);
-    }
-    if gate_q.dtype() != up_q.dtype()
-        || !gguf::fast_mmq::supports(gate_q.dtype())
-        || !gguf::fast_mmq::supports(down_q.dtype())
-    {
-        return Ok(None);
-    }
-
-    Ok(Some(gguf::fast_mmq::fused_ffn(
-        &gate_q, &up_q, &down_q, xs, activation,
-    )?))
-}
-
-#[cfg(feature = "cuda")]
-pub fn try_fused_quantized_gate_up(
-    xs: &Tensor,
-    gate: &dyn QuantMethod,
-    up: &dyn QuantMethod,
-    activation: GluActivationType,
-) -> Result<Option<Tensor>> {
-    if !xs.device().is_cuda() {
-        return Ok(None);
-    }
-    if gate.stats_snapshot().is_some() || up.stats_snapshot().is_some() {
-        return Ok(None);
-    }
-    if gate.is_dynamic_lora_active() || up.is_dynamic_lora_active() {
-        return Ok(None);
-    }
-    if gate.has_bias() || up.has_bias() {
-        return Ok(None);
-    }
-    if !matches!(xs.dtype(), DType::BF16 | DType::F16 | DType::F32) {
-        return Ok(None);
-    }
-
-    if let Some(outputs) = try_forward_with_shared_activation_scheme(xs, &[gate, up])? {
-        let [gate_out, up_out]: [Tensor; 2] = outputs.try_into().map_err(|_| {
-            candle_core::Error::msg("shared gate/up projection returned the wrong output count")
-        })?;
-        return Ok(Some(fused_glu(&gate_out, &up_out, activation)?));
-    }
-
-    let Some(gate_q) = gate.get_qtensor() else {
-        return Ok(None);
-    };
-    let Some(up_q) = up.get_qtensor() else {
-        return Ok(None);
-    };
-    if gate_q.shape() != up_q.shape() {
-        return Ok(None);
-    }
-
-    let Some((&k, batch_dims)) = xs.dims().split_last() else {
-        return Ok(None);
-    };
-    let flat_batch = batch_dims.iter().product::<usize>();
-    if flat_batch == 0 {
-        return Ok(None);
-    }
-    let (_, ncols) = gate_q.shape().dims2()?;
-    if k != ncols {
-        return Ok(None);
-    }
-
-    #[cfg(has_marlin_kernels)]
-    if flat_batch >= gguf::GGUF_AFFINE_MIN_BATCH {
-        let gate_ready = gate.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
-        let up_ready = up.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
-        if gate_ready && up_ready {
-            let gate_out = gate
-                .try_gguf_affine_forward_raw(xs)?
-                .expect("prepared GGUF affine gate projection");
-            let up_out = up
-                .try_gguf_affine_forward_raw(xs)?
-                .expect("prepared GGUF affine up projection");
-            return Ok(Some(fused_glu(&gate_out, &up_out, activation)?));
-        }
-    }
-
-    if gate_q.dtype() != up_q.dtype() {
-        return Ok(None);
-    }
-    if flat_batch <= gguf::fast_mmvq::MMVQ_MAX_BATCH {
-        if !gguf::fast_mmvq::supports_fused_glu(xs.dtype(), gate_q.dtype()) {
-            return Ok(None);
-        }
-        Ok(Some(gguf::fast_mmvq::fused_glu(
-            &gate_q, &up_q, xs, activation,
-        )?))
-    } else {
-        if !gguf::fast_mmq::supports(gate_q.dtype()) {
-            return Ok(None);
-        }
-        Ok(Some(gguf::fast_mmq::fused_glu(
-            &gate_q, &up_q, xs, activation,
-        )?))
-    }
-}
-
-/// CPU fused m==1 matmuls sharing one lhs: one input quantization + one parallel region
-/// (aarch64 repacked GEMV). Returns None when any weight is unsupported.
-pub fn try_fused_gemv_shared_lhs_cpu(
-    xs: &Tensor,
-    ws: &[&dyn QuantMethod],
-) -> Result<Option<Vec<Tensor>>> {
-    if !xs.device().is_cpu() || xs.dtype() != DType::F32 {
-        return Ok(None);
-    }
-    if ws.iter().any(|w| w.has_bias()) {
-        return Ok(None);
-    }
-    let mut qs = Vec::with_capacity(ws.len());
-    for w in ws {
-        let Some(q) = w.get_qtensor() else {
-            return Ok(None);
-        };
-        qs.push(q);
-    }
-    let refs: Vec<&candle_core::quantized::QTensor> = qs.iter().map(|a| a.as_ref()).collect();
-    candle_core::quantized::QTensor::gemv_fused_shared_lhs(&refs, xs)
-}
-
-#[cfg(feature = "cuda")]
-pub fn try_fused_quantized_pair(
-    xs: &Tensor,
-    left: &dyn QuantMethod,
-    right: &dyn QuantMethod,
-) -> Result<Option<(Tensor, Tensor)>> {
-    if !xs.device().is_cuda() || !fused_projections_allowed(xs, &[left, right]) {
-        return Ok(None);
-    }
-    if let Some(mut outputs) = try_forward_with_shared_activation_scheme(xs, &[left, right])? {
-        let right = outputs.pop().expect("two projections");
-        let left = outputs.pop().expect("two projections");
-        return Ok(Some((left, right)));
-    }
-    let tokens = xs.elem_count() / xs.dim(candle_core::D::Minus1)?;
-    #[cfg(has_marlin_kernels)]
-    if tokens >= gguf::GGUF_AFFINE_MIN_BATCH
-        && (left.prepare_gguf_affine_raw(tokens, xs.dtype(), xs.device())?
-            || right.prepare_gguf_affine_raw(tokens, xs.dtype(), xs.device())?)
-    {
-        return Ok(None);
-    }
-    if tokens == 1 {
-        if let (Some(quant), Some(dense)) = (left.get_qtensor(), right.unquant_forward_weight()) {
-            return gguf::fast_mmvq::try_dense_pair(&quant, &dense, xs);
-        }
-        if let (Some(dense), Some(quant)) = (left.unquant_forward_weight(), right.get_qtensor()) {
-            return gguf::fast_mmvq::try_dense_pair(&quant, &dense, xs)
-                .map(|outputs| outputs.map(|(quant, dense)| (dense, quant)));
-        }
-    }
-    let (Some(left), Some(right)) = (left.get_qtensor(), right.get_qtensor()) else {
-        return Ok(None);
-    };
-    if tokens == 0 || left.dtype() != right.dtype() {
-        return Ok(None);
-    }
-    if tokens <= gguf::fast_mmvq::MMVQ_MAX_BATCH {
-        if !gguf::fast_mmvq::supports(left.dtype()) {
-            return Ok(None);
-        }
-        gguf::fast_mmvq::fused_pair(&left, &right, xs).map(Some)
-    } else {
-        if !gguf::fast_mmq::supports(left.dtype()) {
-            return Ok(None);
-        }
-        gguf::fast_mmq::fused_pair(&left, &right, xs).map(Some)
-    }
-}
-
-#[cfg(feature = "cuda")]
-pub fn try_fused_quantized_qkv(
-    xs: &Tensor,
-    q: &dyn QuantMethod,
-    k: &dyn QuantMethod,
-    v: &dyn QuantMethod,
-) -> Result<Option<(Tensor, Tensor, Tensor)>> {
-    if !xs.device().is_cuda() {
-        return Ok(None);
-    }
-    if q.stats_snapshot().is_some() || k.stats_snapshot().is_some() || v.stats_snapshot().is_some()
-    {
-        return Ok(None);
-    }
-    if q.is_dynamic_lora_active() || k.is_dynamic_lora_active() || v.is_dynamic_lora_active() {
-        return Ok(None);
-    }
-    if q.has_bias() || k.has_bias() || v.has_bias() {
-        return Ok(None);
-    }
-    if !matches!(xs.dtype(), DType::BF16 | DType::F16 | DType::F32) {
-        return Ok(None);
-    }
-
-    if let Some(outputs) = try_forward_with_shared_activation_scheme(xs, &[q, k, v])? {
-        let [q_out, k_out, v_out]: [Tensor; 3] = outputs.try_into().map_err(|_| {
-            candle_core::Error::msg("shared QKV projection returned the wrong output count")
-        })?;
-        return Ok(Some((q_out, k_out, v_out)));
-    }
-
-    let Some(q_q) = q.get_qtensor() else {
-        return Ok(None);
-    };
-    let Some(k_q) = k.get_qtensor() else {
-        return Ok(None);
-    };
-    let Some(v_q) = v.get_qtensor() else {
-        return Ok(None);
-    };
-
-    let Some((&input_cols, batch_dims)) = xs.dims().split_last() else {
-        return Ok(None);
-    };
-    let flat_batch = batch_dims.iter().product::<usize>();
-    if flat_batch == 0 {
-        return Ok(None);
-    }
-    let (_, q_cols) = q_q.shape().dims2()?;
-    let (_, k_cols) = k_q.shape().dims2()?;
-    let (_, v_cols) = v_q.shape().dims2()?;
-    if input_cols != q_cols || input_cols != k_cols || input_cols != v_cols {
-        return Ok(None);
-    }
-
-    #[cfg(has_marlin_kernels)]
-    if flat_batch >= gguf::GGUF_AFFINE_MIN_BATCH {
-        let q_ready = q.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
-        let k_ready = k.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
-        let v_ready = v.prepare_gguf_affine_raw(flat_batch, xs.dtype(), xs.device())?;
-        if q_ready && k_ready && v_ready {
-            let q_out = q
-                .try_gguf_affine_forward_raw(xs)?
-                .expect("prepared GGUF affine query projection");
-            let k_out = k
-                .try_gguf_affine_forward_raw(xs)?
-                .expect("prepared GGUF affine key projection");
-            let v_out = v
-                .try_gguf_affine_forward_raw(xs)?
-                .expect("prepared GGUF affine value projection");
-            return Ok(Some((q_out, k_out, v_out)));
-        }
-    }
-
-    let dtype = q_q.dtype();
-    if dtype != k_q.dtype() || dtype != v_q.dtype() {
-        return Ok(None);
-    }
-    if flat_batch <= gguf::fast_mmvq::MMVQ_MAX_BATCH {
-        if !gguf::fast_mmvq::supports(dtype) {
-            return Ok(None);
-        }
-        Ok(Some(gguf::fast_mmvq::fused_qkv(&q_q, &k_q, &v_q, xs)?))
-    } else {
-        if !gguf::fast_mmq::supports(dtype) {
-            return Ok(None);
-        }
-        Ok(Some(gguf::fast_mmq::fused_qkv(&q_q, &k_q, &v_q, xs)?))
-    }
-}
-
-/// Shared preconditions for every fused multi-projection kernel, on every backend: bias-free projections
-/// that are not collecting imatrix stats (fused kernels skip `forward`) or running dynamic LoRA, and a float
-/// activation. Per-backend functions then add their format and shape rules.
-fn fused_projections_allowed(xs: &Tensor, projections: &[&dyn QuantMethod]) -> bool {
-    matches!(xs.dtype(), DType::BF16 | DType::F16 | DType::F32)
-        && projections
-            .iter()
-            .all(|p| !p.has_bias() && p.stats_snapshot().is_none() && !p.is_dynamic_lora_active())
-}
-
-/// Fused gate + up + GLU + down, where a backend has a kernel for these weights.
-#[allow(unused_variables)]
+/// Fused gate + up + GLU + down, where a format has a kernel for these weights.
 pub fn try_fused_ffn(
     xs: &Tensor,
     gate: &dyn QuantMethod,
@@ -2691,355 +2512,39 @@ pub fn try_fused_ffn(
     down: &dyn QuantMethod,
     activation: GluActivationType,
 ) -> Result<Option<Tensor>> {
-    if !fused_projections_allowed(xs, &[gate, up, down]) {
-        return Ok(None);
-    }
-    #[cfg(feature = "cuda")]
-    if xs.device().is_cuda() {
-        return try_fused_quantized_ffn(xs, gate, up, down, activation);
-    }
-    Ok(None)
+    forward_group(xs, &[gate, up, down], GroupKind::Ffn { activation }).map(single_output)
 }
 
-/// Fused gate + up + GLU, where a backend has a kernel for these weights.
-#[allow(unused_variables)]
+/// Fused gate + up + GLU, where a format has a kernel for these weights.
 pub fn try_fused_gate_up(
     xs: &Tensor,
     gate: &dyn QuantMethod,
     up: &dyn QuantMethod,
     activation: GluActivationType,
 ) -> Result<Option<Tensor>> {
-    if !fused_projections_allowed(xs, &[gate, up]) {
-        return Ok(None);
-    }
-    #[cfg(feature = "cuda")]
-    if xs.device().is_cuda() {
-        return try_fused_quantized_gate_up(xs, gate, up, activation);
-    }
-    #[cfg(feature = "metal")]
-    if xs.device().is_metal() {
-        return try_fused_gate_up_metal(xs, gate, up, activation);
-    }
-    Ok(None)
+    forward_group(xs, &[gate, up], GroupKind::Glu { activation }).map(single_output)
 }
 
-/// Fused Q/K/V projections, where a backend has a kernel for these weights.
-#[allow(unused_variables)]
+/// Fused Q/K/V projections, where a format has a kernel for these weights.
 pub fn try_fused_qkv(
     xs: &Tensor,
     q: &dyn QuantMethod,
     k: &dyn QuantMethod,
     v: &dyn QuantMethod,
 ) -> Result<Option<(Tensor, Tensor, Tensor)>> {
-    if !fused_projections_allowed(xs, &[q, k, v]) {
+    let Some(outputs) = forward_group(xs, &[q, k, v], GroupKind::Dense)? else {
         return Ok(None);
-    }
-    #[cfg(feature = "cuda")]
-    if xs.device().is_cuda() {
-        return try_fused_quantized_qkv(xs, q, k, v);
-    }
-    #[cfg(feature = "metal")]
-    if xs.device().is_metal() {
-        return try_fused_qkv_metal(xs, q, k, v);
-    }
-    Ok(None)
+    };
+    let [q, k, v]: [Tensor; 3] = outputs.try_into().map_err(|_| {
+        candle_core::Error::msg("fused QKV projection returned the wrong output count")
+    })?;
+    Ok(Some((q, k, v)))
 }
 
-/// Metal fused gate+up: single Metal kernel that does both matmuls with shared
-/// x reads and applies the GLU activation in-register before writing one output.
-/// Callers go through [`try_fused_gate_up`], which applies the shared preconditions.
-#[cfg(feature = "metal")]
-pub fn try_fused_gate_up_metal(
-    xs: &Tensor,
-    gate: &dyn QuantMethod,
-    up: &dyn QuantMethod,
-    activation: GluActivationType,
-) -> Result<Option<Tensor>> {
-    use candle_core::{backend::BackendStorage, MetalStorage, Shape, Storage};
-
-    if !xs.device().is_metal() {
-        return Ok(None);
+impl Module for dyn QuantMethod {
+    fn forward(&self, xs: &Tensor) -> Result<Tensor> {
+        QuantMethod::forward(self, xs)
     }
-
-    let Some(gi) = gate.afq_inner() else {
-        return Ok(None);
-    };
-    let Some(ui) = up.afq_inner() else {
-        return Ok(None);
-    };
-    if gi.bits != ui.bits || gi.group_size != ui.group_size {
-        return Ok(None);
-    }
-    if gi.scales.dtype() != ui.scales.dtype() {
-        return Ok(None);
-    }
-    if gi.w_q.rank() != 2 || ui.w_q.rank() != 2 {
-        return Ok(None);
-    }
-    let k = xs.dim(D::Minus1)?;
-    let n_gate = gi.w_q.dim(0)?;
-    let n_up = ui.w_q.dim(0)?;
-    if n_gate != n_up {
-        return Ok(None);
-    }
-    let n = n_gate;
-    // qmm_t kernel uses BM=32 tiles; for small M (decode) it wastes most of the
-    // tile. Let the caller fall back to separate qmv-based forwards.
-    let probe_m = xs.elem_count() / k;
-    if probe_m < 16 {
-        return Ok(None);
-    }
-    if k * gi.bits as usize / 8 / 4 != gi.w_q.dim(1)? {
-        // unexpected pack factor; let the generic path handle it
-        return Ok(None);
-    }
-
-    let act_code: u32 = match activation {
-        GluActivationType::Silu => 0,
-        GluActivationType::Gelu => 1,
-        GluActivationType::GeluErf => 2,
-        GluActivationType::Relu => 3,
-        GluActivationType::Sigmoid => return Ok(None),
-    };
-
-    let xs = xs.contiguous()?;
-    let m = xs.elem_count() / k;
-    if m == 0 {
-        return Ok(None);
-    }
-
-    let (xs_storage, xs_layout) = xs.storage_and_layout();
-    let Storage::Metal(xs_storage) = &*xs_storage else {
-        return Ok(None);
-    };
-    let (g_w_s, _) = gi.w_q.storage_and_layout();
-    let Storage::Metal(g_w_s) = &*g_w_s else {
-        return Ok(None);
-    };
-    let (g_s_s, _) = gi.scales.storage_and_layout();
-    let Storage::Metal(g_s_s) = &*g_s_s else {
-        return Ok(None);
-    };
-    let (g_b_s, _) = gi.biases.storage_and_layout();
-    let Storage::Metal(g_b_s) = &*g_b_s else {
-        return Ok(None);
-    };
-    let (u_w_s, _) = ui.w_q.storage_and_layout();
-    let Storage::Metal(u_w_s) = &*u_w_s else {
-        return Ok(None);
-    };
-    let (u_s_s, _) = ui.scales.storage_and_layout();
-    let Storage::Metal(u_s_s) = &*u_s_s else {
-        return Ok(None);
-    };
-    let (u_b_s, _) = ui.biases.storage_and_layout();
-    let Storage::Metal(u_b_s) = &*u_b_s else {
-        return Ok(None);
-    };
-
-    let device = xs_storage.device().clone();
-    let dtype = xs.dtype();
-    let mut out_shape = xs.dims().to_vec();
-    *out_shape.last_mut().unwrap() = n;
-    let out = device.new_buffer(out_shape.iter().product(), dtype, "afq-gate-up-out")?;
-
-    let encoder = device.command_encoder()?;
-    encoder.set_label("afq-gate-up");
-
-    metal_kernels::call_afq_qmm_gate_up(
-        device.device(),
-        &encoder,
-        metal_kernels::Kernels::global(),
-        dtype,
-        (
-            xs_storage.buffer(),
-            xs_layout.start_offset() * dtype.size_in_bytes(),
-        ),
-        g_w_s.buffer(),
-        g_s_s.buffer(),
-        g_b_s.buffer(),
-        u_w_s.buffer(),
-        u_s_s.buffer(),
-        u_b_s.buffer(),
-        &out,
-        m,
-        n,
-        k,
-        gi.bits as usize,
-        gi.group_size as usize,
-        act_code,
-    )
-    .map_err(candle_core::Error::wrap)?;
-
-    let out_t = Tensor::from((
-        Storage::Metal(MetalStorage::new(
-            out,
-            device.clone(),
-            out_shape.iter().product(),
-            dtype,
-        )),
-        Shape::from(out_shape),
-    ));
-    Ok(Some(out_t))
-}
-
-/// Metal fused QKV: single Metal kernel that handles all three projections,
-/// routing per-tile to the right weight matrix.
-/// Callers go through [`try_fused_qkv`], which applies the shared preconditions.
-#[cfg(feature = "metal")]
-pub fn try_fused_qkv_metal(
-    xs: &Tensor,
-    q: &dyn QuantMethod,
-    k: &dyn QuantMethod,
-    v: &dyn QuantMethod,
-) -> Result<Option<(Tensor, Tensor, Tensor)>> {
-    use candle_core::{backend::BackendStorage, MetalStorage, Shape, Storage};
-
-    if !xs.device().is_metal() {
-        return Ok(None);
-    }
-
-    let Some(qi) = q.afq_inner() else {
-        return Ok(None);
-    };
-    let Some(ki) = k.afq_inner() else {
-        return Ok(None);
-    };
-    let Some(vi) = v.afq_inner() else {
-        return Ok(None);
-    };
-    if qi.bits != ki.bits || qi.bits != vi.bits {
-        return Ok(None);
-    }
-    if qi.group_size != ki.group_size || qi.group_size != vi.group_size {
-        return Ok(None);
-    }
-    if qi.scales.dtype() != ki.scales.dtype() || qi.scales.dtype() != vi.scales.dtype() {
-        return Ok(None);
-    }
-    if qi.w_q.rank() != 2 || ki.w_q.rank() != 2 || vi.w_q.rank() != 2 {
-        return Ok(None);
-    }
-    let n_q = qi.w_q.dim(0)?;
-    let n_k = ki.w_q.dim(0)?;
-    let n_v = vi.w_q.dim(0)?;
-    // The kernel routes by tile-aligned column boundaries; require N_q and
-    // N_k to be multiples of the tile width (32). For Gemma-style models
-    // those are already 32-multiples; fall back when they're not.
-    if n_q % 32 != 0 || n_k % 32 != 0 || n_v % 32 != 0 {
-        return Ok(None);
-    }
-    let k_dim = xs.dim(D::Minus1)?;
-    // qmm_t kernel uses BM=32; for small M (decode) the tile is mostly empty.
-    // Fall back to separate qmv calls.
-    let probe_m = xs.elem_count() / k_dim;
-    if probe_m < 16 {
-        return Ok(None);
-    }
-
-    let xs = xs.contiguous()?;
-    let m = xs.elem_count() / k_dim;
-    if m == 0 {
-        return Ok(None);
-    }
-
-    let (xs_s, xs_l) = xs.storage_and_layout();
-    let Storage::Metal(xs_s) = &*xs_s else {
-        return Ok(None);
-    };
-    let qws = qi.w_q.storage_and_layout().0;
-    let qss = qi.scales.storage_and_layout().0;
-    let qbs = qi.biases.storage_and_layout().0;
-    let kws = ki.w_q.storage_and_layout().0;
-    let kss = ki.scales.storage_and_layout().0;
-    let kbs = ki.biases.storage_and_layout().0;
-    let vws = vi.w_q.storage_and_layout().0;
-    let vss = vi.scales.storage_and_layout().0;
-    let vbs = vi.biases.storage_and_layout().0;
-    let (Storage::Metal(qw_m), Storage::Metal(qs_m), Storage::Metal(qb_m)) = (&*qws, &*qss, &*qbs)
-    else {
-        return Ok(None);
-    };
-    let (Storage::Metal(kw_m), Storage::Metal(ks_m), Storage::Metal(kb_m)) = (&*kws, &*kss, &*kbs)
-    else {
-        return Ok(None);
-    };
-    let (Storage::Metal(vw_m), Storage::Metal(vs_m), Storage::Metal(vb_m)) = (&*vws, &*vss, &*vbs)
-    else {
-        return Ok(None);
-    };
-
-    let device = xs_s.device().clone();
-    let dtype = xs.dtype();
-    let mut q_shape = xs.dims().to_vec();
-    let mut k_shape = q_shape.clone();
-    let mut v_shape = q_shape.clone();
-    *q_shape.last_mut().unwrap() = n_q;
-    *k_shape.last_mut().unwrap() = n_k;
-    *v_shape.last_mut().unwrap() = n_v;
-    let q_out = device.new_buffer(q_shape.iter().product(), dtype, "afq-qkv-q")?;
-    let k_out = device.new_buffer(k_shape.iter().product(), dtype, "afq-qkv-k")?;
-    let v_out = device.new_buffer(v_shape.iter().product(), dtype, "afq-qkv-v")?;
-
-    let encoder = device.command_encoder()?;
-    encoder.set_label("afq-qkv");
-
-    metal_kernels::call_afq_qmm_qkv(
-        device.device(),
-        &encoder,
-        metal_kernels::Kernels::global(),
-        dtype,
-        (xs_s.buffer(), xs_l.start_offset() * dtype.size_in_bytes()),
-        qw_m.buffer(),
-        qs_m.buffer(),
-        qb_m.buffer(),
-        kw_m.buffer(),
-        ks_m.buffer(),
-        kb_m.buffer(),
-        vw_m.buffer(),
-        vs_m.buffer(),
-        vb_m.buffer(),
-        &q_out,
-        &k_out,
-        &v_out,
-        m,
-        n_q,
-        n_k,
-        n_v,
-        k_dim,
-        qi.bits as usize,
-        qi.group_size as usize,
-    )
-    .map_err(candle_core::Error::wrap)?;
-
-    let q_t = Tensor::from((
-        Storage::Metal(MetalStorage::new(
-            q_out,
-            device.clone(),
-            q_shape.iter().product(),
-            dtype,
-        )),
-        Shape::from(q_shape),
-    ));
-    let k_t = Tensor::from((
-        Storage::Metal(MetalStorage::new(
-            k_out,
-            device.clone(),
-            k_shape.iter().product(),
-            dtype,
-        )),
-        Shape::from(k_shape),
-    ));
-    let v_t = Tensor::from((
-        Storage::Metal(MetalStorage::new(
-            v_out,
-            device.clone(),
-            v_shape.iter().product(),
-            dtype,
-        )),
-        Shape::from(v_shape),
-    ));
-    Ok(Some((q_t, k_t, v_t)))
 }
 
 fn tensor_prefix(vb: &ShardedVarBuilder) -> String {
@@ -3277,8 +2782,14 @@ mod tests {
             })
         }
 
-        fn activation_quantization_global_scale(&self) -> Option<f32> {
+        fn activation_calibration(&self) -> ActivationCalibration {
             self.0
+                .map_or(ActivationCalibration::Dynamic, |global_scale| {
+                    ActivationCalibration::Static {
+                        global_scale,
+                        source: None,
+                    }
+                })
         }
 
         fn quantize_activation(&self, _a: &Tensor) -> Result<QuantizedActivation> {
@@ -3318,9 +2829,7 @@ mod tests {
         let input = Tensor::zeros((2, 4), DType::BF16, &Device::Cpu)?;
         let first = SharedActivationProbe(Some(0.25), ActivationScaleEncoding::F32);
         let second = SharedActivationProbe(Some(0.5), ActivationScaleEncoding::F32);
-        assert!(
-            try_forward_with_shared_quantized_activation(&input, &[&first, &second])?.is_none()
-        );
+        assert!(forward_group(&input, &[&first, &second], GroupKind::Dense)?.is_none());
         Ok(())
     }
 
@@ -3329,9 +2838,7 @@ mod tests {
         let input = Tensor::zeros((2, 4), DType::BF16, &Device::Cpu)?;
         let first = SharedActivationProbe(None, ActivationScaleEncoding::F32);
         let second = SharedActivationProbe(None, ActivationScaleEncoding::E8M0);
-        assert!(
-            try_forward_with_shared_quantized_activation(&input, &[&first, &second])?.is_none()
-        );
+        assert!(forward_group(&input, &[&first, &second], GroupKind::Dense)?.is_none());
         Ok(())
     }
 
@@ -3397,7 +2904,7 @@ mod tests {
     fn shared_activation_falls_back_for_unsupported_input_dtype() -> Result<()> {
         let input = Tensor::zeros((1, 4), DType::F32, &Device::Cpu)?;
         let method = SharedActivationProbe(None, ActivationScaleEncoding::F32);
-        assert!(try_forward_with_shared_quantized_activation(&input, &[&method])?.is_none());
+        assert!(forward_group(&input, &[&method, &method], GroupKind::Dense)?.is_none());
         Ok(())
     }
 
@@ -3405,9 +2912,11 @@ mod tests {
     fn fused_glu_quantization_defaults_to_fallback() -> Result<()> {
         let input = Tensor::zeros((2, 16), DType::BF16, &Device::Cpu)?;
         let method = SharedActivationProbe(None, ActivationScaleEncoding::F32);
-        assert!(method
-            .try_quantize_glu(&input, &input, GluActivationType::Relu)?
-            .is_none());
+        let glu = GluInput::Split {
+            gate: &input,
+            value: &input,
+        };
+        assert!(method.forward_glu(glu, GluActivationType::Relu)?.is_none());
         Ok(())
     }
 
@@ -3416,10 +2925,12 @@ mod tests {
         let gate = Tensor::zeros((3, 4), DType::BF16, &Device::Cpu)?;
         let value = Tensor::ones((3, 4), DType::BF16, &Device::Cpu)?;
         let method = SharedActivationProbe(None, ActivationScaleEncoding::F32);
-        assert!(try_forward_fused_quantized_glu(
-            &gate,
-            &value,
+        assert!(forward_fused_glu(
             &method,
+            GluInput::Split {
+                gate: &gate,
+                value: &value,
+            },
             GluActivationType::Sigmoid,
         )?
         .is_none());

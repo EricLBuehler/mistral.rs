@@ -152,8 +152,10 @@ fn shared_quantized_pair_prefill_matches_independent_projections() -> Result<()>
                 .to_dtype(dtype)?;
                 let left_weight = left.get_qtensor().unwrap();
                 let right_weight = right.get_qtensor().unwrap();
-                let (actual_left, actual_right) =
-                    super::super::fast_mmq::fused_pair(&left_weight, &right_weight, &input)?;
+                let [actual_left, actual_right]: [Tensor; 2] =
+                    super::super::fast_mmq::shared_lhs(&[&left_weight, &right_weight], &input)?
+                        .try_into()
+                        .expect("two weights produce two outputs");
                 assert!(
                     max_diff(
                         &actual_left,

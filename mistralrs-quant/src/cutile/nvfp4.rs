@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
-use candle_core::{CudaDevice, DType, Device, DeviceLocation, Result, Storage, Tensor};
+use candle_core::{CudaDevice, DType, Device, Result, Storage, Tensor};
 use cutile::cutile_compiler::specialization::DivHint;
 
 use super::warmup::{CutileKernel, WarmupProgress};
@@ -266,13 +266,8 @@ pub(crate) fn try_cutile_nvfp4_gather_shared(
     let (experts, n, k, _) = shape;
     let (tokens, topk) = indices.dims2()?;
     let dev = x.device().as_cuda_device()?;
-    let geometry = super::nvfp4_matmul::routed_geometry(
-        tokens,
-        n,
-        k,
-        first.activation_global_scale.is_some(),
-        super::nvfp4_matmul::matmul_device(dev).compute_major,
-    );
+    let geometry =
+        super::nvfp4_matmul::routed_geometry(tokens, n, k, first.activation_global_scale.is_some());
     if tokens < grouped_min_tokens(experts, topk)
         && (projections.len() < SHARED_MIN_PROJECTIONS
             || first.activation_global_scale.is_none()
@@ -322,7 +317,6 @@ fn launch_calibrated(
     uniform_input_scale: bool,
 ) -> Result<Tensor> {
     let (experts, n, k, rows) = validate_input(x, indices, args)?;
-    let dev = x.device().as_cuda_device()?;
     if let Some(indices) = indices {
         if indices.dim(0)? < grouped_min_tokens(experts, indices.dim(1)?) {
             return super::nvfp4_gemv::launch(x, Some(indices), args, compile_only);
@@ -336,7 +330,6 @@ fn launch_calibrated(
                 n,
                 k,
                 args.activation_global_scale.is_some(),
-                super::nvfp4_matmul::matmul_device(dev).compute_major,
             )
             .rows,
         )])?;
@@ -379,39 +372,6 @@ struct RegisteredShape {
 }
 
 static SHAPES: OnceLock<Mutex<Vec<RegisteredShape>>> = OnceLock::new();
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct RegisteredRouting {
-    device: DeviceLocation,
-    experts: usize,
-    topk: usize,
-}
-
-static ROUTING: OnceLock<Mutex<Vec<RegisteredRouting>>> = OnceLock::new();
-
-/// Register routing before loading expert weights so warmup covers the model's top-k.
-pub fn register_nvfp4_routing(device: &Device, experts: usize, topk: usize) -> Result<()> {
-    if experts == 0 || topk == 0 || topk > experts {
-        candle_core::bail!("NVFP4 routing requires 1 <= topk <= experts")
-    }
-    if !device.is_cuda() {
-        return Ok(());
-    }
-    let entry = RegisteredRouting {
-        device: device.location(),
-        experts,
-        topk,
-    };
-    let mut routing = ROUTING
-        .get_or_init(|| Mutex::new(Vec::new()))
-        .lock()
-        .unwrap();
-    if !routing.contains(&entry) {
-        routing.push(entry);
-        super::warmup::mark_dirty();
-    }
-    Ok(())
-}
 
 fn tensor_pointer_hint<T>(tensor: &Tensor) -> Result<DivHint>
 where
@@ -575,28 +535,15 @@ impl RegisteredShape {
         }
         let experts = self.weights.dim(0)?;
         let n = self.weights.dim(1)?;
-        let compute_major =
-            super::nvfp4_matmul::matmul_device(device.as_cuda_device()?).compute_major;
         let geometry = |tokens| {
             super::nvfp4_matmul::routed_geometry(
                 tokens,
                 n,
                 k,
                 self.activation_global_scale.is_some(),
-                compute_major,
             )
         };
-        let mut topks: Vec<_> = ROUTING
-            .get_or_init(|| Mutex::new(Vec::new()))
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|entry| entry.device == device.location() && entry.experts == experts)
-            .map(|entry| entry.topk)
-            .collect();
-        if topks.is_empty() {
-            topks.push(1);
-        }
+        let topks = super::warmup::registered_moe_topks(device, experts);
         for topk in topks {
             let grouped_start = grouped_min_tokens(experts, topk);
             let shared_start = if self.activation_global_scale.is_some() {
@@ -707,7 +654,7 @@ mod tests {
                     k,
                     topk,
                     multiprocessors,
-                    routed_geometry(1, n, k, true, 12)
+                    routed_geometry(1, n, k, true)
                 ),
                 expected
             );
@@ -720,7 +667,7 @@ mod tests {
         for (n, k) in [(256, 1024), (640, 2560), (1024, 4096)] {
             for (experts, topk) in [(128, 2), (256, 4), (512, 10)] {
                 for multiprocessors in [16, 48, 132] {
-                    let geometry = |tokens| routed_geometry(tokens, n, k, true, 12);
+                    let geometry = |tokens| routed_geometry(tokens, n, k, true);
                     let start = shared_grouped_min_tokens(n, k, topk, multiprocessors, geometry(1));
                     let dense_start = grouped_min_tokens(experts, topk);
                     let key = |tokens| {
@@ -769,7 +716,6 @@ mod tests {
         const WIDTH: usize = 8192;
         const WEIGHT_BYTES: usize = WIDTH * WIDTH / 2 + WIDTH * WIDTH / BLOCK_SIZE;
         let device = MatmulDevice {
-            compute_major: 12,
             l2_bytes: WEIGHT_BYTES - 1,
         };
         assert_eq!(
@@ -782,29 +728,10 @@ mod tests {
         );
         for l2_bytes in [0, WEIGHT_BYTES, WEIGHT_BYTES + 1] {
             assert_eq!(
-                dense_geometry(
-                    ROWS,
-                    WIDTH,
-                    WIDTH,
-                    true,
-                    MatmulDevice { l2_bytes, ..device }
-                ),
+                dense_geometry(ROWS, WIDTH, WIDTH, true, MatmulDevice { l2_bytes }),
                 (128, 64, 1)
             );
         }
-        assert_eq!(
-            dense_geometry(
-                ROWS,
-                WIDTH,
-                WIDTH,
-                true,
-                MatmulDevice {
-                    compute_major: 10,
-                    ..device
-                }
-            ),
-            (128, 64, 1)
-        );
         assert_eq!(
             dense_geometry(ROWS - 1, WIDTH, WIDTH, true, device),
             (64, 128, 1)
@@ -827,113 +754,95 @@ mod tests {
         const K: usize = 4096;
         const MEDIUM_ROWS: [usize; 7] = [17, 18, 20, 23, 24, 31, 32];
         let device = MatmulDevice {
-            compute_major: 12,
             l2_bytes: TEST_L2_BYTES,
         };
         for rows in MEDIUM_ROWS {
             assert_eq!(dense_geometry(rows, N, K, true, device), (32, 64, 1));
-            assert_eq!(dense_worker_warps(rows, N, K, true, device), Some(16));
-            for (n, k, a4, compute_major) in [
-                (N - 1, K, true, 12),
-                (N, K - BLOCK_SIZE, true, 12),
-                (N, K, false, 12),
-                (N, K, true, 10),
-                (N, K, true, 11),
-                (N, K, true, 13),
-            ] {
-                let device = MatmulDevice {
-                    compute_major,
-                    ..device
-                };
+            assert_eq!(dense_worker_warps(rows, N, K, true), Some(16));
+            for (n, k, a4) in [(N - 1, K, true), (N, K - BLOCK_SIZE, true), (N, K, false)] {
                 assert_eq!(dense_geometry(rows, n, k, a4, device), (64, 128, 1));
-                assert_eq!(dense_worker_warps(rows, n, k, a4, device), None);
+                assert_eq!(dense_worker_warps(rows, n, k, a4), None);
             }
         }
         assert_eq!(dense_geometry(16, N, K, true, device), (16, 64, 1));
-        assert_eq!(dense_worker_warps(16, N, K, true, device), None);
+        assert_eq!(dense_worker_warps(16, N, K, true), None);
         for rows in [33, 34, 36, 40, 48, 64, 127] {
             assert_eq!(dense_geometry(rows, N, K, true, device), (64, 128, 1));
-            assert_eq!(dense_worker_warps(rows, N, K, true, device), None);
+            assert_eq!(dense_worker_warps(rows, N, K, true), None);
         }
-        assert_eq!(dense_worker_warps(128, N, K, true, device), Some(16));
+        assert_eq!(dense_worker_warps(128, N, K, true), Some(16));
     }
 
     #[test]
     fn warmup_covers_batch_and_routing_specializations() {
         use super::super::nvfp4_matmul::{dense_geometry, dense_worker_warps, MatmulDevice};
 
-        for compute_major in [10, 12] {
-            for l2_bytes in [0, TEST_L2_BYTES, TEST_L2_BYTES * 4] {
-                let device = MatmulDevice {
-                    compute_major,
-                    l2_bytes,
-                };
-                for a4 in [false, true] {
-                    for (n, k) in TEST_DENSE_SHAPES {
-                        let dense_key = |rows| {
-                            (
-                                rows <= GEMV_MAX_ROWS,
-                                dense_geometry(rows, n, k, a4, device),
-                                dense_worker_warps(rows, n, k, a4, device),
-                                dimension_divisor(rows),
-                            )
-                        };
-                        let dense_keys: HashSet<_> =
-                            dense_warmup_rows().into_iter().map(dense_key).collect();
-                        for rows in 1..=COVERAGE_TOKENS {
-                            assert!(dense_keys.contains(&dense_key(rows)), "dense rows={rows} n={n} k={k} a4={a4} major={compute_major} l2={l2_bytes}");
-                        }
+        for l2_bytes in [0, TEST_L2_BYTES, TEST_L2_BYTES * 4] {
+            let device = MatmulDevice { l2_bytes };
+            for a4 in [false, true] {
+                for (n, k) in TEST_DENSE_SHAPES {
+                    let dense_key = |rows| {
+                        (
+                            rows <= GEMV_MAX_ROWS,
+                            dense_geometry(rows, n, k, a4, device),
+                            dense_worker_warps(rows, n, k, a4),
+                            dimension_divisor(rows),
+                        )
+                    };
+                    let dense_keys: HashSet<_> =
+                        dense_warmup_rows().into_iter().map(dense_key).collect();
+                    for rows in 1..=COVERAGE_TOKENS {
+                        assert!(
+                            dense_keys.contains(&dense_key(rows)),
+                            "dense rows={rows} n={n} k={k} a4={a4} l2={l2_bytes}"
+                        );
                     }
                 }
             }
         }
         for (n, k) in [(640, 2560), (2560, 640), (73, 144)] {
-            for major in [10, 12] {
-                for a4 in [false, true] {
-                    let geometry = |tokens| {
-                        super::super::nvfp4_matmul::routed_geometry(tokens, n, k, a4, major)
-                    };
-                    for experts in [3, 128, 256, 512] {
-                        for topk in [1, 2, 8, 10, 32]
+            for a4 in [false, true] {
+                let geometry =
+                    |tokens| super::super::nvfp4_matmul::routed_geometry(tokens, n, k, a4);
+                for experts in [3, 128, 256, 512] {
+                    for topk in [1, 2, 8, 10, 32]
+                        .into_iter()
+                        .filter(|&topk| topk <= experts)
+                    {
+                        let grouped_key = |tokens| {
+                            let cfg = geometry(tokens);
+                            let routes = tokens * topk;
+                            let em =
+                                crate::moe::cuda::moe_align_em(tokens, topk, experts, cfg.rows);
+                            (
+                                cfg,
+                                dimension_divisor(routes),
+                                dimension_divisor(em),
+                                dimension_divisor(em.div_ceil(cfg.rows)),
+                            )
+                        };
+                        let grouped_keys: HashSet<_> = grouped_warmup_rows(experts, topk, geometry)
                             .into_iter()
-                            .filter(|&topk| topk <= experts)
-                        {
-                            let grouped_key = |tokens| {
-                                let cfg = geometry(tokens);
-                                let routes = tokens * topk;
-                                let em =
-                                    crate::moe::cuda::moe_align_em(tokens, topk, experts, cfg.rows);
-                                (
-                                    cfg,
-                                    dimension_divisor(routes),
-                                    dimension_divisor(em),
-                                    dimension_divisor(em.div_ceil(cfg.rows)),
-                                )
-                            };
-                            let grouped_keys: HashSet<_> =
-                                grouped_warmup_rows(experts, topk, geometry)
-                                    .into_iter()
-                                    .map(grouped_key)
-                                    .collect();
-                            let gemv_keys: HashSet<_> = ROUTED_GEMV_WARMUP_ROWS
-                                .into_iter()
-                                .filter(|&tokens| tokens < grouped_min_tokens(experts, topk))
-                                .map(|tokens| {
-                                    (dimension_divisor(tokens), dimension_divisor(tokens * topk))
-                                })
-                                .collect();
-                            for tokens in 1..grouped_min_tokens(experts, topk) {
-                                assert!(
-                                    gemv_keys.contains(&(
-                                        dimension_divisor(tokens),
-                                        dimension_divisor(tokens * topk)
-                                    )),
-                                    "routed GEMV tokens={tokens} experts={experts} topk={topk}"
-                                );
-                            }
-                            for tokens in grouped_min_tokens(experts, topk)..=COVERAGE_TOKENS {
-                                assert!(grouped_keys.contains(&grouped_key(tokens)), "grouped tokens={tokens} experts={experts} topk={topk} n={n} k={k} a4={a4} major={major}");
-                            }
+                            .map(grouped_key)
+                            .collect();
+                        let gemv_keys: HashSet<_> = ROUTED_GEMV_WARMUP_ROWS
+                            .into_iter()
+                            .filter(|&tokens| tokens < grouped_min_tokens(experts, topk))
+                            .map(|tokens| {
+                                (dimension_divisor(tokens), dimension_divisor(tokens * topk))
+                            })
+                            .collect();
+                        for tokens in 1..grouped_min_tokens(experts, topk) {
+                            assert!(
+                                gemv_keys.contains(&(
+                                    dimension_divisor(tokens),
+                                    dimension_divisor(tokens * topk)
+                                )),
+                                "routed GEMV tokens={tokens} experts={experts} topk={topk}"
+                            );
+                        }
+                        for tokens in grouped_min_tokens(experts, topk)..=COVERAGE_TOKENS {
+                            assert!(grouped_keys.contains(&grouped_key(tokens)), "grouped tokens={tokens} experts={experts} topk={topk} n={n} k={k} a4={a4}");
                         }
                     }
                 }

@@ -822,8 +822,7 @@ mod tests {
     use super::super::GGUF_AFFINE_MIN_BATCH;
     use super::*;
     use crate::{
-        try_fused_quantized_ffn, try_fused_quantized_gate_up, try_fused_quantized_qkv, GgufMatMul,
-        GluActivationType, QuantMethod,
+        try_fused_ffn, try_fused_gate_up, try_fused_qkv, GgufMatMul, GluActivationType, QuantMethod,
     };
 
     const AFFINE_DTYPES: &[GgmlDType] = &[
@@ -1340,7 +1339,7 @@ mod tests {
     }
 
     #[test]
-    fn fused_ffn_prepares_different_down_shape() -> Result<()> {
+    fn affine_ready_ffn_declines_group_and_prepares_each_member() -> Result<()> {
         const M: usize = Q6K_MIN_BATCH;
         const HIDDEN: usize = 256;
         const INTERMEDIATE: usize = 512;
@@ -1371,8 +1370,12 @@ mod tests {
             .to_dtype(DType::BF16)?
             .to_device(&cuda)?;
 
-        let actual = try_fused_quantized_ffn(&xs, &gate, &up, &down, GluActivationType::Silu)?
-            .expect("mixed packed GGUF affine fused FFN");
+        assert!(try_fused_ffn(&xs, &gate, &up, &down, GluActivationType::Silu)?.is_none());
+        let actual = down.forward(&crate::fused_glu(
+            &gate.forward(&xs)?,
+            &up.forward(&xs)?,
+            GluActivationType::Silu,
+        )?)?;
         let gate_expected = xs.matmul(&gate_dequantized.t()?)?;
         let up_expected = xs.matmul(&up_dequantized.t()?)?;
         let intermediate = crate::fused_glu(&gate_expected, &up_expected, GluActivationType::Silu)?;
@@ -1386,7 +1389,7 @@ mod tests {
     }
 
     #[test]
-    fn fused_qkv_and_gate_up_use_packed_layers() -> Result<()> {
+    fn affine_ready_qkv_and_gate_up_decline_group_and_prepare_each_member() -> Result<()> {
         const M: usize = 17;
         const Q_OUT: usize = 256;
         const KV_OUT: usize = 64;
@@ -1409,14 +1412,15 @@ mod tests {
             .to_dtype(DType::BF16)?
             .to_device(&cuda)?;
 
-        let (q_actual, k_actual, v_actual) =
-            try_fused_quantized_qkv(&xs, &q, &k, &v)?.expect("mixed packed GGUF affine fused QKV");
+        assert!(try_fused_qkv(&xs, &q, &k, &v)?.is_none());
+        let (q_actual, k_actual, v_actual) = (q.forward(&xs)?, k.forward(&xs)?, v.forward(&xs)?);
         assert_close(&q_actual, &xs.matmul(&q_dequantized.t()?)?, 0.08, 0.01)?;
         assert_close(&k_actual, &xs.matmul(&k_dequantized.t()?)?, 0.08, 0.01)?;
         assert_close(&v_actual, &xs.matmul(&v_dequantized.t()?)?, 0.08, 0.01)?;
 
-        let gate_up = try_fused_quantized_gate_up(&xs, &k, &v, GluActivationType::Silu)?
-            .expect("mixed packed GGUF affine fused gate-up");
+        assert!(try_fused_gate_up(&xs, &k, &v, GluActivationType::Silu)?.is_none());
+        let gate_up =
+            crate::fused_glu(&k.forward(&xs)?, &v.forward(&xs)?, GluActivationType::Silu)?;
         let gate_expected = xs.matmul(&k_dequantized.t()?)?;
         let up_expected = xs.matmul(&v_dequantized.t()?)?;
         let expected = crate::fused_glu(&gate_expected, &up_expected, GluActivationType::Silu)?;

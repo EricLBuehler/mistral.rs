@@ -82,11 +82,11 @@ fn routing(mode: usize) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
 }
 
 #[test]
-#[ignore = "requires an SM121 CUDA device"]
+#[ignore = "requires a CUDA device that supports compact MMQ tiles"]
 fn compact_mmq_graph_replay_rebuilds_routing_and_reuses_workspace() -> Result<()> {
     let device = Device::new_cuda_with_stream(0)?;
     let cuda = device.as_cuda_device()?;
-    if get_device_info(cuda).cc != COMPACT_CAPABILITY {
+    if !compact_mmq_supported(&cuda_device_info(cuda)) {
         return Ok(());
     }
     let _htod_cache_guard = cuda.enable_cuda_graph_htod_cache();
@@ -224,7 +224,7 @@ fn compact_mmq_graph_replay_rebuilds_routing_and_reuses_workspace() -> Result<()
 }
 
 #[test]
-#[ignore = "requires an SM121 CUDA device"]
+#[ignore = "requires a CUDA device that supports compact MMQ tiles"]
 fn compact_mmq_handles_partial_rows_and_multiple_expert_chunks() -> Result<()> {
     const EXPERTS: usize = 1025;
     const TOKENS: usize = 17;
@@ -232,7 +232,7 @@ fn compact_mmq_handles_partial_rows_and_multiple_expert_chunks() -> Result<()> {
     const COLS: usize = 256;
     let device = Device::new_cuda(0)?;
     let cuda = device.as_cuda_device()?;
-    if get_device_info(cuda).cc != COMPACT_CAPABILITY {
+    if !compact_mmq_supported(&cuda_device_info(cuda)) {
         return Ok(());
     }
     let xs = tests::patterned((TOKENS, COLS), 3, 0.2)?.to_device(&device)?;

@@ -1153,16 +1153,12 @@ impl Runner {
             supported && !no_paged_attn && !no_kv_cache,
         )
         .map_err(PyApiErr::from)?;
+        let prefix_cache_n = mistralrs_core::PrefixCacheCapacity::from(prefix_cache_n);
         let cache_config = cache_config
             .map(|config| config.with_serving_capacity(max_seqs))
             .transpose()?
-            .map(|config| match prefix_cache_n {
-                Some(capacity) => config.with_recurrent_prefix_capacity(capacity),
-                None => config.with_automatic_recurrent_prefix_capacity(
-                    mistralrs_core::DEFAULT_PREFIX_CACHE_N,
-                ),
-            });
-        let prefix_cache_n = prefix_cache_n.unwrap_or(mistralrs_core::DEFAULT_PREFIX_CACHE_N);
+            .map(|config| config.with_recurrent_prefix_capacity(prefix_cache_n));
+        let prefix_cache_n = prefix_cache_n.requested();
         let mtp_config = mtp_model.map(|model| MtpConfig::new(model, mtp_n_predict));
         let mtp_runtime = MtpRuntimeConfig::new(prefix_cache_n);
         let cache_config = reserve_external_mtp_memory_with_runtime(

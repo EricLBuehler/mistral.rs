@@ -20,8 +20,8 @@ use super::tune::{
 };
 use super::warmup::{CutileKernel, WarmupProgress};
 use super::{
-    catch_cutile_panic, context, device_compute_capability, device_multiprocessor_count,
-    jit_available,
+    catch_cutile_panic, context, device_multiprocessor_count, fp8_gemm_entry_hints, jit_available,
+    EntryHints,
 };
 use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
 use crate::{Fp8ActivationMode, Fp8WeightScaleLayout};
@@ -36,13 +36,7 @@ mod kernels {
     #![allow(deprecated)]
     use cutile::core::*;
 
-    #[cutile::entry(
-        unchecked_accesses = false,
-        optimization_hints = (
-            sm_120 = (num_cta_in_cga = 2, occupancy = 2,),
-            sm_121 = (num_cta_in_cga = 2, occupancy = 2,),
-        )
-    )]
+    #[cutile::entry(unchecked_accesses = false)]
     fn fp8_w8a8_bf16<
         const BM: i32,
         const BN: i32,
@@ -94,13 +88,7 @@ mod kernels {
         }
     }
 
-    #[cutile::entry(
-        unchecked_accesses = false,
-        optimization_hints = (
-            sm_120 = (num_cta_in_cga = 2, occupancy = 2,),
-            sm_121 = (num_cta_in_cga = 2, occupancy = 2,),
-        )
-    )]
+    #[cutile::entry(unchecked_accesses = false)]
     fn fp8_w8a8_f16<
         const BM: i32,
         const BN: i32,
@@ -289,16 +277,22 @@ impl CutileFp8W8A8Config {
         })
     }
 
-    fn compile_options(self) -> CompileOptions {
+    fn compile_options(self, defaults: Option<EntryHints>) -> CompileOptions {
         let mut options = CompileOptions::new();
         if self.warps > 0 {
             options = options.num_worker_warps_per_cta(self.warps);
         }
-        if self.occupancy > 0 {
-            options = options.occupancy(self.occupancy);
+        let occupancy = Some(self.occupancy)
+            .filter(|&value| value > 0)
+            .or(defaults.map(|hints| hints.occupancy));
+        if let Some(occupancy) = occupancy {
+            options = options.occupancy(occupancy);
         }
-        if self.cluster > 0 {
-            options = options.num_cta_in_cga(self.cluster);
+        let cluster = Some(self.cluster)
+            .filter(|&value| value > 0)
+            .or(defaults.map(|hints| hints.num_cta_in_cga));
+        if let Some(cluster) = cluster {
+            options = options.num_cta_in_cga(cluster);
         }
         options
     }
@@ -383,11 +377,9 @@ pub fn fp8_w8a8_supported(
     activation_dtype: DType,
     scheme: Fp8W8A8Scheme,
 ) -> bool {
-    let (major, minor) = device_compute_capability(dev);
-    let has_native_fp8_mma = major > 8 || (major == 8 && minor >= 9);
     cfg!(has_blockwise_fp8_kernels)
         && jit_available(dev)
-        && has_native_fp8_mma
+        && crate::cuda_device::cuda_device_info(dev).has_fp8_mma()
         && matches!(activation_dtype, DType::BF16 | DType::F16)
         && output_features > 0
         && input_features > 0
@@ -665,7 +657,7 @@ fn launch(
         ($launcher:expr, $label:literal) => {{
             let launcher = $launcher
                 .generics(generics.clone())
-                .compile_options(cfg.compile_options());
+                .compile_options(cfg.compile_options(fp8_gemm_entry_hints(dev)));
             if compile_only {
                 catch_cutile_panic("W8A8 compile", || {
                     launcher.compile_on(&cutile_stream).map_err(|error| {

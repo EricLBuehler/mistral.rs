@@ -4,10 +4,7 @@ use candle_core::{cuda::cudarc::driver::sys, DType, Device, Result, Tensor};
 use float8::F8E4M3;
 
 use super::{Nvfp4Layer, Nvfp4LayerParts};
-use crate::{
-    try_gather_forward_with_shared_quantized_activation, Nvfp4ActivationMode, QuantMethod,
-    NVFP4_BLOCK_SIZE,
-};
+use crate::{forward_group, GroupKind, Nvfp4ActivationMode, QuantMethod, NVFP4_BLOCK_SIZE};
 
 const EXPERTS: usize = 9;
 const TOPK: usize = 4;
@@ -148,8 +145,12 @@ fn compare(actual: &Tensor, expected: &Tensor) -> Result<()> {
 }
 
 fn shared(input: &Tensor, indices: &Tensor, layers: &[Nvfp4Layer; 2]) -> Result<Vec<Tensor>> {
-    try_gather_forward_with_shared_quantized_activation(input, indices, &[&layers[0], &layers[1]])?
-        .ok_or_else(|| candle_core::Error::msg("compatible expert projections declined sharing"))
+    forward_group(
+        input,
+        &[&layers[0], &layers[1]],
+        GroupKind::Gather { indices },
+    )?
+    .ok_or_else(|| candle_core::Error::msg("compatible expert projections declined sharing"))
 }
 
 #[test]
@@ -213,10 +214,9 @@ fn shared_expert_gather_rejects_unproven_or_mismatched_calibration() -> Result<(
             [&first as &dyn QuantMethod, &other as &dyn QuantMethod],
             [&other as &dyn QuantMethod, &first as &dyn QuantMethod],
         ] {
-            assert!(try_gather_forward_with_shared_quantized_activation(
-                &input, &indices, &methods,
-            )?
-            .is_none());
+            assert!(
+                forward_group(&input, &methods, GroupKind::Gather { indices: &indices })?.is_none()
+            );
         }
         assert_eq!(
             other.gather_forward(&input, &indices)?.dims(),
@@ -317,7 +317,7 @@ fn shared_expert_decode_warmup_and_graph_replay() -> Result<()> {
     if first_rows >= dense_rows {
         return Ok(());
     }
-    crate::cutile::register_nvfp4_routing(&device, DECODE_EXPERTS, DECODE_TOPK)?;
+    crate::cutile::register_moe_routing(&device, DECODE_EXPERTS, DECODE_TOPK)?;
     let stream = dev.cuda_stream();
     let _cache = dev.enable_cuda_graph_htod_cache();
     for dtype in [DType::BF16, DType::F16] {

@@ -9,7 +9,7 @@ use candle_core::{DType, Device, Tensor, D};
 use candle_nn::Conv2dConfig;
 use image::{ColorType, DynamicImage};
 use itertools::Itertools;
-use mistralrs_quant::distributed::layers::DENSE_PACKED_ROW_ALIGNMENT;
+use mistralrs_quant::distributed::packing::packed_dense_bytes;
 use mistralrs_quant::log::once_log_debug;
 use mistralrs_quant::ShardedVarBuilder;
 
@@ -8551,13 +8551,14 @@ impl Qwen4ExpWeightSizes<'_, '_> {
             )?;
             bytes += inject;
             let row_bytes = hidden * self.dtype.size_in_bytes();
-            if cfg!(feature = "cuda")
-                && matches!(self.dtype, DType::F16 | DType::BF16)
-                && down == text.hc_lowrank * row_bytes
-                && inject == text.hc_count * row_bytes
-            {
-                let rows = text.hc_lowrank + text.hc_count;
-                bytes += (rows.next_multiple_of(DENSE_PACKED_ROW_ALIGNMENT) - rows) * row_bytes;
+            if down == text.hc_lowrank * row_bytes && inject == text.hc_count * row_bytes {
+                bytes = bytes - down - inject
+                    + packed_dense_bytes(
+                        text.hc_lowrank + text.hc_count,
+                        hidden,
+                        self.dtype,
+                        cfg!(feature = "cuda"),
+                    );
             }
         }
         Ok(bytes)

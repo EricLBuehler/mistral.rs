@@ -586,8 +586,7 @@ mod kernels {
     }
 }
 
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 
 use candle_core::{CudaDevice, CudaStorage, DType, Device, Result, Shape, Storage, Tensor};
 use cutile::core::{f4e2m1fnx2, f8e4m3fn};
@@ -600,7 +599,7 @@ use float8::F8E4M3;
 use half::{bf16, f16};
 
 use super::nvfp4::Nvfp4GemmArgs;
-use super::{catch_cutile_panic, context, device_compute_major, device_multiprocessor_count};
+use super::{catch_cutile_panic, context, device_multiprocessor_count};
 use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
 
 const BLOCK_SIZE: usize = 16;
@@ -619,7 +618,6 @@ const WIDE_MATMUL_MIN_K: usize = 8192;
 const WIDE_MATMUL_MIN_N: usize = 4096;
 const GROUPED_MATMUL_MIN_K: usize = 4096;
 const GROUPED_MATMUL_ROWS: usize = 8;
-const GROUPED_MATMUL_COMPUTE_MAJOR: i32 = 12;
 const LOAD_LATENCY: usize = 3;
 const BLOCKS_PER_SM: usize = 2;
 const WORKER_HINT_MIN_N: usize = 1024;
@@ -627,30 +625,13 @@ const WORKER_HINT_WARPS: i32 = 16;
 
 #[derive(Clone, Copy)]
 pub(super) struct MatmulDevice {
-    pub(super) compute_major: i32,
     pub(super) l2_bytes: usize,
 }
 
 pub(super) fn matmul_device(dev: &CudaDevice) -> MatmulDevice {
-    use candle_core::cuda::cudarc::driver::{result, sys};
-
-    static DEVICES: OnceLock<Mutex<HashMap<i32, MatmulDevice>>> = OnceLock::new();
-    let cu_device = dev.cuda_stream().context().cu_device();
-    *DEVICES
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .unwrap()
-        .entry(cu_device)
-        .or_insert_with(|| MatmulDevice {
-            compute_major: device_compute_major(dev),
-            l2_bytes: unsafe {
-                result::device::get_attribute(
-                    cu_device,
-                    sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE,
-                )
-            }
-            .unwrap_or(0) as usize,
-        })
+    MatmulDevice {
+        l2_bytes: crate::cuda_device::cuda_device_info(dev).l2_bytes,
+    }
 }
 
 pub(super) fn dense_geometry(
@@ -661,7 +642,6 @@ pub(super) fn dense_geometry(
     device: MatmulDevice,
 ) -> (usize, usize, usize) {
     if a4
-        && device.compute_major == GROUPED_MATMUL_COMPUTE_MAJOR
         && m >= WIDE_MATMUL_ROWS
         && n >= WIDE_MATMUL_MIN_N
         && k >= GROUPED_MATMUL_MIN_K
@@ -672,7 +652,7 @@ pub(super) fn dense_geometry(
         (WIDE_MATMUL_ROWS, WIDE_MATMUL_COLUMNS, GROUPED_MATMUL_ROWS)
     } else if m <= SMALL_MATMUL_ROWS {
         (SMALL_MATMUL_ROWS, SMALL_MATMUL_COLUMNS, 1)
-    } else if m <= MEDIUM_MATMUL_ROWS && dense_worker_warps(m, n, k, a4, device).is_some() {
+    } else if m <= MEDIUM_MATMUL_ROWS && dense_worker_warps(m, n, k, a4).is_some() {
         (MEDIUM_MATMUL_ROWS, MEDIUM_MATMUL_COLUMNS, 1)
     } else if m >= WIDE_MATMUL_ROWS && n >= WIDE_MATMUL_MIN_N && k >= WIDE_MATMUL_MIN_K {
         (WIDE_MATMUL_ROWS, WIDE_MATMUL_COLUMNS, 1)
@@ -681,16 +661,8 @@ pub(super) fn dense_geometry(
     }
 }
 
-pub(super) fn dense_worker_warps(
-    m: usize,
-    n: usize,
-    k: usize,
-    a4: bool,
-    device: MatmulDevice,
-) -> Option<i32> {
-    (device.compute_major == GROUPED_MATMUL_COMPUTE_MAJOR
-        && a4
-        && (m >= WIDE_MATMUL_ROWS || (SMALL_MATMUL_ROWS < m && m <= MEDIUM_MATMUL_ROWS))
+pub(super) fn dense_worker_warps(m: usize, n: usize, k: usize, a4: bool) -> Option<i32> {
+    (a4 && (m >= WIDE_MATMUL_ROWS || (SMALL_MATMUL_ROWS < m && m <= MEDIUM_MATMUL_ROWS))
         && n >= WORKER_HINT_MIN_N
         && k >= GROUPED_MATMUL_MIN_K)
         .then_some(WORKER_HINT_WARPS)
@@ -997,7 +969,7 @@ fn launch_inner(
         LOAD_LATENCY.to_string(),
         group_m.to_string(),
     ];
-    let options = if let Some(warps) = dense_worker_warps(m, n, k, a4, device) {
+    let options = if let Some(warps) = dense_worker_warps(m, n, k, a4) {
         cutile::cutile_compiler::compiler::utils::CompileOptions::default()
             .num_worker_warps_per_cta(warps)
     } else {
@@ -1069,15 +1041,8 @@ pub(super) struct RoutedGeometry {
     pub(super) persistent: bool,
 }
 
-pub(super) fn routed_geometry(
-    tokens: usize,
-    n: usize,
-    k: usize,
-    a4: bool,
-    compute_major: i32,
-) -> RoutedGeometry {
+pub(super) fn routed_geometry(tokens: usize, n: usize, k: usize, a4: bool) -> RoutedGeometry {
     if a4
-        && compute_major == GROUPED_MATMUL_COMPUTE_MAJOR
         && tokens >= ROUTED_PREFILL_MIN_TOKENS
         && n >= ROUTED_PREFILL_MIN_WIDTH
         && k >= ROUTED_PREFILL_MIN_WIDTH
@@ -1135,13 +1100,7 @@ pub(super) fn prepare_gather(
     let Device::Cuda(dev) = x.device() else {
         candle_core::bail!("cuTile NVFP4 grouped matmul requires CUDA tensors")
     };
-    let geometry = routed_geometry(
-        tokens,
-        n,
-        k,
-        args.activation_global_scale.is_some(),
-        matmul_device(dev).compute_major,
-    );
+    let geometry = routed_geometry(tokens, n, k, args.activation_global_scale.is_some());
     let indices = indices.contiguous()?;
     let (id_storage, id_layout) = indices.storage_and_layout();
     let Storage::Cuda(id_cuda) = &*id_storage else {

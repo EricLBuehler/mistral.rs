@@ -40,7 +40,7 @@ pub use hyper_connection::{hc_prefill_supported, register_hc_up_mix, try_hc_pref
 pub(crate) use mxfp8_gemm::{forward as cutile_mxfp8_gemm, register as register_mxfp8_shape};
 pub use nvfp4::{
     cutile_nvfp4, cutile_nvfp4_gather, cutile_nvfp4_prequantized, cutile_nvfp4_quantize,
-    nvfp4_supported, register_nvfp4_routing, register_nvfp4_shape, Nvfp4GemmArgs,
+    nvfp4_supported, register_nvfp4_shape, Nvfp4GemmArgs,
 };
 pub(crate) use nvfp4::{
     cutile_nvfp4_gather_calibrated, grouped_min_tokens as nvfp4_grouped_min_tokens,
@@ -63,7 +63,7 @@ pub use routed_lora::{
     CutileRoutedLoraUnsupported, CUTILE_ROUTED_LORA_MAX_RANK,
 };
 pub use tune::{TuneMode, TUNE_CACHE_ENV, TUNE_MODE_ENV};
-pub use warmup::warmup_moe_kernels;
+pub use warmup::{register_moe_routing, warmup_moe_kernels};
 
 fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
     if let Some(message) = payload.downcast_ref::<String>() {
@@ -87,69 +87,53 @@ pub(super) fn catch_cutile_panic<T>(
     }
 }
 
-pub fn device_compute_capability(dev: &candle_core::CudaDevice) -> (i32, i32) {
-    use candle_core::cuda::cudarc::driver::{result, sys};
-    let cu_device = dev.cuda_stream().context().cu_device();
-    let major = unsafe {
-        result::device::get_attribute(
-            cu_device,
-            sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
-        )
-    }
-    .unwrap_or(0);
-    let minor = unsafe {
-        result::device::get_attribute(
-            cu_device,
-            sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR,
-        )
-    }
-    .unwrap_or(0);
-    (major, minor)
-}
+const BLACKWELL_TILE_MIN_CUDA_VERSION: u32 = 1303;
+const BLACKWELL_TILE_MIN_TILEIRAS_VERSION: (u32, u32) = (13, 3);
 
-const BLOCK_SCALED_MIN_CUDA_VERSION: u32 = 1303;
-const BLOCK_SCALED_MIN_TILEIRAS_VERSION: (u32, u32) = (13, 3);
-
-pub(crate) fn block_scaled_mma_supported(dev: &candle_core::CudaDevice) -> bool {
-    device_compute_major(dev) >= 10
-        && build_cuda_version_code().is_some_and(|version| version >= BLOCK_SCALED_MIN_CUDA_VERSION)
+// Block-scaled MMA and worker-warp specialization both need a Blackwell target plus a 13.3+ toolchain.
+pub(crate) fn blackwell_tile_features_supported(dev: &candle_core::CudaDevice) -> bool {
+    crate::cuda_device::cuda_device_info(dev).is_blackwell_or_newer()
+        && build_cuda_version_code()
+            .is_some_and(|version| version >= BLACKWELL_TILE_MIN_CUDA_VERSION)
         && tileiras_capabilities()
-            .is_some_and(|capabilities| capabilities.version >= BLOCK_SCALED_MIN_TILEIRAS_VERSION)
+            .is_some_and(|capabilities| capabilities.version >= BLACKWELL_TILE_MIN_TILEIRAS_VERSION)
         && jit_available(dev)
 }
 
-pub fn device_compute_major(dev: &candle_core::CudaDevice) -> i32 {
-    device_compute_capability(dev).0
+pub(crate) fn block_scaled_mma_supported(dev: &candle_core::CudaDevice) -> bool {
+    blackwell_tile_features_supported(dev)
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct EntryHints {
+    pub(crate) occupancy: i32,
+    pub(crate) num_cta_in_cga: i32,
+}
+
+// Measured on SM12x; other majors keep tileiras defaults.
+const FP8_GEMM_ENTRY_HINTS: &[(i32, EntryHints)] = &[(
+    12,
+    EntryHints {
+        occupancy: 2,
+        num_cta_in_cga: 2,
+    },
+)];
+
+pub(crate) fn fp8_gemm_entry_hints(dev: &candle_core::CudaDevice) -> Option<EntryHints> {
+    let major = crate::cuda_device::cuda_device_info(dev).major;
+    FP8_GEMM_ENTRY_HINTS
+        .iter()
+        .find(|(hinted, _)| *hinted == major)
+        .map(|(_, hints)| *hints)
 }
 
 pub fn device_multiprocessor_count(dev: &candle_core::CudaDevice) -> usize {
-    use candle_core::cuda::cudarc::driver::{result, sys};
-    use std::{
-        collections::HashMap,
-        sync::{Mutex, OnceLock},
-    };
-
-    static COUNTS: OnceLock<Mutex<HashMap<i32, usize>>> = OnceLock::new();
-    let cu_device = dev.cuda_stream().context().cu_device();
-    *COUNTS
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .unwrap()
-        .entry(cu_device)
-        .or_insert_with(|| {
-            let count = unsafe {
-                result::device::get_attribute(
-                    cu_device,
-                    sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT,
-                )
-            }
-            .unwrap_or(1);
-            usize::try_from(count).unwrap_or(1).max(1)
-        })
+    crate::cuda_device::cuda_device_info(dev).sms
 }
 
 pub fn device_supported(dev: &candle_core::CudaDevice) -> bool {
-    let (major, minor) = device_compute_capability(dev);
+    let crate::cuda_device::CudaDeviceInfo { major, minor, .. } =
+        crate::cuda_device::cuda_device_info(dev);
     let Some(cuda_code) = build_cuda_version_code() else {
         return false;
     };
@@ -244,7 +228,8 @@ fn tileiras_capabilities() -> Option<&'static TileirasCapabilities> {
 
 /// Whether `tileiras` can JIT this Tile IR for the active GPU.
 pub fn jit_available(dev: &candle_core::CudaDevice) -> bool {
-    let (major, minor) = device_compute_capability(dev);
+    let crate::cuda_device::CudaDeviceInfo { major, minor, .. } =
+        crate::cuda_device::cuda_device_info(dev);
     let target = major * 10 + minor;
     tileiras_capabilities().is_some_and(|capabilities| capabilities.targets.contains(&target))
 }

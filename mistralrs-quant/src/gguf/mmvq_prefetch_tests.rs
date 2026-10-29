@@ -1,6 +1,17 @@
 use super::*;
 use candle_core::{cuda::cudarc::driver::sys, quantized::QStorage, Var};
-use std::borrow::Cow;
+use std::{borrow::Cow, cell::Cell};
+
+thread_local! {
+    pub(super) static FORCE_PLAIN: Cell<bool> = const { Cell::new(false) };
+}
+
+fn plain_without_prefetch(weight: &QTensor, input: &Tensor) -> Result<Tensor> {
+    FORCE_PLAIN.with(|flag| flag.set(true));
+    let output = plain(weight, input);
+    FORCE_PLAIN.with(|flag| flag.set(false));
+    output
+}
 
 const INPUT_COLS: usize = 4096;
 const KEY_ROWS: usize = 65;
@@ -8,11 +19,11 @@ const VALUE_ROWS: usize = 129;
 const BACKING_COLS: usize = INPUT_COLS + 1;
 
 #[test]
-#[ignore = "requires an SM121 CUDA device"]
+#[ignore = "requires a CUDA device that prefers L2 weight prefetch"]
 fn prefetch_dispatch_graph_replay_matches_legacy_for_all_formats() -> Result<()> {
     let device = Device::new_cuda_with_stream(0)?;
     let cuda = device.as_cuda_device()?;
-    if !is_sm121(cuda)? {
+    if !prefers_weight_prefetch(cuda) {
         return Ok(());
     }
     for quant in [
@@ -74,7 +85,7 @@ fn prefetch_dispatch_graph_replay_matches_legacy_for_all_formats() -> Result<()>
                 assert!(input.layout().start_offset() > 0);
                 assert_eq!(input.is_contiguous(), !strided);
                 let _ = plain(&weight, &input)?;
-                let _ = plain_impl(&weight, &input, false)?;
+                let _ = plain_without_prefetch(&weight, &input)?;
                 device.synchronize()?;
                 let tracking = stream.context().is_event_tracking();
                 if tracking {
@@ -108,7 +119,7 @@ fn prefetch_dispatch_graph_replay_matches_legacy_for_all_formats() -> Result<()>
                             .to_dtype(dtype)?,
                     )?;
                     graph.launch().map_err(candle_core::Error::msg)?;
-                    let expected = plain_impl(&weight, &input, false)?;
+                    let expected = plain_without_prefetch(&weight, &input)?;
                     let actual = output
                         .to_dtype(DType::F32)?
                         .flatten_all()?
@@ -127,7 +138,7 @@ fn prefetch_dispatch_graph_replay_matches_legacy_for_all_formats() -> Result<()>
                     .to_dtype(DType::F32)?
                     .flatten_all()?
                     .to_vec1::<f32>()?;
-                let expected = plain_impl(&weight, &batched, false)?
+                let expected = plain_without_prefetch(&weight, &batched)?
                     .to_dtype(DType::F32)?
                     .flatten_all()?
                     .to_vec1::<f32>()?;
@@ -149,7 +160,7 @@ fn prefetch_dispatch_graph_replay_matches_legacy_for_all_formats() -> Result<()>
         let value = make_projection(VALUE_ROWS)?;
         for dtype in [DType::BF16, DType::F16, DType::F32] {
             let input = Tensor::ones((1, INPUT_COLS), dtype, &device)?;
-            let expected = plain_impl(&weight, &input, false)?;
+            let expected = plain_without_prefetch(&weight, &input)?;
             let (query_out, key_out, value_out) = fused_qkv(&weight, &key, &value, &input)?;
             let (left, right) = fused_pair(&weight, &key, &input)?;
             for (actual, rows) in [

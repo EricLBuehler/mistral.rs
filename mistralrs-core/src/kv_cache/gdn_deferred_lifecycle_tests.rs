@@ -1,3 +1,5 @@
+#![allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+
 use super::*;
 
 const SMALL_KEY_DIM: usize = 4;

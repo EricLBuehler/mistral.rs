@@ -6,12 +6,9 @@ use crate::{
     QuantMethod,
 };
 
-use super::{ffi, ggml_dtype_to_uqff_code};
+use super::{ffi, ggml_dtype_to_uqff_code, q8_1};
 
 const MAX_TOKENS: usize = 1;
-const INPUT_BLOCK: usize = 32;
-const INPUT_BLOCK_BYTES: usize = 36;
-const INPUT_ALIGNMENT: usize = 512;
 
 #[derive(Clone, Copy, Debug)]
 pub enum QuantizedInputTransform {
@@ -51,7 +48,10 @@ pub fn try_fused_quantized_gated_mix(
     streams: usize,
     transform: QuantizedInputTransform,
 ) -> Result<Option<Tensor>> {
-    if !input.device().is_cuda() || !crate::fused_projections_allowed(input, &[projection]) {
+    if !input.device().is_cuda()
+        || projection.has_bias()
+        || !crate::group_allowed(input, &[projection])
+    {
         return Ok(None);
     }
     let rank = input.dim(candle_core::D::Minus1)?;
@@ -87,8 +87,9 @@ pub fn try_fused_quantized_gated_mix(
     let stream = dev.cuda_stream();
     let stream_ptr = stream.cu_stream() as *mut c_void;
     let (weight_ptr, _weight_guard) = weight.device_ptr_with_guard(&stream)?;
-    let padded_rank = rank.div_ceil(INPUT_ALIGNMENT) * INPUT_ALIGNMENT;
-    let mut scratch = unsafe { dev.alloc::<u8>(padded_rank / INPUT_BLOCK * INPUT_BLOCK_BYTES)? };
+    let padded_rank = rank.next_multiple_of(q8_1::ROW_PADDING);
+    let mut scratch =
+        unsafe { dev.alloc::<u8>(padded_rank / q8_1::BLOCK_ELEMENTS * q8_1::BLOCK_BYTES)? };
     let (scratch_ptr, _scratch_guard) = slice_ptr_mut_on_stream(&mut scratch, 0, &stream);
     let (input_storage, input_layout) = input.storage_and_layout();
     let Storage::Cuda(input_storage) = &*input_storage else {

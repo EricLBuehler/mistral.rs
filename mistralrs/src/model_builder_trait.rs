@@ -450,19 +450,12 @@ fn resolve_paged_attn(
 fn paged_attn_with_serving_capacity(
     config: Option<PagedAttentionConfig>,
     max_num_seqs: usize,
-    recurrent_prefix_capacity: usize,
-    prefix_cache_n_explicit: bool,
+    prefix_cache_n: mistralrs_core::PrefixCacheCapacity,
 ) -> anyhow::Result<Option<PagedAttentionConfig>> {
     Ok(config
         .map(|config| config.with_serving_capacity(max_num_seqs))
         .transpose()?
-        .map(|config| {
-            if prefix_cache_n_explicit {
-                config.with_recurrent_prefix_capacity(recurrent_prefix_capacity)
-            } else {
-                config.with_automatic_recurrent_prefix_capacity(recurrent_prefix_capacity)
-            }
-        }))
+        .map(|config| config.with_recurrent_prefix_capacity(prefix_cache_n)))
 }
 
 pub(crate) async fn scheduler_config_from_pipeline<P>(
@@ -507,7 +500,7 @@ pub(crate) fn build_engine_config(
     search_callback: Option<Arc<SearchCallback>>,
     tool_callbacks: &HashMap<String, ToolCallbackWithTool>,
     no_kv_cache: bool,
-    prefix_cache_n: Option<usize>,
+    prefix_cache_n: mistralrs_core::PrefixCacheCapacity,
 ) -> EngineConfig {
     EngineConfig {
         throughput_logging_enabled,
@@ -515,8 +508,8 @@ pub(crate) fn build_engine_config(
         search_callback,
         tool_callbacks: tool_callbacks.clone(),
         no_kv_cache,
-        no_prefix_cache: prefix_cache_n.is_none(),
-        prefix_cache_n: prefix_cache_n.unwrap_or(mistralrs_core::DEFAULT_PREFIX_CACHE_N),
+        no_prefix_cache: prefix_cache_n.is_disabled(),
+        prefix_cache_n: prefix_cache_n.requested(),
         disable_eos_stop: false,
     }
 }
@@ -537,7 +530,7 @@ pub(crate) async fn build_pipeline_from_text_loader(
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use mistralrs_core::*;
 
-    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
+    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.requested());
 
     let engine_config = build_engine_config(
         builder.throughput_logging,
@@ -557,8 +550,7 @@ pub(crate) async fn build_pipeline_from_text_loader(
     builder.paged_attn_cfg = paged_attn_with_serving_capacity(
         builder.paged_attn_cfg.clone(),
         builder.max_num_seqs,
-        builder.prefix_cache_n.unwrap_or(0),
-        builder.prefix_cache_n_explicit,
+        builder.prefix_cache_n,
     )?;
 
     builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
@@ -616,7 +608,7 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use mistralrs_core::*;
 
-    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
+    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.requested());
 
     let engine_config = build_engine_config(
         builder.throughput_logging,
@@ -635,8 +627,7 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
     builder.paged_attn_cfg = paged_attn_with_serving_capacity(
         builder.paged_attn_cfg.clone(),
         builder.max_num_seqs,
-        builder.prefix_cache_n.unwrap_or(0),
-        builder.prefix_cache_n_explicit,
+        builder.prefix_cache_n,
     )?;
 
     builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
@@ -743,7 +734,7 @@ pub async fn build_text_pipeline(
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use mistralrs_core::*;
 
-    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
+    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.requested());
 
     let config = NormalSpecificConfig {
         topology: builder.topology.clone(),
@@ -786,8 +777,7 @@ pub async fn build_text_pipeline(
     builder.paged_attn_cfg = paged_attn_with_serving_capacity(
         builder.paged_attn_cfg.clone(),
         builder.max_num_seqs,
-        builder.prefix_cache_n.unwrap_or(0),
-        builder.prefix_cache_n_explicit,
+        builder.prefix_cache_n,
     )?;
 
     builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
@@ -896,7 +886,7 @@ pub async fn build_multimodal_pipeline(
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use mistralrs_core::*;
 
-    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
+    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.requested());
 
     let config = MultimodalSpecificConfig {
         topology: builder.topology.clone(),
@@ -940,8 +930,7 @@ pub async fn build_multimodal_pipeline(
     builder.paged_attn_cfg = paged_attn_with_serving_capacity(
         builder.paged_attn_cfg.clone(),
         builder.max_num_seqs,
-        builder.prefix_cache_n.unwrap_or(0),
-        builder.prefix_cache_n_explicit,
+        builder.prefix_cache_n,
     )?;
 
     builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
@@ -1064,7 +1053,7 @@ pub async fn build_gguf_pipeline(
     {
         anyhow::bail!("Built-in MTP is not supported for GGUF models. Use a safetensors checkpoint with ISQ, or omit the built-in MTP configuration.");
     }
-    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
+    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.requested());
 
     let config = GGUFSpecificConfig {
         topology: builder.topology.clone(),
@@ -1111,8 +1100,7 @@ pub async fn build_gguf_pipeline(
     builder.paged_attn_cfg = paged_attn_with_serving_capacity(
         builder.paged_attn_cfg.clone(),
         builder.max_num_seqs,
-        builder.prefix_cache_n.unwrap_or(0),
-        builder.prefix_cache_n_explicit,
+        builder.prefix_cache_n,
     )?;
 
     builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
@@ -1490,7 +1478,7 @@ pub async fn build_auto_pipeline(
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use mistralrs_core::*;
 
-    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
+    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.requested());
 
     let normal_config = NormalSpecificConfig {
         topology: builder.topology.clone(),
@@ -1566,8 +1554,7 @@ pub async fn build_auto_pipeline(
     builder.paged_attn_cfg = paged_attn_with_serving_capacity(
         builder.paged_attn_cfg.clone(),
         builder.max_num_seqs,
-        builder.prefix_cache_n.unwrap_or(0),
-        builder.prefix_cache_n_explicit,
+        builder.prefix_cache_n,
     )?;
 
     builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
@@ -1683,41 +1670,55 @@ mod paged_attention_policy_tests {
     const TEST_PREFILL_TOKENS: usize = 256;
 
     #[test]
-    fn builder_prefix_defaults_are_distinct_from_explicit_limits() {
-        let default = mistralrs_core::DEFAULT_PREFIX_CACHE_N;
-        let text = crate::TextModelBuilder::new("test");
-        let automatic = crate::ModelBuilder::new("test");
-        let gguf = crate::GgufModelBuilder::new("test", vec!["model.gguf"]);
-        let multimodal = crate::MultimodalModelBuilder::new("test");
-        for (count, explicit) in [
-            (text.prefix_cache_n, text.prefix_cache_n_explicit),
-            (automatic.prefix_cache_n, automatic.prefix_cache_n_explicit),
-            (gguf.prefix_cache_n, gguf.prefix_cache_n_explicit),
-        ] {
-            assert_eq!(count, Some(default));
-            assert!(!explicit);
-        }
-        assert_eq!(multimodal.prefix_cache_n, None);
-        assert!(!multimodal.prefix_cache_n_explicit);
-        for count in [None, Some(0), Some(default)] {
-            let text = crate::TextModelBuilder::new("test").with_prefix_cache_n(count);
-            let automatic = crate::ModelBuilder::new("test").with_prefix_cache_n(count);
-            let gguf =
-                crate::GgufModelBuilder::new("test", vec!["model.gguf"]).with_prefix_cache_n(count);
-            let multimodal = crate::MultimodalModelBuilder::new("test").with_prefix_cache_n(count);
-            for (actual, explicit) in [
-                (text.prefix_cache_n, text.prefix_cache_n_explicit),
-                (automatic.prefix_cache_n, automatic.prefix_cache_n_explicit),
-                (gguf.prefix_cache_n, gguf.prefix_cache_n_explicit),
-                (
+    fn builder_prefix_capacity_defaults_to_auto_and_honors_explicit_values() {
+        use mistralrs_core::PrefixCacheCapacity;
+        let builders = |capacity: Option<PrefixCacheCapacity>| {
+            let text = crate::TextModelBuilder::new("test");
+            let automatic = crate::ModelBuilder::new("test");
+            let gguf = crate::GgufModelBuilder::new("test", vec!["model.gguf"]);
+            let multimodal = crate::MultimodalModelBuilder::new("test");
+            match capacity {
+                None => [
+                    text.prefix_cache_n,
+                    automatic.prefix_cache_n,
+                    gguf.prefix_cache_n,
                     multimodal.prefix_cache_n,
-                    multimodal.prefix_cache_n_explicit,
-                ),
-            ] {
-                assert_eq!(actual, count);
-                assert!(explicit);
+                ],
+                Some(capacity) => [
+                    text.with_prefix_cache_n(capacity).prefix_cache_n,
+                    automatic.with_prefix_cache_n(capacity).prefix_cache_n,
+                    gguf.with_prefix_cache_n(capacity).prefix_cache_n,
+                    multimodal.with_prefix_cache_n(capacity).prefix_cache_n,
+                ],
             }
+        };
+        assert_eq!(builders(None), [PrefixCacheCapacity::Auto; 4]);
+        for capacity in [
+            PrefixCacheCapacity::Auto,
+            PrefixCacheCapacity::DISABLED,
+            PrefixCacheCapacity::Fixed(mistralrs_core::DEFAULT_PREFIX_CACHE_N),
+        ] {
+            assert_eq!(builders(Some(capacity)), [capacity; 4]);
         }
+        let disabled = super::build_engine_config(
+            false,
+            None,
+            None,
+            &HashMap::new(),
+            false,
+            PrefixCacheCapacity::DISABLED,
+        );
+        assert!(disabled.no_prefix_cache);
+        let auto = super::build_engine_config(
+            false,
+            None,
+            None,
+            &HashMap::new(),
+            false,
+            PrefixCacheCapacity::Auto,
+        );
+        assert!(!auto.no_prefix_cache);
+        assert_eq!(auto.prefix_cache_n, mistralrs_core::DEFAULT_PREFIX_CACHE_N);
     }
 
     fn explicit_config() -> anyhow::Result<PagedAttentionConfig> {

@@ -163,7 +163,7 @@ pub use mistralrs_mcp::{
 };
 pub use mistralrs_quant::{IsqBits, IsqType};
 pub use mistralrs_sandbox::{NetworkMode, SandboxPolicy};
-pub use paged_attention::{PagedAttentionConfig, PagedCacheType};
+pub use paged_attention::{PagedAttentionConfig, PagedCacheType, PrefixCacheCapacity};
 pub use pipeline::hf::{
     get_model_file, hf_home_dir, hf_hub_cache_dir, hf_token_path, is_hf_hub_offline,
     list_model_files, probe_hf_repo_files, read_model_file_range, try_get_model_file,

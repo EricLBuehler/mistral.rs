@@ -2,6 +2,7 @@ use std::{fmt::Debug, fs::File, sync::Barrier};
 
 use candle_core::Result;
 pub mod layers;
+pub mod packing;
 pub mod socket;
 
 use serde::{Deserialize, Serialize};

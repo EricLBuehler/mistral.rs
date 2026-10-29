@@ -699,8 +699,8 @@ impl<K: Hash + Eq + Copy, C: Copy> Default for TunedTable<K, C> {
 }
 
 fn arch(dev: &CudaDevice) -> String {
-    let (major, minor) = super::device_compute_capability(dev);
-    format!("sm_{major}{minor}")
+    let info = crate::cuda_device::cuda_device_info(dev);
+    format!("sm_{}{}", info.major, info.minor)
 }
 
 /// GPU name and SM count as a file-name-safe slug; records are per device model, not just per arch.
@@ -708,7 +708,7 @@ fn device_slug(dev: &CudaDevice) -> String {
     use candle_core::cuda::cudarc::driver::result;
     let cu_device = dev.cuda_stream().context().cu_device();
     let name = result::device::get_name(cu_device).unwrap_or_else(|_| "unknown-gpu".to_string());
-    let sms = super::device_multiprocessor_count(dev);
+    let sms = crate::cuda_device::cuda_device_info(dev).sms;
     let mut slug: String = name
         .to_ascii_lowercase()
         .chars()

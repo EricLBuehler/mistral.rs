@@ -387,16 +387,44 @@ fn bind_split_qkv(
             );
         }
         let p = format!("model.layers.{layer}.self_attn");
-        for (name, start, len) in [
-            ("q_proj", 0, q_rows),
-            ("k_proj", q_rows, k_rows),
-            ("v_proj", q_rows + k_rows, v_rows),
-        ] {
-            bindings.insert(
-                format!("{p}.{name}.{suffix}"),
-                GgufTensorBinding::tensor(&source).slice(0, start, len),
-            );
-        }
+        bind_slices(
+            bindings,
+            &source,
+            0,
+            output,
+            [
+                (format!("{p}.q_proj.{suffix}"), q_rows),
+                (format!("{p}.k_proj.{suffix}"), k_rows),
+                (format!("{p}.v_proj.{suffix}"), v_rows),
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+/// Bind consecutive `dim` ranges of a fused `source` tensor that must exactly cover its `size`.
+pub(super) fn bind_slices(
+    bindings: &mut GgufBindingMap,
+    source: &str,
+    dim: usize,
+    size: usize,
+    parts: impl IntoIterator<Item = (String, usize)>,
+) -> Result<()> {
+    let parts = parts.into_iter().collect::<Vec<_>>();
+    let expected = parts
+        .iter()
+        .try_fold(0usize, |total, (_, len)| total.checked_add(*len))
+        .with_context(|| format!("fused tensor `{source}` split size overflow"))?;
+    if size != expected {
+        bail!("fused tensor `{source}` has size {size} along dim {dim}, expected {expected}");
+    }
+    let mut start = 0;
+    for (target, len) in parts {
+        bindings.insert(
+            target,
+            GgufTensorBinding::tensor(source).slice(dim, start, len),
+        );
+        start += len;
     }
     Ok(())
 }
@@ -468,13 +496,18 @@ fn bind_fused_expert_gate_up(
         bail!("fused expert gate/up tensor `{source}` has invalid shape {shape:?}");
     }
     let intermediate = shape[1] / 2;
-    for (projection, start) in [("gate", 0), ("up", intermediate)] {
-        bindings.insert(
-            expert_target(loader, prefix, projection, suffix),
-            GgufTensorBinding::tensor(source).slice(1, start, intermediate),
-        );
-    }
-    Ok(())
+    bind_slices(
+        bindings,
+        source,
+        1,
+        shape[1],
+        ["gate", "up"].map(|projection| {
+            (
+                expert_target(loader, prefix, projection, suffix),
+                intermediate,
+            )
+        }),
+    )
 }
 
 fn bind_deepseek_kv_b(

@@ -10,8 +10,8 @@ use std::{
 use candle_core::{DType, Device, Result, Tensor};
 
 use crate::{
-    ActivationQuantizationScheme, ActivationScaleLayout, DistributedKind, IsqJobOutput, IsqType,
-    QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedActivation, QuantizedSerde,
+    DistributedKind, IsqJobOutput, IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard,
+    QuantizedSerde,
 };
 
 enum PendingState {
@@ -77,6 +77,12 @@ impl PendingIsqLayer {
     }
 }
 
+impl PendingIsqLayer {
+    fn resolved(&self) -> Option<Arc<dyn QuantMethod>> {
+        self.resolve().ok()
+    }
+}
+
 impl Debug for PendingIsqLayer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let state_str = match &*self.inner.lock().unwrap() {
@@ -110,10 +116,7 @@ impl QuantizedSerde for PendingIsqLayer {
 }
 
 impl QuantMethod for PendingIsqLayer {
-    #[cfg(feature = "metal")]
-    fn prepare_metal_kernels(&self, activation_dtype: DType) -> Result<()> {
-        self.resolve()?.prepare_metal_kernels(activation_dtype)
-    }
+    crate::forward_quant_hooks!(meta, activation, output, weights, group: Self::resolved);
 
     fn new(_method: QuantMethodConfig) -> Result<Self>
     where
@@ -150,80 +153,6 @@ impl QuantMethod for PendingIsqLayer {
         self.resolve()?.embedding_forward_raw(ids)
     }
 
-    #[cfg(feature = "cuda")]
-    fn get_qtensor(&self) -> Option<Arc<candle_core::quantized::QTensor>> {
-        self.resolve().ok()?.get_qtensor()
-    }
-
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
-    fn prepare_gguf_affine_raw(
-        &self,
-        flat_batch: usize,
-        dtype: DType,
-        device: &Device,
-    ) -> Result<bool> {
-        self.resolve()?
-            .prepare_gguf_affine_raw(flat_batch, dtype, device)
-    }
-
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
-    fn try_gguf_affine_forward_raw(&self, a: &Tensor) -> Result<Option<Tensor>> {
-        self.resolve()?.try_gguf_affine_forward_raw(a)
-    }
-
-    fn afq_inner(&self) -> Option<crate::AfqInner> {
-        self.resolve().ok()?.afq_inner()
-    }
-
-    fn activation_quantization_scheme(&self) -> Option<ActivationQuantizationScheme> {
-        self.resolve().ok()?.activation_quantization_scheme()
-    }
-
-    fn activation_quantization_scheme_for(
-        &self,
-        a: &Tensor,
-    ) -> Option<ActivationQuantizationScheme> {
-        self.resolve().ok()?.activation_quantization_scheme_for(a)
-    }
-
-    fn preferred_activation_scale_layout_for(&self, a: &Tensor) -> Option<ActivationScaleLayout> {
-        self.resolve()
-            .ok()?
-            .preferred_activation_scale_layout_for(a)
-    }
-
-    fn activation_quantization_global_scale(&self) -> Option<f32> {
-        self.resolve().ok()?.activation_quantization_global_scale()
-    }
-
-    fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {
-        self.resolve()?.quantize_activation(a)
-    }
-
-    fn try_quantize_glu(
-        &self,
-        gate: &Tensor,
-        value: &Tensor,
-        activation: crate::GluActivationType,
-    ) -> Result<Option<QuantizedActivation>> {
-        self.resolve()?.try_quantize_glu(gate, value, activation)
-    }
-
-    fn forward_quantized(&self, a: &QuantizedActivation) -> Result<Tensor> {
-        self.resolve()?.forward_quantized(a)
-    }
-
-    #[cfg(feature = "cuda")]
-    fn try_forward_fused_split_glu(
-        &self,
-        input: &Tensor,
-        split_size: usize,
-        activation: crate::GluActivationType,
-    ) -> Result<Option<Tensor>> {
-        self.resolve()?
-            .try_forward_fused_split_glu(input, split_size, activation)
-    }
-
     fn quantized_act_type(&self) -> Option<DType> {
         self.resolve().ok()?.quantized_act_type()
     }
@@ -255,10 +184,6 @@ impl QuantMethod for PendingIsqLayer {
             .apply_isq(dtype, device, n_quantized, imatrix_weight, guard)
     }
 
-    fn unquant_forward_weight(&self) -> Option<Tensor> {
-        self.resolve().ok()?.unquant_forward_weight()
-    }
-
     fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
         self.resolve().ok()?.unquant_weight_bias()
     }
@@ -273,22 +198,6 @@ impl QuantMethod for PendingIsqLayer {
             Ok(layer) => layer.has_bias(),
             Err(_) => false,
         }
-    }
-
-    fn begin_track_stats(&self) -> Result<()> {
-        self.resolve()?.begin_track_stats()
-    }
-
-    fn end_track_stats(&self) -> Result<Tensor> {
-        self.resolve()?.end_track_stats()
-    }
-
-    fn stats_snapshot(&self) -> Option<(usize, usize)> {
-        self.resolve().ok()?.stats_snapshot()
-    }
-
-    fn process_routed_stats(&self, x: &Tensor, ids: &Tensor) -> Result<()> {
-        self.resolve()?.process_routed_stats(x, ids)
     }
 
     fn is_distributed(&self) -> Option<DistributedKind> {

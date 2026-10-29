@@ -347,7 +347,7 @@ use float8::F8E4M3;
 use half::{bf16, f16};
 
 use super::nvfp4::nvfp4_supported;
-use super::{catch_cutile_panic, context, device_compute_capability, device_multiprocessor_count};
+use super::{catch_cutile_panic, context, device_multiprocessor_count};
 use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
 use crate::GluActivationType;
 
@@ -355,8 +355,6 @@ const BLOCK_SIZE: usize = 16;
 const QUANT_ROWS: usize = 4;
 const QUANT_K: usize = 256;
 const BLOCKS_PER_SM: usize = 2;
-const TUNED_COMPUTE_CAPABILITY: (i32, i32) = (12, 1);
-const TUNED_OCCUPANCY: i32 = 2;
 const MAX_DIMENSION: usize = i32::MAX as usize;
 const WARMUP_ROWS: [usize; 5] = [1, 2, 4, 8, 16];
 const WARMUP_ACTIVATIONS: [GluActivationType; 3] = [
@@ -485,11 +483,8 @@ pub(crate) fn launch(
     let stream = dev.cuda_stream();
     let ordinal = stream.context().ordinal();
     let cutile_stream = context::stream(dev);
-    let compile_options = if device_compute_capability(dev) == TUNED_COMPUTE_CAPABILITY {
-        CompileOptions::default().occupancy(TUNED_OCCUPANCY)
-    } else {
-        CompileOptions::default()
-    };
+    // The persistent grid is sized for BLOCKS_PER_SM resident CTAs, so ask the compiler to fit that many.
+    let compile_options = CompileOptions::default().occupancy(BLOCKS_PER_SM as i32);
     let (global_address, _global_guard) = slice_ptr_on_stream(
         global_cuda.as_cuda_slice::<f32>()?,
         global_layout.start_offset(),
@@ -1024,7 +1019,13 @@ mod tests {
             let intermediate = crate::fused_glu(&gate, &value, activation)?;
             let expected = layer.forward(&intermediate)?;
             let actual = layer
-                .try_forward_fused_split_glu(&input, COLUMNS, activation)?
+                .forward_glu(
+                    crate::GluInput::Packed {
+                        input: &input,
+                        split_size: COLUMNS,
+                    },
+                    activation,
+                )?
                 .expect("registered A4 layer should use the packed hook");
             assert_eq!(actual.dims(), &[2, 3, OUTPUT]);
             assert_eq!(actual.dtype(), dtype);
@@ -1043,15 +1044,10 @@ mod tests {
             let separate_gate = gate.contiguous()?;
             let separate_value = value.contiguous()?;
             let compiled = cutile::tile_kernel::jit_compile_count();
-            let quantized = layer
-                .try_quantize_glu(&separate_gate, &separate_value, activation)?
-                .expect("registered layer should quantize separate GLU sources");
-            assert_eq!(quantized.global_scale(), Some(GLOBAL));
-            assert_eq!(quantized.source_shape(), gate.dims());
-            let separate_output = crate::try_forward_fused_quantized_glu(
-                &separate_gate,
-                &separate_value,
+            let split = |gate, value| crate::GluInput::Split { gate, value };
+            let separate_output = crate::forward_fused_glu(
                 &layer,
+                split(&separate_gate, &separate_value),
                 activation,
             )?
             .expect("separate GLU helper should preserve NVFP4 capability");
@@ -1069,27 +1065,54 @@ mod tests {
                     .to_vec1::<f32>()?,
             );
             assert!(layer
-                .try_quantize_glu(&separate_gate, &separate_value, GluActivationType::Gelu)?
+                .forward_glu(
+                    split(&separate_gate, &separate_value),
+                    GluActivationType::Gelu
+                )?
                 .is_none());
+            let narrowed = separate_value.narrow(2, 0, COLUMNS - 1)?;
+            assert!(crate::forward_fused_glu(
+                &layer,
+                split(&separate_gate, &narrowed),
+                activation
+            )?
+            .is_none());
+            let one_row = input.reshape((ROWS, COLUMNS * 2))?.narrow(0, 0, 1)?;
             assert!(layer
-                .try_quantize_glu(
-                    &separate_gate,
-                    &separate_value.narrow(2, 0, COLUMNS - 1)?,
+                .forward_glu(
+                    crate::GluInput::Packed {
+                        input: &one_row,
+                        split_size: COLUMNS
+                    },
                     activation
                 )?
                 .is_none());
-            let one_row = input.reshape((ROWS, COLUMNS * 2))?.narrow(0, 0, 1)?;
             assert!(layer
-                .try_forward_fused_split_glu(&one_row, COLUMNS, activation)?
+                .forward_glu(
+                    crate::GluInput::Packed {
+                        input: &input,
+                        split_size: COLUMNS - 1
+                    },
+                    activation
+                )?
                 .is_none());
             assert!(layer
-                .try_forward_fused_split_glu(&input, COLUMNS - 1, activation)?
+                .forward_glu(
+                    crate::GluInput::Packed {
+                        input: &input,
+                        split_size: COLUMNS
+                    },
+                    GluActivationType::Gelu
+                )?
                 .is_none());
             assert!(layer
-                .try_forward_fused_split_glu(&input, COLUMNS, GluActivationType::Gelu)?
-                .is_none());
-            assert!(layer
-                .try_forward_fused_split_glu(&input.to_dtype(DType::F32)?, COLUMNS, activation)?
+                .forward_glu(
+                    crate::GluInput::Packed {
+                        input: &input.to_dtype(DType::F32)?,
+                        split_size: COLUMNS
+                    },
+                    activation
+                )?
                 .is_none());
             let separate = crate::cutile::cutile_nvfp4_quantize(
                 &intermediate.reshape((ROWS, COLUMNS))?,
@@ -1108,10 +1131,16 @@ mod tests {
                 dtype,
             })?;
             assert!(a16
-                .try_forward_fused_split_glu(&input, COLUMNS, activation)?
+                .forward_glu(
+                    crate::GluInput::Packed {
+                        input: &input,
+                        split_size: COLUMNS
+                    },
+                    activation
+                )?
                 .is_none());
             assert!(a16
-                .try_quantize_glu(&separate_gate, &separate_value, activation)?
+                .forward_glu(split(&separate_gate, &separate_value), activation)?
                 .is_none());
         }
         Ok(())
@@ -1211,7 +1240,11 @@ mod tests {
             value.slice_set(&value_source, 0, 0)?;
             let compiled = cutile::tile_kernel::jit_compile_count();
             let _htod_cache_guard = cuda.enable_cuda_graph_htod_cache();
-            crate::try_forward_fused_quantized_glu(&gate, &value, &layer, activation)?
+            let glu = crate::GluInput::Split {
+                gate: &gate,
+                value: &value,
+            };
+            crate::forward_fused_glu(&layer, glu, activation)?
                 .expect("warmup must cover the separate-source projection hook");
             assert_eq!(cutile::tile_kernel::jit_compile_count(), compiled);
             device.synchronize()?;
@@ -1227,8 +1260,7 @@ mod tests {
                 }
                 return Err(candle_core::Error::msg(error.to_string()));
             }
-            let captured =
-                crate::try_forward_fused_quantized_glu(&gate, &value, &layer, activation);
+            let captured = crate::forward_fused_glu(&layer, glu, activation);
             let graph = stream.end_capture(
                 sys::CUgraphInstantiate_flags::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH,
             );

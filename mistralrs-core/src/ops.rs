@@ -6925,7 +6925,11 @@ pub(crate) fn try_fused_gated_projection(
     let Some(activation) = glu_activation_type(act) else {
         return Ok(None);
     };
-    mistralrs_quant::try_forward_fused_quantized_glu(gate, value, projection, activation)
+    mistralrs_quant::forward_fused_glu(
+        projection,
+        mistralrs_quant::GluInput::Split { gate, value },
+        activation,
+    )
 }
 
 pub fn mul_and_candle_act(a: &Tensor, b: &Tensor, act: candle_nn::Activation) -> Result<Tensor> {
@@ -6949,19 +6953,17 @@ pub(crate) fn try_fused_split_glu_quantized_forward(
     act: Activation,
     projection: &dyn mistralrs_quant::QuantMethod,
 ) -> Result<Option<Tensor>> {
-    #[cfg(feature = "cuda")]
-    {
-        let Some(activation) = glu_activation_type(act) else {
-            return Ok(None);
-        };
-        projection.try_forward_fused_split_glu(xs, split_size, activation)
-    }
-
-    #[cfg(not(feature = "cuda"))]
-    {
-        let _ = (xs, split_size, act, projection);
-        Ok(None)
-    }
+    let Some(activation) = glu_activation_type(act) else {
+        return Ok(None);
+    };
+    mistralrs_quant::forward_fused_glu(
+        projection,
+        mistralrs_quant::GluInput::Packed {
+            input: xs,
+            split_size,
+        },
+        activation,
+    )
 }
 
 pub fn split_mul_and_act_order(
@@ -7107,7 +7109,9 @@ pub(crate) fn quantized_ffn(
     }
 
     if xs.device().is_cpu() {
-        if let Some(mut out) = mistralrs_quant::try_fused_gemv_shared_lhs_cpu(xs, &[gate, up])? {
+        if let Some(mut out) =
+            mistralrs_quant::forward_group(xs, &[gate, up], mistralrs_quant::GroupKind::Dense)?
+        {
             let rhs = out.pop().unwrap();
             let lhs = out.pop().unwrap();
             let inter = mul_and_act(&lhs, &rhs, act)?;
@@ -7132,17 +7136,6 @@ pub(crate) fn qkv_projections(
 ) -> Result<(Tensor, Tensor, Tensor)> {
     if let Some(qkv) = mistralrs_quant::try_fused_qkv(xs, q_proj, k_proj, v_proj)? {
         return Ok(qkv);
-    }
-
-    if xs.device().is_cpu() {
-        if let Some(mut out) =
-            mistralrs_quant::try_fused_gemv_shared_lhs_cpu(xs, &[q_proj, k_proj, v_proj])?
-        {
-            let v = out.pop().unwrap();
-            let k = out.pop().unwrap();
-            let q = out.pop().unwrap();
-            return Ok((q, k, v));
-        }
     }
 
     Ok((

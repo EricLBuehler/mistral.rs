@@ -142,17 +142,11 @@ impl Mxfp8Linear {
     }
 
     pub(crate) fn permute_output_rows(self, rows: &[usize]) -> Result<Self> {
-        let indices = rows
-            .iter()
-            .map(|&row| u32::try_from(row).map_err(candle_core::Error::wrap))
-            .collect::<Result<Vec<_>>>()?;
-        let indices = Tensor::from_vec(indices, rows.len(), self.weight.device())?;
+        let gather = |tensor: &Tensor| crate::distributed::layers::select_rows(tensor, rows);
         Self::from_parts(
-            self.weight.index_select(&indices, 0)?,
-            self.scales.index_select(&indices, 0)?,
-            self.bias
-                .map(|bias| bias.index_select(&indices, 0))
-                .transpose()?,
+            gather(&self.weight)?,
+            gather(&self.scales)?,
+            self.bias.as_ref().map(gather).transpose()?,
             self.dtype,
         )
     }

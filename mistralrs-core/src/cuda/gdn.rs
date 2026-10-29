@@ -49,8 +49,11 @@ pub(crate) const GDN_SPEC_CHECKPOINT_MAX_CONV_WIDTH: usize = 16;
 pub(crate) const GDN_SPEC_CHECKPOINT_MAX_K: usize = 256;
 pub(crate) const GDN_SPEC_FUSED_MAX_TOKENS: usize = 8;
 pub(crate) const GDN_CHANNEL_BLOCK_SIZE: usize = 256;
+#[cfg(any(feature = "cuda", test))]
 pub(crate) const GDN_DEFERRED_DECODE_MIN_BATCH: usize = 8;
+#[cfg(any(feature = "cuda", test))]
 const GDN_DEFERRED_DECODE_OCCUPANCY_MIN_BATCH: usize = 2;
+#[cfg(any(feature = "cuda", test))]
 const GDN_DEFERRED_DECODE_MIN_SM_WAVES: usize = 2;
 pub(crate) const GDN_DEFERRED_STATE_DEPTH: usize = 4;
 #[cfg(feature = "cuda")]
@@ -291,6 +294,7 @@ pub(crate) fn recurrent_state_dtype_supported(dtype: DType) -> bool {
     matches!(dtype, DType::F16 | DType::BF16 | DType::F32)
 }
 
+#[cfg(any(feature = "cuda", test))]
 pub(crate) fn deferred_decode_batch_supported(
     batch_size: usize,
     value_heads: usize,

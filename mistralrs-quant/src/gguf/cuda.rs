@@ -6,7 +6,8 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-use super::ffi;
+use super::{ffi, q8_1};
+use crate::cuda_device::cuda_device_info;
 use crate::utils::{slice_ptr, slice_ptr_mut_on_stream, slice_ptr_on_stream};
 use candle_core::cuda::cudarc::driver::DeviceRepr;
 use candle_core::cuda_backend::CudaDType;
@@ -19,7 +20,6 @@ use half::{bf16, f16};
 
 // Constants matching candle's quantized CUDA implementation
 pub const CUDA_QUANTIZE_BLOCK_SIZE: usize = 256;
-pub const MATRIX_ROW_PADDING: usize = 512;
 const CUDA_GRID_YZ_LIMIT: usize = 65_535;
 const MOE_REDUCE_THREADS: usize = 256;
 const MOE_OUTPUT_F32: i32 = 0;
@@ -27,26 +27,6 @@ const MOE_OUTPUT_F16: i32 = 1;
 const MOE_OUTPUT_BF16: i32 = 2;
 const MOE_PREFETCH_MAX_TOKENS: usize = 2;
 const MOE_STAGING_TOKENS: usize = 1;
-
-static MOE_L2_BYTES: OnceLock<Mutex<HashMap<candle_core::cuda::DeviceId, usize>>> = OnceLock::new();
-
-fn moe_l2_bytes(device: &CudaDevice) -> Result<usize> {
-    use candle_core::cuda::cudarc::driver::sys::CUdevice_attribute;
-    let mut sizes = MOE_L2_BYTES
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .unwrap();
-    if let Some(&bytes) = sizes.get(&device.id()) {
-        return Ok(bytes);
-    }
-    let bytes = device
-        .cuda_stream()
-        .context()
-        .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE)
-        .map_err(candle_core::Error::wrap)? as usize;
-    sizes.insert(device.id(), bytes);
-    Ok(bytes)
-}
 
 fn moe_staging_bank_eligible(prefetch: bool, tokens: usize, bytes: usize, l2: usize) -> bool {
     prefetch && tokens == MOE_STAGING_TOKENS && bytes > l2
@@ -247,7 +227,7 @@ fn quantize_q8_1(
     ky: usize,
     dev: &CudaDevice,
 ) -> Result<()> {
-    let kx_padded = pad(k, MATRIX_ROW_PADDING);
+    let kx_padded = pad(k, q8_1::ROW_PADDING);
     let num_blocks = ceil_div(kx_padded, CUDA_QUANTIZE_BLOCK_SIZE);
 
     let total_rows = ky;
@@ -972,7 +952,7 @@ pub fn quantize_input_q8_1(xs: &Tensor, dev: &CudaDevice) -> Result<(CudaSlice<u
     let xs_contig = xs.contiguous()?;
     let num_rows = xs_contig.dim(0)?;
     let k = xs_contig.dim(1)?;
-    let k_padded = pad(k, MATRIX_ROW_PADDING);
+    let k_padded = pad(k, q8_1::ROW_PADDING);
     let y_size_in_bytes = q8_1_bytes(num_rows, k_padded);
 
     // SAFETY: quantize kernel writes all elements up to k_padded per row
@@ -989,7 +969,7 @@ fn quantize_input_q8_1_into(
 ) -> Result<(usize, usize)> {
     let num_rows = xs_contig.dim(0)?;
     let k = xs_contig.dim(1)?;
-    let k_padded = pad(k, MATRIX_ROW_PADDING);
+    let k_padded = pad(k, q8_1::ROW_PADDING);
     let y_size_in_bytes = q8_1_bytes(num_rows, k_padded);
     if input_quant.len() < y_size_in_bytes {
         candle_core::bail!(
@@ -1231,8 +1211,8 @@ impl<'a> IndexedMoeLoraDecode<'a> {
         ] {
             i32::try_from(dim)?;
         }
-        i32::try_from(pad(hidden, MATRIX_ROW_PADDING))?;
-        i32::try_from(pad(intermediate, MATRIX_ROW_PADDING))?;
+        i32::try_from(pad(hidden, q8_1::ROW_PADDING))?;
+        i32::try_from(pad(intermediate, q8_1::ROW_PADDING))?;
         intermediate
             .checked_mul(2)
             .ok_or_else(|| candle_core::Error::msg("indexed MoE LoRA output size overflow"))?;
@@ -1262,7 +1242,7 @@ impl<'a> IndexedMoeLoraDecode<'a> {
 
     fn gate_up_t<T: MoeLoraOutput>(&self, input: &Tensor, output_type: i32) -> Result<Tensor> {
         let input = self.validate_input(input, self.routing.batch, self.hidden)?;
-        let k_padded = pad(self.hidden, MATRIX_ROW_PADDING);
+        let k_padded = pad(self.hidden, q8_1::ROW_PADDING);
         let q8_bytes = q8_1_bytes_checked(self.routing.batch, k_padded)?;
         let mut q8 = u8_workspace_ensure(&MOE_DECODE_Q8_WORKSPACE, self.routing.dev, q8_bytes)?;
         quantize_input_q8_1_into(&input, &mut q8.slice, self.routing.dev)?;
@@ -1328,7 +1308,7 @@ impl<'a> IndexedMoeLoraDecode<'a> {
     fn down_t<T: MoeLoraOutput>(&self, input: &Tensor, output_type: i32) -> Result<Tensor> {
         let routes = self.routing.batch * self.routing.topk;
         let input = self.validate_input(input, routes, self.intermediate)?;
-        let k_padded = pad(self.intermediate, MATRIX_ROW_PADDING);
+        let k_padded = pad(self.intermediate, q8_1::ROW_PADDING);
         let q8_bytes = q8_1_bytes_checked(routes, k_padded)?;
         let mut q8 = u8_workspace_ensure(&MOE_DECODE_Q8_WORKSPACE, self.routing.dev, q8_bytes)?;
         quantize_input_q8_1_into(&input, &mut q8.slice, self.routing.dev)?;
@@ -1513,10 +1493,11 @@ pub unsafe fn indexed_moe_fused_decode(
     let xs_contig = xs_flat.contiguous()?;
     let input_rows = xs_contig.dim(0)?;
     let k = xs_contig.dim(1)?;
-    let prefetch =
-        batch <= MOE_PREFETCH_MAX_TOKENS && input_rows == batch && super::fast_mmvq::is_sm121(dev)?;
+    let prefetch = batch <= MOE_PREFETCH_MAX_TOKENS
+        && input_rows == batch
+        && super::fast_mmvq::prefers_weight_prefetch(dev);
     let l2 = if prefetch && batch == MOE_STAGING_TOKENS {
-        moe_l2_bytes(dev)?
+        cuda_device_info(dev).l2_bytes
     } else {
         0
     };
@@ -1529,10 +1510,10 @@ pub unsafe fn indexed_moe_fused_decode(
     );
     let stage_down =
         moe_staging_bank_eligible(prefetch, batch, quantized_weight_bytes(down_qt), l2);
-    let k_padded = pad(k, MATRIX_ROW_PADDING);
+    let k_padded = pad(k, q8_1::ROW_PADDING);
     let input_q8_bytes = q8_1_bytes(input_rows, k_padded);
     let intermediate_rows = batch * topk;
-    let k_down_padded = pad(intermediate_size, MATRIX_ROW_PADDING);
+    let k_down_padded = pad(intermediate_size, q8_1::ROW_PADDING);
     let intermediate_q8_bytes = q8_1_bytes(intermediate_rows, k_down_padded);
 
     let mut q8_workspace = u8_workspace_ensure(
@@ -1749,5 +1730,5 @@ pub unsafe fn indexed_moe_fused_decode(
 }
 
 #[cfg(test)]
-#[path = "moe_sm121_tests.rs"]
-mod moe_sm121_tests;
+#[path = "moe_prefetch_tests.rs"]
+mod moe_prefetch_tests;

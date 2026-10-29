@@ -29,14 +29,14 @@ pub struct PerTensorFP8Linear {
     dequantized_weight: Mutex<Option<Tensor>>,
 }
 
-struct PerTensorFp8Parts {
-    weight: Tensor,
-    weight_scale_inv: Tensor,
-    weight_scale_layout: Fp8WeightScaleLayout,
-    activation_mode: Fp8ActivationMode,
-    activation_scale: Option<Tensor>,
-    bias: Option<Tensor>,
-    dequant_dtype: DType,
+pub(crate) struct PerTensorFp8Parts {
+    pub(crate) weight: Tensor,
+    pub(crate) weight_scale_inv: Tensor,
+    pub(crate) weight_scale_layout: Fp8WeightScaleLayout,
+    pub(crate) activation_mode: Fp8ActivationMode,
+    pub(crate) activation_scale: Option<Tensor>,
+    pub(crate) bias: Option<Tensor>,
+    pub(crate) dequant_dtype: DType,
 }
 
 impl PerTensorFP8Linear {
@@ -71,6 +71,64 @@ impl PerTensorFP8Linear {
             layer.dequantized_weight = Mutex::new(Some(weight));
         }
         Ok(layer)
+    }
+
+    /// Packs bias-free row-concatenated parts; constituents are row views of the packed storage.
+    pub(crate) fn merge_packed(
+        parts: PerTensorFp8Parts,
+        rows_per_rank: Vec<usize>,
+    ) -> Result<crate::PackedLinear> {
+        let weight = parts.weight.clone();
+        let scale = parts.weight_scale_inv.clone();
+        let layout = parts.weight_scale_layout;
+        let activation_mode = parts.activation_mode;
+        let activation_scale = parts.activation_scale.clone();
+        let dequant_dtype = parts.dequant_dtype;
+        let packed = Self::from_parts(parts)?;
+        let k = packed.weight_shape[1];
+        let dequantized = packed.dequantized_weight.lock().unwrap().clone();
+        let mut constituents = Vec::with_capacity(rows_per_rank.len());
+        let mut offset = 0;
+        for &rows in &rows_per_rank {
+            let scale = match layout {
+                Fp8WeightScaleLayout::Tensor => scale.clone(),
+                Fp8WeightScaleLayout::Channel => scale.narrow(0, offset, rows)?,
+                Fp8WeightScaleLayout::Block([block_n, _]) => {
+                    scale.narrow(0, offset / block_n, rows.div_ceil(block_n))?
+                }
+            };
+            let layer = match &dequantized {
+                // Share the packed dequantized cache so constituents add no resident copy.
+                Some(dequantized) => Self {
+                    weight: None,
+                    weight_shape: [rows, k],
+                    device: packed.device.clone(),
+                    weight_scale_inv: scale,
+                    weight_scale_layout: layout,
+                    activation_mode,
+                    activation_scale: activation_scale.clone(),
+                    bias: None,
+                    dequant_dtype,
+                    dequantized_weight: Mutex::new(Some(dequantized.narrow(0, offset, rows)?)),
+                },
+                None => Self::from_parts(PerTensorFp8Parts {
+                    weight: weight.narrow(0, offset, rows)?,
+                    weight_scale_inv: scale,
+                    weight_scale_layout: layout,
+                    activation_mode,
+                    activation_scale: activation_scale.clone(),
+                    bias: None,
+                    dequant_dtype,
+                })?,
+            };
+            constituents.push(Arc::new(layer) as Arc<dyn QuantMethod>);
+            offset += rows;
+        }
+        Ok(crate::PackedLinear {
+            packed: Arc::new(packed),
+            constituents,
+            rows_per_rank,
+        })
     }
 
     pub fn from_w8a16(

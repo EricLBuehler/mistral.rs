@@ -155,7 +155,7 @@ mod tests {
         .with_serving_capacity(16)?
         .with_base_device_memory_reservation(4 * 1024 * 1024 * 1024)?
         .with_recurrent_checkpoint_lanes(8)?
-        .with_recurrent_prefix_capacity(16);
+        .with_recurrent_prefix_capacity(crate::PrefixCacheCapacity::Fixed(16));
         config.recurrent_checkpoint_lanes_auto = true;
         config.reserve_activation_memory(512 * 1024 * 1024, 256 * 1024 * 1024);
 

@@ -1,8 +1,7 @@
 use super::*;
 use crate::{
-    try_forward_with_shared_quantized_activation, try_fused_quantized_pair, DistributedKind,
-    GgufMatMul, IsqPlanParams, IsqRequest, IsqType, QuantMethod, QuantMethodConfig,
-    QuantizeOntoGuard, QuantizedSerde, UnquantLinear,
+    forward_group, DistributedKind, GgufMatMul, GroupKind, GroupMember, IsqPlanParams, IsqRequest,
+    IsqType, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedSerde, UnquantLinear,
 };
 use candle_core::{cuda::cudarc::driver::sys, Var};
 use std::sync::{atomic::AtomicUsize, Arc};
@@ -65,29 +64,17 @@ fn shared_mmvq_replays_same_and_mixed_formats_with_workspace_reuse() -> Result<(
                         let other =
                             Tensor::full(0.125f32, input.shape(), &device)?.to_dtype(dtype)?;
                         let public_available =
-                            try_forward_with_shared_quantized_activation(&input, &methods)?
-                                .is_some();
+                            forward_group(&input, &methods, GroupKind::Dense)?.is_some();
                         if !public_available {
                             #[cfg(has_marlin_kernels)]
-                            {
-                                let mut prefers_affine = false;
-                                for method in methods {
-                                    prefers_affine |=
-                                        method.prepare_gguf_affine_raw(batch, dtype, &device)?;
-                                }
-                                assert!(
-                                    prefers_affine && batch >= super::super::GGUF_AFFINE_MIN_BATCH
-                                );
-                            }
+                            assert!(batch >= super::super::GGUF_AFFINE_MIN_BATCH);
                             #[cfg(not(has_marlin_kernels))]
                             panic!("supported MMVQ formats should share the input");
                         }
                         let project = |input: &Tensor| {
                             if public_available {
-                                Ok(
-                                    try_forward_with_shared_quantized_activation(input, &methods)?
-                                        .expect("eligible formats"),
-                                )
+                                Ok(forward_group(input, &methods, GroupKind::Dense)?
+                                    .expect("eligible formats"))
                             } else {
                                 shared_lhs(&weights, input)
                             }
@@ -218,6 +205,14 @@ impl QuantMethod for GuardedWeight {
         }
     }
 
+    fn group_member(&self, xs: &Tensor, kind: GroupKind<'_>) -> Result<Option<GroupMember>> {
+        if matches!(self.blocked, BlockedCapability::Collective) {
+            Ok(None)
+        } else {
+            self.inner.group_member(xs, kind)
+        }
+    }
+
     fn has_bias(&self) -> bool {
         matches!(self.blocked, BlockedCapability::Bias)
     }
@@ -269,12 +264,18 @@ fn shared_mmvq_preserves_projection_and_backend_capabilities() -> Result<()> {
             None,
         )),
     )?);
-    assert!(
-        try_fused_quantized_pair(&input, mixed_quant.as_ref(), mixed_dense.as_ref())?.is_some()
-    );
-    assert!(
-        try_fused_quantized_pair(&input, mixed_dense.as_ref(), mixed_quant.as_ref())?.is_some()
-    );
+    assert!(forward_group(
+        &input,
+        &[mixed_quant.as_ref(), mixed_dense.as_ref()],
+        GroupKind::Dense
+    )?
+    .is_some());
+    assert!(forward_group(
+        &input,
+        &[mixed_dense.as_ref(), mixed_quant.as_ref()],
+        GroupKind::Dense
+    )?
+    .is_some());
     for blocked in [
         BlockedCapability::Bias,
         BlockedCapability::Stats,
@@ -285,14 +286,8 @@ fn shared_mmvq_preserves_projection_and_backend_capabilities() -> Result<()> {
             inner: left.clone(),
             blocked,
         };
-        assert!(
-            try_forward_with_shared_quantized_activation(&input, &[&guarded, right.as_ref()])?
-                .is_none()
-        );
-        assert!(
-            try_forward_with_shared_quantized_activation(&input, &[right.as_ref(), &guarded])?
-                .is_none()
-        );
+        assert!(forward_group(&input, &[&guarded, right.as_ref()], GroupKind::Dense)?.is_none());
+        assert!(forward_group(&input, &[right.as_ref(), &guarded], GroupKind::Dense)?.is_none());
         for (blocked_weight, other) in [
             (mixed_quant.clone(), mixed_dense.as_ref()),
             (mixed_dense.clone(), mixed_quant.as_ref()),
@@ -301,24 +296,21 @@ fn shared_mmvq_preserves_projection_and_backend_capabilities() -> Result<()> {
                 inner: blocked_weight,
                 blocked,
             };
-            assert!(try_fused_quantized_pair(&input, &guarded, other)?.is_none());
-            assert!(try_fused_quantized_pair(&input, other, &guarded)?.is_none());
+            assert!(forward_group(&input, &[&guarded, other], GroupKind::Dense)?.is_none());
+            assert!(forward_group(&input, &[other, &guarded], GroupKind::Dense)?.is_none());
         }
     }
     for format in [GgmlDType::Q8_1, GgmlDType::Q8K] {
         let unsupported = layer(format, LEFT_ROWS, &device)?;
-        assert!(try_forward_with_shared_quantized_activation(
+        assert!(forward_group(
             &input,
-            &[unsupported.as_ref(), right.as_ref()]
+            &[unsupported.as_ref(), right.as_ref()],
+            GroupKind::Dense
         )?
         .is_none());
     }
     let prefill = Tensor::zeros((MMVQ_MAX_BATCH + 1, COLUMNS), DType::BF16, &device)?;
-    assert!(try_forward_with_shared_quantized_activation(
-        &prefill,
-        &[left.as_ref(), right.as_ref()]
-    )?
-    .is_none());
-    assert!(try_forward_with_shared_quantized_activation(&input, &[left.as_ref()])?.is_none());
+    assert!(forward_group(&prefill, &[left.as_ref(), right.as_ref()], GroupKind::Dense)?.is_none());
+    assert!(forward_group(&input, &[left.as_ref()], GroupKind::Dense)?.is_none());
     Ok(())
 }

@@ -13,10 +13,21 @@ pub mod fast_mmvq;
 mod ffi;
 #[cfg(feature = "cuda")]
 pub(crate) mod gated_mix;
+mod group;
 #[cfg(all(feature = "cuda", has_marlin_kernels))]
 mod packed_affine;
 pub(crate) mod quantize;
 mod weight_source;
+
+#[cfg(feature = "cuda")]
+pub(crate) mod q8_1 {
+    pub(crate) const BLOCK_ELEMENTS: usize = 32;
+    // Two f16 scale halves followed by the int8 quants.
+    pub(crate) const BLOCK_BYTES: usize = 4 + BLOCK_ELEMENTS;
+    // MMQ tiles pack four blocks' quants plus their four f32 scale slots.
+    pub(crate) const MMQ_BLOCK_BYTES: usize = 4 * BLOCK_ELEMENTS + 4 * 4;
+    pub(crate) const ROW_PADDING: usize = 512;
+}
 
 pub use weight_source::{
     GgufBindingMap, GgufBindingResolver, GgufTensorBackend, GgufTensorBinding, GgufWeightSource,
@@ -546,22 +557,12 @@ impl QuantMethod for GgufMatMul {
         }
     }
 
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
-    fn prepare_gguf_affine_raw(
+    fn group_member(
         &self,
-        flat_batch: usize,
-        dtype: DType,
-        device: &Device,
-    ) -> Result<bool> {
-        Ok(self.packed_affine_for(flat_batch, dtype, device)?.is_some())
-    }
-
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
-    fn try_gguf_affine_forward_raw(&self, a: &Tensor) -> Result<Option<Tensor>> {
-        let Some(out) = self.packed_affine_forward(a)? else {
-            return Ok(None);
-        };
-        Ok(Some(self.add_bias(out)?))
+        xs: &Tensor,
+        kind: crate::GroupKind<'_>,
+    ) -> Result<Option<crate::GroupMember>> {
+        self.gguf_group_member(xs, kind)
     }
 
     fn quantized_act_type(&self) -> Option<DType> {

@@ -612,13 +612,7 @@ fn shared_decode_boundaries(
                 } else {
                     "shared_grouped"
                 };
-                let geometry = routed_geometry(
-                    tokens,
-                    n,
-                    k,
-                    true,
-                    super::super::nvfp4_matmul::matmul_device(dev).compute_major,
-                );
+                let geometry = routed_geometry(tokens, n, k, true);
                 let shared_min = shared_grouped_min_tokens(
                     n,
                     k,
@@ -772,31 +766,30 @@ fn shared_decode_boundaries(
 #[test]
 fn routed_prefill_geometry_preserves_small_and_a16_paths() {
     use super::super::nvfp4_matmul::routed_geometry;
-    let short = routed_geometry(512, 2560, 640, true, 12);
+    let short = routed_geometry(512, 2560, 640, true);
     assert_eq!(
         (short.rows, short.columns, short.k, short.persistent),
         (64, 128, 128, true)
     );
-    let long = routed_geometry(512, 640, 2560, true, 12);
+    let long = routed_geometry(512, 640, 2560, true);
     assert_eq!(
         (long.rows, long.columns, long.k, long.persistent),
         (16, 128, 256, true)
     );
-    let boundary = routed_geometry(4095, 640, 2560, true, 12);
+    let boundary = routed_geometry(4095, 640, 2560, true);
     assert_eq!(boundary, long);
     for tokens in [4096, 4097, 8192] {
-        let large = routed_geometry(tokens, 640, 2560, true, 12);
+        let large = routed_geometry(tokens, 640, 2560, true);
         assert_eq!(
             (large.rows, large.columns, large.k, large.persistent),
             (32, 128, 256, true)
         );
-        assert_eq!(routed_geometry(tokens, 2560, 640, true, 12), short);
+        assert_eq!(routed_geometry(tokens, 2560, 640, true), short);
     }
     for cfg in [
-        routed_geometry(511, 2560, 640, true, 12),
-        routed_geometry(512, 2560, 640, false, 12),
-        routed_geometry(512, 2560, 640, true, 10),
-        routed_geometry(512, 73, 144, true, 12),
+        routed_geometry(511, 2560, 640, true),
+        routed_geometry(512, 2560, 640, false),
+        routed_geometry(512, 73, 144, true),
     ] {
         assert_eq!(
             (cfg.rows, cfg.columns, cfg.k, cfg.persistent),
@@ -811,8 +804,7 @@ fn routed_prefill_warmup_covers_alignment_tails_and_graph_replay() -> Result<()>
     const TOPK: usize = 2;
     let device = Device::new_cuda_with_stream(0)?;
     let dev = device.as_cuda_device()?;
-    let major = super::super::device_compute_major(dev);
-    if !nvfp4_supported(dev) || major != 12 {
+    if !nvfp4_supported(dev) {
         return Ok(());
     }
     let stream = dev.cuda_stream();
@@ -846,8 +838,7 @@ fn routed_prefill_warmup_covers_alignment_tails_and_graph_replay() -> Result<()>
                 weight_global_scale: &globals,
                 activation_global_scale: Some(&activation),
             };
-            let geometry =
-                |tokens| super::super::nvfp4_matmul::routed_geometry(tokens, n, k, true, major);
+            let geometry = |tokens| super::super::nvfp4_matmul::routed_geometry(tokens, n, k, true);
             for rows in grouped_warmup_rows(EXPERTS, TOPK, geometry)
                 .into_iter()
                 .filter(|&rows| rows >= super::super::nvfp4_matmul::ROUTED_PREFILL_MIN_TOKENS)

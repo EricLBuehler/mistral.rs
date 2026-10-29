@@ -10,8 +10,8 @@ use mistralrs_core::{
     DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting,
     HfConfigOverrides, Loader, LoaderBuilder, McpClientConfig, MemoryGoal, MistralRsBuilder,
     ModelLoaderConfig, ModelSelected, MtpConfig, MtpRuntimeConfig, PagedAttentionConfig,
-    PagedCacheType, PagedKvModelRequest, SchedulerConfig, SearchCallback, SearchEmbeddingModel,
-    TokenSource,
+    PagedCacheType, PagedKvModelRequest, PrefixCacheCapacity, SchedulerConfig, SearchCallback,
+    SearchEmbeddingModel, TokenSource,
 };
 use tracing::{debug, info};
 
@@ -234,7 +234,7 @@ pub struct MistralRsForServerBuilder {
     interactive_mode: bool,
 
     /// Number of prefix caches to hold on the device. Other caches are evicted to the CPU based on a LRU strategy.
-    prefix_cache_n: Option<usize>,
+    prefix_cache_n: PrefixCacheCapacity,
 
     /// NOTE: This can be omitted to use automatic device mapping!
     /// Number of device layers to load and run on GPU(s). All others will be on the CPU.
@@ -311,7 +311,7 @@ impl Default for MistralRsForServerBuilder {
             hf_config_overrides: None,
             token_source: defaults::TOKEN_SOURCE,
             interactive_mode: defaults::INTERACTIVE_MODE,
-            prefix_cache_n: None,
+            prefix_cache_n: PrefixCacheCapacity::Auto,
             num_device_layers: defaults::NUM_DEVICE_LAYERS,
             in_situ_quant: defaults::IN_SITU_QUANT,
             memory_goal: MemoryGoal::Auto,
@@ -558,8 +558,8 @@ impl MistralRsForServerBuilder {
         self
     }
 
-    /// Sets prefix retention; `None` sizes the default capacity within the memory budget.
-    pub fn with_prefix_cache_n(mut self, prefix_cache_n: impl Into<Option<usize>>) -> Self {
+    /// Sets prefix retention; `Auto` sizes the default capacity within the memory budget.
+    pub fn with_prefix_cache_n(mut self, prefix_cache_n: impl Into<PrefixCacheCapacity>) -> Self {
         self.prefix_cache_n = prefix_cache_n.into();
         self
     }
@@ -753,7 +753,7 @@ impl MistralRsForServerBuilder {
 
     /// Build a single-model instance (legacy mode)
     async fn build_single_model(mut self) -> Result<SharedMistralRsState> {
-        let prefix_cache_n = self.prefix_cache_n.unwrap_or(defaults::PREFIX_CACHE_N);
+        let prefix_cache_n = self.prefix_cache_n.requested();
         let mtp_runtime = MtpRuntimeConfig::new(prefix_cache_n);
         let model = self.model.context("Model was None")?;
 
@@ -789,10 +789,7 @@ impl MistralRsForServerBuilder {
                 })
             })
             .transpose()?
-            .map(|config| match self.prefix_cache_n {
-                Some(capacity) => config.with_recurrent_prefix_capacity(capacity),
-                None => config.with_automatic_recurrent_prefix_capacity(defaults::PREFIX_CACHE_N),
-            }),
+            .map(|config| config.with_recurrent_prefix_capacity(self.prefix_cache_n)),
             self.mtp_config.as_ref(),
             mtp_runtime,
             &dtype,
@@ -912,7 +909,7 @@ impl MistralRsForServerBuilder {
 
     /// Build a multi-model instance
     pub async fn build_multi_model(mut self) -> Result<SharedMistralRsState> {
-        let prefix_cache_n = self.prefix_cache_n.unwrap_or(defaults::PREFIX_CACHE_N);
+        let prefix_cache_n = self.prefix_cache_n.requested();
         let mtp_runtime = MtpRuntimeConfig::new(prefix_cache_n);
         if self.models.is_empty() {
             anyhow::bail!("No models configured for multi-model mode");
@@ -993,10 +990,7 @@ impl MistralRsForServerBuilder {
             })
         })
         .transpose()?
-        .map(|config| match self.prefix_cache_n {
-            Some(capacity) => config.with_recurrent_prefix_capacity(capacity),
-            None => config.with_automatic_recurrent_prefix_capacity(defaults::PREFIX_CACHE_N),
-        });
+        .map(|config| config.with_recurrent_prefix_capacity(self.prefix_cache_n));
         let mut paged_kv_plan = plan_paged_kv(
             &self
                 .models
