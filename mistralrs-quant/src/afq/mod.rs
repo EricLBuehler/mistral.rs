@@ -247,7 +247,29 @@ impl QuantMethod for AfqLayer {
         }
     }
 
+    fn routed_weights(&self) -> Option<crate::RoutedWeights> {
+        let (experts, n, _) = self.w_q.dims3().ok()?;
+        let group = self.group_size as usize;
+        let k = self.scales.dim(2).ok()? * group;
+        Some(crate::RoutedWeights::new(
+            crate::RoutedCodec::Afq {
+                bits: self.bits as usize,
+                group,
+            },
+            self.w_q.clone(),
+            self.scales.clone(),
+            Some(self.biases.clone()),
+            self.bias.clone(),
+            [experts, n, k],
+        ))
+    }
+
     fn gather_forward_raw(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        if let Some(routed) = self.routed_weights() {
+            if let Some(output) = crate::try_routed_gather(x, indices, &routed)? {
+                return Ok(output);
+            }
+        }
         let output = if x.device().is_metal() {
             ops::afq_mm_op(
                 x,
@@ -278,15 +300,39 @@ impl QuantMethod for AfqLayer {
         }
     }
 
-    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
-        ops::afq_embedding_op(
+    fn embedding_table(&self) -> Option<crate::EmbeddingTable<'_>> {
+        use crate::embedding::{RowCodec, ScaleGrid, ScaleType};
+        let (rows, _) = self.w_q.dims2().ok()?;
+        let columns = self.scales.dim(1).ok()? * self.group_size as usize;
+        let grid = ScaleGrid::per_row(
+            ScaleType::from_dtype(self.scales.dtype()).ok()?,
+            self.group_size as usize,
+        );
+        let codec = RowCodec::Afq {
+            bits: self.bits as usize,
+            grid,
+        };
+        Some(
+            crate::EmbeddingTable::new(codec, rows, columns, &self.w_q)
+                .with_scales(&self.scales)
+                .with_aux(&self.biases),
+        )
+    }
+
+    #[cfg(feature = "metal")]
+    fn embedding_forward(&self, ids: &Tensor, out: crate::EmbeddingOutput) -> Result<Tensor> {
+        if !self.w_q.device().is_metal() {
+            return crate::embedding::forward(self, ids, out);
+        }
+        let rows = ops::afq_embedding_op(
             ids,
             &self.w_q,
             &self.scales,
             &self.biases,
             self.group_size,
             self.bits,
-        )
+        )?;
+        crate::embedding::finish_rows(rows, out)
     }
 
     fn quantized_act_type(&self) -> Option<DType> {

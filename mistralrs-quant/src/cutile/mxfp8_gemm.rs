@@ -10,6 +10,10 @@ use cutile::tensor::IntoPartition;
 use cutile::tile_kernel::TileKernel;
 use float8::F8E4M3;
 
+use super::tune::{
+    bucket_warm_rows, buckets_from_breakpoints, policy_breakpoints, probe_input, random_activation,
+    tunable, Bucket, Prepared, Space, Tunable, TuneMode, TuneRequest, Tuned, TunedTable,
+};
 use super::warmup::{CutileKernel, WarmupProgress};
 use super::{catch_cutile_panic, context, device_multiprocessor_count};
 use crate::mxfp8::{MXFP8_ACTIVATION_SCHEME, MXFP8_BLOCK_SIZE};
@@ -37,6 +41,13 @@ const SMALL_BATCH_NARROW_SM_DIVISOR: usize = 8;
 const SMALL_BATCH_SPLITS: usize = 4;
 const SMALL_BATCH_MIN_K_TILES_PER_SPLIT: usize = 4;
 const SMALL_BATCH_SPLIT_SM_DIVISOR: usize = 3;
+const TUNE_KERNEL: &str = "mxfp8_gemm";
+/// Decode batches keep the split-K and narrow-tile policy; only prefill rows are tuned.
+const TUNE_MIN_ROWS: usize = 64;
+/// Rows scanned for policy changes; past this the policy depends on rows only through the tail.
+const TUNE_SCAN_ROWS: usize = 8192;
+const TUNE_PREFILL_PROBE: usize = 2048;
+const TUNE_TAIL_PROBE: usize = 4096;
 const WARM_ROWS: [usize; 30] = [
     2, 3, 4, 5, 8, 9, 10, 12, 16, 17, 18, 20, 24, 32, 33, 34, 36, 40, 48, 64, 1985, 1986, 1988,
     1992, 2000, 2049, 2050, 2052, 2056, 2064,
@@ -128,7 +139,7 @@ mod kernels {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct Config {
     bm: usize,
     bn: usize,
@@ -137,7 +148,19 @@ struct Config {
     static_k: bool,
     group_m: usize,
     blocks_per_sm: usize,
+    latency: usize,
 }
+
+tunable!(Config {
+    bm,
+    bn,
+    bk,
+    splits,
+    static_k,
+    group_m,
+    blocks_per_sm,
+    latency
+});
 
 fn config(rows: usize, columns: usize, inner: usize, multiprocessors: usize) -> Config {
     let static_k =
@@ -183,7 +206,55 @@ fn config(rows: usize, columns: usize, inner: usize, multiprocessors: usize) -> 
         } else {
             2
         },
+        latency: LOAD_LATENCY as usize,
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct TuneKey {
+    ordinal: usize,
+    n: usize,
+    k: usize,
+    dtype: DType,
+}
+
+static TUNED: TunedTable<TuneKey, Config> = TunedTable::new();
+
+fn launch_config(key: TuneKey, rows: usize, multiprocessors: usize) -> Config {
+    (rows > TUNE_MIN_ROWS)
+        .then(|| TUNED.get(key, rows))
+        .flatten()
+        .unwrap_or_else(|| config(rows, key.n, key.k, multiprocessors))
+}
+
+fn tune_buckets(key: TuneKey, multiprocessors: usize) -> Vec<Bucket> {
+    let breakpoints = policy_breakpoints(TUNE_MIN_ROWS + 1, TUNE_SCAN_ROWS, |rows| {
+        config(rows, key.n, key.k, multiprocessors)
+    });
+    buckets_from_breakpoints(&breakpoints, TUNE_PREFILL_PROBE, TUNE_TAIL_PROBE)
+}
+
+/// Pipelined operand stages must fit in opt-in shared memory; 0 means unknown and skips the check.
+fn fits_smem(cfg: Config, smem: usize) -> bool {
+    let stage = (cfg.bm + cfg.bn) * cfg.bk * (1 + MXFP8_BLOCK_SIZE) / MXFP8_BLOCK_SIZE;
+    smem == 0 || stage * cfg.latency.max(1) <= smem
+}
+
+fn tune_space(bucket: Bucket, key: TuneKey, multiprocessors: usize, smem: usize) -> Space {
+    let policy = config(bucket.probe, key.n, key.k, multiprocessors);
+    Space::new()
+        .joint(
+            ["bm", "bn"],
+            [[64, 128], [128, 128], [64, 64], [128, 64], [32, 128]],
+        )
+        .axis("bk", [128, 64, 256])
+        .axis("static_k", [0, 1])
+        .axis("group_m", [8, 16, 4])
+        .axis("blocks_per_sm", [2, 1, 3])
+        .axis("latency", [3, 2, 4])
+        .axis("splits", [policy.splits as i64])
+        .constrain(move |c| Config::from_config(c).is_some_and(|cfg| fits_smem(cfg, smem)))
+        .policy(policy.to_config())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -238,27 +309,6 @@ struct DispatchCtx<'a> {
     dev: &'a CudaDevice,
     compile_only: bool,
     cfg: Config,
-}
-
-fn dispatch<T: cutile::DType>(
-    tiles: Tiles<T>,
-    rows: usize,
-    n: usize,
-    dev: &CudaDevice,
-    compile_only: bool,
-) -> Result<()> {
-    let k = tiles.weight.size() / n;
-    let cfg = config(rows, n, k, device_multiprocessor_count(dev));
-    dispatch_config(
-        tiles,
-        DispatchCtx {
-            rows,
-            n,
-            dev,
-            compile_only,
-            cfg,
-        },
-    )
 }
 
 fn dispatch_config<T: cutile::DType>(tiles: Tiles<T>, ctx: DispatchCtx<'_>) -> Result<()> {
@@ -385,7 +435,7 @@ fn dispatch_gemm<T: cutile::DType>(tiles: Tiles<T>, ctx: DispatchCtx<'_>) -> Res
         cfg.bk.to_string(),
         (cfg.bk / MXFP8_BLOCK_SIZE).to_string(),
         cfg.group_m.to_string(),
-        LOAD_LATENCY.to_string(),
+        cfg.latency.to_string(),
         if cfg.static_k { k.div_ceil(cfg.bk) } else { 0 }.to_string(),
         cfg.splits.to_string(),
     ]);
@@ -507,20 +557,25 @@ fn forward_config(
                     ),
                 }
             };
-            if let Some(cfg) = config_override {
-                dispatch_config(
-                    tiles,
-                    DispatchCtx {
-                        rows,
-                        n,
-                        dev,
-                        compile_only: false,
-                        cfg,
-                    },
-                )?;
-            } else {
-                dispatch(tiles, rows, n, dev, false)?;
-            }
+            let cfg = config_override.unwrap_or_else(|| {
+                let key = TuneKey {
+                    ordinal: dev.cuda_stream().context().ordinal(),
+                    n,
+                    k,
+                    dtype: activation.source_dtype(),
+                };
+                launch_config(key, rows, device_multiprocessor_count(dev))
+            });
+            dispatch_config(
+                tiles,
+                DispatchCtx {
+                    rows,
+                    n,
+                    dev,
+                    compile_only: false,
+                    cfg,
+                },
+            )?;
             drop(yg);
             CudaStorage::wrap_cuda_slice(output, dev.clone())
         }};
@@ -556,17 +611,96 @@ impl CutileKernel for Mxfp8Gemm {
         if shapes.is_empty() {
             return Ok(());
         }
-        let progress = WarmupProgress::new("MXFP8 GEMM", shapes.len() * WARM_ROWS.len(), silent);
-        for shape in shapes {
-            warm_shape(shape, dev, &progress)?;
+        for shape in &shapes {
+            let key = shape.key();
+            TUNED.tune_once(key, |mode| tune_shape(key, dev, mode))?;
+        }
+        let multiprocessors = device_multiprocessor_count(dev);
+        let plans: Vec<(WarmShape, Vec<usize>)> = shapes
+            .into_iter()
+            .map(|shape| {
+                let rows = warm_rows(shape.key(), multiprocessors);
+                (shape, rows)
+            })
+            .collect();
+        let total = plans.iter().map(|(_, rows)| rows.len()).sum();
+        let progress = WarmupProgress::new("MXFP8 GEMM", total, silent);
+        for (shape, rows) in plans {
+            warm_shape(shape, &rows, dev, &progress)?;
         }
         Ok(())
     }
 }
 
-fn warm_shape(shape: WarmShape, dev: &CudaDevice, progress: &WarmupProgress) -> Result<()> {
+impl WarmShape {
+    fn key(&self) -> TuneKey {
+        TuneKey {
+            ordinal: self.ordinal,
+            n: self.n,
+            k: self.k,
+            dtype: self.dtype,
+        }
+    }
+}
+
+fn random_quantized(
+    rows: usize,
+    k: usize,
+    dtype: DType,
+    dev: &CudaDevice,
+) -> Result<QuantizedActivation> {
+    let device = candle_core::Device::Cuda(dev.clone());
+    crate::mxfp8::quantize_packed(&random_activation(rows, k, dtype, &device)?)
+}
+
+/// Tunes one weight shape on synthetic weights.
+fn tune_shape(key: TuneKey, dev: &CudaDevice, mode: TuneMode) -> Result<Vec<Tuned>> {
+    let multiprocessors = device_multiprocessor_count(dev);
+    let smem = crate::cuda_device::cuda_device_info(dev).smem_optin;
+    let buckets = tune_buckets(key, multiprocessors);
+    let space = move |bucket: Bucket| tune_space(bucket, key, multiprocessors, smem);
+    let request = TuneRequest {
+        kernel: TUNE_KERNEL,
+        source_hash: kernels::_SOURCE_HASH,
+        shape: format!("n{}_k{}_{:?}", key.n, key.k, key.dtype).to_ascii_lowercase(),
+        buckets: &buckets,
+        space: &space,
+    };
+    let weight = random_quantized(key.n, key.k, key.dtype, dev)?;
+    let (weight, scales) = (weight.quantized().clone(), weight.scales().clone());
+    let mut inputs = std::collections::HashMap::new();
+    Ok(TUNED.tune(key, dev, mode, &request, |rows, cfg| {
+        let activation = probe_input(&mut inputs, rows, || {
+            random_quantized(rows, key.k, key.dtype, dev)
+        })?
+        .clone();
+        let (weight, scales) = (weight.clone(), scales.clone());
+        Prepared::from_launch(move || forward_config(&activation, &weight, &scales, Some(cfg)))
+    }))
+}
+
+/// The static row set plus every divisor class of each tuned bucket.
+fn warm_rows(key: TuneKey, multiprocessors: usize) -> Vec<usize> {
+    let mut rows: Vec<usize> = WARM_ROWS
+        .into_iter()
+        .chain(bucket_warm_rows(
+            &tune_buckets(key, multiprocessors),
+            TUNE_MIN_ROWS + 1,
+        ))
+        .collect();
+    rows.sort_unstable();
+    rows.dedup();
+    rows
+}
+
+fn warm_shape(
+    shape: WarmShape,
+    rows: &[usize],
+    dev: &CudaDevice,
+    progress: &WarmupProgress,
+) -> Result<()> {
     let stream = context::stream(dev);
-    for rows in WARM_ROWS {
+    for &rows in rows {
         progress.run(format!("n={} k={} rows={rows}", shape.n, shape.k), || {
             macro_rules! compile {
                 ($ty:ty) => {{
@@ -587,7 +721,8 @@ fn warm_shape(shape: WarmShape, dev: &CudaDevice, progress: &WarmupProgress) -> 
                             .map_err(|error| {
                                 candle_core::Error::msg(format!("cuTile MXFP8 metadata: {error:?}"))
                             })?;
-                    dispatch(
+                    let cfg = launch_config(shape.key(), rows, device_multiprocessor_count(dev));
+                    dispatch_config(
                         Tiles {
                             output,
                             activation: meta(&[rows, shape.k])?,
@@ -598,10 +733,13 @@ fn warm_shape(shape: WarmShape, dev: &CudaDevice, progress: &WarmupProgress) -> 
                             ])?,
                             scale_offset: shape.scale_offset,
                         },
-                        rows,
-                        shape.n,
-                        dev,
-                        true,
+                        DispatchCtx {
+                            rows,
+                            n: shape.n,
+                            dev,
+                            compile_only: true,
+                            cfg,
+                        },
                     )
                 }};
             }

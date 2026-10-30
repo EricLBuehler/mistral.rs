@@ -34,6 +34,35 @@ pub struct Nvfp4GemmArgs<'a> {
     pub activation_global_scale: Option<&'a Tensor>,
 }
 
+/// Owned [`Nvfp4GemmArgs`], for state that outlives the borrowed layer.
+#[derive(Clone)]
+pub(super) struct Nvfp4Weights {
+    pub(super) weights: Tensor,
+    pub(super) weight_scales: Tensor,
+    pub(super) weight_global_scale: Tensor,
+    pub(super) activation_global_scale: Option<Tensor>,
+}
+
+impl Nvfp4Weights {
+    pub(super) fn new(args: Nvfp4GemmArgs<'_>) -> Self {
+        Self {
+            weights: args.weights.clone(),
+            weight_scales: args.weight_scales.clone(),
+            weight_global_scale: args.weight_global_scale.clone(),
+            activation_global_scale: args.activation_global_scale.cloned(),
+        }
+    }
+
+    pub(super) fn args(&self) -> Nvfp4GemmArgs<'_> {
+        Nvfp4GemmArgs {
+            weights: &self.weights,
+            weight_scales: &self.weight_scales,
+            weight_global_scale: &self.weight_global_scale,
+            activation_global_scale: self.activation_global_scale.as_ref(),
+        }
+    }
+}
+
 pub fn nvfp4_supported(dev: &CudaDevice) -> bool {
     super::block_scaled_mma_supported(dev)
 }
@@ -266,8 +295,9 @@ pub(crate) fn try_cutile_nvfp4_gather_shared(
     let (experts, n, k, _) = shape;
     let (tokens, topk) = indices.dims2()?;
     let dev = x.device().as_cuda_device()?;
-    let geometry =
-        super::nvfp4_matmul::routed_geometry(tokens, n, k, first.activation_global_scale.is_some());
+    let a4 = first.activation_global_scale.is_some();
+    let key = super::nvfp4_tune::RoutedKey::new(dev, experts, n, k, topk, a4, x.dtype());
+    let geometry = super::nvfp4_tune::routed_config(key, tokens);
     if tokens < grouped_min_tokens(experts, topk)
         && (projections.len() < SHARED_MIN_PROJECTIONS
             || first.activation_global_scale.is_none()
@@ -321,17 +351,21 @@ fn launch_calibrated(
         if indices.dim(0)? < grouped_min_tokens(experts, indices.dim(1)?) {
             return super::nvfp4_gemv::launch(x, Some(indices), args, compile_only);
         }
-        validate_kernel_dimensions(&[crate::moe::cuda::moe_align_em(
-            indices.dim(0)?,
-            indices.dim(1)?,
+        let (tokens, topk) = indices.dims2()?;
+        let key = super::nvfp4_tune::RoutedKey::new(
+            x.device().as_cuda_device()?,
             experts,
-            super::nvfp4_matmul::routed_geometry(
-                indices.dim(0)?,
-                n,
-                k,
-                args.activation_global_scale.is_some(),
-            )
-            .rows,
+            n,
+            k,
+            topk,
+            args.activation_global_scale.is_some(),
+            x.dtype(),
+        );
+        validate_kernel_dimensions(&[crate::moe::cuda::moe_align_em(
+            tokens,
+            topk,
+            experts,
+            super::nvfp4_tune::routed_config(key, tokens).rows,
         )])?;
     } else if rows <= GEMV_MAX_ROWS
         && !(args.activation_global_scale.is_some()
@@ -363,10 +397,7 @@ fn launch_calibrated(
 }
 
 struct RegisteredShape {
-    weights: Tensor,
-    weight_scales: Tensor,
-    weight_global_scale: Tensor,
-    activation_global_scale: Option<Tensor>,
+    layer: Nvfp4Weights,
     activation_dtype: DType,
     pointer_hints: [Option<DivHint>; 4],
 }
@@ -404,19 +435,17 @@ pub fn register_nvfp4_shape(args: Nvfp4GemmArgs<'_>, activation_dtype: DType) ->
         .lock()
         .unwrap();
     if shapes.iter().any(|shape| {
-        shape.weights.dims() == args.weights.dims()
-            && shape.weights.device().same_device(args.weights.device())
+        let layer = shape.layer.args();
+        layer.weights.dims() == args.weights.dims()
+            && layer.weights.device().same_device(args.weights.device())
             && shape.activation_dtype == activation_dtype
-            && shape.activation_global_scale.is_some() == args.activation_global_scale.is_some()
+            && layer.activation_global_scale.is_some() == args.activation_global_scale.is_some()
             && shape.pointer_hints == pointer_hints
     }) {
         return Ok(());
     }
     shapes.push(RegisteredShape {
-        weights: args.weights.clone(),
-        weight_scales: args.weight_scales.clone(),
-        weight_global_scale: args.weight_global_scale.clone(),
-        activation_global_scale: args.activation_global_scale.cloned(),
+        layer: Nvfp4Weights::new(args),
         activation_dtype,
         pointer_hints,
     });
@@ -511,42 +540,43 @@ fn grouped_warmup_rows_from(
 }
 
 impl RegisteredShape {
-    fn args(&self) -> Nvfp4GemmArgs<'_> {
-        Nvfp4GemmArgs {
-            weights: &self.weights,
-            weight_scales: &self.weight_scales,
-            weight_global_scale: &self.weight_global_scale,
-            activation_global_scale: self.activation_global_scale.as_ref(),
-        }
-    }
-
     fn warm(&self) -> Result<()> {
-        let device = self.weights.device();
-        let k = self.weights.dim(self.weights.rank() - 1)? * 2;
-        if self.weights.rank() == 2 {
-            for rows in dense_warmup_rows() {
+        let args = self.layer.args();
+        let device = args.weights.device();
+        let k = args.weights.dim(args.weights.rank() - 1)? * 2;
+        if args.weights.rank() == 2 {
+            super::nvfp4_tune::tune_dense(args, self.activation_dtype)?;
+            let mut rows = dense_warmup_rows();
+            rows.extend(super::nvfp4_tune::dense_warm_rows());
+            rows.sort_unstable();
+            rows.dedup();
+            for rows in rows {
                 let x = Tensor::zeros((rows, k), self.activation_dtype, device)?;
-                launch(&x, None, self.args(), true)?;
+                launch(&x, None, args, true)?;
             }
-            if let Some(global) = &self.activation_global_scale {
+            if let Some(global) = args.activation_global_scale {
                 super::nvfp4_glu::warm_common(global, self.activation_dtype, k)?;
             }
             return Ok(());
         }
-        let experts = self.weights.dim(0)?;
-        let n = self.weights.dim(1)?;
-        let geometry = |tokens| {
-            super::nvfp4_matmul::routed_geometry(
-                tokens,
-                n,
-                k,
-                self.activation_global_scale.is_some(),
-            )
-        };
+        let experts = args.weights.dim(0)?;
+        let n = args.weights.dim(1)?;
+        let a4 = args.activation_global_scale.is_some();
         let topks = super::warmup::registered_moe_topks(device, experts);
         for topk in topks {
+            let key = super::nvfp4_tune::RoutedKey::new(
+                device.as_cuda_device()?,
+                experts,
+                n,
+                k,
+                topk,
+                a4,
+                self.activation_dtype,
+            );
+            super::nvfp4_tune::tune_routed(args, key)?;
+            let geometry = |tokens| super::nvfp4_tune::routed_config(key, tokens);
             let grouped_start = grouped_min_tokens(experts, topk);
-            let shared_start = if self.activation_global_scale.is_some() {
+            let shared_start = if args.activation_global_scale.is_some() {
                 shared_grouped_min_tokens(
                     n,
                     k,
@@ -573,15 +603,15 @@ impl RegisteredShape {
             {
                 let indices = Tensor::zeros((rows, topk), DType::U32, device)?;
                 let x = Tensor::zeros((rows, k), self.activation_dtype, device)?;
-                launch(&x, Some(&indices), self.args(), true)?;
+                launch(&x, Some(&indices), args, true)?;
                 if rows >= shared_start && rows < grouped_start {
-                    super::nvfp4_matmul::launch_gather(&x, &indices, self.args(), true, true)?;
+                    super::nvfp4_matmul::launch_gather(&x, &indices, args, true, true)?;
                 }
                 if topk > 1 {
                     let x = Tensor::zeros((rows, topk, k), self.activation_dtype, device)?;
-                    launch(&x, Some(&indices), self.args(), true)?;
+                    launch(&x, Some(&indices), args, true)?;
                     if rows >= shared_start && rows < grouped_start {
-                        super::nvfp4_matmul::launch_gather(&x, &indices, self.args(), true, true)?;
+                        super::nvfp4_matmul::launch_gather(&x, &indices, args, true, true)?;
                     }
                 }
             }
@@ -600,7 +630,7 @@ impl CutileKernel for Nvfp4Kernel {
                 .unwrap();
             let (shapes, other_devices): (Vec<_>, Vec<_>) = std::mem::take(&mut *registered)
                 .into_iter()
-                .partition(|shape| shape.weights.device().same_device(&device));
+                .partition(|shape| shape.layer.weights.device().same_device(&device));
             *registered = other_devices;
             shapes
         };
@@ -610,7 +640,11 @@ impl CutileKernel for Nvfp4Kernel {
         let progress = WarmupProgress::new("NVFP4 shapes", shapes.len(), silent);
         if let Err(error) = shapes.iter().try_for_each(|shape| {
             progress.run(
-                format!("{:?} {:?}", shape.activation_dtype, shape.weights.dims()),
+                format!(
+                    "{:?} {:?}",
+                    shape.activation_dtype,
+                    shape.layer.weights.dims()
+                ),
                 || shape.warm(),
             )
         }) {

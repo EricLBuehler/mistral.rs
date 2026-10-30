@@ -490,16 +490,19 @@ fn warmed_offset_scale_views_capture_without_jit() -> Result<()> {
             None,
             dtype,
         )?;
+        let shape = WarmShape {
+            ordinal: dev.cuda_stream().context().ordinal(),
+            n,
+            k,
+            dtype,
+            scale_offset: (k / MXFP8_BLOCK_SIZE) % MAX_POINTER_ALIGNMENT,
+        };
+        let rows = warm_rows(shape.key(), device_multiprocessor_count(dev));
         warm_shape(
-            WarmShape {
-                ordinal: dev.cuda_stream().context().ordinal(),
-                n,
-                k,
-                dtype,
-                scale_offset: (k / MXFP8_BLOCK_SIZE) % MAX_POINTER_ALIGNMENT,
-            },
+            shape,
+            &rows,
             dev,
-            &WarmupProgress::new("MXFP8 test", WARM_ROWS.len(), true),
+            &WarmupProgress::new("MXFP8 test", rows.len(), true),
         )?;
         let compiled = cutile::tile_kernel::jit_compile_count();
         let stream = dev.cuda_stream();
@@ -556,6 +559,162 @@ fn warmed_offset_scale_views_capture_without_jit() -> Result<()> {
                     .to_vec1::<f32>()?
                     .iter()
                     .all(|&output| output == k as f32 * value));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn tune_buckets_never_mix_policies_and_skip_decode_rows() {
+    for multiprocessors in [24, 48, 132] {
+        for (n, k) in [(128, 2048), (4096, 4096), (12288, 4096), (8192, 2048)] {
+            let key = TuneKey {
+                ordinal: 0,
+                n,
+                k,
+                dtype: DType::BF16,
+            };
+            let buckets = tune_buckets(key, multiprocessors);
+            let mut lower = TUNE_MIN_ROWS + 1;
+            for bucket in &buckets {
+                assert!(bucket.probe >= lower && bucket.probe <= bucket.upper);
+                let policy = config(bucket.probe, n, k, multiprocessors);
+                for rows in lower..=bucket.upper.min(TUNE_SCAN_ROWS * 2) {
+                    assert_eq!(config(rows, n, k, multiprocessors), policy, "rows={rows}");
+                }
+                lower = bucket.upper.saturating_add(1);
+            }
+            let policy = config(buckets[0].probe, n, k, multiprocessors);
+            let configs = tune_space(buckets[0], key, multiprocessors, SMALL_SMEM).configs();
+            assert_eq!(Config::from_config(&configs[0]), Some(policy));
+            assert!(configs
+                .iter()
+                .filter_map(Config::from_config)
+                .all(|cfg| cfg == policy || fits_smem(cfg, SMALL_SMEM)));
+        }
+    }
+}
+
+const SMALL_SMEM: usize = 99 << 10;
+
+#[test]
+fn launch_config_consults_the_table_only_for_prefill_rows() {
+    let key = TuneKey {
+        ordinal: 0,
+        n: 4224,
+        k: 4096,
+        dtype: DType::F16,
+    };
+    let forced = Config {
+        bm: 128,
+        group_m: 4,
+        ..config(512, key.n, key.k, 48)
+    };
+    TUNED.set(
+        key,
+        &[Tuned::measured(
+            Bucket {
+                upper: usize::MAX,
+                probe: 512,
+            },
+            forced.to_config(),
+        )],
+        Config::from_config,
+    );
+    assert_eq!(launch_config(key, 512, 48), forced);
+    assert_eq!(
+        launch_config(key, TUNE_MIN_ROWS, 48),
+        config(TUNE_MIN_ROWS, key.n, key.k, 48)
+    );
+    assert_eq!(launch_config(key, 8, 48), config(8, key.n, key.k, 48));
+    let rows = warm_rows(key, 48);
+    assert!(rows.contains(&(TUNE_MIN_ROWS + 1)) && rows.contains(&2049));
+}
+
+#[test]
+#[ignore = "GPU MXFP8 tuning sweep; run with --ignored --nocapture --test-threads=1"]
+fn mxfp8_tuned_vs_policy_sweep() -> Result<()> {
+    let device = Device::new_cuda(0)?;
+    let dev = device.as_cuda_device()?;
+    if !super::super::block_scaled_mma_supported(dev) {
+        return Ok(());
+    }
+    for dtype in [DType::BF16, DType::F16] {
+        for (n, k) in [(12288, 4096), (4096, 12288)] {
+            let key = TuneKey {
+                ordinal: dev.cuda_stream().context().ordinal(),
+                n,
+                k,
+                dtype,
+            };
+            super::super::tune::report(
+                &format!("mxfp8 {dtype:?} n={n} k={k}"),
+                &tune_shape(key, dev, TuneMode::Force)?,
+            );
+        }
+    }
+    Ok(())
+}
+
+fn dequantized(activation: &QuantizedActivation, dtype: DType) -> Result<Tensor> {
+    Mxfp8Linear::from_parts(
+        activation.quantized().clone(),
+        activation.scales().clone(),
+        None,
+        dtype,
+    )?
+    .dequantize_w()?
+    .to_dtype(DType::F32)
+}
+
+#[test]
+#[ignore = "requires a CUDA device with cuTile support"]
+fn tunable_configs_match_the_reference_at_odd_rows() -> Result<()> {
+    let device = Device::new_cuda(0)?;
+    let dev = device.as_cuda_device()?;
+    if !super::super::block_scaled_mma_supported(dev) {
+        return Ok(());
+    }
+    let (n, k) = (320, 1056);
+    for dtype in [DType::BF16, DType::F16] {
+        let weight = random_quantized(n, k, dtype, dev)?;
+        let reference_weight = dequantized(&weight, dtype)?;
+        for rows in [65, 129, 333] {
+            let activation = random_quantized(rows, k, dtype, dev)?;
+            let reference = dequantized(&activation, dtype)?.matmul(&reference_weight.t()?)?;
+            let policy = config(rows, n, k, device_multiprocessor_count(dev));
+            for cfg in [
+                policy,
+                Config {
+                    bm: 128,
+                    bn: 64,
+                    bk: 64,
+                    static_k: true,
+                    group_m: 4,
+                    latency: 2,
+                    ..policy
+                },
+                Config {
+                    bm: 32,
+                    bk: 256,
+                    blocks_per_sm: 3,
+                    latency: 4,
+                    ..policy
+                },
+            ] {
+                let actual =
+                    forward_config(&activation, weight.quantized(), weight.scales(), Some(cfg))?
+                        .to_dtype(DType::F32)?;
+                let error = (actual - &reference)?
+                    .abs()?
+                    .max_all()?
+                    .to_scalar::<f32>()?;
+                let scale = reference.abs()?.max_all()?.to_scalar::<f32>()?;
+                assert!(
+                    error <= 1e-2 * scale,
+                    "{dtype:?} rows={rows} {cfg:?}: {error} vs {scale}"
+                );
             }
         }
     }

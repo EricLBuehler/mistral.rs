@@ -13,6 +13,8 @@ mod csf;
 #[cfg(all(feature = "cuda", feature = "cutile"))]
 mod decode;
 pub mod embedding;
+#[cfg(feature = "cuda")]
+pub(crate) mod portable;
 #[cfg(all(feature = "cuda", feature = "cutile"))]
 pub(crate) mod prepare;
 
@@ -29,6 +31,33 @@ const FP4_VALUES: [f32; 8] = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0];
 const FP4_MAX: f32 = 6.0;
 const FP8_MAX: f32 = 448.0;
 const VALUES_PER_BYTE: usize = 2;
+
+thread_local! {
+    static FORCE_PORTABLE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Layers constructed on this thread afterwards use the pre-Blackwell W4A16 kernels even where FP4 MMA exists.
+#[doc(hidden)]
+pub fn force_portable_kernels(enabled: bool) {
+    FORCE_PORTABLE.with(|force| force.set(enabled));
+}
+
+// Pre-Blackwell runs W4A4 checkpoints as W4A16: activations stay unquantized, like vLLM's Marlin NVFP4 path.
+#[cfg(feature = "cuda")]
+fn use_portable_kernels(device: &candle_core::CudaDevice) -> Result<bool> {
+    #[cfg(feature = "cutile")]
+    let native = crate::cutile::nvfp4_supported(device);
+    #[cfg(not(feature = "cutile"))]
+    let native = false;
+    if native && !FORCE_PORTABLE.with(std::cell::Cell::get) {
+        return Ok(false);
+    }
+    if !portable::supported(device) {
+        candle_core::bail!("NVFP4 CUDA inference requires compute capability 8.0 or newer");
+    }
+    Ok(true)
+}
+
 pub(crate) const NVFP4_ACTIVATION_SCHEME: crate::ActivationQuantizationScheme =
     crate::ActivationQuantizationScheme {
         dtype: DType::U8,
@@ -57,6 +86,7 @@ pub struct Nvfp4Layer {
     input_global_scale: Option<f32>,
     // Value equality is safe only for private calibration allocations.
     input_scale_immutable: bool,
+    portable: bool,
     #[cfg(all(feature = "cuda", feature = "cutile", has_nvfp4_cutlass_kernels))]
     native: Option<cutlass::State>,
 }
@@ -185,18 +215,13 @@ impl Nvfp4Layer {
         if parts.weight.device().is_cuda() && parts.dtype == DType::F32 {
             candle_core::bail!("NVFP4 CUDA inference requires BF16 or F16 output dtype");
         }
-        #[cfg(all(feature = "cuda", feature = "cutile"))]
-        if let Device::Cuda(device) = parts.weight.device() {
-            if !crate::cutile::nvfp4_supported(device) {
-                candle_core::bail!(
-                    "NVFP4 CUDA inference requires Blackwell or newer, CUDA 13.3 or newer, and a compatible tileiras"
-                );
-            }
-        }
-        #[cfg(not(all(feature = "cuda", feature = "cutile")))]
-        if parts.weight.device().is_cuda() {
-            candle_core::bail!("NVFP4 CUDA inference requires the cuda and cutile features");
-        }
+        #[cfg(feature = "cuda")]
+        let portable = match parts.weight.device() {
+            Device::Cuda(device) => use_portable_kernels(device)?,
+            _ => false,
+        };
+        #[cfg(not(feature = "cuda"))]
+        let portable = false;
         if parts.weight.device().is_metal() {
             candle_core::bail!("NVFP4 accelerator inference requires CUDA");
         }
@@ -252,6 +277,14 @@ impl Nvfp4Layer {
             .map(|scale| scale.contiguous())
             .transpose()?;
         parts.bias = parts.bias.map(|bias| bias.contiguous()).transpose()?;
+        #[cfg(feature = "cuda")]
+        if portable {
+            parts.weight = portable::realigned(&parts.weight, portable::WEIGHT_ALIGNMENT)?;
+            // Only whole-word scale rows are read as u32.
+            if (k / NVFP4_BLOCK_SIZE).is_multiple_of(portable::SCALE_ALIGNMENT) {
+                parts.scales = portable::realigned(&parts.scales, portable::SCALE_ALIGNMENT)?;
+            }
+        }
         let input_global_scale = if parts.weight.rank() == 2 {
             parts
                 .input_scale
@@ -276,16 +309,21 @@ impl Nvfp4Layer {
             None
         };
         #[cfg(all(feature = "cuda", feature = "cutile", has_nvfp4_cutlass_kernels))]
-        let native = cutlass::State::new(&parts)?;
+        let native = if portable {
+            None
+        } else {
+            cutlass::State::new(&parts)?
+        };
         let layer = Self {
             parts,
             input_global_scale,
             input_scale_immutable,
+            portable,
             #[cfg(all(feature = "cuda", feature = "cutile", has_nvfp4_cutlass_kernels))]
             native,
         };
         #[cfg(all(feature = "cuda", feature = "cutile"))]
-        if layer.parts.weight.device().is_cuda() {
+        if layer.parts.weight.device().is_cuda() && !layer.portable {
             crate::cutile::register_nvfp4_shape(layer.gemm_args(), layer.parts.dtype)?;
         }
         Ok(layer)
@@ -650,11 +688,51 @@ impl Nvfp4Layer {
         }
     }
 
-    #[cfg(all(feature = "cuda", feature = "cutile"))]
-    fn forward_cuda(&self, x: &Tensor) -> Result<Tensor> {
-        if decode::supports(x.dim(0)?, 1, x.dtype(), self.gemm_args()) {
-            return decode::forward(x, None, self.gemm_args());
+    #[cfg(feature = "cuda")]
+    fn portable_weights(&self) -> portable::Weights<'_> {
+        portable::Weights {
+            weight: &self.parts.weight,
+            scales: &self.parts.scales,
+            global: &self.parts.global_scales,
         }
+    }
+
+    #[cfg(feature = "cuda")]
+    fn forward_cuda(&self, x: &Tensor) -> Result<Tensor> {
+        #[cfg(feature = "cutile")]
+        {
+            if decode::supports(x.dim(0)?, 1, x.dtype(), self.gemm_args()) {
+                return decode::forward(x, None, self.gemm_args());
+            }
+            if !self.portable {
+                return self.forward_native(x);
+            }
+        }
+        portable::matmul(x, self.portable_weights())
+    }
+
+    #[cfg(feature = "cuda")]
+    fn gather_cuda(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        #[cfg(feature = "cutile")]
+        {
+            let (tokens, topk) = indices.dims2()?;
+            if decode::supports(tokens, topk, x.dtype(), self.gemm_args()) {
+                return decode::forward(x, Some(indices), self.gemm_args());
+            }
+            if !self.portable {
+                return crate::cutile::cutile_nvfp4_gather_calibrated(
+                    x,
+                    indices,
+                    self.gemm_args(),
+                    self.input_global_scale.is_some(),
+                );
+            }
+        }
+        portable::gather(x, indices, self.portable_weights())
+    }
+
+    #[cfg(all(feature = "cuda", feature = "cutile"))]
+    fn forward_native(&self, x: &Tensor) -> Result<Tensor> {
         #[cfg(has_nvfp4_cutlass_kernels)]
         if let Some(native) = &self.native {
             if native.supports(x.dim(0)?, x.dtype()) {
@@ -843,6 +921,22 @@ impl QuantMethod for Nvfp4Layer {
         candle_core::bail!("Construct NVFP4 layers using Nvfp4Layer::from_parts")
     }
 
+    fn embedding_table(&self) -> Option<crate::EmbeddingTable<'_>> {
+        use crate::embedding::{RowCodec, RowScale, ScaleGrid, ScaleType};
+        let (rows, packed) = self.parts.weight.dims2().ok()?;
+        let grid = ScaleGrid::per_row(ScaleType::E4m3, NVFP4_BLOCK_SIZE);
+        Some(
+            crate::EmbeddingTable::new(
+                RowCodec::Fp4(grid),
+                rows,
+                packed * VALUES_PER_BYTE,
+                &self.parts.weight,
+            )
+            .with_scales(&self.parts.scales)
+            .with_row_scale(RowScale::PerRow(&self.parts.global_scales)),
+        )
+    }
+
     fn dequantize_w(&self) -> Result<Tensor> {
         self.dequantize_block_scaled()?
             .broadcast_mul(&self.parts.global_scales.unsqueeze(D::Minus1)?)?
@@ -856,7 +950,7 @@ impl QuantMethod for Nvfp4Layer {
             *shape.last_mut().unwrap() = self.parts.weight.dim(0)?;
             return Tensor::zeros(shape, x.dtype(), x.device());
         }
-        #[cfg(all(feature = "cuda", feature = "cutile"))]
+        #[cfg(feature = "cuda")]
         if x.device().is_cuda() {
             let k = x.dim(D::Minus1)?;
             let rows = x.elem_count() / k;
@@ -871,15 +965,29 @@ impl QuantMethod for Nvfp4Layer {
             return output.reshape(shape);
         }
         if !x.device().is_cpu() {
-            candle_core::bail!(
-                "NVFP4 accelerator inference requires CUDA 13.3 or newer and the cutile feature"
-            );
+            candle_core::bail!("NVFP4 accelerator inference requires the cuda feature");
         }
         self.reference_forward(x)
     }
 
     fn supports_flat_gather(&self) -> bool {
         true
+    }
+
+    fn routed_weights(&self) -> Option<crate::RoutedWeights> {
+        // W4A4 checkpoints are calibrated against FP4 activations; the routed codec reads them unquantized.
+        if self.parts.activation == Nvfp4ActivationMode::DynamicBlock {
+            return None;
+        }
+        let shape: [usize; 3] = self.logical_shape().try_into().ok()?;
+        Some(crate::RoutedWeights::new(
+            crate::RoutedCodec::Nvfp4,
+            self.parts.weight.clone(),
+            self.parts.scales.clone(),
+            Some(self.parts.global_scales.clone()),
+            self.parts.bias.clone(),
+            shape,
+        ))
     }
 
     fn gather_forward_raw(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
@@ -930,20 +1038,21 @@ impl QuantMethod for Nvfp4Layer {
         if indices.elem_count() == 0 {
             return Tensor::zeros(output_shape, x.dtype(), x.device());
         }
-        #[cfg(all(feature = "cuda", feature = "cutile"))]
+        #[cfg(feature = "cuda")]
+        if x.device().is_cuda() {
+            if let Some(routed) = self.routed_weights() {
+                let x = x.reshape((tokens, input_routes, k))?;
+                let indices = indices.reshape((tokens, topk))?;
+                if let Some(output) = crate::try_routed_gather(&x, &indices, &routed)? {
+                    return output.reshape(output_shape);
+                }
+            }
+        }
+        #[cfg(feature = "cuda")]
         if x.device().is_cuda() {
             let x = x.contiguous()?.reshape((tokens, input_routes, k))?;
             let indices = indices.contiguous()?.reshape((tokens, topk))?;
-            let output = if decode::supports(tokens, topk, x.dtype(), self.gemm_args()) {
-                decode::forward(&x, Some(&indices), self.gemm_args())?
-            } else {
-                crate::cutile::cutile_nvfp4_gather_calibrated(
-                    &x,
-                    &indices,
-                    self.gemm_args(),
-                    self.input_global_scale.is_some(),
-                )?
-            };
+            let output = self.gather_cuda(&x, &indices)?;
             let output = match &self.parts.bias {
                 Some(bias) => output.broadcast_add(
                     &bias
@@ -955,9 +1064,7 @@ impl QuantMethod for Nvfp4Layer {
             return output.reshape(output_shape);
         }
         if !x.device().is_cpu() {
-            candle_core::bail!(
-                "NVFP4 accelerator inference requires CUDA 13.3 or newer and the cutile feature"
-            );
+            candle_core::bail!("NVFP4 accelerator inference requires the cuda feature");
         }
         let x = x.reshape((tokens * input_routes, k))?;
         let ids = indices.flatten_all()?.to_vec1::<u32>()?;
@@ -979,7 +1086,8 @@ impl QuantMethod for Nvfp4Layer {
             let crate::GroupKind::Gather { indices } = kind else {
                 return Ok(None);
             };
-            if !x.device().is_cuda()
+            if self.portable
+                || !x.device().is_cuda()
                 || !matches!(x.dtype(), DType::BF16 | DType::F16)
                 || x.dtype() != self.parts.dtype
                 || indices.dtype() != DType::U32
@@ -1024,7 +1132,8 @@ impl QuantMethod for Nvfp4Layer {
         &self,
         x: &Tensor,
     ) -> Option<crate::ActivationQuantizationScheme> {
-        if !x.device().is_cuda()
+        if self.portable
+            || !x.device().is_cuda()
             || !matches!(x.dtype(), DType::BF16 | DType::F16)
             || self.parts.weight.rank() != 2
             || self.input_global_scale.is_none()
@@ -1074,7 +1183,8 @@ impl QuantMethod for Nvfp4Layer {
 
     fn forward_quantized(&self, activation: &crate::QuantizedActivation) -> Result<Tensor> {
         let (rows, packed_k) = activation.quantized().dims2()?;
-        if activation.scheme() != NVFP4_ACTIVATION_SCHEME
+        if self.portable
+            || activation.scheme() != NVFP4_ACTIVATION_SCHEME
             || self.input_global_scale.is_none()
             || activation.global_scale() != self.input_global_scale
             || self.parts.weight.rank() != 2
@@ -1532,3 +1642,6 @@ mod tests {
 
 #[cfg(all(test, feature = "cuda", feature = "cutile"))]
 mod shared_gather_tests;
+
+#[cfg(all(test, feature = "cuda"))]
+mod portable_layer_tests;

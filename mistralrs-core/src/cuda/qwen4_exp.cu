@@ -204,39 +204,7 @@ q4_ple_hist_update_kernel(const unsigned int *__restrict__ tokens, Q4Tokens l,
   }
 }
 
-// Table shards may be host memory accessed through ATS/HMM.
-__global__ void
-q4_ple_gather_kernel(const long long *__restrict__ rows, int n_lookups,
-                     const unsigned long long *__restrict__ shard_ptrs,
-                     const long long *__restrict__ shard_starts, int n_shards,
-                     int head_dim, unsigned short *__restrict__ out) {
-  const int lookup = blockIdx.x * (blockDim.x >> 5) + (threadIdx.x >> 5);
-  const int lane = threadIdx.x & 31;
-  if (lookup >= n_lookups) {
-    return;
-  }
-  const long long r = rows[lookup];
-  int lo = 0;
-  int hi = n_shards - 1;
-  while (lo < hi) {
-    const int mid = (lo + hi + 1) >> 1;
-    if (shard_starts[mid] <= r) {
-      lo = mid;
-    } else {
-      hi = mid - 1;
-    }
-  }
-  const unsigned short *src =
-      reinterpret_cast<const unsigned short *>(shard_ptrs[lo]) +
-      (size_t)(r - shard_starts[lo]) * head_dim;
-  unsigned short *dst = out + (size_t)lookup * head_dim;
-  for (int i = lane; i < head_dim; i += 32) {
-    dst[i] = src[i];
-  }
-}
-
 #define Q4_PLE_GROUP 32
-#define Q4_PLE_FMT_Q8 0
 #define Q4_PLE_QUANT_WARPS 8
 
 template <typename T>
@@ -271,35 +239,6 @@ __global__ void q4_ple_quantize_table_kernel(
       data[(size_t)group * (Q4_PLE_GROUP / 2) + lane / 2] =
           (unsigned char)((q + 8) | ((next + 8) << 4));
     }
-  }
-}
-
-__global__ void
-q4_ple_gather_quant_kernel(const long long *__restrict__ rows, int n_lookups,
-                           const unsigned char *__restrict__ data,
-                           const __half *__restrict__ scales, int head_dim,
-                           int format, __nv_bfloat16 *__restrict__ out) {
-  const int lookup = blockIdx.x * (blockDim.x >> 5) + (threadIdx.x >> 5);
-  const int lane = threadIdx.x & 31;
-  if (lookup >= n_lookups) {
-    return;
-  }
-  const size_t r = (size_t)rows[lookup];
-  const int groups = head_dim / Q4_PLE_GROUP;
-  __nv_bfloat16 *dst = out + (size_t)lookup * head_dim;
-  const int bits = format == Q4_PLE_FMT_Q8 ? 8 : 4;
-  const size_t row_bytes = (size_t)head_dim * bits / 8;
-  const unsigned char *src = data + r * row_bytes;
-  const __half *sc = scales + r * groups;
-  for (int i = lane; i < head_dim; i += 32) {
-    int q;
-    if (bits == 8) {
-      q = (int)(signed char)src[i];
-    } else {
-      const unsigned char byte = src[i >> 1];
-      q = (int)((i & 1) ? (byte >> 4) : (byte & 15)) - 8;
-    }
-    dst[i] = __float2bfloat16_rn((float)q * __half2float(sc[i / Q4_PLE_GROUP]));
   }
 }
 
@@ -1042,35 +981,6 @@ extern "C" void qwen4_ple_hist_update(const unsigned int *tokens,
   const cudaStream_t s = (cudaStream_t)stream;
   q4_ple_hist_update_kernel<<<(layout.n_seqs + 63) / 64, 64, 0, s>>>(
       tokens, layout, hist_pool, slots, hist_len);
-}
-
-extern "C" void qwen4_ple_gather(const long long *rows, int n_lookups,
-                                 const unsigned long long *shard_ptrs,
-                                 const long long *shard_starts, int n_shards,
-                                 int head_dim, void *out, int64_t stream) {
-  if (n_lookups == 0) {
-    return;
-  }
-  const cudaStream_t s = (cudaStream_t)stream;
-  const int warps = 8;
-  q4_ple_gather_kernel<<<(n_lookups + warps - 1) / warps, warps * 32, 0, s>>>(
-      rows, n_lookups, shard_ptrs, shard_starts, n_shards, head_dim,
-      (unsigned short *)out);
-}
-
-extern "C" void qwen4_ple_gather_quant(const long long *rows, int n_lookups,
-                                       const unsigned char *data,
-                                       const void *scales, int head_dim,
-                                       int format, void *out, int64_t stream) {
-  if (n_lookups == 0) {
-    return;
-  }
-  const cudaStream_t s = (cudaStream_t)stream;
-  const int warps = 8;
-  q4_ple_gather_quant_kernel<<<(n_lookups + warps - 1) / warps, warps * 32, 0,
-                               s>>>(rows, n_lookups, data,
-                                    (const __half *)scales, head_dim, format,
-                                    (__nv_bfloat16 *)out);
 }
 
 extern "C" void qwen4_ple_quantize_table(const void *source, unsigned char *data,

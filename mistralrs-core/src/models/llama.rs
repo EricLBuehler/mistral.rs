@@ -468,7 +468,7 @@ impl Llama {
     }
 
     pub fn get_input_embeddings(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.wte.embedding_forward(input_ids, self.dtype)
+        self.wte.embedding_forward(input_ids, self.dtype.into())
     }
 
     pub fn forward(
@@ -478,7 +478,7 @@ impl Llama {
     ) -> Result<Tensor> {
         self.forward_embeds(
             input_ids,
-            self.wte.embedding_forward(input_ids, self.dtype)?,
+            self.wte.embedding_forward(input_ids, self.dtype.into())?,
             ctx,
         )
     }

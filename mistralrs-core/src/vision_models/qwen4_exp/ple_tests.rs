@@ -75,7 +75,7 @@ fn nvfp4_shards_load_without_requantizing() -> Result<()> {
         let device = Device::new_cuda_with_stream(0)?;
         let mut table = PleTable::load(&vb, HEAD_DIM, &device)?;
         let ids = Tensor::from_slice(&ids.map(|i| i as i64), (2, 3), &device)?;
-        if table.device_index.is_some() {
+        if table.mapped.has_device_index() {
             for prepared in [false, true] {
                 if prepared {
                     table.prepare_mapped(&device, SHARD_ROWS, 0)?;
@@ -117,11 +117,13 @@ fn nvfp4_shards_load_without_requantizing() -> Result<()> {
                 execution_bytes: bytes + RESIDENT_RESERVE_BYTES,
             },
         )?;
-        let Some(ResidentTable::Nvfp4(resident)) = &table.resident else {
+        let Some(resident) = &table.resident else {
             panic!("packed table was not made resident");
         };
         for dtype in [DType::BF16, DType::F16, DType::F32] {
-            let actual = unsafe { resident.gather(&ids, dtype)? }
+            let actual = resident
+                .table(HEAD_DIM)?
+                .gather(&ids, dtype.into())?
                 .to_dtype(DType::F32)?
                 .flatten_all()?
                 .to_vec1::<f32>()?;
@@ -300,30 +302,39 @@ fn resident_quantization_matches_host() -> Result<()> {
             if device_reads_pageable_memory(&device)? {
                 let mapped_data = mapped_bytes(&got)?;
                 let mapped_scales = mapped_bytes(bytemuck::cast_slice(&got_scales))?;
-                let rows = Tensor::from_slice(&[0i64, 36, 5, 5, 17, 1], (2, 3), &device)?;
-                let format = if bits == 8 {
-                    crate::cuda::qwen4_exp::PleTableFormat::Q8
-                } else {
-                    crate::cuda::qwen4_exp::PleTableFormat::Q4
+                const LOOKUPS: [i64; 6] = [0, 36, 5, 5, 17, 1];
+                let rows = Tensor::from_slice(&LOOKUPS, (2, 3), &device)?;
+                let shard = MappedShard {
+                    data: mapped_data[row_bytes..].as_ptr(),
+                    scales: mapped_scales[groups * 2..].as_ptr(),
+                    first_row: 0,
+                    rows: ROWS,
                 };
-                let expected = crate::cuda::qwen4_exp::ple_gather_quant(
-                    &rows,
-                    &data.narrow(0, 1, ROWS)?,
-                    Some(&scales.narrow(0, 1, ROWS)?),
-                    HEAD_DIM,
-                    format,
-                )?
-                .flatten_all()?
-                .to_vec1::<half::bf16>()?;
-                let actual = crate::cuda::qwen4_exp::ple_gather_quant_mapped(
-                    &rows,
-                    &mapped_data[row_bytes..(ROWS + 1) * row_bytes],
-                    Some(&mapped_scales[groups * 2..(ROWS + 1) * groups * 2]),
-                    HEAD_DIM,
-                    format,
-                )?
-                .flatten_all()?
-                .to_vec1::<half::bf16>()?;
+                let mapped =
+                    unsafe { MappedRows::new(vec![shard], Arc::new((mapped_data, mapped_scales))) }
+                        .with_device_index(&device)?;
+                let data = data.narrow(0, 1, ROWS)?;
+                let scales = scales.narrow(0, 1, ROWS)?;
+                let resident = EmbeddingTable::new(packed_codec(bits), ROWS, HEAD_DIM, &data)
+                    .with_scales(&scales);
+                let expected = resident
+                    .gather(&rows, DType::BF16.into())?
+                    .flatten_all()?
+                    .to_vec1::<half::bf16>()?;
+                let (host_data, host_scales) = (
+                    data.to_device(&Device::Cpu)?,
+                    scales.to_device(&Device::Cpu)?,
+                );
+                let host = EmbeddingTable::new(packed_codec(bits), ROWS, HEAD_DIM, &host_data)
+                    .with_scales(&host_scales)
+                    .gather_host(&LOOKUPS.map(|row| row as u64), DType::BF16.into())?
+                    .flatten_all()?
+                    .to_vec1::<half::bf16>()?;
+                assert_eq!(host, expected, "host {dtype:?} Q{bits}");
+                let actual = EmbeddingTable::mapped(packed_codec(bits), HEAD_DIM, &mapped)
+                    .gather(&rows, DType::BF16.into())?
+                    .flatten_all()?
+                    .to_vec1::<half::bf16>()?;
                 assert_eq!(actual, expected, "mapped {dtype:?} Q{bits}");
             }
         }
@@ -367,28 +378,26 @@ fn mapped_quantization_preserves_shard_and_chunk_offsets() -> Result<()> {
             file.path(),
         )?;
         let raw = Arc::new(unsafe { MmapedSafetensors::new(file.path())? });
-        let mut resident_table = PleTable {
-            source: TableSource::Shards {
+        let mut resident_table = PleTable::new(
+            TableSource::Shards {
                 raw: raw.clone(),
                 names: names.clone(),
                 starts: starts.clone(),
                 dtype,
             },
-            head_dim: HEAD_DIM,
-            device_index: None,
-            resident: None,
-        };
-        let mut table = PleTable {
-            source: TableSource::Shards {
+            HEAD_DIM,
+            &Device::Cpu,
+        )?;
+        let mut table = PleTable::new(
+            TableSource::Shards {
                 raw,
                 names,
                 starts,
                 dtype,
             },
-            head_dim: HEAD_DIM,
-            device_index: None,
-            resident: None,
-        };
+            HEAD_DIM,
+            &Device::Cpu,
+        )?;
         table.make_resident(
             &device,
             WeightAllocationBudget {
@@ -423,18 +432,15 @@ fn mapped_quantization_preserves_shard_and_chunk_offsets() -> Result<()> {
         )?;
         assert!(resident_table.resident.is_none());
         resident_table.make_resident(&device, resident_budget)?;
-        assert!(matches!(
-            resident_table.resident,
-            Some(ResidentTable::Native {
-                format: crate::cuda::qwen4_exp::PleTableFormat::Q4,
-                ..
-            })
-        ));
+        assert!(resident_table
+            .resident
+            .as_ref()
+            .is_some_and(|r| r.codec == packed_codec(PLANNED_RESIDENT_BITS)));
         assert!(table
             .prepare_mapped(&device, CHUNK_ROWS, host_budget - 1)
             .is_err());
         assert!(matches!(table.source, TableSource::Shards { .. }));
-        assert!(table.device_index.is_none());
+        assert!(!table.mapped.has_device_index());
         table.prepare_mapped(&device, CHUNK_ROWS, host_budget)?;
         file.close().map_err(candle_core::Error::wrap)?;
         let TableSource::Packed {
@@ -458,7 +464,7 @@ fn mapped_quantization_preserves_shard_and_chunk_offsets() -> Result<()> {
             &map[*data_bytes..],
             bytemuck::cast_slice::<_, u8>(&scales.flatten_all()?.to_vec1::<half::f16>()?)
         );
-        let Some(ResidentTable::Native {
+        let Some(ResidentTable {
             data: resident_data,
             scales: Some(resident_scales),
             ..
@@ -494,10 +500,11 @@ fn mapped_quantization_preserves_shard_and_chunk_offsets() -> Result<()> {
             assert_mapped_graph_replay(&table, &data, &scales, &device)?;
         }
         assert_eq!(table.reclaimable_weight_cache_bytes(), None);
-        table.resident = Some(ResidentTable::Native {
+        table.resident = Some(ResidentTable {
+            codec: packed_codec(PLANNED_RESIDENT_BITS),
             data,
             scales: Some(scales),
-            format: crate::cuda::qwen4_exp::PleTableFormat::Q4,
+            row_scale: None,
         });
         assert_eq!(table.reclaimable_weight_cache_bytes(), None);
     }
@@ -601,13 +608,14 @@ fn assert_mapped_graph_replay(
     for ids in IDS {
         rows.set(&Tensor::from_slice(&ids, (2, 3), device)?)?;
         graph.launch().map_err(candle_core::Error::wrap)?;
-        let expected = crate::cuda::qwen4_exp::ple_gather_quant(
-            &rows,
-            data,
-            Some(scales),
+        let expected = EmbeddingTable::new(
+            packed_codec(PLANNED_RESIDENT_BITS),
+            data.dim(0)?,
             table.head_dim,
-            crate::cuda::qwen4_exp::PleTableFormat::Q4,
-        )?;
+            data,
+        )
+        .with_scales(scales)
+        .gather(&rows, DType::BF16.into())?;
         for dtype in [DType::BF16, DType::F16] {
             let values = |tensor: &Tensor| {
                 tensor
@@ -648,8 +656,9 @@ fn iq4_nl_gather_matches_host_dequant() -> Result<()> {
     let TableSource::Gguf(embedding) = &mapped.source else {
         unreachable!()
     };
-    let got = unsafe { embedding.gather_resident(&rows, &data) }?
-        .to_dtype(DType::BF16)?
+    let got = embedding
+        .resident(&data)
+        .gather(&rows, DType::BF16.into())?
         .to_dtype(DType::F32)?
         .flatten_all()?
         .to_vec1::<f32>()?;
@@ -667,8 +676,9 @@ fn iq4_nl_gather_matches_host_dequant() -> Result<()> {
         assert_eq!(*g, half::bf16::from_f32(*e).to_f32());
     }
     if device_reads_pageable_memory(&device)? {
-        let actual = unsafe { embedding.gather_mapped(&rows) }?
-            .to_dtype(DType::BF16)?
+        let actual = mapped
+            .table()
+            .gather(&rows, DType::BF16.into())?
             .to_dtype(DType::F32)?
             .flatten_all()?
             .to_vec1::<f32>()?;

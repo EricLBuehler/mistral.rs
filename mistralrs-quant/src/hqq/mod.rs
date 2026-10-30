@@ -1156,8 +1156,11 @@ impl QuantMethod for HqqLayer {
         self.dequantize()
     }
 
-    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
-        self.embedding_forward_raw_with_chunk_elements(ids, HQQ_EMBEDDING_CHUNK_ELEMENTS)
+    fn embedding_forward(&self, ids: &Tensor, out: crate::EmbeddingOutput) -> Result<Tensor> {
+        crate::embedding::finish_rows(
+            self.embedding_forward_raw_with_chunk_elements(ids, HQQ_EMBEDDING_CHUNK_ELEMENTS)?,
+            out,
+        )
     }
 
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
@@ -1172,6 +1175,11 @@ impl QuantMethod for HqqLayer {
 
     fn quantized_act_type(&self) -> Option<DType> {
         Some(self.scales.dtype())
+    }
+
+    fn gather_forward_raw(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        let weight = self.dequantize()?.reshape(self.w_shape.clone())?;
+        crate::routed_gemv::dense_gather(&weight, self.bias.as_ref(), a, indices)
     }
 
     fn add_delta_w(&self, _delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
@@ -1393,7 +1401,7 @@ mod tests {
     fn assert_embedding_matches_dequantized_gather(layer: &HqqLayer) -> Result<()> {
         let device = layer.w_q.device().clone();
         let ids = Tensor::from_vec(vec![0u32, 63, 95, 17, 63, 64], (2, 3), &device)?;
-        let actual = layer.embedding_forward_raw(&ids)?;
+        let actual = layer.embedding_forward(&ids, candle_core::DType::F32.into())?;
         let expected = layer
             .dequantize()?
             .index_select(&ids.flatten_all()?, 0)?
@@ -1504,7 +1512,7 @@ mod tests {
         )?
         .narrow(0, 0, 0)?
         .reshape((2, 0, 3))?;
-        let output = layer.embedding_forward_raw(&ids)?;
+        let output = layer.embedding_forward(&ids, candle_core::DType::F32.into())?;
 
         assert_eq!(output.dims(), &[2, 0, 3, TEST_EMBEDDING_DIM]);
         assert_eq!(output.dtype(), DType::F32);
@@ -1537,7 +1545,7 @@ mod tests {
             .load_linear("test.embedding", &device, Shard::default())?
             .unwrap();
         let ids = Tensor::from_vec(vec![95u32, 0, 64, 95], (2, 2), &device)?;
-        let actual = loaded.embedding_forward_raw(&ids)?;
+        let actual = loaded.embedding_forward(&ids, candle_core::DType::F32.into())?;
         let expected = layer
             .dequantize()?
             .index_select(&ids.flatten_all()?, 0)?

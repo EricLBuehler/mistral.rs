@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 
+use candle_core::Device;
+use float8::F8E4M3;
+
 use super::*;
 
 const ROWS: usize = 11;
@@ -124,18 +127,17 @@ fn nvfp4_embedding_sharded_host_gather_matches_reference() -> Result<()> {
         fixture.table.row_bytes(),
         COLUMNS / 2 + COLUMNS / NVFP4_BLOCK_SIZE
     );
-    let actual = fixture
-        .table
-        .gather(&IDS, &Device::Cpu)?
+    let rows = fixture.table.mapped_rows()?;
+    let table = fixture.table.mapped(&rows);
+    let out = DType::F32.into();
+    let actual = table
+        .gather_host(&IDS, out)?
         .flatten_all()?
         .to_vec1::<f32>()?;
     assert_exact(&actual, &expected_rows(&fixture));
-    assert!(fixture.table.gather(&[ROWS as u64], &Device::Cpu).is_err());
-    assert!(fixture.table.gather(&[u64::MAX], &Device::Cpu).is_err());
-    assert_eq!(
-        fixture.table.gather(&[], &Device::Cpu)?.dims(),
-        &[0, COLUMNS]
-    );
+    assert!(table.gather_host(&[ROWS as u64], out).is_err());
+    assert!(table.gather_host(&[u64::MAX], out).is_err());
+    assert_eq!(table.gather_host(&[], out)?.dims(), &[0, COLUMNS]);
     Ok(())
 }
 
@@ -152,7 +154,7 @@ fn nvfp4_embedding_cuda_resident_and_mapped_match_reference() -> Result<()> {
     scales.extend(&fixture.scales);
     let data = Tensor::from_vec(data, (ROWS + 1, COLUMNS / 2), &device)?.narrow(0, 1, ROWS)?;
     let scales = Tensor::from_vec(scales, (ROWS + 1, groups), &device)?.narrow(0, 1, ROWS)?;
-    let resident = fixture.table.cuda_resident(data, scales)?;
+    let resident = fixture.table.resident(&data, &scales);
     let ids = IDS.map(|i| i as i64);
     let mut padded_ids = vec![0i64];
     padded_ids.extend(ids);
@@ -169,11 +171,12 @@ fn nvfp4_embedding_cuda_resident_and_mapped_match_reference() -> Result<()> {
     }
     .map_err(candle_core::Error::wrap)?
         == 1;
-    let mapped = if pageable {
-        Some(unsafe { fixture.table.cuda_mapped(&device)? })
+    let rows = if pageable {
+        Some(fixture.table.mapped_rows()?.with_device_index(&device)?)
     } else {
         None
     };
+    let mapped = rows.as_ref().map(|rows| fixture.table.mapped(rows));
     for dtype in [DType::F32, DType::F16, DType::BF16] {
         let expected = expected
             .to_dtype(dtype)?
@@ -181,30 +184,14 @@ fn nvfp4_embedding_cuda_resident_and_mapped_match_reference() -> Result<()> {
             .flatten_all()?
             .to_vec1::<f32>()?;
         for table in std::iter::once(&resident).chain(mapped.as_ref()) {
-            let actual = unsafe { table.gather(&ids, dtype)? }
+            let actual = table.gather(&ids, dtype.into())?;
+            assert_eq!(actual.dims(), &[2, 4, COLUMNS]);
+            let actual = actual
                 .to_dtype(DType::F32)?
                 .flatten_all()?
                 .to_vec1::<f32>()?;
             assert_exact(&actual, &expected);
         }
-        let staged = fixture.table.gather_staged(&IDS, dtype, &device)?;
-        assert_eq!(staged.dtype(), dtype);
-        assert_eq!(staged.dims(), &[IDS.len(), COLUMNS]);
-        assert_exact(
-            &staged
-                .to_dtype(DType::F32)?
-                .flatten_all()?
-                .to_vec1::<f32>()?,
-            &expected,
-        );
-        assert_eq!(
-            fixture.table.gather_staged(&[], dtype, &device)?.dims(),
-            &[0, COLUMNS]
-        );
     }
-    assert!(fixture
-        .table
-        .gather_staged(&[ROWS as u64], DType::BF16, &device)
-        .is_err());
     Ok(())
 }

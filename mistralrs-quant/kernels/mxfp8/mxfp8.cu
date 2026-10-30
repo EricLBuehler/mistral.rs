@@ -7,6 +7,8 @@
 #include <mma.h>
 #include <type_traits>
 
+#include "../common/fp_codecs.cuh"
+
 namespace {
 constexpr int kGroup = 32;
 constexpr int kThreads = 128;
@@ -23,18 +25,6 @@ constexpr unsigned kFp8MaxMantissa = 0x00600000u;
 constexpr int kFp8ScaleExponentBias = 135;
 constexpr int kE8M0ExponentBias = 127;
 constexpr unsigned kWarpMask = 0xffffffffu;
-
-__device__ float scale_value(uint8_t value) {
-  if (value == 0)
-    return __uint_as_float(0x00400000u);
-  if (value == 255)
-    return __uint_as_float(0x7fc00000u);
-  return __uint_as_float(static_cast<unsigned>(value) << 23);
-}
-
-__device__ float fp8_value(uint8_t value) {
-  return __half2float(__nv_cvt_fp8_to_halfraw(value, __NV_E4M3));
-}
 
 __device__ int quantization_exponent(float value) {
   float maximum = fabsf(value);
@@ -57,7 +47,7 @@ __global__ void quantize(const T *input, T *output, size_t elements) {
   float normalized = ldexpf(value, -static_cast<int>(exponent));
   auto packed = __nv_cvt_float_to_fp8(normalized, __NV_SATFINITE, __NV_E4M3);
   if (index < elements)
-    output[index] = static_cast<T>(fp8_value(packed) * scale);
+    output[index] = static_cast<T>(e4m3_to_float(packed) * scale);
 }
 
 template <typename T>
@@ -79,8 +69,8 @@ __global__ void dequantize(const uint8_t *weight, const uint8_t *scales,
                            T *output, size_t elements) {
   size_t index = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   if (index < elements)
-    output[index] = static_cast<T>(fp8_value(weight[index]) *
-                                   scale_value(scales[index / kGroup]));
+    output[index] = static_cast<T>(e4m3_to_float(weight[index]) *
+                                   e8m0_to_float_ocp(scales[index / kGroup]));
 }
 
 template <typename T>
@@ -101,8 +91,8 @@ __global__ void gemv(const T *input, const uint8_t *weight,
   size_t weight_row = (static_cast<size_t>(expert) * n + column) * k;
   float sum = 0.0f;
   for (int offset = lane; offset < k; offset += kGroup) {
-    float w = fp8_value(weight[weight_row + offset]);
-    float scale = scale_value(scales[(weight_row + offset) / kGroup]);
+    float w = e4m3_to_float(weight[weight_row + offset]);
+    float scale = e8m0_to_float_ocp(scales[(weight_row + offset) / kGroup]);
     sum = fmaf(
         static_cast<float>(input[static_cast<size_t>(input_row) * k + offset]),
         w * scale, sum);
@@ -137,7 +127,7 @@ __global__ void gemv_vector(const T *input, const uint8_t *weight,
     for (; offset < k; offset += kGroup * WarpsPerRow * kGemvVector) {
       size_t index = weight_row + offset;
       uint32_t packed = *reinterpret_cast<const uint32_t *>(weight + index);
-      float scale = scale_value(scales[index / kGroup]);
+      float scale = e8m0_to_float_ocp(scales[index / kGroup]);
       __half2 low = __nv_cvt_fp8x2_to_halfraw2(packed & 0xffffu, __NV_E4M3);
       __half2 high = __nv_cvt_fp8x2_to_halfraw2(packed >> 16, __NV_E4M3);
       float2 low_values = __half22float2(low);
@@ -189,11 +179,10 @@ __global__ void gemm(const T *input, const uint8_t *weight,
     for (int index = threadIdx.x; index < kTileN * kGroup; index += kThreads) {
       int column = col_base + index / kGroup;
       size_t offset = static_cast<size_t>(column) * k + group + index % kGroup;
-      b[index] =
-          column < n
-              ? static_cast<__nv_bfloat16>(fp8_value(weight[offset]) *
-                                           scale_value(scales[offset / kGroup]))
-              : static_cast<__nv_bfloat16>(0.0f);
+      b[index] = column < n ? static_cast<__nv_bfloat16>(
+                                  e4m3_to_float(weight[offset]) *
+                                  e8m0_to_float_ocp(scales[offset / kGroup]))
+                            : static_cast<__nv_bfloat16>(0.0f);
     }
     __syncthreads();
     for (int offset = 0; offset < kGroup; offset += kMmaK) {

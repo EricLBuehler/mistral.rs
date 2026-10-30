@@ -1901,7 +1901,10 @@ impl TextModel {
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.embedding_forward(input_ids, self.dtype)? * self.embed_tokens_scale
+        self.embed_tokens.embedding_forward(
+            input_ids,
+            mistralrs_quant::EmbeddingOutput::scaled(self.dtype, self.embed_tokens_scale),
+        )
     }
 
     pub fn supports_packed_prefill(&self) -> bool {
@@ -1975,9 +1978,10 @@ impl TextModel {
         let (b, seq, _) = inputs_embeds.dims3()?;
 
         // 1. Token-level per-layer embeddings: [b, seq, num_layers * ple_dim]
-        let embedded = ple_emb.embedding_forward(ple_input_ids, self.dtype)?;
-        // Scale by sqrt(ple_dim)
-        let embedded = (embedded * (ple_dim as f64).sqrt())?;
+        let embedded = ple_emb.embedding_forward(
+            ple_input_ids,
+            mistralrs_quant::EmbeddingOutput::scaled(self.dtype, (ple_dim as f64).sqrt()),
+        )?;
         // Reshape to [b, seq, num_layers, ple_dim]
         let embedded = embedded.reshape((b, seq, self.num_hidden_layers, ple_dim))?;
 

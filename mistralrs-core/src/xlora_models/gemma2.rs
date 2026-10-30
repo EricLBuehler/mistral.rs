@@ -606,8 +606,10 @@ impl Model {
         is_scaling_pass: Option<f64>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let xs = self.embed_tokens.embedding_forward(input_ids, self.dtype)?;
-        let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
+        let mut xs = self.embed_tokens.embedding_forward(
+            input_ids,
+            mistralrs_quant::EmbeddingOutput::scaled(self.dtype, (self.hidden_size as f64).sqrt()),
+        )?;
         let mut cache = if is_full_pass {
             if no_kv_cache {
                 let mut new_cache = Vec::new();

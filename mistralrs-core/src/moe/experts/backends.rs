@@ -1639,6 +1639,22 @@ impl FastExpertsWeights {
     ) -> Result<Option<Tensor>> {
         use candle_core::cuda::cudarc::driver::DevicePtr;
 
+        if let Some(activation) = crate::ops::glu_activation_type(config.act) {
+            if let Some(output) = mistralrs_quant::try_routed_ffn(
+                forward.xs_flat,
+                forward.topk_ids,
+                forward.topk_weights,
+                [
+                    self.fused_gate_proj.as_ref(),
+                    self.fused_up_proj.as_ref(),
+                    self.fused_down_proj.as_ref(),
+                ],
+                activation,
+            )? {
+                return Ok(Some(output.to_dtype(forward.original_dtype)?));
+            }
+        }
+
         let dev = forward.xs_flat.device().as_cuda_device()?;
 
         // Get QTensors - bail to fallback if not quantized

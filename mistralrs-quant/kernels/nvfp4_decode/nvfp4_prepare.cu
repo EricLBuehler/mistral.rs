@@ -5,6 +5,7 @@
 #include <cuda_runtime.h>
 
 #if CUDART_VERSION >= 13000
+#include "../common/fp_codecs.cuh"
 #include <cuda_fp4.h>
 #include <cuda_fp8.h>
 #endif
@@ -62,8 +63,7 @@ __device__ __forceinline__ void quantize_row(RoutedActivation a, int row,
       maximum = fmaxf(maximum, __shfl_xor_sync(mask, maximum, offset, kLanes));
     const uint8_t scale_code = __nv_cvt_float_to_fp8(
         fminf(__fdiv_rn(maximum, kFp4Max), kFp8Max), __NV_SATFINITE, __NV_E4M3);
-    const float scale =
-        __half2float(__nv_cvt_fp8_to_halfraw(scale_code, __NV_E4M3));
+    const float scale = e4m3_to_float(scale_code);
     const float denominator = scale == 0.0f ? 1.0f : scale;
     const uint8_t packed =
         __nv_cvt_float2_to_fp4x2(make_float2(__fdiv_rn(first, denominator),

@@ -468,8 +468,21 @@ impl QuantMethod for GgufMatMul {
         }
     }
 
-    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
-        self.w.embedding(ids)
+    fn embedding_table(&self) -> Option<crate::EmbeddingTable<'_>> {
+        match &self.w {
+            QMatMul::QTensor(q) => crate::EmbeddingTable::quantized(q).ok(),
+            QMatMul::Tensor(w) | QMatMul::TensorF16(w) => {
+                let (rows, columns) = w.dims2().ok()?;
+                w.is_contiguous().then(|| {
+                    crate::EmbeddingTable::new(
+                        crate::embedding::RowCodec::Dense(w.dtype()),
+                        rows,
+                        columns,
+                        w,
+                    )
+                })
+            }
+        }
     }
 
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
@@ -858,7 +871,7 @@ mod tests {
             .index_select(&ids.flatten_all()?, 0)?
             .reshape((2, 3, TEST_EMBEDDING_DIM))?;
         let layer = GgufMatMul::from_qtensor(weight, None);
-        let actual = layer.embedding_forward_raw(&ids)?;
+        let actual = layer.embedding_forward(&ids, candle_core::DType::F32.into())?;
 
         assert_eq!(actual.dims(), &[2, 3, TEST_EMBEDDING_DIM]);
         assert_eq!(actual.dtype(), DType::F32);

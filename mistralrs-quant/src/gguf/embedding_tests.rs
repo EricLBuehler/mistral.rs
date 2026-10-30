@@ -1,7 +1,7 @@
 use std::{io::Write, sync::Arc};
 
 use byteorder::{ByteOrder, LittleEndian, WriteBytesExt};
-use candle_core::{quantized::QTensor, Device, Result, Tensor};
+use candle_core::{quantized::QTensor, DType, Device, Result, Tensor};
 use tempfile::NamedTempFile;
 
 use super::{
@@ -151,18 +151,18 @@ fn embedding_cpu_gathers_all_formats_from_unaligned_storage() -> Result<()> {
             let fixture = fixture(format, columns, true)?;
             assert_eq!(fixture.embedding.rows(), ROWS);
             assert_eq!(fixture.embedding.columns(), columns);
-            let empty = fixture.embedding.gather(&[], &Device::Cpu)?;
+            let rows = fixture.embedding.mapped_rows()?;
+            let table = fixture.embedding.mapped(&rows);
+            let out = DType::F32.into();
+            let empty = table.gather_host(&[], out)?;
             assert_eq!(empty.dims(), &[0, columns]);
             assert_rows(
-                &fixture.embedding.gather(&SELECTION, &Device::Cpu)?,
+                &table.gather_host(&SELECTION, out)?,
                 &fixture,
                 &SELECTION,
                 format,
             )?;
-            assert!(fixture
-                .embedding
-                .gather(&[ROWS as u64], &Device::Cpu)
-                .is_err());
+            assert!(table.gather_host(&[ROWS as u64], out).is_err());
         }
     }
     Ok(())
@@ -219,26 +219,23 @@ fn embedding_cuda_gathers_all_formats_resident_and_mapped() -> Result<()> {
             let len = bytes.len();
             let data =
                 Tensor::from_vec(bytes, len, &device)?.narrow(0, ALIGNMENT, len - ALIGNMENT)?;
-            let empty = unsafe { fixture.embedding.gather_resident(&empty_ids, &data)? };
+            let out = DType::F32.into();
+            let resident = fixture.embedding.resident(&data);
+            let empty = resident.gather(&empty_ids, out)?;
             assert_eq!(empty.dims(), &[0, columns]);
-            assert_rows(
-                &unsafe { fixture.embedding.gather_resident(&ids, &data)? },
-                &fixture,
-                &SELECTION,
-                format,
-            )?;
-            if mapped {
-                let empty = unsafe { fixture.embedding.gather_mapped(&empty_ids)? };
+            assert_rows(&resident.gather(&ids, out)?, &fixture, &SELECTION, format)?;
+            if mapped && fixture.embedding.mapped_gather_aligned()? {
+                let rows = fixture
+                    .embedding
+                    .mapped_rows()?
+                    .with_device_index(&device)?;
+                let table = fixture.embedding.mapped(&rows);
+                let empty = table.gather(&empty_ids, out)?;
                 assert_eq!(empty.dims(), &[0, columns]);
                 let original_bytes = fixture.embedding.bytes()?.to_vec();
                 crate::cuda_memory::prefault_mapped_memory(fixture.embedding.bytes()?, &device)?;
                 assert_eq!(fixture.embedding.bytes()?, original_bytes);
-                assert_rows(
-                    &unsafe { fixture.embedding.gather_mapped(&ids)? },
-                    &fixture,
-                    &SELECTION,
-                    format,
-                )?;
+                assert_rows(&table.gather(&ids, out)?, &fixture, &SELECTION, format)?;
             }
         }
     }
@@ -249,7 +246,7 @@ fn embedding_cuda_gathers_all_formats_resident_and_mapped() -> Result<()> {
 #[test]
 #[ignore = "requires a CUDA device"]
 fn embedding_cuda_graph_replay_tracks_changed_strided_ids() -> Result<()> {
-    use candle_core::{cuda::cudarc::driver::sys, DType, Var};
+    use candle_core::{cuda::cudarc::driver::sys, Var};
     const ID_ROWS: usize = 2;
     const ID_COLUMNS: usize = SELECTION.len() + 1;
     let device = Device::new_cuda_with_stream(0)?;
@@ -261,8 +258,20 @@ fn embedding_cuda_graph_replay_tracks_changed_strided_ids() -> Result<()> {
         let bytes = fixture.embedding.bytes()?.to_vec();
         let len = bytes.len();
         let data = Tensor::from_vec(bytes, len, &device)?;
+        let resident = fixture.embedding.resident(&data);
+        let rows = if mapped {
+            Some(
+                fixture
+                    .embedding
+                    .mapped_rows()?
+                    .with_device_index(&device)?,
+            )
+        } else {
+            None
+        };
+        let mapped_table = rows.as_ref().map(|rows| fixture.embedding.mapped(rows));
         for from_mapping in [false, true] {
-            if from_mapping && !mapped {
+            if from_mapping && mapped_table.is_none() {
                 continue;
             }
             let backing = Var::zeros((ID_ROWS, ID_COLUMNS), DType::U32, &device)?;
@@ -270,11 +279,12 @@ fn embedding_cuda_graph_replay_tracks_changed_strided_ids() -> Result<()> {
             assert!(!ids.is_contiguous());
             assert!(ids.layout().start_offset() > 0);
             let gather = || {
-                if from_mapping {
-                    unsafe { fixture.embedding.gather_mapped(&ids) }
+                let table = if from_mapping {
+                    mapped_table.as_ref().unwrap()
                 } else {
-                    unsafe { fixture.embedding.gather_resident(&ids, &data) }
-                }
+                    &resident
+                };
+                table.gather(&ids, DType::F32.into())
             };
             let _ = gather()?;
             device.synchronize()?;

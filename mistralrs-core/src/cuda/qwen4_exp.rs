@@ -69,26 +69,6 @@ mod ffi {
             hist_len: i32,
             stream: i64,
         );
-        pub(super) fn qwen4_ple_gather(
-            rows: *const i64,
-            n_lookups: i32,
-            shard_ptrs: *const u64,
-            shard_starts: *const i64,
-            n_shards: i32,
-            head_dim: i32,
-            out: *mut c_void,
-            stream: i64,
-        );
-        pub(super) fn qwen4_ple_gather_quant(
-            rows: *const i64,
-            n_lookups: i32,
-            data: *const u8,
-            scales: *const c_void,
-            head_dim: i32,
-            format: i32,
-            out: *mut c_void,
-            stream: i64,
-        );
         pub(super) fn qwen4_ple_quantize_table(
             source: *const c_void,
             data: *mut u8,
@@ -450,38 +430,6 @@ pub(crate) fn ple_hash(
     Ok(rows)
 }
 
-/// Gather 16-bit rows from shard base addresses the device can dereference (ATS/HMM).
-pub(crate) fn ple_gather(
-    rows: &Tensor,
-    shard_ptrs: &Tensor,
-    shard_starts: &Tensor,
-    head_dim: usize,
-    dtype: DType,
-) -> Result<Tensor> {
-    let (tokens, heads) = rows.dims2()?;
-    let out = empty(&[tokens, heads * head_dim], dtype, rows.device())?;
-    unsafe {
-        ffi::qwen4_ple_gather(
-            dev_ptr(rows)? as *const i64,
-            (tokens * heads) as i32,
-            dev_ptr(shard_ptrs)? as *const u64,
-            dev_ptr(shard_starts)? as *const i64,
-            shard_ptrs.dim(0)? as i32,
-            head_dim as i32,
-            dev_ptr(&out)? as *mut _,
-            stream(rows.device())?,
-        );
-    }
-    Ok(out)
-}
-
-/// Row encodings of the device-resident n-gram table; values match `Q4_PLE_FMT_*`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PleTableFormat {
-    Q8 = 0,
-    Q4 = 1,
-}
-
 pub(crate) fn ple_quantize_table(
     source: &Tensor,
     data: &Tensor,
@@ -500,56 +448,6 @@ pub(crate) fn ple_quantize_table(
         );
     }
     Ok(())
-}
-
-/// Gather and dequantize rows from the device-resident table into `[tokens, heads * head_dim]` bf16.
-pub(crate) fn ple_gather_quant(
-    rows: &Tensor,
-    data: &Tensor,
-    scales: Option<&Tensor>,
-    head_dim: usize,
-    format: PleTableFormat,
-) -> Result<Tensor> {
-    let (tokens, heads) = rows.dims2()?;
-    let out = empty(&[tokens, heads * head_dim], DType::BF16, rows.device())?;
-    unsafe {
-        ffi::qwen4_ple_gather_quant(
-            dev_ptr(rows)? as *const i64,
-            (tokens * heads) as i32,
-            dev_ptr(data)? as *const u8,
-            dev_ptr(scales.unwrap_or(data))? as *const _,
-            head_dim as i32,
-            format as i32,
-            dev_ptr(&out)? as *mut _,
-            stream(rows.device())?,
-        );
-    }
-    Ok(out)
-}
-
-pub(crate) fn ple_gather_quant_mapped(
-    rows: &Tensor,
-    data: &[u8],
-    scales: Option<&[u8]>,
-    head_dim: usize,
-    format: PleTableFormat,
-) -> Result<Tensor> {
-    let (tokens, heads) = rows.dims2()?;
-    let out = empty(&[tokens, heads * head_dim], DType::BF16, rows.device())?;
-    // The model retains these maps through graph replay; the device must support pageable memory access.
-    unsafe {
-        ffi::qwen4_ple_gather_quant(
-            dev_ptr(rows)? as *const i64,
-            (tokens * heads) as i32,
-            data.as_ptr(),
-            scales.unwrap_or(data).as_ptr().cast(),
-            head_dim as i32,
-            format as i32,
-            dev_ptr(&out)? as *mut _,
-            stream(rows.device())?,
-        );
-    }
-    Ok(out)
 }
 
 pub(crate) struct PleGateWeights<'a> {

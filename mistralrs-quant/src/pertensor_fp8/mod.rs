@@ -65,7 +65,7 @@ impl PerTensorFP8Linear {
             dequantized_weight: Mutex::new(None),
         };
         layer.validate()?;
-        if !layer.register_cutile() {
+        if !layer.register_cutile() && !layer.w8a16_kernel_supported() {
             let weight = layer.dequantize_uncached()?;
             layer.weight = None;
             layer.dequantized_weight = Mutex::new(Some(weight));
@@ -247,6 +247,47 @@ impl PerTensorFP8Linear {
             }
         }
         false
+    }
+
+    #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+    fn w8a16_view<'a>(&'a self, weight: &'a Tensor) -> crate::moe::grouped_fp8::Fp8WeightView<'a> {
+        let [n, k] = self.weight_shape;
+        crate::moe::grouped_fp8::Fp8WeightView {
+            weight,
+            scales: &self.weight_scale_inv,
+            encoding: crate::moe::grouped_fp8::Fp8ScaleEncoding::F32,
+            block: match self.weight_scale_layout {
+                Fp8WeightScaleLayout::Tensor => [n, k],
+                Fp8WeightScaleLayout::Channel => [1, k],
+                Fp8WeightScaleLayout::Block(block) => block,
+            },
+        }
+    }
+
+    // The retained-E4M3 kernel replaces the resident dequantized copy whenever it serves the model dtype.
+    fn w8a16_kernel_supported(&self) -> bool {
+        #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+        if let Some(weight) = self.weight.as_ref() {
+            return crate::moe::grouped_fp8::dense_supported(
+                self.w8a16_view(weight),
+                self.dequant_dtype,
+            );
+        }
+        false
+    }
+
+    #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+    fn try_w8a16_kernel(&self, input: &Tensor) -> Result<Option<Tensor>> {
+        let Some(weight) = self.weight.as_ref() else {
+            return Ok(None);
+        };
+        let Some(result) = crate::moe::grouped_fp8::dense(input, self.w8a16_view(weight))? else {
+            return Ok(None);
+        };
+        match &self.bias {
+            Some(bias) => result.broadcast_add(bias).map(Some),
+            None => Ok(Some(result)),
+        }
     }
 
     fn dequantize_uncached(&self) -> Result<Tensor> {
@@ -513,6 +554,33 @@ impl QuantMethod for PerTensorFP8Linear {
         }
     }
 
+    fn embedding_table(&self) -> Option<crate::EmbeddingTable<'_>> {
+        use crate::embedding::{RowCodec, RowScale, ScaleGrid, ScaleType};
+        let weight = self.weight.as_ref()?;
+        let [rows, columns] = self.weight_shape;
+        let table = crate::EmbeddingTable::new(RowCodec::Fp8(None), rows, columns, weight);
+        Some(match self.weight_scale_layout {
+            Fp8WeightScaleLayout::Tensor => {
+                table.with_row_scale(RowScale::Scalar(&self.weight_scale_inv))
+            }
+            Fp8WeightScaleLayout::Channel => {
+                table.with_row_scale(RowScale::PerRow(&self.weight_scale_inv))
+            }
+            Fp8WeightScaleLayout::Block([block_rows, block_columns]) => {
+                let grid = ScaleGrid {
+                    ty: ScaleType::from_dtype(self.weight_scale_inv.dtype()).ok()?,
+                    group: block_columns,
+                    rows_per_scale: block_rows,
+                };
+                crate::EmbeddingTable {
+                    codec: RowCodec::Fp8(Some(grid)),
+                    ..table
+                }
+                .with_scales(&self.weight_scale_inv)
+            }
+        })
+    }
+
     fn dequantize_w(&self) -> Result<Tensor> {
         let cached = self.dequantized_weight.lock().unwrap();
         if let Some(weight) = cached.as_ref() {
@@ -532,6 +600,10 @@ impl QuantMethod for PerTensorFP8Linear {
         }
         #[cfg(all(feature = "cuda", feature = "cutile"))]
         if let Some(result) = self.try_cutile_w8a8(x)? {
+            return Ok(result);
+        }
+        #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+        if let Some(result) = self.try_w8a16_kernel(x)? {
             return Ok(result);
         }
         let unquant = UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(

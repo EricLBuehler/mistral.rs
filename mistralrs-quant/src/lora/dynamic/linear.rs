@@ -113,13 +113,13 @@ impl QuantMethod for DynamicLoraLinear {
         add_delta(&execution, &self.site, input, output)
     }
 
-    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
+    fn embedding_forward(&self, ids: &Tensor, out: crate::EmbeddingOutput) -> Result<Tensor> {
         if let Some(execution) = current_lora_execution(self.runtime_id) {
             if execution.site_is_active(&self.site)? {
                 candle_core::bail!("dynamic LoRA does not support embedding linears");
             }
         }
-        self.base.embedding_forward_raw(ids)
+        self.base.embedding_forward(ids, out)
     }
 
     fn gather_forward_raw(&self, input: &Tensor, indices: &Tensor) -> Result<Tensor> {
@@ -401,7 +401,9 @@ mod tests {
         let expected = vec![vec![5f32, 6.], vec![1., 2.]];
 
         assert_eq!(
-            layer.embedding_forward_raw(&ids)?.to_vec2::<f32>()?,
+            layer
+                .embedding_forward(&ids, candle_core::DType::F32.into())?
+                .to_vec2::<f32>()?,
             expected
         );
 
@@ -415,14 +417,14 @@ mod tests {
         let mut other_execution = LoraExecution::new(registry.runtime_id(), vec![Some(0)]);
         other_execution.insert(&other_site, 0, weights()?)?;
         let output = with_lora_execution(Some(Arc::new(other_execution)), || {
-            layer.embedding_forward_raw(&ids)
+            layer.embedding_forward(&ids, candle_core::DType::F32.into())
         })?;
         assert_eq!(output.to_vec2::<f32>()?, expected);
 
         let mut embedding_execution = LoraExecution::new(registry.runtime_id(), vec![Some(0)]);
         embedding_execution.insert(&embedding_site, 0, weights()?)?;
         let error = with_lora_execution(Some(Arc::new(embedding_execution)), || {
-            layer.embedding_forward_raw(&ids)
+            layer.embedding_forward(&ids, candle_core::DType::F32.into())
         })
         .expect_err("active embedding LoRA should fail");
         assert!(error

@@ -13,19 +13,25 @@ mod kernels {
     const FP8_MAX: f32 = 448.0;
 
     #[cutile::entry(unchecked_accesses = true)]
-    unsafe fn quantize_bf16<const BM: i32, const BK: i32, const PK: i32, const SK: i32>(
+    unsafe fn quantize<
+        T: ElementType,
+        const BM: i32,
+        const BK: i32,
+        const PK: i32,
+        const SK: i32,
+    >(
         mut q: MappedPartitionMut<f4e2m1fnx2, { [BM, PK] }, { [1, 1] }>,
         s: *mut f8e4m3fn,
         rows: i32,
         scale_stride: i32,
-        x: &Tensor<bf16, { [-1, -1] }>,
+        x: &Tensor<T, { [-1, -1] }>,
         ag: &Tensor<f32, { [-1] }>,
     ) {
         let px = x.partition(const_shape![BM, BK]);
         let global: Tile<f32, { [1] }> = load_tile(ag, const_shape![1], [0]);
         for idx in q.iter_indices() {
             let (m, kg) = idx.components();
-            let xt: Tile<bf16, { [BM, BK] }> = px.load([m, kg]);
+            let xt: Tile<T, { [BM, BK] }> = px.load([m, kg]);
             let xf: Tile<f32, { [BM, BK] }> = convert_tile(xt);
             let xf = xf
                 / global
@@ -90,7 +96,8 @@ mod kernels {
     }
 
     #[cutile::entry(unchecked_accesses = false)]
-    fn matmul_bf16<
+    fn matmul<
+        T: ElementType,
         const BM: i32,
         const BN: i32,
         const BK: i32,
@@ -100,8 +107,8 @@ mod kernels {
         const LATENCY: i32,
         const GROUP_M: i32,
     >(
-        mut y: MappedPartitionMut<bf16, { [BM, BN] }, { [GROUP_M, 1] }>,
-        x: &Tensor<bf16, { [-1, -1] }>,
+        mut y: MappedPartitionMut<T, { [BM, BN] }, { [GROUP_M, 1] }>,
+        x: &Tensor<T, { [-1, -1] }>,
         q: &Tensor<f4e2m1fnx2, { [-1, -1] }>,
         qs: &Tensor<f8e4m3fn, { [-1, -1] }>,
         w: &Tensor<f4e2m1fnx2, { [-1, -1] }>,
@@ -135,15 +142,15 @@ mod kernels {
                     let sw: Tile<f8e4m3fn, { [SK, BN] }> = permute(sw, transpose);
                     acc = mmaf_scaled(xq, wt, acc, sx, sw);
                 } else {
-                    let xt: Tile<bf16, { [BM, BK] }> = px.load_pipelined::<LATENCY>([m, kg]);
+                    let xt: Tile<T, { [BM, BK] }> = px.load_pipelined::<LATENCY>([m, kg]);
                     let wf: Tile<f32, { [BN, BK] }> = convert_tile(wt);
                     let sw: Tile<f32, { [BN, SK] }> = convert_tile(sw);
                     let sw = sw
                         .reshape(const_shape![BN, SK, 1])
                         .broadcast(const_shape![BN, SK, BLOCK])
                         .reshape(const_shape![BN, BK]);
-                    let wd: Tile<bf16, { [BN, BK] }> = convert_tile(wf * sw);
-                    let wd: Tile<bf16, { [BK, BN] }> = permute(wd, transpose);
+                    let wd: Tile<T, { [BN, BK] }> = convert_tile(wf * sw);
+                    let wd: Tile<T, { [BK, BN] }> = permute(wd, transpose);
                     acc = mmaf(xt, wd, acc);
                 }
             }
@@ -160,165 +167,14 @@ mod kernels {
             } else {
                 result
             };
-            let out: Tile<bf16, { [BM, BN] }> = convert_tile(result);
+            let out: Tile<T, { [BM, BN] }> = convert_tile(result);
             y.store(out, idx);
         }
     }
 
     #[cutile::entry(unchecked_accesses = true)]
-    unsafe fn quantize_f16<const BM: i32, const BK: i32, const PK: i32, const SK: i32>(
-        mut q: MappedPartitionMut<f4e2m1fnx2, { [BM, PK] }, { [1, 1] }>,
-        s: *mut f8e4m3fn,
-        rows: i32,
-        scale_stride: i32,
-        x: &Tensor<f16, { [-1, -1] }>,
-        ag: &Tensor<f32, { [-1] }>,
-    ) {
-        let px = x.partition(const_shape![BM, BK]);
-        let global: Tile<f32, { [1] }> = load_tile(ag, const_shape![1], [0]);
-        for idx in q.iter_indices() {
-            let (m, kg) = idx.components();
-            let xt: Tile<f16, { [BM, BK] }> = px.load([m, kg]);
-            let xf: Tile<f32, { [BM, BK] }> = convert_tile(xt);
-            let xf = xf
-                / global
-                    .reshape(const_shape![1, 1])
-                    .broadcast(const_shape![BM, BK]);
-            let blocks: Tile<f32, { [BM, SK, BLOCK] }> = xf.reshape(const_shape![BM, SK, BLOCK]);
-            let maxima: Tile<f32, { [BM, SK] }> = reduce_max(absf(blocks), 2);
-            let maxima = maxima.reshape(const_shape![BM, SK]);
-            let fp4_max: Tile<f32, { [BM, SK] }> = constant(FP4_MAX, const_shape![BM, SK]);
-            let fp8_max: Tile<f32, { [BM, SK] }> = constant(FP8_MAX, const_shape![BM, SK]);
-            let zeros: Tile<f32, { [BM, SK] }> = constant(0.0f32, const_shape![BM, SK]);
-            let ones: Tile<f32, { [BM, SK] }> = constant(1.0f32, const_shape![BM, SK]);
-            let upper: Tile<f32, { [BM, BK] }> = constant(FP4_MAX, const_shape![BM, BK]);
-            let lower: Tile<f32, { [BM, BK] }> = constant(FP4_MIN, const_shape![BM, BK]);
-            let raw_scale = min_tile(maxima / fp4_max, fp8_max);
-            let sx: Tile<f8e4m3fn, { [BM, SK] }> = convert_tile(raw_scale);
-            let rounded: Tile<f32, { [BM, SK] }> = convert_tile(sx);
-            let denominator = select(eq_tile(rounded, zeros), ones, rounded);
-            let denominator = denominator
-                .reshape(const_shape![BM, SK, 1])
-                .broadcast(const_shape![BM, SK, BLOCK]);
-            let normalized = (blocks / denominator).reshape(const_shape![BM, BK]);
-            let normalized = max_tile(min_tile(normalized, upper), lower);
-            let xq: Tile<f4e2m1fn, { [BM, BK] }> = convert_tile(normalized);
-            let packed: Tile<f4e2m1fnx2, { [BM, PK] }> = xq.pack(const_shape![BM, PK]);
-            q.store(packed, idx);
-            let row: Tile<i32, { [BM] }> =
-                iota(const_shape![BM]) + broadcast_scalar(m * BM, const_shape![BM]);
-            let col: Tile<i32, { [SK] }> =
-                iota(const_shape![SK]) + broadcast_scalar(kg * SK, const_shape![SK]);
-            let row_offset: Tile<i64, { [BM] }> = exti(row);
-            let stride: Tile<i64, { [BM] }> =
-                exti(broadcast_scalar(scale_stride, const_shape![BM]));
-            let col_offset: Tile<i64, { [SK] }> = exti(col);
-            let offset = (row_offset * stride)
-                .reshape(const_shape![BM, 1])
-                .broadcast(const_shape![BM, SK])
-                + col_offset
-                    .reshape(const_shape![1, SK])
-                    .broadcast(const_shape![BM, SK]);
-            let mask = lt_tile(row, broadcast_scalar(rows, const_shape![BM]))
-                .reshape(const_shape![BM, 1])
-                .broadcast(const_shape![BM, SK])
-                & lt_tile(col, broadcast_scalar(scale_stride, const_shape![SK]))
-                    .reshape(const_shape![1, SK])
-                    .broadcast(const_shape![BM, SK]);
-            let base: PointerTile<*mut f8e4m3fn, { [] }> = pointer_to_tile(s);
-            let base: PointerTile<*mut f8e4m3fn, { [1, 1] }> = base.reshape(const_shape![1, 1]);
-            let base: PointerTile<*mut f8e4m3fn, { [BM, SK] }> =
-                base.broadcast(const_shape![BM, SK]);
-            let ptrs: PointerTile<*mut f8e4m3fn, { [BM, SK] }> = base.offset_tile(offset);
-            store_ptr_tko(
-                ptrs,
-                sx,
-                ordering::Weak,
-                None::<scope::TileBlock>,
-                Some(mask),
-                None,
-                Latency::<0>,
-            );
-        }
-    }
-
-    #[cutile::entry(unchecked_accesses = false)]
-    fn matmul_f16<
-        const BM: i32,
-        const BN: i32,
-        const BK: i32,
-        const PK: i32,
-        const SK: i32,
-        const A4: bool,
-        const LATENCY: i32,
-        const GROUP_M: i32,
-    >(
-        mut y: MappedPartitionMut<f16, { [BM, BN] }, { [GROUP_M, 1] }>,
-        x: &Tensor<f16, { [-1, -1] }>,
-        q: &Tensor<f4e2m1fnx2, { [-1, -1] }>,
-        qs: &Tensor<f8e4m3fn, { [-1, -1] }>,
-        w: &Tensor<f4e2m1fnx2, { [-1, -1] }>,
-        ws: &Tensor<f8e4m3fn, { [-1, -1] }>,
-        wg: &Tensor<f32, { [-1] }>,
-        ag: &Tensor<f32, { [-1] }>,
-    ) {
-        let px = x.partition(const_shape![BM, BK]);
-        let pq = q.partition(const_shape![BM, PK]);
-        let pqs = qs.partition(const_shape![BM, SK]);
-        let pw = w.partition(const_shape![BN, PK]);
-        let pws = ws.partition(const_shape![BN, SK]);
-        let pwg = wg.partition(const_shape![BN]);
-        let global: Tile<f32, { [1] }> = load_tile(ag, const_shape![1], [0]);
-        let transpose: Array<{ [1, 0] }> = Array::<{ [1, 0] }> {
-            dims: &[1i32, 0i32],
-        };
-        let k = num_tiles(&pw, 1);
-        for idx in y.iter_indices() {
-            let (m, n) = idx.components();
-            let mut acc: Tile<f32, { [BM, BN] }> = constant(0.0f32, const_shape![BM, BN]);
-            for kg in 0..k {
-                let packed: Tile<f4e2m1fnx2, { [BN, PK] }> = pw.load_pipelined::<LATENCY>([n, kg]);
-                let wt: Tile<f4e2m1fn, { [BN, BK] }> = packed.unpack(const_shape![BN, BK]);
-                let sw: Tile<f8e4m3fn, { [BN, SK] }> = pws.load_pipelined::<LATENCY>([n, kg]);
-                if A4 {
-                    let xp: Tile<f4e2m1fnx2, { [BM, PK] }> = pq.load_pipelined::<LATENCY>([m, kg]);
-                    let xq: Tile<f4e2m1fn, { [BM, BK] }> = xp.unpack(const_shape![BM, BK]);
-                    let sx: Tile<f8e4m3fn, { [BM, SK] }> = pqs.load_pipelined::<LATENCY>([m, kg]);
-                    let wt: Tile<f4e2m1fn, { [BK, BN] }> = permute(wt, transpose);
-                    let sw: Tile<f8e4m3fn, { [SK, BN] }> = permute(sw, transpose);
-                    acc = mmaf_scaled(xq, wt, acc, sx, sw);
-                } else {
-                    let xt: Tile<f16, { [BM, BK] }> = px.load_pipelined::<LATENCY>([m, kg]);
-                    let wf: Tile<f32, { [BN, BK] }> = convert_tile(wt);
-                    let sw: Tile<f32, { [BN, SK] }> = convert_tile(sw);
-                    let sw = sw
-                        .reshape(const_shape![BN, SK, 1])
-                        .broadcast(const_shape![BN, SK, BLOCK])
-                        .reshape(const_shape![BN, BK]);
-                    let wd: Tile<f16, { [BN, BK] }> = convert_tile(wf * sw);
-                    let wd: Tile<f16, { [BK, BN] }> = permute(wd, transpose);
-                    acc = mmaf(xt, wd, acc);
-                }
-            }
-            let weight_global: Tile<f32, { [BN] }> = pwg.load([n]);
-            let weight_global = weight_global
-                .reshape(const_shape![1, BN])
-                .broadcast(const_shape![BM, BN]);
-            let result = acc * weight_global;
-            let result = if A4 {
-                result
-                    * global
-                        .reshape(const_shape![1, 1])
-                        .broadcast(const_shape![BM, BN])
-            } else {
-                result
-            };
-            let out: Tile<f16, { [BM, BN] }> = convert_tile(result);
-            y.store(out, idx);
-        }
-    }
-    #[cutile::entry(unchecked_accesses = true)]
-    unsafe fn routed_matmul_bf16<
+    unsafe fn routed_matmul<
+        T: ElementType,
         const BM: i32,
         const BN: i32,
         const BK: i32,
@@ -328,13 +184,13 @@ mod kernels {
         const LATENCY: i32,
         const PERSISTENT: bool,
     >(
-        y: *mut bf16,
+        y: *mut T,
         sids: &Tensor<i32, { [-1] }>,
         eids: &Tensor<i32, { [-1] }>,
         ntpp: &Tensor<i32, { [-1] }>,
         routes: i32,
         n_size: i32,
-        x: &Tensor<bf16, { [-1, -1] }>,
+        x: &Tensor<T, { [-1, -1] }>,
         q: &Tensor<f4e2m1fnx2, { [-1, -1] }>,
         qs: &Tensor<f8e4m3fn, { [-1, -1] }>,
         w: &Tensor<f4e2m1fnx2, { [-1, -1, -1] }>,
@@ -389,15 +245,15 @@ mod kernels {
                         let sw: Tile<f8e4m3fn, { [SK, BN] }> = permute(sw, transpose);
                         acc = mmaf_scaled(xq, wt, acc, sx, sw);
                     } else {
-                        let xt: Tile<bf16, { [BM, BK] }> = px.load_pipelined::<LATENCY>([m, kg]);
+                        let xt: Tile<T, { [BM, BK] }> = px.load_pipelined::<LATENCY>([m, kg]);
                         let wf: Tile<f32, { [BN, BK] }> = convert_tile(wt);
                         let sw: Tile<f32, { [BN, SK] }> = convert_tile(sw);
                         let sw = sw
                             .reshape(const_shape![BN, SK, 1])
                             .broadcast(const_shape![BN, SK, BLOCK])
                             .reshape(const_shape![BN, BK]);
-                        let wd: Tile<bf16, { [BN, BK] }> = convert_tile(wf * sw);
-                        let wd: Tile<bf16, { [BK, BN] }> = permute(wd, transpose);
+                        let wd: Tile<T, { [BN, BK] }> = convert_tile(wf * sw);
+                        let wd: Tile<T, { [BK, BN] }> = permute(wd, transpose);
                         acc = mmaf(xt, wd, acc);
                     }
                 }
@@ -415,7 +271,7 @@ mod kernels {
                 } else {
                     result
                 };
-                let out: Tile<bf16, { [BM, BN] }> = convert_tile(result);
+                let out: Tile<T, { [BM, BN] }> = convert_tile(result);
                 let ids: Tile<i32, { [BM] }> = load_tile(sids, const_shape![BM], [m]);
                 let cols: Tile<i32, { [BN] }> =
                     iota(const_shape![BN]) + broadcast_scalar(n * BN, const_shape![BN]);
@@ -434,144 +290,10 @@ mod kernels {
                     & lt_tile(cols, broadcast_scalar(n_size, const_shape![BN]))
                         .reshape(const_shape![1, BN])
                         .broadcast(const_shape![BM, BN]);
-                let ptr: PointerTile<*mut bf16, { [] }> = pointer_to_tile(y);
-                let ptr: PointerTile<*mut bf16, { [1, 1] }> = ptr.reshape(const_shape![1, 1]);
-                let ptr: PointerTile<*mut bf16, { [BM, BN] }> = ptr.broadcast(const_shape![BM, BN]);
-                let ptr: PointerTile<*mut bf16, { [BM, BN] }> = ptr.offset_tile(offsets);
-                store_ptr_tko(
-                    ptr,
-                    out,
-                    ordering::Weak,
-                    None::<scope::TileBlock>,
-                    Some(mask),
-                    None,
-                    Latency::<0>,
-                );
-            }
-        }
-    }
-
-    #[cutile::entry(unchecked_accesses = true)]
-    unsafe fn routed_matmul_f16<
-        const BM: i32,
-        const BN: i32,
-        const BK: i32,
-        const PK: i32,
-        const SK: i32,
-        const A4: bool,
-        const LATENCY: i32,
-        const PERSISTENT: bool,
-    >(
-        y: *mut f16,
-        sids: &Tensor<i32, { [-1] }>,
-        eids: &Tensor<i32, { [-1] }>,
-        ntpp: &Tensor<i32, { [-1] }>,
-        routes: i32,
-        n_size: i32,
-        x: &Tensor<f16, { [-1, -1] }>,
-        q: &Tensor<f4e2m1fnx2, { [-1, -1] }>,
-        qs: &Tensor<f8e4m3fn, { [-1, -1] }>,
-        w: &Tensor<f4e2m1fnx2, { [-1, -1, -1] }>,
-        ws: &Tensor<f8e4m3fn, { [-1, -1, -1] }>,
-        wg: &Tensor<f32, { [-1, -1] }>,
-        ag: &Tensor<f32, { [-1] }>,
-    ) {
-        let px = x.partition(const_shape![BM, BK]);
-        let pq = q.partition(const_shape![BM, PK]);
-        let pqs = qs.partition(const_shape![BM, SK]);
-        let pw = w.partition(const_shape![1, BN, PK]);
-        let pws = ws.partition(const_shape![1, BN, SK]);
-        let pwg = wg.partition(const_shape![1, BN]);
-        let transpose: Array<{ [1, 0] }> = Array::<{ [1, 0] }> {
-            dims: &[1i32, 0i32],
-        };
-        let k = num_tiles(&pw, 2);
-        let block_id = get_tile_block_id().0;
-        let workers = get_num_tile_blocks().0;
-        let ntiles = ceil_div(n_size, BN);
-        let aligned: Tile<i32, { [1] }> = load_tile(ntpp, const_shape![1], [0]);
-        let aligned: i32 = tile_to_scalar(aligned.reshape(const_shape![]));
-        let rounds = if PERSISTENT {
-            ceil_div(ceil_div(aligned, BM) * ntiles, workers)
-        } else {
-            1i32
-        };
-        for round in 0..rounds {
-            let pid = block_id + round * workers;
-            let m = pid / ntiles;
-            let n = pid % ntiles;
-            if m * BM < aligned {
-                let expert: Tile<i32, { [1] }> = load_tile(eids, const_shape![1], [m]);
-                let expert: i32 = tile_to_scalar(expert.reshape(const_shape![]));
-                let global: Tile<f32, { [1] }> = load_tile(ag, const_shape![1], [expert]);
-                let mut acc: Tile<f32, { [BM, BN] }> = constant(0.0f32, const_shape![BM, BN]);
-                for kg in 0..k {
-                    let packed: Tile<f4e2m1fnx2, { [BN, PK] }> = pw
-                        .load_pipelined::<LATENCY>([expert, n, kg])
-                        .reshape(const_shape![BN, PK]);
-                    let wt: Tile<f4e2m1fn, { [BN, BK] }> = packed.unpack(const_shape![BN, BK]);
-                    let sw: Tile<f8e4m3fn, { [BN, SK] }> = pws
-                        .load_pipelined::<LATENCY>([expert, n, kg])
-                        .reshape(const_shape![BN, SK]);
-                    if A4 {
-                        let xp: Tile<f4e2m1fnx2, { [BM, PK] }> =
-                            pq.load_pipelined::<LATENCY>([m, kg]);
-                        let xq: Tile<f4e2m1fn, { [BM, BK] }> = xp.unpack(const_shape![BM, BK]);
-                        let sx: Tile<f8e4m3fn, { [BM, SK] }> =
-                            pqs.load_pipelined::<LATENCY>([m, kg]);
-                        let wt: Tile<f4e2m1fn, { [BK, BN] }> = permute(wt, transpose);
-                        let sw: Tile<f8e4m3fn, { [SK, BN] }> = permute(sw, transpose);
-                        acc = mmaf_scaled(xq, wt, acc, sx, sw);
-                    } else {
-                        let xt: Tile<f16, { [BM, BK] }> = px.load_pipelined::<LATENCY>([m, kg]);
-                        let wf: Tile<f32, { [BN, BK] }> = convert_tile(wt);
-                        let sw: Tile<f32, { [BN, SK] }> = convert_tile(sw);
-                        let sw = sw
-                            .reshape(const_shape![BN, SK, 1])
-                            .broadcast(const_shape![BN, SK, BLOCK])
-                            .reshape(const_shape![BN, BK]);
-                        let wd: Tile<f16, { [BN, BK] }> = convert_tile(wf * sw);
-                        let wd: Tile<f16, { [BK, BN] }> = permute(wd, transpose);
-                        acc = mmaf(xt, wd, acc);
-                    }
-                }
-                let weight_global: Tile<f32, { [BN] }> =
-                    pwg.load([expert, n]).reshape(const_shape![BN]);
-                let weight_global = weight_global
-                    .reshape(const_shape![1, BN])
-                    .broadcast(const_shape![BM, BN]);
-                let result = acc * weight_global;
-                let result = if A4 {
-                    result
-                        * global
-                            .reshape(const_shape![1, 1])
-                            .broadcast(const_shape![BM, BN])
-                } else {
-                    result
-                };
-                let out: Tile<f16, { [BM, BN] }> = convert_tile(result);
-                let ids: Tile<i32, { [BM] }> = load_tile(sids, const_shape![BM], [m]);
-                let cols: Tile<i32, { [BN] }> =
-                    iota(const_shape![BN]) + broadcast_scalar(n * BN, const_shape![BN]);
-                let row_offset: Tile<i64, { [BM] }> = exti(ids);
-                let stride: Tile<i64, { [BM] }> = exti(broadcast_scalar(n_size, const_shape![BM]));
-                let col_offset: Tile<i64, { [BN] }> = exti(cols);
-                let offsets = (row_offset * stride)
-                    .reshape(const_shape![BM, 1])
-                    .broadcast(const_shape![BM, BN])
-                    + col_offset
-                        .reshape(const_shape![1, BN])
-                        .broadcast(const_shape![BM, BN]);
-                let mask = lt_tile(ids, broadcast_scalar(routes, const_shape![BM]))
-                    .reshape(const_shape![BM, 1])
-                    .broadcast(const_shape![BM, BN])
-                    & lt_tile(cols, broadcast_scalar(n_size, const_shape![BN]))
-                        .reshape(const_shape![1, BN])
-                        .broadcast(const_shape![BM, BN]);
-                let ptr: PointerTile<*mut f16, { [] }> = pointer_to_tile(y);
-                let ptr: PointerTile<*mut f16, { [1, 1] }> = ptr.reshape(const_shape![1, 1]);
-                let ptr: PointerTile<*mut f16, { [BM, BN] }> = ptr.broadcast(const_shape![BM, BN]);
-                let ptr: PointerTile<*mut f16, { [BM, BN] }> = ptr.offset_tile(offsets);
+                let ptr: PointerTile<*mut T, { [] }> = pointer_to_tile(y);
+                let ptr: PointerTile<*mut T, { [1, 1] }> = ptr.reshape(const_shape![1, 1]);
+                let ptr: PointerTile<*mut T, { [BM, BN] }> = ptr.broadcast(const_shape![BM, BN]);
+                let ptr: PointerTile<*mut T, { [BM, BN] }> = ptr.offset_tile(offsets);
                 store_ptr_tko(
                     ptr,
                     out,
@@ -601,6 +323,14 @@ use half::{bf16, f16};
 use super::nvfp4::Nvfp4GemmArgs;
 use super::{catch_cutile_panic, context, device_multiprocessor_count};
 use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
+
+pub(super) const KERNEL_SOURCE_HASH: &str = kernels::_SOURCE_HASH;
+
+pub(super) fn with_element<T: cutile::DType>(generics: &[String]) -> Vec<String> {
+    std::iter::once(T::DTYPE.as_str().to_owned())
+        .chain(generics.iter().cloned())
+        .collect()
+}
 
 const BLOCK_SIZE: usize = 16;
 const QUANT_ROWS: usize = 4;
@@ -744,7 +474,7 @@ pub(super) fn quantize(
                     ag,
                 )
             }
-            .generics(generic);
+            .generics(with_element::<$dtype>(&generic));
             if compile_only {
                 catch_cutile_panic("NVFP4 quantization compile", || {
                     launcher.compile_on(&cutile_stream).map_err(|error| {
@@ -765,8 +495,8 @@ pub(super) fn quantize(
         }};
     }
     match x.dtype() {
-        DType::BF16 => run!(bf16, kernels::quantize_bf16),
-        DType::F16 => run!(f16, kernels::quantize_f16),
+        DType::BF16 => run!(bf16, kernels::quantize),
+        DType::F16 => run!(f16, kernels::quantize),
         dtype => candle_core::bail!("cuTile NVFP4 quantization does not support {dtype:?}"),
     }
     drop(q_guard);
@@ -783,12 +513,72 @@ pub(super) fn quantize(
     ))
 }
 
+/// Launch parameters of the dense NVFP4 matmul; the policy comes from [`dense_policy`] and the
+/// autotuner may replace it per shape and row bucket.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) struct DenseConfig {
+    pub(super) bm: usize,
+    pub(super) bn: usize,
+    pub(super) bk: usize,
+    pub(super) group_m: usize,
+    pub(super) latency: usize,
+    /// Worker warps per CTA; 0 leaves it to the compiler.
+    pub(super) warps: i32,
+    pub(super) blocks_per_sm: usize,
+}
+
+pub(super) fn dense_policy(
+    m: usize,
+    n: usize,
+    k: usize,
+    a4: bool,
+    device: MatmulDevice,
+) -> DenseConfig {
+    let (bm, bn, group_m) = dense_geometry(m, n, k, a4, device);
+    DenseConfig {
+        bm,
+        bn,
+        bk: MATMUL_K,
+        group_m,
+        latency: LOAD_LATENCY,
+        warps: dense_worker_warps(m, n, k, a4).unwrap_or(0),
+        blocks_per_sm: BLOCKS_PER_SM,
+    }
+}
+
+/// One dense NVFP4 matmul: an A16 activation, or an already quantized A4 one.
+#[derive(Clone, Copy)]
+pub(super) struct DenseOperands<'a> {
+    pub(super) x: Option<&'a Tensor>,
+    pub(super) prequantized: Option<(&'a Tensor, &'a Tensor)>,
+    pub(super) dtype: DType,
+    pub(super) args: Nvfp4GemmArgs<'a>,
+}
+
+impl DenseOperands<'_> {
+    fn rows_and_k(&self) -> Result<(usize, usize)> {
+        match self.prequantized {
+            Some((packed, _)) => {
+                let (m, packed_k) = packed.dims2()?;
+                Ok((m, packed_k * 2))
+            }
+            None => self.x.unwrap().dims2(),
+        }
+    }
+}
+
 pub(super) fn launch(x: &Tensor, args: Nvfp4GemmArgs<'_>, compile_only: bool) -> Result<Tensor> {
     if let Some(global) = args.activation_global_scale {
         let (packed, scales) = quantize(x, global, compile_only)?;
         launch_prequantized(&packed, &scales, x.dtype(), args, compile_only)
     } else {
-        launch_inner(Some(x), None, x.dtype(), args, compile_only)
+        let operands = DenseOperands {
+            x: Some(x),
+            prequantized: None,
+            dtype: x.dtype(),
+            args,
+        };
+        launch_dense(operands, None, compile_only)
     }
 }
 
@@ -799,28 +589,45 @@ pub(super) fn launch_prequantized(
     args: Nvfp4GemmArgs<'_>,
     compile_only: bool,
 ) -> Result<Tensor> {
-    launch_inner(None, Some((packed, scales)), dtype, args, compile_only)
+    let operands = DenseOperands {
+        x: None,
+        prequantized: Some((packed, scales)),
+        dtype,
+        args,
+    };
+    launch_dense(operands, None, compile_only)
 }
 
-fn launch_inner(
-    x: Option<&Tensor>,
-    prequantized: Option<(&Tensor, &Tensor)>,
-    dtype: DType,
-    args: Nvfp4GemmArgs<'_>,
+/// `config` overrides the tuned-or-policy choice, for the autotuner's candidates.
+pub(super) fn launch_dense(
+    operands: DenseOperands<'_>,
+    config: Option<DenseConfig>,
     compile_only: bool,
 ) -> Result<Tensor> {
-    let (m, k) = match prequantized {
-        Some((packed, _)) => {
-            let (m, packed_k) = packed.dims2()?;
-            (m, packed_k * 2)
-        }
-        None => x.unwrap().dims2()?,
-    };
+    let DenseOperands {
+        x,
+        prequantized,
+        dtype,
+        args,
+    } = operands;
+    let (m, k) = operands.rows_and_k()?;
     let (n, packed_k) = args.weights.dims2()?;
     let dev = args.weights.device().as_cuda_device()?;
     let a4 = prequantized.is_some();
-    let device = matmul_device(dev);
-    let (bm, bn, group_m) = dense_geometry(m, n, k, a4, device);
+    let cfg = config.unwrap_or_else(|| {
+        super::nvfp4_tune::dense_config(
+            super::nvfp4_tune::DenseKey::new(dev, n, k, a4, dtype),
+            m,
+            matmul_device(dev),
+        )
+    });
+    let DenseConfig {
+        bm,
+        bn,
+        bk,
+        group_m,
+        ..
+    } = cfg;
     let stream = dev.cuda_stream();
     let ordinal = stream.context().ordinal();
     let cutile_stream = context::stream(dev);
@@ -958,20 +765,20 @@ fn launch_inner(
             },
         )
     });
-    let blocks = (BLOCKS_PER_SM * device_multiprocessor_count(dev)) as u32;
+    let blocks = (cfg.blocks_per_sm.max(1) * device_multiprocessor_count(dev)) as u32;
     let generic = vec![
         bm.to_string(),
         bn.to_string(),
-        MATMUL_K.to_string(),
-        (MATMUL_K / 2).to_string(),
-        (MATMUL_K / BLOCK_SIZE).to_string(),
+        bk.to_string(),
+        (bk / 2).to_string(),
+        (bk / BLOCK_SIZE).to_string(),
         a4.to_string(),
-        LOAD_LATENCY.to_string(),
+        cfg.latency.to_string(),
         group_m.to_string(),
     ];
-    let options = if let Some(warps) = dense_worker_warps(m, n, k, a4) {
+    let options = if cfg.warps > 0 {
         cutile::cutile_compiler::compiler::utils::CompileOptions::default()
-            .num_worker_warps_per_cta(warps)
+            .num_worker_warps_per_cta(cfg.warps)
     } else {
         cutile::cutile_compiler::compiler::utils::CompileOptions::default()
     };
@@ -1002,7 +809,7 @@ fn launch_inner(
                 cutile::tensor::Tensor::<$dtype>::borrow_raw_parts(out_addr as CUdeviceptr, ordinal, vec![m as i32, n as i32], vec![n as i32, 1])
             };
             let mapped = y.partition([bm, bn]).map([group_m, 1], blocks.min((m.div_ceil(bm) * n.div_ceil(bn)) as u32));
-            let launcher = $kernel(mapped, input, q, qs, w, ws, wg, ag).generics(generic).compile_options(options);
+            let launcher = $kernel(mapped, input, q, qs, w, ws, wg, ag).generics(with_element::<$dtype>(&generic)).compile_options(options);
             if compile_only {
                 catch_cutile_panic("NVFP4 matmul compile", || {
                     launcher.compile_on(&cutile_stream).map_err(|error| candle_core::Error::msg(format!("cuTile NVFP4 matmul compile failed: {error:?}")))
@@ -1017,8 +824,8 @@ fn launch_inner(
         }};
     }
     match dtype {
-        DType::BF16 => run!(bf16, kernels::matmul_bf16),
-        DType::F16 => run!(f16, kernels::matmul_f16),
+        DType::BF16 => run!(bf16, kernels::matmul),
+        DType::F16 => run!(f16, kernels::matmul),
         dtype => candle_core::bail!("cuTile NVFP4 matmul does not support {dtype:?}"),
     }
 }
@@ -1032,6 +839,7 @@ const ROUTED_LARGE_PREFILL_ROWS: usize = 32;
 const ROUTED_PREFILL_COLUMNS: usize = 128;
 const ROUTED_PREFILL_MIN_WIDTH: usize = 512;
 const ROUTED_PREFILL_SHORT_K: usize = 128;
+const ROUTED_WORKERS_PER_SM: usize = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) struct RoutedGeometry {
@@ -1039,6 +847,9 @@ pub(super) struct RoutedGeometry {
     pub(super) columns: usize,
     pub(super) k: usize,
     pub(super) persistent: bool,
+    pub(super) latency: usize,
+    /// Persistent tile blocks per SM; unused by the one-block-per-tile grid.
+    pub(super) workers_per_sm: usize,
 }
 
 pub(super) fn routed_geometry(tokens: usize, n: usize, k: usize, a4: bool) -> RoutedGeometry {
@@ -1062,6 +873,8 @@ pub(super) fn routed_geometry(tokens: usize, n: usize, k: usize, a4: bool) -> Ro
                 MATMUL_K
             },
             persistent: true,
+            latency: LOAD_LATENCY,
+            workers_per_sm: ROUTED_WORKERS_PER_SM,
         }
     } else {
         RoutedGeometry {
@@ -1069,6 +882,8 @@ pub(super) fn routed_geometry(tokens: usize, n: usize, k: usize, a4: bool) -> Ro
             columns: ROUTED_COLUMNS,
             k: MATMUL_K,
             persistent: false,
+            latency: LOAD_LATENCY,
+            workers_per_sm: ROUTED_WORKERS_PER_SM,
         }
     }
 }
@@ -1083,6 +898,14 @@ pub(super) struct PreparedRoutedInput {
     geometry: RoutedGeometry,
 }
 
+/// How a routed activation is prepared; `geometry` overrides the tuned-or-policy choice.
+#[derive(Clone, Copy)]
+pub(super) struct GatherPlan {
+    pub(super) geometry: Option<RoutedGeometry>,
+    pub(super) uniform_input_scale: bool,
+    pub(super) compile_only: bool,
+}
+
 pub(super) fn prepare_gather(
     x: &Tensor,
     indices: &Tensor,
@@ -1090,6 +913,25 @@ pub(super) fn prepare_gather(
     uniform_input_scale: bool,
     compile_only: bool,
 ) -> Result<PreparedRoutedInput> {
+    let plan = GatherPlan {
+        geometry: None,
+        uniform_input_scale,
+        compile_only,
+    };
+    prepare_gather_with(x, indices, args, plan)
+}
+
+pub(super) fn prepare_gather_with(
+    x: &Tensor,
+    indices: &Tensor,
+    args: Nvfp4GemmArgs<'_>,
+    plan: GatherPlan,
+) -> Result<PreparedRoutedInput> {
+    let GatherPlan {
+        uniform_input_scale,
+        compile_only,
+        ..
+    } = plan;
     let (tokens, topk) = indices.dims2()?;
     let (experts, n, packed_k) = args.weights.dims3()?;
     let routes = tokens * topk;
@@ -1100,7 +942,11 @@ pub(super) fn prepare_gather(
     let Device::Cuda(dev) = x.device() else {
         candle_core::bail!("cuTile NVFP4 grouped matmul requires CUDA tensors")
     };
-    let geometry = routed_geometry(tokens, n, k, args.activation_global_scale.is_some());
+    let a4 = args.activation_global_scale.is_some();
+    let geometry = plan.geometry.unwrap_or_else(|| {
+        let key = super::nvfp4_tune::RoutedKey::new(dev, experts, n, k, topk, a4, x.dtype());
+        super::nvfp4_tune::routed_config(key, tokens)
+    });
     let indices = indices.contiguous()?;
     let (id_storage, id_layout) = indices.storage_and_layout();
     let Storage::Cuda(id_cuda) = &*id_storage else {
@@ -1144,7 +990,6 @@ pub(super) fn prepare_gather(
     let (sid_addr, _sid_guard) = slice_ptr_on_stream(&alignment.sids, 0, &stream);
     let (eid_addr, _eid_guard) = slice_ptr_on_stream(&alignment.eids, 0, &stream);
     let (ntpp_addr, _ntpp_guard) = slice_ptr_on_stream(&alignment.ntpp, 0, &stream);
-    let a4 = args.activation_global_scale.is_some();
     let quantize_source = a4
         && uniform_input_scale
         && crate::nvfp4::prepare::supports_source_quantization(input_rows, k, x_stride);
@@ -1384,7 +1229,7 @@ pub(super) fn launch_gather_prepared(
         )
     });
     let blocks = if geometry.persistent {
-        device_multiprocessor_count(dev) as u32
+        (device_multiprocessor_count(dev) * geometry.workers_per_sm.max(1)) as u32
     } else {
         (em.div_ceil(geometry.rows) * n.div_ceil(geometry.columns)) as u32
     };
@@ -1396,7 +1241,7 @@ pub(super) fn launch_gather_prepared(
         (geometry.k / 2).to_string(),
         (geometry.k / BLOCK_SIZE).to_string(),
         a4.to_string(),
-        LOAD_LATENCY.to_string(),
+        geometry.latency.to_string(),
         geometry.persistent.to_string(),
     ];
     macro_rules! dispatch {
@@ -1507,7 +1352,7 @@ pub(super) fn launch_gather_prepared(
                     ag,
                 )
             }
-            .generics(generic)
+            .generics(with_element::<$dtype>(&generic))
             .grid((blocks, 1, 1));
             dispatch!(matmul);
             drop(out_guard);
@@ -1518,8 +1363,8 @@ pub(super) fn launch_gather_prepared(
         }};
     }
     match x.dtype() {
-        DType::BF16 => Ok(run!(bf16, kernels::routed_matmul_bf16)),
-        DType::F16 => Ok(run!(f16, kernels::routed_matmul_f16)),
+        DType::BF16 => Ok(run!(bf16, kernels::routed_matmul)),
+        DType::F16 => Ok(run!(f16, kernels::routed_matmul)),
         dtype => {
             candle_core::bail!("cuTile NVFP4 grouped matmul does not support {dtype:?} activations")
         }

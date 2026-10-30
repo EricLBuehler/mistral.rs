@@ -5,6 +5,7 @@
 #include <cuda_runtime.h>
 
 #if CUDART_VERSION >= 13000
+#include "../common/fp_codecs.cuh"
 #include <cuda_fp4.h>
 #include <cuda_fp8.h>
 #endif
@@ -37,13 +38,9 @@ struct Args {
 };
 
 #if CUDART_VERSION >= 13000
-__device__ float fp8(uint8_t value) {
-  return __half2float(__nv_cvt_fp8_to_halfraw(value, __NV_E4M3));
-}
-
 __device__ int unpack4(uint32_t nibble) {
   const uint32_t magnitude =
-      __byte_perm(0x03020100u, 0x0c080604u, nibble & 0x7777u);
+      __byte_perm(kE2M1x2Pos0, kE2M1x2Pos1, nibble & 0x7777u);
   const uint32_t negative = __byte_perm(0, kMask, (nibble >> 1) & 0x4444u);
   return static_cast<int>(__vsub4(magnitude ^ negative, negative));
 }
@@ -78,7 +75,7 @@ template <typename T> __global__ void quantize(Args a) {
   }
   const uint8_t scale_byte = __nv_cvt_float_to_fp8(
       fminf(__fdiv_rn(maximum, kFp4Max), kFp8Max), __NV_SATFINITE, __NV_E4M3);
-  const float scale = fp8(scale_byte);
+  const float scale = e4m3_to_float(scale_byte);
   const float denominator = scale == 0.0f ? 1.0f : scale;
   uint8_t *output = a.quantized + (size_t(route) * a.k + group * kBlock) / 2;
 #pragma unroll
@@ -105,7 +102,8 @@ template <typename T> __global__ void gemv(Args a) {
     const uint2 codes = packed_block(input + group * (kBlock / 2));
     const int4 x = make_int4(unpack4(codes.x), unpack4(codes.x >> 16),
                              unpack4(codes.y), unpack4(codes.y >> 16));
-    const float input_scale = fp8(input_scales[group]) * kIntegerScale;
+    const float input_scale =
+        e4m3_to_float(input_scales[group]) * kIntegerScale;
 #pragma unroll
     for (int output = 0; output < kOutputs; ++output) {
       if (row + output >= a.n)
@@ -117,7 +115,8 @@ template <typename T> __global__ void gemv(Args a) {
       dot = __dp4a(x.y, unpack4(w.x >> 16), dot);
       dot = __dp4a(x.z, unpack4(w.y), dot);
       dot = __dp4a(x.w, unpack4(w.y >> 16), dot);
-      const float scale = fp8(a.scales[weight_row * (a.k / kBlock) + group]);
+      const float scale =
+          e4m3_to_float(a.scales[weight_row * (a.k / kBlock) + group]);
       sums[output] = fmaf(float(dot), input_scale * scale, sums[output]);
     }
   }

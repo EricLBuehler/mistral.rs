@@ -133,11 +133,17 @@ impl QuantMethod for UnquantLinear {
         Ok(self.w.clone())
     }
 
-    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
-        let mut final_dims = ids.dims().to_vec();
-        final_dims.push(self.w.dim(D::Minus1)?);
-        let ids = ids.flatten_all()?;
-        self.w.index_select(&ids, 0)?.reshape(final_dims)
+    fn embedding_table(&self) -> Option<crate::EmbeddingTable<'_>> {
+        let (rows, columns) = self.w.dims2().ok()?;
+        (matches!(self.w.dtype(), DType::F32 | DType::F16 | DType::BF16) && self.w.is_contiguous())
+            .then(|| {
+                crate::EmbeddingTable::new(
+                    crate::embedding::RowCodec::Dense(self.w.dtype()),
+                    rows,
+                    columns,
+                    &self.w,
+                )
+            })
     }
 
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {

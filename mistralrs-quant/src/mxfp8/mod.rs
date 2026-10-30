@@ -208,6 +208,16 @@ impl QuantMethod for Mxfp8Linear {
         candle_core::bail!("MXFP8 layers require packed E4M3 weights and E8M0 scales")
     }
 
+    fn embedding_table(&self) -> Option<crate::EmbeddingTable<'_>> {
+        use crate::embedding::{RowCodec, ScaleGrid, ScaleType};
+        let (rows, columns) = self.weight.dims2().ok()?;
+        let grid = ScaleGrid::per_row(ScaleType::E8m0, MXFP8_BLOCK_SIZE);
+        Some(
+            crate::EmbeddingTable::new(RowCodec::Fp8(Some(grid)), rows, columns, &self.weight)
+                .with_scales(&self.scales),
+        )
+    }
+
     fn dequantize_w(&self) -> Result<Tensor> {
         self.weight
             .apply_op2_no_bwd(&self.scales, &Dequantize { dtype: self.dtype })
@@ -246,6 +256,18 @@ impl QuantMethod for Mxfp8Linear {
         }
     }
 
+    fn routed_weights(&self) -> Option<crate::RoutedWeights> {
+        let (experts, n, k) = self.weight.dims3().ok()?;
+        Some(crate::RoutedWeights::new(
+            crate::RoutedCodec::Mxfp8,
+            self.weight.clone(),
+            self.scales.clone(),
+            None,
+            self.bias.clone(),
+            [experts, n, k],
+        ))
+    }
+
     fn gather_forward_raw(&self, input: &Tensor, indices: &Tensor) -> Result<Tensor> {
         let (_, _, k) = self.weight.dims3()?;
         let (rows, topk) = indices.dims2()?;
@@ -258,6 +280,23 @@ impl QuantMethod for Mxfp8Linear {
             candle_core::bail!(
                 "MXFP8 gather activation/index shapes do not match the expert weights"
             );
+        }
+        if let Some(routed) = self.routed_weights() {
+            if let Some(output) = crate::try_routed_gather(input, indices, &routed)? {
+                return Ok(output);
+            }
+        }
+        #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+        {
+            let view = crate::moe::grouped_fp8::Fp8WeightView {
+                weight: &self.weight,
+                scales: &self.scales,
+                encoding: crate::moe::grouped_fp8::Fp8ScaleEncoding::E8m0,
+                block: [1, MXFP8_BLOCK_SIZE],
+            };
+            if let Some(output) = crate::moe::grouped_fp8::gather(input, indices, view)? {
+                return Ok(output);
+            }
         }
         let input = input
             .contiguous()?
@@ -431,7 +470,7 @@ fn quantization_scale(group: &[f32]) -> u8 {
     (exponent + E8M0_BIAS) as u8
 }
 
-fn quantize_packed(input: &Tensor) -> Result<QuantizedActivation> {
+pub(crate) fn quantize_packed(input: &Tensor) -> Result<QuantizedActivation> {
     let k = input.dim(candle_core::D::Minus1)?;
     if input.rank() < 2 || k == 0 || !k.is_multiple_of(MXFP8_BLOCK_SIZE) {
         candle_core::bail!(

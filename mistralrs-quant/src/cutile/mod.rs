@@ -13,6 +13,7 @@ mod nvfp4;
 mod nvfp4_gemv;
 mod nvfp4_glu;
 mod nvfp4_matmul;
+mod nvfp4_tune;
 mod qsa;
 mod qsa_decode;
 mod routed_lora;
@@ -62,7 +63,7 @@ pub use routed_lora::{
     CutileRoutedLoraShapeKey, CutileRoutedLoraStatus, CutileRoutedLoraTuningKey,
     CutileRoutedLoraUnsupported, CUTILE_ROUTED_LORA_MAX_RANK,
 };
-pub use tune::{TuneMode, TUNE_CACHE_ENV, TUNE_MODE_ENV};
+pub use tune::{TuneMode, TUNE_BUDGET_ENV, TUNE_CACHE_ENV, TUNE_MODE_ENV};
 pub use warmup::{register_moe_routing, warmup_moe_kernels};
 
 fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
@@ -110,21 +111,21 @@ pub(crate) struct EntryHints {
     pub(crate) num_cta_in_cga: i32,
 }
 
-// Measured on SM12x; other majors keep tileiras defaults.
-const FP8_GEMM_ENTRY_HINTS: &[(i32, EntryHints)] = &[(
-    12,
-    EntryHints {
-        occupancy: 2,
-        num_cta_in_cga: 2,
-    },
-)];
+const SMALL_SMEM_OPTIN_BYTES: usize = 128 * 1024;
+// Measured on GB10: two resident CTAs paired in a cluster win where smem cannot hold deep stages.
+const SMALL_SMEM_FP8_HINTS: EntryHints = EntryHints {
+    occupancy: 2,
+    num_cta_in_cga: 2,
+};
 
 pub(crate) fn fp8_gemm_entry_hints(dev: &candle_core::CudaDevice) -> Option<EntryHints> {
-    let major = crate::cuda_device::cuda_device_info(dev).major;
-    FP8_GEMM_ENTRY_HINTS
-        .iter()
-        .find(|(hinted, _)| *hinted == major)
-        .map(|(_, hints)| *hints)
+    fp8_entry_hints_for(&crate::cuda_device::cuda_device_info(dev))
+}
+
+// Clusters need Hopper or newer; large-smem parts keep tileiras defaults.
+fn fp8_entry_hints_for(info: &crate::cuda_device::CudaDeviceInfo) -> Option<EntryHints> {
+    (info.is_hopper_or_newer() && info.smem_optin <= SMALL_SMEM_OPTIN_BYTES)
+        .then_some(SMALL_SMEM_FP8_HINTS)
 }
 
 pub fn device_multiprocessor_count(dev: &candle_core::CudaDevice) -> usize {
@@ -268,6 +269,27 @@ mod tests {
     fn tileiras_target_parser_reads_only_gpu_values() {
         let help = "--gpu-name=<value>\n  =sm_80 - SM 80\n  =sm_121 - SM 121\n  sm_90\n  =sm_bad";
         assert_eq!(parse_tileiras_targets(help), vec![80, 121]);
+    }
+
+    #[test]
+    fn fp8_entry_hints_follow_cluster_support_and_smem() {
+        let device = |major, minor, smem_optin| crate::cuda_device::CudaDeviceInfo {
+            major,
+            minor,
+            sms: 48,
+            threads_per_sm: 1536,
+            l2_bytes: 24 << 20,
+            smem_optin,
+            warp_size: 32,
+            integrated: false,
+        };
+        let hinted =
+            |info| super::fp8_entry_hints_for(&info).map(|h| (h.occupancy, h.num_cta_in_cga));
+        assert_eq!(hinted(device(12, 1, 99 << 10)), Some((2, 2)));
+        assert_eq!(hinted(device(12, 0, 99 << 10)), Some((2, 2)));
+        assert_eq!(hinted(device(10, 0, 227 << 10)), None);
+        assert_eq!(hinted(device(9, 0, 227 << 10)), None);
+        assert_eq!(hinted(device(8, 9, 99 << 10)), None);
     }
 
     #[test]

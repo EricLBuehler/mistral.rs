@@ -6869,7 +6869,7 @@ pub fn apply_triangular(xs: &Tensor, diagonal: isize, upper: bool) -> Result<Ten
 /// - CUDA: Custom CUDA kernel with vec4 optimization
 /// - Metal: Native Metal kernel
 /// - CPU: Rayon-parallelized implementation
-fn glu_activation_type(act: Activation) -> Option<mistralrs_quant::GluActivationType> {
+pub(crate) fn glu_activation_type(act: Activation) -> Option<mistralrs_quant::GluActivationType> {
     match act {
         Activation::Silu | Activation::Swish => Some(mistralrs_quant::GluActivationType::Silu),
         Activation::NewGelu | Activation::GeluPytorchTanh => {

@@ -755,7 +755,8 @@ impl Qwen4ExpTextModel {
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.embedding_forward(input_ids, self.dtype)
+        self.embed_tokens
+            .embedding_forward(input_ids, self.dtype.into())
     }
 
     /// `(start, len)` of every logical sequence on the flattened token axis of `xs: [b, s, h]`.

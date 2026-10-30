@@ -145,12 +145,8 @@ impl QuantMethod for PendingIsqLayer {
         self.resolve()?.gather_forward_raw(a, indices)
     }
 
-    fn embedding_forward(&self, ids: &Tensor, output_dtype: DType) -> Result<Tensor> {
-        self.resolve()?.embedding_forward(ids, output_dtype)
-    }
-
-    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
-        self.resolve()?.embedding_forward_raw(ids)
+    fn embedding_forward(&self, ids: &Tensor, out: crate::EmbeddingOutput) -> Result<Tensor> {
+        self.resolve()?.embedding_forward(ids, out)
     }
 
     fn quantized_act_type(&self) -> Option<DType> {

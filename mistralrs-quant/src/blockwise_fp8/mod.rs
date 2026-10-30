@@ -512,6 +512,23 @@ impl QuantMethod for BlockwiseFP8Linear {
             }
         }
     }
+    fn embedding_table(&self) -> Option<crate::EmbeddingTable<'_>> {
+        use crate::embedding::{RowCodec, ScaleGrid, ScaleType};
+        let (rows, columns) = self.weight.dims2().ok()?;
+        let &[block_rows, block_columns] = self.weight_block_size.as_slice() else {
+            return None;
+        };
+        let grid = ScaleGrid {
+            ty: ScaleType::from_dtype(self.weight_scale_inv.dtype()).ok()?,
+            group: block_columns,
+            rows_per_scale: block_rows,
+        };
+        Some(
+            crate::EmbeddingTable::new(RowCodec::Fp8(Some(grid)), rows, columns, &self.weight)
+                .with_scales(&self.weight_scale_inv),
+        )
+    }
+
     fn dequantize_w(&self) -> Result<candle_core::Tensor> {
         if self.weight.rank() == 3 {
             let experts = (0..self.weight.dim(0)?)
@@ -715,7 +732,45 @@ impl QuantMethod for BlockwiseFP8Linear {
     ///
     /// If `a` is (n_tokens, 1, cols), `self` weights are (n_experts, rows, cols),
     /// then the indices are (n_tokens, n_experts_per_tok).
+    fn routed_weights(&self) -> Option<crate::RoutedWeights> {
+        let (experts, n, k) = self.weight.dims3().ok()?;
+        let [block_rows, block_cols] = self.weight_block_size[..] else {
+            return None;
+        };
+        Some(crate::RoutedWeights::new(
+            crate::RoutedCodec::Fp8 {
+                block_rows,
+                block_cols,
+            },
+            self.weight.clone(),
+            self.weight_scale_inv.clone(),
+            None,
+            self.bias.clone(),
+            [experts, n, k],
+        ))
+    }
+
     fn gather_forward_raw(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        if let Some(routed) = self.routed_weights() {
+            if let Some(output) = crate::try_routed_gather(x, indices, &routed)? {
+                return Ok(output);
+            }
+        }
+        #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+        if let [block_n, block_k] = *self.weight_block_size.as_slice() {
+            let view = crate::moe::grouped_fp8::Fp8WeightView {
+                weight: &self.weight,
+                scales: &self.weight_scale_inv,
+                encoding: crate::moe::grouped_fp8::Fp8ScaleEncoding::F32,
+                block: [block_n, block_k],
+            };
+            if let Some(result) = crate::moe::grouped_fp8::gather(x, indices, view)? {
+                return match &self.bias {
+                    Some(bias) => result.broadcast_add(bias),
+                    None => Ok(result),
+                };
+            }
+        }
         // Try to use native FP8 indexed MoE GEMM kernel on CUDA
         #[cfg(feature = "cuda")]
         {

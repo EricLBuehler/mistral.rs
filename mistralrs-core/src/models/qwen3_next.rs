@@ -966,7 +966,9 @@ impl Model {
         input_ids: &Tensor,
         ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        let mut x = self.embed_tokens.embedding_forward(input_ids, self.dtype)?;
+        let mut x = self
+            .embed_tokens
+            .embedding_forward(input_ids, self.dtype.into())?;
 
         let recurrent_metadata = ctx.recurrent_metadata().cloned();
         let has_linear_attention = self

@@ -16,8 +16,9 @@ use candle_nn::Linear;
 use float8::F8E4M3;
 use mistralrs_quant::{
     blockwise_fp8_moe, linear_no_bias, quantize_expert_stack, try_fused_gate_up, try_fused_qkv,
-    Fp8ActivationScheme, GluActivationType, IsqType, MXFP4Layer, PreQuantizedExperts, QuantMethod,
-    QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig, ShardedSafeTensors, UnquantLinear,
+    try_routed_ffn, EmbeddingOutput, Fp8ActivationScheme, GluActivationType, IsqType, MXFP4Layer,
+    PreQuantizedExperts, QuantMethod, QuantMethodConfig, QuantizeOntoGuard, QuantizedConfig,
+    ShardedSafeTensors, UnquantLinear,
 };
 use serde_json::{json, Value};
 
@@ -29,7 +30,11 @@ const MOE_HIDDEN: usize = 2048;
 const MOE_INTER: usize = 768;
 const MOE_EXPERTS: usize = 64;
 const MOE_TOPK: usize = 8;
+const FFN_LAYERS: f64 = 3.0;
 const DECODE_MAX_ROWS: usize = 8;
+const EMBED_VOCAB: usize = 151936;
+const EMBED_HIDDEN: usize = 2048;
+const BYTES_PER_MB: f64 = 1e6;
 
 const WEIGHT_STD: f32 = 0.02;
 // static activation scales are calibrated for N(0, 1) inputs
@@ -66,18 +71,24 @@ const LCG_INC: u64 = 1442695040888963407;
 const DENSE_PREFIX: &str = "model.layers.0.proj";
 const MOE_PREFIX: &str = "model.layers.0.mlp";
 const CELL_PREFIX: &str = "SCOREBOARD_CELL";
+// set to run cuTile warmup (and its autotuner, see MISTRALRS_CUTILE_TUNE) after each layer build
+const WARMUP_ENV: &str = "SCOREBOARD_WARMUP";
 const NO_DEQUANT_NOTE: &str = " ref=orig weight";
 const STICKY_EXIT_CODE: i32 = 3;
 const NOTE_MAX_CHARS: usize = 120;
 const LABEL_WIDTH: usize = 20;
 const CELL_WIDTH: usize = 9;
+// rows that force the pre-Blackwell NVFP4 kernels
+const PORTABLE_NVFP4_ROWS: [&str; 2] = ["nvfp4_fallback", "nvfp4_w4a16_fallback"];
 
 #[derive(Clone, Copy, PartialEq)]
 enum OpKind {
     Dense(usize),
     Moe(usize),
+    MoeFfn(usize),
     GateUp(usize),
     Qkv(usize),
+    Embed(usize),
 }
 
 struct Op {
@@ -86,7 +97,7 @@ struct Op {
     kind: OpKind,
 }
 
-const OPS: [Op; 12] = [
+const OPS: [Op; 16] = [
     Op {
         id: "m1",
         label: "decode M=1",
@@ -123,6 +134,16 @@ const OPS: [Op; 12] = [
         kind: OpKind::Moe(8),
     },
     Op {
+        id: "ffn_t1",
+        label: "routed FFN T=1",
+        kind: OpKind::MoeFfn(1),
+    },
+    Op {
+        id: "ffn_t8",
+        label: "routed FFN T=8",
+        kind: OpKind::MoeFfn(8),
+    },
+    Op {
         id: "moe_t512",
         label: "MoE prefill T=512",
         kind: OpKind::Moe(512),
@@ -147,12 +168,27 @@ const OPS: [Op; 12] = [
         label: "fused QKV M=512",
         kind: OpKind::Qkv(512),
     },
+    Op {
+        id: "embed_t1",
+        label: "embedding T=1",
+        kind: OpKind::Embed(1),
+    },
+    Op {
+        id: "embed_t512",
+        label: "embedding T=512",
+        kind: OpKind::Embed(512),
+    },
 ];
 
 impl OpKind {
     fn rows(self) -> usize {
         match self {
-            Self::Dense(m) | Self::Moe(m) | Self::GateUp(m) | Self::Qkv(m) => m,
+            Self::Dense(m)
+            | Self::Moe(m)
+            | Self::MoeFfn(m)
+            | Self::GateUp(m)
+            | Self::Qkv(m)
+            | Self::Embed(m) => m,
         }
     }
 
@@ -165,8 +201,11 @@ impl OpKind {
         match self {
             Self::Dense(m) => (m, DENSE_N, DENSE_K),
             Self::Moe(t) => (t * MOE_TOPK, MOE_INTER, MOE_HIDDEN),
+            Self::MoeFfn(t) => (t * MOE_TOPK, 3 * MOE_INTER, MOE_HIDDEN),
             Self::GateUp(m) => (m, 2 * DENSE_N, DENSE_K),
             Self::Qkv(m) => (m, QKV_Q_OUT + 2 * QKV_KV_OUT, DENSE_K),
+            // embeddings are ranked against a bf16 index_select instead
+            Self::Embed(t) => (t, EMBED_HIDDEN, 1),
         }
     }
 }
@@ -201,6 +240,8 @@ struct Format {
     kernel_tol: f64,
     // vs the original bf16 weight, covers weight quantization error
     quant_tol: f64,
+    // activation and output dtype of checkpoint layers
+    dtype: DType,
 }
 
 macro_rules! fmt_row {
@@ -213,11 +254,18 @@ macro_rules! fmt_row {
             bits_per_weight: $bpw,
             kernel_tol: $ktol,
             quant_tol: $qtol,
+            dtype: DType::BF16,
+        }
+    };
+    ($id:literal, $label:literal, $group:literal, $build:expr, $bpw:literal, $ktol:literal, $qtol:literal, $dtype:expr) => {
+        Format {
+            dtype: $dtype,
+            ..fmt_row!($id, $label, $group, $build, $bpw, $ktol, $qtol)
         }
     };
 }
 
-const FORMATS: [Format; 24] = [
+const FORMATS: [Format; 29] = [
     fmt_row!("bf16", "bf16", "unquantized", Build::Bf16, 16.0, 0.01, 0.01),
     fmt_row!(
         "q4_0",
@@ -407,6 +455,54 @@ const FORMATS: [Format; 24] = [
         4.5,
         0.02,
         0.25
+    ),
+    fmt_row!(
+        "nvfp4_fallback",
+        "NVFP4 W4A4 pre-BW",
+        "fp4",
+        Build::Ckpt(Ckpt::Nvfp4),
+        4.5,
+        0.25,
+        0.35
+    ),
+    fmt_row!(
+        "nvfp4_w4a16_fallback",
+        "NVFP4 W4A16 pre-BW",
+        "fp4",
+        Build::Ckpt(Ckpt::Nvfp4W4A16),
+        4.5,
+        0.02,
+        0.25
+    ),
+    fmt_row!(
+        "mxfp8_f16",
+        "MXFP8 f16",
+        "fp8",
+        Build::Ckpt(Ckpt::Mxfp8),
+        8.25,
+        0.08,
+        0.12,
+        DType::F16
+    ),
+    fmt_row!(
+        "nvfp4_f16",
+        "NVFP4 W4A4 f16",
+        "fp4",
+        Build::Ckpt(Ckpt::Nvfp4),
+        4.5,
+        0.25,
+        0.35,
+        DType::F16
+    ),
+    fmt_row!(
+        "nvfp4_w4a16_f16",
+        "NVFP4 W4A16 f16",
+        "fp4",
+        Build::Ckpt(Ckpt::Nvfp4W4A16),
+        4.5,
+        0.02,
+        0.25,
+        DType::F16
     ),
     fmt_row!("mxfp4", "MXFP4", "fp4", Build::Mxfp4, 4.25, 0.02, 0.3),
     fmt_row!(
@@ -801,7 +897,7 @@ fn build_dense(fmt: &Format, w: &Tensor) -> Result<Arc<dyn QuantMethod>> {
         Build::Ckpt(kind) => {
             let mut map = HashMap::new();
             ckpt_entries(kind, w, DENSE_PREFIX, &mut map)?;
-            let vb = ShardedSafeTensors::wrap(map, DType::BF16, dev);
+            let vb = ShardedSafeTensors::wrap(map, fmt.dtype, dev);
             linear_no_bias(k, n, &Some(ckpt_config(kind)?), vb.pp(DENSE_PREFIX))
         }
     }
@@ -862,7 +958,7 @@ fn build_moe(fmt: &Format, w: &Tensor) -> Result<Arc<dyn QuantMethod>> {
                 let down = w_e.t()?.contiguous()?;
                 ckpt_entries(kind, &down, &format!("{base}.down_proj"), &mut map)?;
             }
-            let vb = ShardedSafeTensors::wrap(map, DType::BF16, dev);
+            let vb = ShardedSafeTensors::wrap(map, fmt.dtype, dev);
             let experts = PreQuantizedExperts::new(
                 k,
                 n,
@@ -892,6 +988,12 @@ fn make_case(
         .to_dtype(DType::BF16)?
         .to_dtype(DType::F32)?;
     let layer = build(fmt, &orig)?;
+    if env::var_os(WARMUP_ENV).is_some() {
+        // inference only warns on a failed warmup too; the cell still runs and JITs lazily
+        if let Err(e) = mistralrs_quant::cutile::warmup_moe_kernels(dev, true) {
+            eprintln!("warmup failed: {}", sanitize(&e.to_string()));
+        }
+    }
     let (deq, deq_note) = match layer.dequantize_w() {
         Ok(d) if d.elem_count() == orig.elem_count() => (
             d.to_device(dev)?.to_dtype(DType::F32)?.reshape(shape)?,
@@ -924,6 +1026,9 @@ struct Worker {
     k: Lazy,
     v: Lazy,
     moe: Lazy,
+    moe_up: Lazy,
+    moe_down: Lazy,
+    embed: Lazy,
 }
 
 impl Worker {
@@ -939,7 +1044,7 @@ impl Worker {
     }
 
     fn input(&self, shape: &[usize]) -> Result<(Tensor, Tensor)> {
-        let x = Tensor::randn(0f32, 1f32, shape, &self.dev)?.to_dtype(DType::BF16)?;
+        let x = Tensor::randn(0f32, 1f32, shape, &self.dev)?.to_dtype(self.fmt.dtype)?;
         let xf = x.to_dtype(DType::F32)?;
         Ok((x, xf))
     }
@@ -1060,6 +1165,45 @@ impl Worker {
         self.classify(op, bytes, ms, &case.deq_note)
     }
 
+    // gate/up/down + weighted reduce through the routed decode path the MoE block takes first
+    fn moe_ffn(&self, op: &Op, tokens: usize) -> Result<Cell> {
+        let gate_shape = [MOE_EXPERTS, MOE_INTER, MOE_HIDDEN];
+        let gate = self.get(&self.moe, &gate_shape, build_moe)?;
+        let up = self.get(&self.moe_up, &gate_shape, build_moe)?;
+        let down = self.get(
+            &self.moe_down,
+            &[MOE_EXPERTS, MOE_HIDDEN, MOE_INTER],
+            build_moe,
+        )?;
+        let ids = routing(tokens);
+        let unique = ids.iter().collect::<HashSet<_>>().len();
+        let idx = Tensor::from_vec(ids.clone(), (tokens, MOE_TOPK), &self.dev)?;
+        let weights = (0..ids.len())
+            .map(|i| (i % MOE_TOPK + 1) as f32 / MOE_TOPK as f32)
+            .collect::<Vec<_>>();
+        let route_w = Tensor::from_slice(&weights, (tokens, MOE_TOPK), &self.dev)?;
+        let (x, xf) = self.input(&[tokens, MOE_HIDDEN])?;
+        let xt = xf.t()?.contiguous()?;
+        let members = [&*gate.layer, &*up.layer, &*down.layer];
+        let run = || try_routed_ffn(&x, &idx, &route_w, members, GluActivationType::Silu);
+        let Some(y) = run()? else {
+            return Ok(Cell::none("no routed FFN path"));
+        };
+        let reference = |w: [&Tensor; 3]| ffn_reference(w, &xt, &ids, &weights);
+        let kernel_rel = rel_err(&y, &reference([&gate.deq, &up.deq, &down.deq])?)?;
+        let quant_rel = rel_err(&y, &reference([&gate.orig, &up.orig, &down.orig])?)?;
+        // quant error from the three stacked layers adds roughly in quadrature vs the one-layer tolerance
+        let quant_rel = quant_rel / FFN_LAYERS.sqrt();
+        if let Some(cell) = self.check(kernel_rel, quant_rel, &gate.deq_note) {
+            return Ok(cell);
+        }
+        let ms = self.time(op, || {
+            run()?.ok_or_else(|| candle_core::Error::msg("routed path disappeared"))
+        })?;
+        let bytes = self.weight_bytes(3 * unique * MOE_INTER * MOE_HIDDEN);
+        self.classify(op, bytes, ms, &gate.deq_note)
+    }
+
     fn gate_up(&self, op: &Op, m: usize) -> Result<Cell> {
         let up = self.get(&self.up, &[DENSE_N, DENSE_K], build_dense)?;
         let gate = self.get(&self.gate, &[DENSE_N, DENSE_K], build_dense)?;
@@ -1127,12 +1271,49 @@ impl Worker {
         self.classify(op, self.weight_bytes(elems), ms, &q.deq_note)
     }
 
+    fn embed(&self, op: &Op, tokens: usize) -> Result<Cell> {
+        let case = self.get(&self.embed, &[EMBED_VOCAB, EMBED_HIDDEN], build_dense)?;
+        let ids = Tensor::from_vec(embed_ids(tokens), (1, tokens), &self.dev)?;
+        let flat = ids.flatten_all()?;
+        let out = EmbeddingOutput::from(DType::BF16);
+        let y = case.layer.embedding_forward(&ids, out)?;
+        let kernel_rel = rel_err(&y, &case.deq.index_select(&flat, 0)?)?;
+        let quant_rel = rel_err(&y, &case.orig.index_select(&flat, 0)?)?;
+        if let Some(cell) = self.check(kernel_rel, quant_rel, &case.deq_note) {
+            return Ok(cell);
+        }
+        let ms = self.time(op, || case.layer.embedding_forward(&ids, out))?;
+        let table = case.orig.to_dtype(DType::BF16)?;
+        let base = self.time(op, || table.index_select(&flat, 0))?;
+        let ratio = base / ms;
+        let status = if ratio >= FAST_RATIO {
+            Status::Fast
+        } else if ratio >= PARTIAL_RATIO {
+            Status::Partial
+        } else {
+            Status::Fallback
+        };
+        let elems = EMBED_VOCAB * EMBED_HIDDEN;
+        Ok(Cell {
+            status,
+            short: format!("{ratio:.2}x"),
+            note: format!(
+                "{ratio:.2}x bf16 index_select ({base:.4} ms), {ms:.4} ms, table {:.0} MB vs bf16 {:.0} MB{}",
+                self.weight_bytes(elems) / BYTES_PER_MB,
+                (elems * DType::BF16.size_in_bytes()) as f64 / BYTES_PER_MB,
+                case.deq_note
+            ),
+        })
+    }
+
     fn run(&self, op: &Op) -> Result<Cell> {
         match op.kind {
             OpKind::Dense(m) => self.dense(op, m),
             OpKind::Moe(t) => self.moe(op, t),
+            OpKind::MoeFfn(t) => self.moe_ffn(op, t),
             OpKind::GateUp(m) => self.gate_up(op, m),
             OpKind::Qkv(m) => self.qkv(op, m),
+            OpKind::Embed(t) => self.embed(op, t),
         }
     }
 }
@@ -1158,6 +1339,23 @@ fn routing(tokens: usize) -> Vec<u32> {
     ids
 }
 
+// first and last rows plus LCG rows with a repeat
+fn embed_ids(tokens: usize) -> Vec<u32> {
+    let mut state = ROUTING_SEED;
+    let mut ids = (0..tokens)
+        .map(|_| {
+            state = state.wrapping_mul(LCG_MUL).wrapping_add(LCG_INC);
+            ((state >> 33) as usize % EMBED_VOCAB) as u32
+        })
+        .collect::<Vec<_>>();
+    if tokens > 2 {
+        ids[0] = 0;
+        ids[1] = ids[tokens / 2];
+        ids[tokens - 1] = (EMBED_VOCAB - 1) as u32;
+    }
+    ids
+}
+
 // w [E, N, K] f32, xt [K, T] -> [T, topk, N]
 fn moe_reference(w: &Tensor, xt: &Tensor, ids: &[u32]) -> Result<Tensor> {
     let all = w.broadcast_matmul(xt)?;
@@ -1170,6 +1368,23 @@ fn moe_reference(w: &Tensor, xt: &Tensor, ids: &[u32]) -> Result<Tensor> {
         out.extend((0..n).map(|row| host[base + row * tokens + t]));
     }
     Tensor::from_vec(out, (tokens, MOE_TOPK, n), w.device())
+}
+
+// [gate, up, down] f32 weights, xt [K, T] -> [T, hidden] silu-GLU FFN summed over routes
+fn ffn_reference(w: [&Tensor; 3], xt: &Tensor, ids: &[u32], weights: &[f32]) -> Result<Tensor> {
+    let mid =
+        (moe_reference(w[0], xt, ids)?.silu()? * moe_reference(w[1], xt, ids)?)?.flatten_to(1)?;
+    let mut rows = Vec::with_capacity(ids.len() / MOE_TOPK);
+    for (t, routes) in ids.as_chunks::<MOE_TOPK>().0.iter().enumerate() {
+        let mut acc = Tensor::zeros((MOE_HIDDEN, 1), DType::F32, xt.device())?;
+        for (k, &e) in routes.iter().enumerate() {
+            let r = t * MOE_TOPK + k;
+            let y = w[2].i(e as usize)?.matmul(&mid.i(r)?.unsqueeze(1)?)?;
+            acc = (acc + (y * f64::from(weights[r]))?)?;
+        }
+        rows.push(acc.squeeze(1)?);
+    }
+    Tensor::stack(&rows, 0)
 }
 
 fn is_sticky(message: &str) -> bool {
@@ -1201,6 +1416,10 @@ fn worker_main(args: &Args) -> Result<()> {
     let fmt = find_format(&args.worker)
         .ok_or_else(|| candle_core::Error::msg(format!("unknown format {}", args.worker)))?;
     let dev = Device::new_cuda(0)?;
+    mistralrs_quant::nvfp4::force_portable_kernels(PORTABLE_NVFP4_ROWS.contains(&fmt.id));
+    if env::var_os(WARMUP_ENV).is_some() {
+        mistralrs_quant::cutile::register_moe_routing(&dev, MOE_EXPERTS, MOE_TOPK)?;
+    }
     let worker = Worker {
         fmt,
         flush: Tensor::zeros(L2_FLUSH_ELEMS, DType::F32, &dev)?,
@@ -1212,6 +1431,9 @@ fn worker_main(args: &Args) -> Result<()> {
         k: OnceCell::new(),
         v: OnceCell::new(),
         moe: OnceCell::new(),
+        moe_up: OnceCell::new(),
+        moe_down: OnceCell::new(),
+        embed: OnceCell::new(),
     };
     for id in &args.cols {
         let Some(op) = find_op(id) else { continue };

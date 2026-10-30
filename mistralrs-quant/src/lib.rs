@@ -32,6 +32,7 @@ mod cuda_toolkit;
 pub mod cutile;
 pub mod distributed;
 mod dummy;
+pub mod embedding;
 pub mod f8q8;
 mod fp8;
 mod fp8_config;
@@ -50,12 +51,12 @@ pub mod nvfp4;
 mod pending_layer;
 mod pertensor_fp8;
 pub mod rotary;
+mod routed_gemv;
 pub mod safetensors;
 mod scalar_fp8;
 mod unquantized;
 mod uqff;
 mod utils;
-mod vector_fp8;
 
 use gptq::gptq_linear;
 use regex::Regex;
@@ -206,6 +207,7 @@ pub use distributed::{
     BarrierLike, Comm, Id, RingConfig, SumAllReduce,
 };
 pub use dummy::{DummyLayer, DummyLayerInfo};
+pub use embedding::{EmbeddingOutput, EmbeddingTable};
 pub use f8q8::F8Q8Linear;
 pub use fp8::FP8Linear;
 pub use fp8_config::{
@@ -274,6 +276,9 @@ pub use mxfp4::MXFP4Layer;
 pub use nvfp4::{Nvfp4Layer, Nvfp4LayerParts};
 pub use pending_layer::{pending_isq_channel, PendingIsqLayer};
 pub use pertensor_fp8::{fp8_w8a16_linear, fp8_w8a8_linear, Fp8W8A8LinearArgs, PerTensorFP8Linear};
+pub use routed_gemv::{
+    try_routed_ffn, try_routed_gather, try_routed_glu, RoutedCodec, RoutedWeights,
+};
 pub use unquantized::UnquantLinear;
 pub use utils::flash_attn_sinks_metal;
 pub use utils::flash_attn_sinks_varlen_metal;
@@ -289,7 +294,6 @@ pub use utils::softcap;
 pub use utils::softmax_with_sinks;
 pub use utils::{fused_glu, fused_split_glu, GluActivationType};
 pub use utils::{log, BitWiseOp, CumSumOp, LeftshiftOp, NonZeroOp, SortOp};
-pub use vector_fp8::{fp8_vector_dequantize, fp8_vector_quantize};
 
 use candle_nn::{Conv1d, Conv2d, Linear, Module};
 use serde::{Deserialize, Deserializer, Serialize};
@@ -2056,15 +2060,14 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         Ok(None)
     }
 
-    fn embedding_forward(&self, ids: &Tensor, output_dtype: DType) -> Result<Tensor> {
-        self.embedding_forward_raw(ids)?.to_dtype(output_dtype)
+    /// Encoded rows `embedding_forward` decodes in place, so the table stays quantized when used as an embedding.
+    fn embedding_table(&self) -> Option<EmbeddingTable<'_>> {
+        None
     }
 
-    fn embedding_forward_raw(&self, _ids: &Tensor) -> Result<Tensor> {
-        candle_core::bail!(
-            "{} does not support `embedding_forward`. Please raise an issue.",
-            self.name()
-        )
+    /// Rows `ids` of the weight as `[..ids, hidden]`; formats without a row decoder dequantize the table.
+    fn embedding_forward(&self, ids: &Tensor, out: EmbeddingOutput) -> Result<Tensor> {
+        embedding::forward(self, ids, out)
     }
 
     /// Get the underlying QTensor if this is a GGUF quantized layer.
@@ -2075,6 +2078,11 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
 
     /// If this is an AFQ layer, return its (w_q, scales, biases, bits, group_size).
     fn afq_inner(&self) -> Option<crate::afq::AfqInner> {
+        None
+    }
+
+    /// This expert stack in a shared routed GEMV codec, when the format has one.
+    fn routed_weights(&self) -> Option<RoutedWeights> {
         None
     }
 
@@ -2315,6 +2323,10 @@ macro_rules! forward_quant_hooks {
 
         fn afq_inner(&self) -> Option<$crate::AfqInner> {
             $acc(self)?.afq_inner()
+        }
+
+        fn routed_weights(&self) -> Option<$crate::RoutedWeights> {
+            $acc(self)?.routed_weights()
         }
 
         fn unquant_forward_weight(&self) -> Option<candle_core::Tensor> {

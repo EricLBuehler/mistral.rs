@@ -3,11 +3,16 @@
 use std::sync::Arc;
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-#[cfg(feature = "cuda")]
-use mistralrs_quant::{nvfp4::embedding::CudaNvfp4Embedding, NVFP4_BLOCK_SIZE};
 use mistralrs_quant::{
-    nvfp4::embedding::Nvfp4Embedding, safetensors::MmapedSafetensors, GgufArchive, GgufEmbedding,
-    QuantMethod, ReplicatedLayer, ShardedVarBuilder,
+    embedding::{EmbeddingTable, MappedRows, MappedShard, RowCodec},
+    nvfp4::embedding::Nvfp4Embedding,
+    safetensors::MmapedSafetensors,
+    GgufArchive, GgufEmbedding, QuantMethod, ReplicatedLayer, ShardedVarBuilder,
+};
+#[cfg(feature = "cuda")]
+use mistralrs_quant::{
+    embedding::{RowScale, ScaleGrid, ScaleType},
+    NVFP4_BLOCK_SIZE,
 };
 
 use super::config::{PleConfig, TextConfig};
@@ -267,51 +272,149 @@ enum TableSource {
     },
     Gguf(GgufEmbedding),
     Nvfp4(Nvfp4Embedding),
+    /// Symmetric int rows followed by their f16 group scales in anonymous host RAM.
     #[cfg(feature = "cuda")]
     Packed {
-        map: memmap2::Mmap,
+        map: Arc<memmap2::Mmap>,
         rows: usize,
         data_bytes: usize,
     },
 }
 
+impl TableSource {
+    fn codec(&self) -> RowCodec {
+        match self {
+            Self::Shards { dtype, .. } => RowCodec::Dense(*dtype),
+            Self::Gguf(table) => table.codec(),
+            Self::Nvfp4(_) => Nvfp4Embedding::codec(),
+            #[cfg(feature = "cuda")]
+            Self::Packed { .. } => packed_codec(PLANNED_RESIDENT_BITS),
+        }
+    }
+
+    fn mapped_rows(&self) -> Result<MappedRows> {
+        match self {
+            Self::Shards {
+                raw, names, starts, ..
+            } => {
+                let shards = names
+                    .iter()
+                    .zip(starts)
+                    .map(|(name, &first_row)| {
+                        let view = raw.get(name)?;
+                        Ok(MappedShard {
+                            data: view.data().as_ptr(),
+                            scales: std::ptr::null(),
+                            first_row,
+                            rows: view.shape()[0],
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(unsafe { MappedRows::new(shards, raw.clone()) })
+            }
+            Self::Gguf(table) => table.mapped_rows(),
+            Self::Nvfp4(table) => table.mapped_rows(),
+            #[cfg(feature = "cuda")]
+            Self::Packed {
+                map,
+                rows,
+                data_bytes,
+            } => {
+                let shard = MappedShard {
+                    data: map.as_ptr(),
+                    scales: map[*data_bytes..].as_ptr(),
+                    first_row: 0,
+                    rows: *rows,
+                };
+                Ok(unsafe { MappedRows::new(vec![shard], map.clone()) })
+            }
+        }
+    }
+
+    #[cfg(feature = "cuda")]
+    fn device_mappable(&self) -> Result<bool> {
+        match self {
+            Self::Gguf(table) => table.mapped_gather_aligned(),
+            _ => Ok(true),
+        }
+    }
+}
+
 #[cfg(feature = "cuda")]
-enum DeviceTableIndex {
-    Shards { pointers: Tensor, starts: Tensor },
-    Nvfp4(CudaNvfp4Embedding),
-    Packed,
+fn packed_codec(bits: usize) -> RowCodec {
+    RowCodec::SymInt {
+        bits,
+        grid: ScaleGrid::per_row(ScaleType::F16, RESIDENT_GROUP),
+    }
 }
 
 struct PleTable {
     source: TableSource,
     head_dim: usize,
-    #[cfg(feature = "cuda")]
-    device_index: Option<DeviceTableIndex>,
+    /// Host rows of `source`, indexed on the device when it reads pageable memory.
+    mapped: MappedRows,
     #[cfg(feature = "cuda")]
     resident: Option<ResidentTable>,
 }
 
-/// Device copy of the table in a gather-kernel format so decode never faults on host pages.
+/// Device copy of the table so decode never faults on host pages.
 #[cfg(feature = "cuda")]
-enum ResidentTable {
-    Gguf(Tensor),
-    Nvfp4(CudaNvfp4Embedding),
-    Native {
-        data: Tensor,
-        scales: Option<Tensor>,
-        format: crate::cuda::qwen4_exp::PleTableFormat,
-    },
+struct ResidentTable {
+    codec: RowCodec,
+    data: Tensor,
+    scales: Option<Tensor>,
+    row_scale: Option<f32>,
+}
+
+#[cfg(feature = "cuda")]
+impl ResidentTable {
+    fn table(&self, columns: usize) -> Result<EmbeddingTable<'_>> {
+        let mut table = EmbeddingTable::new(self.codec, self.data.dim(0)?, columns, &self.data);
+        if let Some(scales) = &self.scales {
+            table = table.with_scales(scales);
+        }
+        if let Some(scale) = self.row_scale {
+            table = table.with_row_scale(RowScale::Value(scale));
+        }
+        Ok(table)
+    }
 }
 
 impl PleTable {
+    fn new(source: TableSource, head_dim: usize, device: &Device) -> Result<Self> {
+        let mapped = source.mapped_rows()?;
+        #[cfg(feature = "cuda")]
+        let mapped = if device.is_cuda()
+            && device_reads_pageable_memory(device)?
+            && source.device_mappable()?
+        {
+            tracing::debug!("Qwen4-Exp PLE rows can be gathered through pageable memory access");
+            mapped.with_device_index(device)?
+        } else {
+            mapped
+        };
+        #[cfg(not(feature = "cuda"))]
+        let _ = device;
+        Ok(Self {
+            source,
+            head_dim,
+            mapped,
+            #[cfg(feature = "cuda")]
+            resident: None,
+        })
+    }
+
+    fn table(&self) -> EmbeddingTable<'_> {
+        match &self.source {
+            TableSource::Gguf(table) => table.mapped(&self.mapped),
+            TableSource::Nvfp4(table) => table.mapped(&self.mapped),
+            source => EmbeddingTable::mapped(source.codec(), self.head_dim, &self.mapped),
+        }
+    }
+
     #[cfg(feature = "cuda")]
     fn reclaimable_weight_cache_bytes(&self) -> Option<usize> {
-        if self.resident.is_some()
-            || !matches!(
-                self.device_index,
-                Some(DeviceTableIndex::Packed | DeviceTableIndex::Nvfp4(_))
-            )
-        {
+        if self.resident.is_some() || !self.mapped.has_device_index() {
             return None;
         }
         let bytes = match &self.source {
@@ -372,43 +475,16 @@ impl PleTable {
             rows,
             "Qwen4-Exp PLE n-gram table is memory-mapped"
         );
-        #[cfg_attr(not(feature = "cuda"), allow(unused_mut))]
-        let mut table = Self {
-            source: TableSource::Shards {
+        Self::new(
+            TableSource::Shards {
                 raw,
                 names,
                 starts,
                 dtype,
             },
             head_dim,
-            #[cfg(feature = "cuda")]
-            device_index: None,
-            #[cfg(feature = "cuda")]
-            resident: None,
-        };
-        #[cfg(feature = "cuda")]
-        if device.is_cuda() && device_reads_pageable_memory(device)? {
-            let TableSource::Shards {
-                raw, names, starts, ..
-            } = &table.source
-            else {
-                unreachable!()
-            };
-            let ptrs = names
-                .iter()
-                .map(|name| Ok(raw.get(name)?.data().as_ptr() as i64))
-                .collect::<Result<Vec<_>>>()?;
-            let starts = starts.iter().map(|s| *s as i64).collect::<Vec<_>>();
-            let n = ptrs.len();
-            table.device_index = Some(DeviceTableIndex::Shards {
-                pointers: Tensor::from_vec(ptrs, n, device)?,
-                starts: Tensor::from_vec(starts, n, device)?,
-            });
-            tracing::debug!("Qwen4-Exp PLE rows can be gathered through pageable memory access");
-        }
-        #[cfg(not(feature = "cuda"))]
-        let _ = device;
-        Ok(table)
+            device,
+        )
     }
 
     fn load_nvfp4(
@@ -433,24 +509,7 @@ impl PleTable {
             shards = table.shard_count(),
             "NVFP4 PLE table is memory-mapped"
         );
-        #[cfg(feature = "cuda")]
-        let device_index = if device.is_cuda() && device_reads_pageable_memory(device)? {
-            Some(DeviceTableIndex::Nvfp4(unsafe {
-                table.cuda_mapped(device)?
-            }))
-        } else {
-            None
-        };
-        #[cfg(not(feature = "cuda"))]
-        let _ = device;
-        Ok(Self {
-            source: TableSource::Nvfp4(table),
-            head_dim,
-            #[cfg(feature = "cuda")]
-            device_index,
-            #[cfg(feature = "cuda")]
-            resident: None,
-        })
+        Self::new(TableSource::Nvfp4(table), head_dim, device)
     }
 
     fn load_gguf(archive: Arc<GgufArchive>, head_dim: usize, device: &Device) -> Result<Self> {
@@ -466,52 +525,12 @@ impl PleTable {
             rows,
             "Qwen4-Exp PLE n-gram table is memory-mapped from GGUF"
         );
-        #[cfg(not(feature = "cuda"))]
-        let _ = device;
-        #[cfg(feature = "cuda")]
-        let device_index = (device.is_cuda()
-            && device_reads_pageable_memory(device)?
-            && table.mapped_gather_aligned()?)
-        .then_some(DeviceTableIndex::Packed);
-        Ok(Self {
-            source: TableSource::Gguf(table),
-            head_dim,
-            #[cfg(feature = "cuda")]
-            device_index,
-            #[cfg(feature = "cuda")]
-            resident: None,
-        })
-    }
-
-    /// Element dtype of the rows `device_index` points at.
-    #[cfg(feature = "cuda")]
-    fn shard_dtype(&self) -> DType {
-        match &self.source {
-            TableSource::Shards { dtype, .. } => *dtype,
-            TableSource::Gguf(_) => DType::U8,
-            TableSource::Nvfp4(_) => DType::U8,
-            TableSource::Packed { .. } => DType::U8,
-        }
-    }
-
-    #[cfg(feature = "cuda")]
-    fn total_rows(&self) -> Result<usize> {
-        match &self.source {
-            TableSource::Shards {
-                raw, names, starts, ..
-            } => {
-                let last = names.len() - 1;
-                Ok(starts[last] + raw.get(&names[last])?.shape()[0])
-            }
-            TableSource::Gguf(table) => Ok(table.rows()),
-            TableSource::Nvfp4(table) => Ok(table.rows()),
-            TableSource::Packed { rows, .. } => Ok(*rows),
-        }
+        Self::new(TableSource::Gguf(table), head_dim, device)
     }
 
     #[cfg(feature = "cuda")]
     fn fallback_path(&self) -> &'static str {
-        if self.device_index.is_some() {
+        if self.mapped.has_device_index() {
             if self.head_dim.is_multiple_of(RESIDENT_GROUP) {
                 "prompt rows are gathered on the CPU; decode uses mapped GPU access"
             } else {
@@ -532,7 +551,7 @@ impl PleTable {
             );
             return Ok(());
         }
-        let rows = self.total_rows()?;
+        let rows = self.mapped.rows();
         let budget = WeightAllocationBudget {
             execution_bytes: budget
                 .execution_bytes
@@ -614,7 +633,12 @@ impl PleTable {
             progress.bar.inc(src.len() as u64);
         }
         progress.bar.finish_and_clear();
-        Ok(ResidentTable::Gguf(data))
+        Ok(ResidentTable {
+            codec: table.codec(),
+            data,
+            scales: None,
+            row_scale: None,
+        })
     }
 
     #[cfg(feature = "cuda")]
@@ -654,7 +678,12 @@ impl PleTable {
             }
         }
         progress.bar.finish_and_clear();
-        Ok(ResidentTable::Nvfp4(table.cuda_resident(data, scales)?))
+        Ok(ResidentTable {
+            codec: Nvfp4Embedding::codec(),
+            data,
+            scales: Some(scales),
+            row_scale: Some(table.global_scale()),
+        })
     }
 
     #[cfg(feature = "cuda")]
@@ -703,21 +732,18 @@ impl PleTable {
             }
         }
         progress.bar.finish_and_clear();
-        Ok(ResidentTable::Native {
+        Ok(ResidentTable {
+            codec: packed_codec(bits),
             data,
             scales: Some(scales),
-            format: if bits == 8 {
-                crate::cuda::qwen4_exp::PleTableFormat::Q8
-            } else {
-                crate::cuda::qwen4_exp::PleTableFormat::Q4
-            },
+            row_scale: None,
         })
     }
 
     #[cfg(feature = "cuda")]
     fn prepare_mapped(&mut self, device: &Device, chunk_rows: usize, budget: usize) -> Result<()> {
         if let TableSource::Nvfp4(table) = &self.source {
-            if self.device_index.is_some() {
+            if self.mapped.has_device_index() {
                 let progress = table_progress(
                     "Preparing mapped NVFP4 embedding table",
                     table.rows() * table.row_bytes(),
@@ -738,7 +764,7 @@ impl PleTable {
             return Ok(());
         }
         if let TableSource::Gguf(table) = &self.source {
-            if matches!(self.device_index, Some(DeviceTableIndex::Packed)) {
+            if self.mapped.has_device_index() {
                 let started = std::time::Instant::now();
                 let bytes = table.bytes()?;
                 let gpu_prefault =
@@ -773,7 +799,7 @@ impl PleTable {
             return Ok(());
         }
         let started = std::time::Instant::now();
-        let rows = self.total_rows()?;
+        let rows = self.mapped.rows();
         let row_bytes = self.head_dim * PLANNED_RESIDENT_BITS / 8;
         let scale_row_bytes = self.head_dim / RESIDENT_GROUP * DType::F16.size_in_bytes();
         let source_row_bytes = self.head_dim * dtype.size_in_bytes();
@@ -851,12 +877,16 @@ impl PleTable {
         );
         let gpu_prefault = mistralrs_quant::cuda_memory::prefault_mapped_memory(&map, device)?;
         self.source = TableSource::Packed {
-            map,
+            map: Arc::new(map),
             rows,
             data_bytes,
         };
-        self.device_index =
-            device_reads_pageable_memory(device)?.then_some(DeviceTableIndex::Packed);
+        let mapped = self.source.mapped_rows()?;
+        self.mapped = if device_reads_pageable_memory(device)? {
+            mapped.with_device_index(device)?
+        } else {
+            mapped
+        };
         tracing::info!(
             size_gb = resident_bytes(rows, self.head_dim, PLANNED_RESIDENT_BITS) >> 30,
             elapsed_s = started.elapsed().as_secs(),
@@ -866,6 +896,7 @@ impl PleTable {
         Ok(())
     }
 
+    /// `[tokens, heads * head_dim]` rows gathered from the mapped table without a resident copy.
     #[cfg(feature = "cuda")]
     fn gather_mapped(
         &self,
@@ -873,115 +904,35 @@ impl PleTable {
         layout: &crate::cuda::qwen4_exp::TokenLayout,
         dtype: DType,
     ) -> Result<Tensor> {
-        let dtype = if matches!(self.source, TableSource::Nvfp4(_)) {
-            dtype
-        } else {
-            DType::BF16
-        };
-        if layout.kv_lens.is_some() {
+        let (tokens, heads) = rows.dims2()?;
+        let table = self.table();
+        let emb = if layout.kv_lens.is_some() && !matches!(self.source, TableSource::Shards { .. })
+        {
             // CPU gathers avoid first-touch stalls from scattered GPU reads of the mapped table.
-            let (tokens, heads) = rows.dims2()?;
             let host_rows = rows
                 .flatten_all()?
                 .to_vec1::<i64>()?
                 .into_iter()
                 .map(|row| row as u64)
                 .collect::<Vec<_>>();
-            if let TableSource::Nvfp4(table) = &self.source {
-                return table
-                    .gather_staged(&host_rows, dtype, rows.device())?
-                    .reshape((tokens, heads * self.head_dim));
-            }
-            return self
-                .gather_host(&host_rows, &Device::Cpu)?
-                .to_dtype(dtype)?
-                .reshape((tokens, heads * self.head_dim))?
-                .to_device(rows.device());
-        }
-        let (data, scales, format) = match &self.source {
-            TableSource::Gguf(table) => {
-                let (tokens, heads) = rows.dims2()?;
-                return unsafe { table.gather_mapped(rows) }?
-                    .to_dtype(DType::BF16)?
-                    .reshape((tokens, heads * self.head_dim));
-            }
-            TableSource::Nvfp4(_) => {
-                let Some(DeviceTableIndex::Nvfp4(index)) = &self.device_index else {
-                    unreachable!()
-                };
-                let (tokens, heads) = rows.dims2()?;
-                return unsafe { index.gather(rows, dtype) }?
-                    .reshape((tokens, heads * self.head_dim));
-            }
-            TableSource::Packed {
-                map, data_bytes, ..
-            } => (
-                &map[..*data_bytes],
-                Some(&map[*data_bytes..]),
-                crate::cuda::qwen4_exp::PleTableFormat::Q4,
-            ),
-            TableSource::Shards { .. } => unreachable!("packed device table index"),
+            table
+                .gather_host(&host_rows, dtype.into())?
+                .to_device(rows.device())?
+        } else {
+            table.gather(rows, dtype.into())?
         };
-        crate::cuda::qwen4_exp::ple_gather_quant_mapped(rows, data, scales, self.head_dim, format)
+        emb.reshape((tokens, heads * self.head_dim))
     }
 
     /// Host gather of `rows` into a `[rows.len(), head_dim]` tensor on `device`.
     fn gather_host(&self, rows: &[u64], device: &Device) -> Result<Tensor> {
-        let outside = |row: u64| {
-            candle_core::Error::msg(format!("PLE row {row} is outside the n-gram table"))
+        let dtype = match &self.source {
+            TableSource::Shards { dtype, .. } => *dtype,
+            _ => DType::F32,
         };
-        match &self.source {
-            TableSource::Shards {
-                raw,
-                names,
-                starts,
-                dtype,
-            } => {
-                let row_bytes = self.head_dim * dtype.size_in_bytes();
-                let mut data = vec![0u8; rows.len() * row_bytes];
-                for (dst, &row) in data.chunks_exact_mut(row_bytes).zip(rows) {
-                    let idx = row as usize;
-                    let shard = starts.partition_point(|start| *start <= idx) - 1;
-                    let view = raw.get(&names[shard])?;
-                    let offset = (idx - starts[shard]) * row_bytes;
-                    let src = view
-                        .data()
-                        .get(offset..offset + row_bytes)
-                        .ok_or_else(|| outside(row))?;
-                    dst.copy_from_slice(src);
-                }
-                Tensor::from_raw_buffer(&data, *dtype, &[rows.len(), self.head_dim], &Device::Cpu)?
-                    .to_device(device)
-            }
-            TableSource::Gguf(table) => table.gather(rows, device),
-            TableSource::Nvfp4(table) => table.gather(rows, device),
-            #[cfg(feature = "cuda")]
-            TableSource::Packed {
-                map, data_bytes, ..
-            } => {
-                let row_bytes = self.head_dim / 2;
-                let scale_row_bytes = self.head_dim / RESIDENT_GROUP * 2;
-                let mut out = vec![0f32; rows.len() * self.head_dim];
-                for (dst, &row) in out.chunks_exact_mut(self.head_dim).zip(rows) {
-                    let offset = row as usize * row_bytes;
-                    let src = map
-                        .get(offset..offset + row_bytes)
-                        .ok_or_else(|| outside(row))?;
-                    let scale_offset = data_bytes + row as usize * scale_row_bytes;
-                    let scales = map
-                        .get(scale_offset..scale_offset + scale_row_bytes)
-                        .ok_or_else(|| outside(row))?;
-                    for (i, value) in dst.iter_mut().enumerate() {
-                        let scale = 2 * (i / RESIDENT_GROUP);
-                        let scale =
-                            half::f16::from_le_bytes([scales[scale], scales[scale + 1]]).to_f32();
-                        let q = (src[i / 2] >> (4 * (i % 2))) & 15;
-                        *value = (i32::from(q) - 8) as f32 * scale;
-                    }
-                }
-                Tensor::from_vec(out, (rows.len(), self.head_dim), device)
-            }
-        }
+        self.table()
+            .gather_host(rows, dtype.into())?
+            .to_device(device)
     }
 }
 
@@ -1214,7 +1165,7 @@ impl PleLayer {
 
     #[cfg(feature = "cuda")]
     pub(super) fn gathers_on_device(&self) -> bool {
-        self.table.resident.is_some() || self.table.device_index.is_some()
+        self.table.resident.is_some() || self.table.mapped.has_device_index()
     }
 
     #[cfg(feature = "cuda")]
@@ -1246,7 +1197,7 @@ impl PleLayer {
                 let native = matches!(self.table.source, TableSource::Shards { .. });
                 if unified && native && self.table.head_dim.is_multiple_of(RESIDENT_GROUP) {
                     let required = resident_bytes(
-                        self.table.total_rows()?,
+                        self.table.mapped.rows(),
                         self.table.head_dim,
                         PLANNED_RESIDENT_BITS,
                     );
@@ -1295,50 +1246,16 @@ impl PleLayer {
                 state.slots,
                 &self.hash_ffi,
             )?;
-            let emb = match (&self.table.resident, &self.table.device_index) {
-                (Some(ResidentTable::Nvfp4(index)), _) => {
+            let emb = match &self.table.resident {
+                Some(resident) => {
                     let (tokens, heads) = rows.dims2()?;
-                    unsafe { index.gather(&rows, flat.dtype()) }?
+                    resident
+                        .table(self.table.head_dim)?
+                        .gather(&rows, flat.dtype().into())?
                         .reshape((tokens, heads * self.table.head_dim))?
                 }
-                (Some(ResidentTable::Gguf(data)), _) => {
-                    let TableSource::Gguf(table) = &self.table.source else {
-                        unreachable!()
-                    };
-                    let (tokens, heads) = rows.dims2()?;
-                    unsafe { table.gather_resident(&rows, data) }?
-                        .to_dtype(DType::BF16)?
-                        .reshape((tokens, heads * self.table.head_dim))?
-                }
-                (
-                    Some(ResidentTable::Native {
-                        data,
-                        scales,
-                        format,
-                    }),
-                    _,
-                ) => crate::cuda::qwen4_exp::ple_gather_quant(
-                    &rows,
-                    data,
-                    scales.as_ref(),
-                    self.table.head_dim,
-                    *format,
-                )?,
-                (None, Some(DeviceTableIndex::Shards { pointers, starts })) => {
-                    crate::cuda::qwen4_exp::ple_gather(
-                        &rows,
-                        pointers,
-                        starts,
-                        self.table.head_dim,
-                        self.table.shard_dtype(),
-                    )?
-                }
-                (None, Some(DeviceTableIndex::Packed | DeviceTableIndex::Nvfp4(_))) => {
-                    self.table.gather_mapped(&rows, layout, flat.dtype())?
-                }
-                (None, None) => unreachable!("checked by gathers_on_device"),
-            }
-            .to_dtype(flat.dtype())?;
+                None => self.table.gather_mapped(&rows, layout, flat.dtype())?,
+            };
             let (gated, normed) = self.gate(&emb, &flat)?;
             if let Some(out) = conv_inputs_out {
                 *out = Some(normed.clone());

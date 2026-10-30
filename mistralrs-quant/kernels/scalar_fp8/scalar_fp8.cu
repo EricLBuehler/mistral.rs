@@ -6,6 +6,8 @@
 #include <cuda_fp16.h>
 #include <cuda_fp8.h>
 
+#include "../common/fp_codecs.cuh"
+
 #define CUDA_CHECK(call)                                                       \
   do {                                                                         \
     cudaError_t err = call;                                                    \
@@ -22,9 +24,7 @@ __global__ void fp8_to_dtype_kernel(const __nv_fp8_e4m3 *__restrict__ input,
                                     size_t num_elements) {
   size_t idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < num_elements) {
-    float val =
-        __half2float(__nv_cvt_fp8_to_halfraw(input[idx].__x, __NV_E4M3));
-    output[idx] = static_cast<T>(val);
+    output[idx] = static_cast<T>(e4m3_to_float(input[idx].__x));
   }
 }
 

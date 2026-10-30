@@ -88,18 +88,18 @@ impl QuantMethod for MXFP4Layer {
         self.dequantize_weights_to(self.blocks.device())
     }
 
-    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
-        let (_, k_half) = self.blocks.dims2()?;
-        let mut output_shape = ids.dims().to_vec();
-        output_shape.push(k_half * 2);
-
-        let ids = ids
-            .to_device(self.blocks.device())?
-            .flatten_all()?
-            .contiguous()?;
-        let blocks = self.blocks.index_select(&ids, 0)?;
-        let scales = self.scales.index_select(&ids, 0)?;
-        Self::dequantize_rows(&blocks, &scales)?.reshape(output_shape)
+    fn embedding_table(&self) -> Option<crate::EmbeddingTable<'_>> {
+        use crate::embedding::{RowCodec, ScaleGrid, ScaleType};
+        let (rows, k_half) = self.blocks.dims2().ok()?;
+        Some(
+            crate::EmbeddingTable::new(
+                RowCodec::Fp4(ScaleGrid::per_row(ScaleType::E8m0Raw, MXFP4_BLOCK_SIZE)),
+                rows,
+                k_half * 2,
+                &self.blocks,
+            )
+            .with_scales(&self.scales),
+        )
     }
 
     #[allow(unused_variables)]
@@ -152,8 +152,25 @@ impl QuantMethod for MXFP4Layer {
         self.forward_dequantize(x)
     }
 
+    fn routed_weights(&self) -> Option<crate::RoutedWeights> {
+        let (experts, n, half_k) = self.blocks.dims3().ok()?;
+        Some(crate::RoutedWeights::new(
+            crate::RoutedCodec::Mxfp4,
+            self.blocks.clone(),
+            self.scales.clone(),
+            None,
+            self.bias.clone(),
+            [experts, n, half_k * 2],
+        ))
+    }
+
     #[allow(unused_variables)]
     fn gather_forward_raw(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        if let Some(routed) = self.routed_weights() {
+            if let Some(output) = crate::try_routed_gather(x, indices, &routed)? {
+                return Ok(output);
+            }
+        }
         #[cfg(feature = "cuda")]
         if matches!(x.device(), Device::Cuda(_)) && ffi::HAVE_MXFP4_GEMM_KERNELS {
             return ops::mxfp4_indexed_moe_gemm(
@@ -664,48 +681,6 @@ impl MXFP4Layer {
             .to_device(device)
     }
 
-    fn dequantize_rows(blocks: &Tensor, scales: &Tensor) -> Result<Tensor> {
-        use rayon::prelude::*;
-
-        let (num_rows, k_half) = blocks.dims2()?;
-        let k = k_half * 2;
-        let num_blocks_per_row = k / MXFP4_BLOCK_SIZE;
-        let half_block = MXFP4_BLOCK_SIZE / 2;
-        let blocks_data = blocks
-            .to_device(&Device::Cpu)?
-            .flatten_all()?
-            .to_vec1::<u8>()?;
-        let scales_data = scales
-            .to_device(&Device::Cpu)?
-            .flatten_all()?
-            .to_vec1::<u8>()?;
-        let mut weights = vec![0f32; num_rows * k];
-
-        weights
-            .par_chunks_mut(k)
-            .enumerate()
-            .for_each(|(row, weights_row)| {
-                let blocks_row = row * k_half;
-                let scales_row = row * num_blocks_per_row;
-                for blk in 0..num_blocks_per_row {
-                    let scale = scales_data[scales_row + blk] as usize;
-                    let dequant = &Self::DEQUANT_LUT[scale];
-                    let block_start = blocks_row + blk * half_block;
-                    let output_start = blk * MXFP4_BLOCK_SIZE;
-                    for byte_i in 0..half_block {
-                        let packed = blocks_data[block_start + byte_i];
-                        weights_row[output_start + byte_i * 2] = dequant[(packed & 0x0F) as usize];
-                        weights_row[output_start + byte_i * 2 + 1] =
-                            dequant[((packed >> 4) & 0x0F) as usize];
-                    }
-                }
-            });
-
-        Tensor::from_vec(weights, (num_rows, k), &Device::Cpu)?
-            .to_device(blocks.device())?
-            .to_dtype(DType::BF16)
-    }
-
     /// CPU forward pass: blocked dequant + matmul to avoid full weight allocation.
     /// Processes MXFP4_BLOCK_SIZE (32) input columns at a time, dequantizing only
     /// the needed weight slice before accumulating partial results.
@@ -1000,7 +975,7 @@ mod tests {
         let layer = test_layer()?;
         let ids = Tensor::from_vec(vec![6u32, 1, 6, 3, 0, 4], (2, 3), &Device::Cpu)?;
 
-        let output = layer.embedding_forward(&ids, DType::F32)?;
+        let output = layer.embedding_forward(&ids, DType::F32.into())?;
         let expected = expected_embedding(layer.as_ref(), &ids)?.to_dtype(DType::F32)?;
 
         assert_eq!(output.dims(), &[2, 3, TEST_HIDDEN_SIZE]);
@@ -1038,7 +1013,7 @@ mod tests {
             .load_linear("test.embedding", &Device::Cpu, Shard::default())?
             .unwrap();
         let ids = Tensor::from_vec(vec![5u32, 2, 1, 5], (2, 2), &Device::Cpu)?;
-        let output = loaded.embedding_forward(&ids, DType::BF16)?;
+        let output = loaded.embedding_forward(&ids, DType::BF16.into())?;
         let expected = expected_embedding(layer.as_ref(), &ids)?;
         drop(reader);
         let _ = std::fs::remove_file(path);
