@@ -10,6 +10,8 @@ use float8::F8E4M3;
 
 #[cfg(feature = "cuda")]
 mod cuda;
+#[cfg(feature = "metal")]
+mod metal;
 
 const UNIT: usize = 8;
 const IQ4_BLOCK: usize = 32;
@@ -225,10 +227,9 @@ impl RowCodec {
     /// Columns one indivisible block of the encoding covers.
     pub fn block_columns(&self) -> usize {
         match self {
-            Self::Dense(_) | Self::Fp8(None) => 1,
+            Self::Dense(_) | Self::Fp8(_) => 1,
             Self::Gguf(ty) => ty.block().0,
             Self::Fp4(grid) | Self::Afq { grid, .. } | Self::SymInt { grid, .. } => grid.group,
-            Self::Fp8(Some(grid)) => grid.group.min(UNIT),
         }
     }
 
@@ -253,7 +254,7 @@ impl RowCodec {
         }
     }
 
-    #[cfg(feature = "cuda")]
+    #[cfg(any(feature = "cuda", feature = "metal"))]
     fn id(&self) -> i32 {
         match self {
             Self::Dense(DType::F32) => 0,
@@ -276,7 +277,11 @@ impl RowCodec {
             Self::SymInt { bits, .. } => matches!(bits, 4 | 8),
             _ => true,
         };
-        if !ok || block == 0 || !columns.is_multiple_of(block) {
+        if !ok
+            || block == 0
+            || self.grid().is_some_and(|grid| grid.group == 0)
+            || !columns.is_multiple_of(block)
+        {
             candle_core::bail!("{self:?} cannot encode rows of {columns} columns");
         }
         if block > 1 && !columns.is_multiple_of(UNIT) {
@@ -563,13 +568,15 @@ impl<'a> EmbeddingTable<'a> {
         }
     }
 
-    /// Whether `gather` runs on `device` (CUDA kernel or host decode); other backends dequantize instead.
+    /// Whether rows can be gathered on `device` without dequantizing the table.
     pub fn gathers_on(&self, device: &Device) -> bool {
         let cuda = cfg!(feature = "cuda") && device.is_cuda();
+        let metal = cfg!(feature = "metal") && device.is_metal();
         match self.storage {
             TableStorage::Mapped(rows) => device.is_cpu() || cuda && rows.has_device_index(),
             TableStorage::Device { .. } => {
-                self.device().is_some_and(|d| d.same_device(device)) && (device.is_cpu() || cuda)
+                self.device().is_some_and(|d| d.same_device(device))
+                    && (device.is_cpu() || cuda || metal)
             }
         }
     }
@@ -584,6 +591,11 @@ impl<'a> EmbeddingTable<'a> {
         if device.is_cuda() {
             let ids = ids.to_device(&device)?;
             return cuda::gather(self, &ids, out)?.reshape(shape);
+        }
+        #[cfg(feature = "metal")]
+        if device.is_metal() && matches!(self.storage, TableStorage::Device { .. }) {
+            let ids = ids.to_device(&device)?;
+            return metal::gather(self, &ids, out)?.reshape(shape);
         }
         if let (
             RowCodec::Dense(_),
@@ -798,5 +810,7 @@ fn cpu_bytes(storage: &candle_core::CpuStorage) -> Result<&[u8]> {
     })
 }
 
+#[cfg(all(test, feature = "metal"))]
+mod metal_tests;
 #[cfg(test)]
 mod tests;

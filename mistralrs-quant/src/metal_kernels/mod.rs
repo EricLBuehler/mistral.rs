@@ -188,6 +188,84 @@ impl Kernels {
     }
 }
 
+const EMBEDDING_UNIT: usize = 8;
+
+// Mirrors EmbeddingGatherConfig in embedding.metal; the explicit padding keeps every byte initialized.
+#[repr(C)]
+pub(crate) struct EmbeddingGatherConfig {
+    pub lookups: u64,
+    pub rows: u64,
+    pub columns: u64,
+    pub data_stride: u64,
+    pub scale_stride: u64,
+    pub scale_row_div: u64,
+    pub group: u64,
+    pub out_scale: f32,
+    pub scale_type: u32,
+    pub row_scale_mode: u32,
+    pub row_scale_type: u32,
+    pub bits: u32,
+    pub has_scales: u32,
+    pub ids_i64: u32,
+    pub padding: u32,
+}
+
+pub(crate) struct EmbeddingGather<'a> {
+    pub data: (&'a Buffer, usize),
+    pub scales: (&'a Buffer, usize),
+    pub aux: (&'a Buffer, usize),
+    pub row_scales: (&'a Buffer, usize),
+    pub ids: (&'a Buffer, usize),
+    pub output: &'a Buffer,
+    pub codec: i32,
+    pub dtype: DType,
+    pub config: EmbeddingGatherConfig,
+}
+
+pub(crate) fn call_embedding_gather(
+    device: &Device,
+    ep: impl EncoderProvider,
+    kernels: &Kernels,
+    args: &EmbeddingGather<'_>,
+) -> Result<(), MetalKernelError> {
+    let dtype = match args.dtype {
+        DType::F32 => "float",
+        DType::F16 => "half",
+        DType::BF16 => "bfloat",
+        got => {
+            return Err(MetalKernelError::DTypeMismatch {
+                expected: vec![DType::F32, DType::F16, DType::BF16],
+                got,
+            })
+        }
+    };
+    let elements =
+        args.config.lookups as usize * (args.config.columns as usize).div_ceil(EMBEDDING_UNIT);
+    if elements == 0 {
+        return Ok(());
+    }
+    let pipeline =
+        kernels.load_pipeline(device, format!("embedding_gather_{}_{dtype}", args.codec))?;
+    let encoder = ep.encoder();
+    let encoder: &ComputeCommandEncoderRef = encoder.as_ref();
+    encoder.set_compute_pipeline_state(&pipeline);
+    set_params!(
+        encoder,
+        (
+            args.data,
+            args.scales,
+            args.aux,
+            args.row_scales,
+            args.ids,
+            Output::new(args.output)
+        )
+    );
+    encoder.set_bytes(6, &args.config);
+    let (groups, threads) = linear_split(&pipeline, elements);
+    encoder.dispatch_thread_groups(groups, threads);
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn call_dequant_8bit(
     device: &Device,

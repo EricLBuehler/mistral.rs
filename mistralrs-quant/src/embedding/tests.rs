@@ -26,6 +26,8 @@ const E8M0_BASE: u8 = 118;
 const E8M0_SPAN: u8 = 16;
 const NVFP4_SCALE_BASE: u8 = 0x28;
 const NVFP4_SCALE_SPAN: u8 = 0x20;
+const FP8_SCALE_GROUPS: [usize; 9] = [1, 2, 3, 4, 7, 8, 12, 16, 128];
+const FP8_SCALE_TEST_COLUMNS: [usize; 4] = [16, 17, 24, 129];
 
 fn ids(rows: usize) -> Vec<u32> {
     let last = rows as u32 - 1;
@@ -414,8 +416,50 @@ fn host_gather_handles_codecs_without_a_layer() -> Result<()> {
     check_codecs_without_a_layer(&Device::Cpu)
 }
 
-#[cfg(feature = "cuda")]
-mod cuda {
+fn check_fp8_scale_boundaries(device: &Device) -> Result<()> {
+    for group in FP8_SCALE_GROUPS {
+        for columns in FP8_SCALE_TEST_COLUMNS {
+            for rows_per_scale in [1, 4] {
+                let scale_columns = columns.div_ceil(group);
+                let scales: Vec<f32> = (0..ROWS.div_ceil(rows_per_scale) * scale_columns)
+                    .map(|i| (i + 1) as f32 * 0.25)
+                    .collect();
+                let expected: Vec<f32> = (0..ROWS * columns)
+                    .map(|i| {
+                        scales[(i / columns / rows_per_scale) * scale_columns + i % columns / group]
+                    })
+                    .collect();
+                let data = Tensor::from_vec(
+                    vec![F8E4M3::from_f32(1.0).to_bits(); ROWS * columns],
+                    (ROWS, columns),
+                    device,
+                )?;
+                let scales = Tensor::from_vec(scales.clone(), scales.len(), device)?;
+                let codec = RowCodec::Fp8(Some(ScaleGrid {
+                    ty: ScaleType::F32,
+                    group,
+                    rows_per_scale,
+                }));
+                let table = EmbeddingTable::new(codec, ROWS, columns, &data).with_scales(&scales);
+                check_table(
+                    &format!("fp8 group={group} columns={columns} scale_rows={rows_per_scale}"),
+                    &table,
+                    &expected,
+                    device,
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn host_gather_handles_fp8_scale_boundaries() -> Result<()> {
+    check_fp8_scale_boundaries(&Device::Cpu)
+}
+
+#[cfg(any(feature = "cuda", feature = "metal"))]
+mod gpu {
     use super::*;
 
     struct DeviceCopy {
@@ -462,9 +506,7 @@ mod cuda {
         out
     }
 
-    #[test]
-    fn cuda_gather_matches_dequantized_index_select_for_every_codec() -> Result<()> {
-        let device = Device::new_cuda(0)?;
+    fn check_every_codec(device: Device) -> Result<()> {
         for case in cases()? {
             let table = case.layer.embedding_table().unwrap();
             let copy = upload(&table, &device)?;
@@ -512,11 +554,43 @@ mod cuda {
         Ok(())
     }
 
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn cuda_gather_matches_dequantized_index_select_for_every_codec() -> Result<()> {
+        check_every_codec(Device::new_cuda(0)?)
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn metal_gather_matches_dequantized_index_select_for_every_codec() -> Result<()> {
+        check_every_codec(Device::new_metal(0)?)
+    }
+
+    #[cfg(feature = "cuda")]
     #[test]
     fn cuda_gather_handles_codecs_without_a_layer() -> Result<()> {
         check_codecs_without_a_layer(&Device::new_cuda(0)?)
     }
 
+    #[cfg(feature = "metal")]
+    #[test]
+    fn metal_gather_handles_codecs_without_a_layer() -> Result<()> {
+        check_codecs_without_a_layer(&Device::new_metal(0)?)
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn cuda_gather_handles_fp8_scale_boundaries() -> Result<()> {
+        check_fp8_scale_boundaries(&Device::new_cuda(0)?)
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn metal_gather_handles_fp8_scale_boundaries() -> Result<()> {
+        check_fp8_scale_boundaries(&Device::new_metal(0)?)
+    }
+
+    #[cfg(feature = "cuda")]
     #[test]
     fn cuda_layers_gather_through_the_hook() -> Result<()> {
         let device = Device::new_cuda(0)?;

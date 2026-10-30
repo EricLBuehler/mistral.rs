@@ -148,7 +148,9 @@ pub(super) fn gather(
                 || !(data | data_stride).is_multiple_of(VECTOR_ALIGN)
                 || shard_count > 0
         }
-        RowCodec::Fp8(_) => !columns.is_multiple_of(UNIT),
+        RowCodec::Fp8(grid) => {
+            !columns.is_multiple_of(UNIT) || grid.is_some_and(|g| !g.group.is_multiple_of(UNIT))
+        }
         _ => false,
     };
     let bits = match codec {

@@ -16,6 +16,9 @@ const USED_EXPERTS: usize = EXPERTS - 1;
 const TOPKS: [usize; 2] = [1, 3];
 const BF16_TOLERANCE: f64 = 1e-2;
 const F16_TOLERANCE: f64 = 3e-3;
+const FP4_CODE_COUNT: usize = 16;
+const FINITE_POSITIVE_SCALE_COUNT: usize = 127;
+const FULL_RANGE_GLOBAL: f32 = 1.0 / 1024.0;
 
 struct Rng(u64);
 
@@ -211,6 +214,85 @@ fn grouped_matches_dequantized_reference() -> Result<()> {
                     }
                 }
             }
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn finite_scale_range_matches_exact_dense_and_routed_reference() -> Result<()> {
+    let Some(device) = cuda()? else {
+        return Ok(());
+    };
+    let n = FP4_CODE_COUNT * FINITE_POSITIVE_SCALE_COUNT;
+    let k = NVFP4_BLOCK_SIZE;
+    let mut packed = Vec::with_capacity(n * k / 2);
+    let mut scales = Vec::with_capacity(n);
+    let mut expected = Vec::with_capacity(n);
+    for bits in 0..FINITE_POSITIVE_SCALE_COUNT {
+        let scale = F8E4M3::from_bits(bits as u8);
+        for code in 0..FP4_CODE_COUNT {
+            packed.extend(std::iter::repeat_n((code | code << 4) as u8, k / 2));
+            scales.push(scale);
+            expected.push(
+                super::super::unpack_fp4(code as u8)
+                    * scale.to_f32()
+                    * k as f32
+                    * FULL_RANGE_GLOBAL,
+            );
+        }
+    }
+    let weight = Tensor::from_vec(packed, (n, k / 2), &device)?;
+    let scales = Tensor::from_vec(scales, (n, 1), &device)?;
+    let global = Tensor::from_vec(vec![FULL_RANGE_GLOBAL; n], n, &device)?;
+    let grouped_weight = Tensor::stack(&[&weight, &weight], 0)?;
+    let grouped_scales = Tensor::stack(&[&scales, &scales], 0)?;
+    let grouped_global = Tensor::stack(&[&global, &(&global * 2.0)?], 0)?;
+    let indices = Tensor::from_vec(vec![1u32, 0], (1, 2), &device)?;
+    let expected_grouped = expected
+        .iter()
+        .map(|value| value * 2.0)
+        .chain(expected.iter().copied())
+        .collect::<Vec<_>>();
+    for dtype in [DType::BF16, DType::F16] {
+        let x = Tensor::ones((1, k), dtype, &device)?;
+        for (actual, expected) in [
+            (
+                matmul(
+                    &x,
+                    Weights {
+                        weight: &weight,
+                        scales: &scales,
+                        global: &global,
+                    },
+                )?,
+                &expected,
+            ),
+            (
+                gather(
+                    &x.reshape((1, 1, k))?,
+                    &indices,
+                    Weights {
+                        weight: &grouped_weight,
+                        scales: &grouped_scales,
+                        global: &grouped_global,
+                    },
+                )?,
+                &expected_grouped,
+            ),
+        ] {
+            let expected = Tensor::from_vec(expected.clone(), expected.len(), &Device::Cpu)?
+                .to_dtype(dtype)?
+                .to_dtype(DType::F32)?
+                .to_vec1::<f32>()?;
+            assert_eq!(
+                actual
+                    .to_dtype(DType::F32)?
+                    .flatten_all()?
+                    .to_vec1::<f32>()?,
+                expected,
+                "{dtype:?}"
+            );
         }
     }
     Ok(())

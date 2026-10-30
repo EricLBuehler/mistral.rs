@@ -59,6 +59,11 @@ A tied output head reuses the effective embedding instead of storing a second co
 per-tensor ISQ type in a [topology](/guides/perf/topology/) takes precedence over these
 defaults.
 
+Embedding lookups on CUDA and Metal decode only the requested rows from supported compressed
+tables, including common GGUF, AFQ, FP8, and packed FP4 formats. Output conversion and embedding
+scaling operate on the gathered rows. The matrix-multiplication backend requirements below apply
+separately.
+
 ## Format-specific types
 
 ### AFQ family

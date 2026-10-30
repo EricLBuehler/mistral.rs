@@ -399,7 +399,7 @@ fn launch(run: Run<'_>) -> Result<Option<Tensor>> {
     }
     let mut x = x.contiguous()?;
     if address(&x, &stream)?.is_some_and(|input| !aligned(input, VECTOR_BYTES)) {
-        x = x.copy()?;
+        x = x.force_contiguous()?;
     }
     let indices = run.indices.contiguous()?;
     let routing = run

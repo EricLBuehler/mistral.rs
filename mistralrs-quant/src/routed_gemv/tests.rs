@@ -14,6 +14,11 @@ const NVFP4_GROUP: usize = 16;
 const MX_GROUP: usize = 32;
 const BF16_TOL: f32 = 1e-2;
 const F32_TOL: f32 = 1e-4;
+const OFFSET_WEIGHT_SHAPE: [usize; 3] = [4, 17, 64];
+const OFFSET_TOKENS: usize = 2;
+const OFFSET_TOPK: usize = 2;
+const INPUT_OFFSETS: [usize; 4] = [1, 3, 8, 17];
+const OFFSET_IDS: [u32; 4] = [3, 1, 2, 0];
 const ACTIVATIONS: [GluActivationType; 5] = [
     GluActivationType::Silu,
     GluActivationType::Gelu,
@@ -515,6 +520,60 @@ fn afq_matches_dequantized_reference() -> Result<()> {
         &|r, d| afq(r, [12, 9, 64], 4, 32, DType::F32, d),
         DType::F32,
     )
+}
+
+#[test]
+fn offset_inputs_match_dequantized_reference() -> Result<()> {
+    let dev = Device::new_cuda(0)?;
+    let mut rng = Rng(0x5eed);
+    let k = OFFSET_WEIGHT_SHAPE[2];
+    let indices = Tensor::from_vec(OFFSET_IDS.to_vec(), (OFFSET_TOKENS, OFFSET_TOPK), &dev)?;
+    for dtype in [DType::BF16, DType::F16, DType::F32] {
+        let mut cases = vec![
+            nvfp4(&mut rng, OFFSET_WEIGHT_SHAPE, &dev)?,
+            mx(&mut rng, OFFSET_WEIGHT_SHAPE, false, &dev)?,
+            mx(&mut rng, OFFSET_WEIGHT_SHAPE, true, &dev)?,
+            fp8_block(&mut rng, OFFSET_WEIGHT_SHAPE, [1, MX_GROUP], &dev)?,
+        ];
+        for bits in [2, 3, 4, 6, 8] {
+            cases.push(afq(
+                &mut rng,
+                OFFSET_WEIGHT_SHAPE,
+                bits,
+                MX_GROUP,
+                dtype,
+                &dev,
+            )?);
+        }
+        for offset in INPUT_OFFSETS {
+            let elements = OFFSET_TOKENS * k;
+            let x = random(&mut rng, &[elements + offset], dtype, &dev)?
+                .narrow(0, offset, elements)?
+                .reshape((OFFSET_TOKENS, 1, k))?;
+            assert!(x.is_contiguous());
+            assert_eq!(x.layout().start_offset(), offset);
+            let rows = rows_of(&x)?;
+            let route_rows = (0..OFFSET_IDS.len())
+                .map(|route| rows[route / OFFSET_TOPK].clone())
+                .collect::<Vec<_>>();
+            for case in &cases {
+                let actual = super::try_routed_gather(&x, &indices, &case.weights)?
+                    .expect("routed gather declined an offset input");
+                let expected = reference(case, &route_rows, &OFFSET_IDS, None);
+                check(
+                    &format!("{:?} {dtype:?} offset={offset}", case.weights.codec),
+                    &host(&actual)?,
+                    &expected.concat(),
+                    if dtype == DType::F32 {
+                        F32_TOL
+                    } else {
+                        BF16_TOL
+                    },
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 #[test]

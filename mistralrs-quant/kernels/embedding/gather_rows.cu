@@ -91,6 +91,11 @@ __device__ __forceinline__ float half_at(const uint8_t *p) {
   return __half2float(__ushort_as_half(static_cast<unsigned short>(p[0] | (p[1] << 8))));
 }
 
+__device__ __forceinline__ float float_at(const uint8_t *p) {
+  return __uint_as_float(uint32_t(p[0]) | (uint32_t(p[1]) << 8) |
+                         (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24));
+}
+
 __device__ __forceinline__ float load_scalar(const void *base, uint64_t index, int type) {
   const auto *p = static_cast<const uint8_t *>(base);
   switch (type) {
@@ -180,7 +185,7 @@ __device__ __forceinline__ void decode(const GatherArgs &a, const Row &r, uint64
       v[i] = q[i] * d;
   } else if constexpr (C == Q8K) {
     const uint8_t *b = r.data + (col / kQ8KSuperBlock) * 292;
-    const float d = *reinterpret_cast<const float *>(b);
+    const float d = float_at(b);
     const auto *q = reinterpret_cast<const int8_t *>(b + 4) + col % kQ8KSuperBlock;
 #pragma unroll
     for (int i = 0; i < kUnit; ++i)

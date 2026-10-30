@@ -7,6 +7,7 @@
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
+#include <type_traits>
 
 struct Nvfp4W4a16Args {
   const void *input;
@@ -367,13 +368,19 @@ __global__ void __launch_bounds__(Shape<WarpsM, TilesM>::kThreads)
         const uint32_t bytes = lookup(codes);
         const T2 scale = step % 2 ? Tr::high(scale_pairs[j][step / 2])
                                   : Tr::low(scale_pairs[j][step / 2]);
-        // (bias + 2v) * s - bias * s rounds once from an exactly representable
-        // v * s.
-        const T2 offset = __hmul2(scale, negative_bias);
         uint32_t low = __byte_perm(bytes, Tr::kMagic, kLowPairSelect);
         uint32_t high = __byte_perm(bytes, Tr::kMagic, kHighPairSelect);
-        T2 b0 = __hfma2(*reinterpret_cast<T2 *>(&low), scale, offset);
-        T2 b1 = __hfma2(*reinterpret_cast<T2 *>(&high), scale, offset);
+        T2 b0 = *reinterpret_cast<T2 *>(&low);
+        T2 b1 = *reinterpret_cast<T2 *>(&high);
+        if constexpr (std::is_same_v<T, __half>) {
+          // Valid E4M3 scales overflow bias * scale in F16; removing the bias first stays exact.
+          b0 = __hmul2(__hadd2(b0, negative_bias), scale);
+          b1 = __hmul2(__hadd2(b1, negative_bias), scale);
+        } else {
+          const T2 offset = __hmul2(scale, negative_bias);
+          b0 = __hfma2(b0, scale, offset);
+          b1 = __hfma2(b1, scale, offset);
+        }
 #pragma unroll
         for (int i = 0; i < TilesM; ++i)
           Tr::mma(acc[i][j], fragments[i], *reinterpret_cast<uint32_t *>(&b0),

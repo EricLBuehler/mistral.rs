@@ -19,6 +19,8 @@ const IQ4_VALUES: [i8; 16] = [
 ];
 const SELECTION: [u64; 5] = [6, 0, 3, 3, 1];
 const TOLERANCE: f32 = 1e-5;
+#[cfg(feature = "cuda")]
+const Q8_K_FORMAT: u32 = 15;
 
 struct Fixture {
     _file: NamedTempFile,
@@ -238,6 +240,49 @@ fn embedding_cuda_gathers_all_formats_resident_and_mapped() -> Result<()> {
                 assert_rows(&table.gather(&ids, out)?, &fixture, &SELECTION, format)?;
             }
         }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+#[ignore = "requires a CUDA device"]
+fn embedding_cuda_q8k_gathers_unaligned_storage() -> Result<()> {
+    let device = Device::new_cuda_with_stream(0)?;
+    let fixture = fixture(Q8_K_FORMAT, widths(Q8_K_FORMAT)[1], true)?;
+    assert!(fixture.embedding.mapped_gather_aligned()?);
+    let mut bytes = vec![0u8];
+    bytes.extend_from_slice(fixture.embedding.bytes()?);
+    let len = bytes.len();
+    let data = Tensor::from_vec(bytes, len, &device)?.narrow(0, 1, len - 1)?;
+    let ids = Tensor::from_vec(
+        SELECTION.map(|id| id as u32).to_vec(),
+        SELECTION.len(),
+        &device,
+    )?;
+    assert_rows(
+        &fixture
+            .embedding
+            .resident(&data)
+            .gather(&ids, DType::F32.into())?,
+        &fixture,
+        &SELECTION,
+        Q8_K_FORMAT,
+    )?;
+    if can_read_mapped(&device)? {
+        let rows = fixture
+            .embedding
+            .mapped_rows()?
+            .with_device_index(&device)?;
+        assert_rows(
+            &fixture
+                .embedding
+                .mapped(&rows)
+                .gather(&ids, DType::F32.into())?,
+            &fixture,
+            &SELECTION,
+            Q8_K_FORMAT,
+        )?;
     }
     Ok(())
 }
