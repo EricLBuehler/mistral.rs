@@ -7173,8 +7173,9 @@ checksum = "8df9b6e13f2d32c91b9bd719c00d1958837bc7dec474d94952798cc8e69eeec3"
 
 [[package]]
 name = "tqdm"
-version = "0.8.0"
-source = "git+https://github.com/setoelkahfi/tqdm?branch=deps%2Fbump-crossterm#41e4182829136e6dadbdd1c36af824d19219147a"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a882329b482cea1d2762e9b9ff1ed0f0327a1ec3a9ba7b8e8c4e3635908a4ae5"
 dependencies = [
  "anyhow",
  "crossterm 0.29.0",
