@@ -627,6 +627,7 @@ const fn ggml_dtype_alignment(dtype: GgmlDType) -> usize {
         GgmlDType::Q6K => align_of::<BlockQ6K>(),
         GgmlDType::Q8K => align_of::<BlockQ8K>(),
         GgmlDType::BF16 => align_of::<bf16>(),
+        GgmlDType::Mxfp4 => align_of::<candle_core::quantized::k_quants::BlockMxfp4>(),
     }
 }
 

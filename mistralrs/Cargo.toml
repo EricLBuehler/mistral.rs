@@ -278,6 +278,9 @@ path = "examples/cookbook/agent/main.rs"
 no-default-features = true
 
 [features]
+cuda-legacy-bf16 = ["cuda", "mistralrs-core/cuda-legacy-bf16"]
+cuda-legacy-fp8 = ["cuda", "mistralrs-core/cuda-legacy-fp8"]
+cuda-legacy-fp4 = ["cuda", "mistralrs-core/cuda-legacy-fp4"]
 # NVIDIA CUDA GPU support
 cuda = ["mistralrs-core/cuda"]
 cutile = ["cuda", "mistralrs-core/cutile"]

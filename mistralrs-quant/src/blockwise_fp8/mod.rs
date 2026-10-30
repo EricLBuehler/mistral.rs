@@ -8,7 +8,7 @@ use candle_nn::Linear;
 
 #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
 mod deepgemm;
-#[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+#[cfg(all(feature = "cuda", has_fp8_mma_kernels))]
 pub(crate) mod mma;
 pub(crate) mod ops;
 pub use ops::{
@@ -53,7 +53,7 @@ enum BlockwiseFp8Provider {
     CutlassSm90,
     #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
     DeepGemmSm90(Arc<deepgemm::Prepared>),
-    #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+    #[cfg(all(feature = "cuda", has_fp8_mma_kernels))]
     TensorCoreGemv,
 }
 
@@ -65,7 +65,7 @@ static DEEPGEMM_FP8_PROVIDER_LOG: std::sync::Once = std::sync::Once::new();
 static DEEPGEMM_FP8_FALLBACK_LOG: std::sync::Once = std::sync::Once::new();
 #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
 const FP8_SM90_PROVIDER_ENV: &str = "MISTRALRS_FP8_SM90_PROVIDER";
-#[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+#[cfg(all(feature = "cuda", has_fp8_mma_kernels))]
 static TENSOR_CORE_GEMV_PROVIDER_LOG: std::sync::Once = std::sync::Once::new();
 
 impl BlockwiseFp8Provider {
@@ -78,7 +78,7 @@ impl BlockwiseFp8Provider {
             Self::CutlassSm90 => true,
             #[cfg(all(feature = "cuda", has_deepgemm_fp8_sm90_provider))]
             Self::DeepGemmSm90(_) => true,
-            #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+            #[cfg(all(feature = "cuda", has_fp8_mma_kernels))]
             Self::TensorCoreGemv => true,
         }
     }
@@ -170,7 +170,7 @@ impl BlockwiseFP8Linear {
                 );
             });
         }
-        #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+        #[cfg(all(feature = "cuda", has_fp8_mma_kernels))]
         if self.dequant_dtype == DType::BF16
             && mma::weight_supported(
                 &self.weight,
@@ -194,7 +194,7 @@ impl BlockwiseFP8Linear {
         Ok(())
     }
 
-    #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels, feature = "cutile"))]
+    #[cfg(all(feature = "cuda", has_fp8_mma_kernels, feature = "cutile"))]
     fn cutile_scale_layout() -> ActivationScaleLayout {
         ActivationScaleLayout::GroupMajor {
             row_alignment: std::num::NonZeroUsize::new(crate::cutile::FP8_GEMM_BLOCK_ROWS)
@@ -203,7 +203,7 @@ impl BlockwiseFP8Linear {
     }
 
     /// Rows padded to the GEMM block when `x` takes the cuTile GEMM instead of the tensor-core GEMV.
-    #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels, feature = "cutile"))]
+    #[cfg(all(feature = "cuda", has_fp8_mma_kernels, feature = "cutile"))]
     fn cutile_padded_rows(&self, x: &Tensor) -> Option<usize> {
         if !matches!(self.provider, BlockwiseFp8Provider::TensorCoreGemv)
             || x.dtype() != DType::BF16
@@ -223,7 +223,7 @@ impl BlockwiseFP8Linear {
             .then(|| rows.div_ceil(block_rows) * block_rows)
     }
 
-    #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels, feature = "cutile"))]
+    #[cfg(all(feature = "cuda", has_fp8_mma_kernels, feature = "cutile"))]
     fn forward_cutile_quantized(&self, activation: &QuantizedActivation) -> Result<Tensor> {
         let dev = activation.quantized().device().as_cuda_device()?;
         let (rows, _) = activation.quantized().dims2()?;
@@ -414,7 +414,7 @@ impl QuantMethod for BlockwiseFP8Linear {
             return self.forward_quantized(&activation);
         }
 
-        #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+        #[cfg(all(feature = "cuda", has_fp8_mma_kernels))]
         if matches!(self.provider, BlockwiseFp8Provider::TensorCoreGemv) && x.dtype() == DType::BF16
         {
             if self.activation_quantization_scheme_for(x).is_some() {
@@ -570,7 +570,7 @@ impl QuantMethod for BlockwiseFP8Linear {
         {
             return None;
         }
-        #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+        #[cfg(all(feature = "cuda", has_fp8_mma_kernels))]
         if matches!(self.provider, BlockwiseFp8Provider::TensorCoreGemv) {
             return Some(ActivationQuantizationScheme {
                 dtype: DType::F8E4M3,
@@ -594,7 +594,7 @@ impl QuantMethod for BlockwiseFP8Linear {
         &self,
         x: &Tensor,
     ) -> Option<ActivationQuantizationScheme> {
-        #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+        #[cfg(all(feature = "cuda", has_fp8_mma_kernels))]
         if matches!(self.provider, BlockwiseFp8Provider::TensorCoreGemv) {
             #[cfg(feature = "cutile")]
             if self.cutile_padded_rows(x).is_some() {
@@ -612,7 +612,7 @@ impl QuantMethod for BlockwiseFP8Linear {
 
     fn preferred_activation_scale_layout_for(&self, x: &Tensor) -> Option<ActivationScaleLayout> {
         self.activation_quantization_scheme_for(x)?;
-        #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels, feature = "cutile"))]
+        #[cfg(all(feature = "cuda", has_fp8_mma_kernels, feature = "cutile"))]
         if self.cutile_padded_rows(x).is_some() {
             return Some(Self::cutile_scale_layout());
         }
@@ -637,7 +637,7 @@ impl QuantMethod for BlockwiseFP8Linear {
     }
 
     fn quantize_activation(&self, x: &Tensor) -> Result<QuantizedActivation> {
-        #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+        #[cfg(all(feature = "cuda", has_fp8_mma_kernels))]
         if matches!(self.provider, BlockwiseFp8Provider::TensorCoreGemv) {
             let scheme = self.activation_quantization_scheme_for(x).ok_or_else(|| {
                 candle_core::Error::msg("FP8 tensor-core activation quantization is unavailable")
@@ -700,7 +700,7 @@ impl QuantMethod for BlockwiseFP8Linear {
     }
 
     fn forward_quantized(&self, activation: &QuantizedActivation) -> Result<Tensor> {
-        #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+        #[cfg(all(feature = "cuda", has_fp8_mma_kernels))]
         if matches!(self.provider, BlockwiseFp8Provider::TensorCoreGemv) {
             #[cfg(feature = "cutile")]
             if activation.scale_layout() == Self::cutile_scale_layout() {
@@ -803,7 +803,7 @@ impl QuantMethod for BlockwiseFP8Linear {
         split_size: usize,
         activation: GluActivationType,
     ) -> Result<Option<Tensor>> {
-        #[cfg(all(has_blockwise_fp8_kernels, feature = "cutile"))]
+        #[cfg(all(has_fp8_mma_kernels, feature = "cutile"))]
         if matches!(self.provider, BlockwiseFp8Provider::TensorCoreGemv) {
             if self.activation_scheme != Some(Fp8ActivationScheme::Dynamic)
                 || input.dtype() != DType::BF16
@@ -1583,7 +1583,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels, feature = "cutile"))]
+    #[cfg(all(feature = "cuda", has_fp8_mma_kernels, feature = "cutile"))]
     fn cutile_test_layer(
         dev: &Device,
         output_features: usize,
@@ -1620,7 +1620,7 @@ mod tests {
         Ok(layer)
     }
 
-    #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels, feature = "cutile"))]
+    #[cfg(all(feature = "cuda", has_fp8_mma_kernels, feature = "cutile"))]
     #[test]
     #[ignore = "requires a CUDA device with cuTile support"]
     fn cutile_w8a16_preserves_empty_leading_dimensions() -> Result<()> {
@@ -1643,7 +1643,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels, feature = "cutile"))]
+    #[cfg(all(feature = "cuda", has_fp8_mma_kernels, feature = "cutile"))]
     fn assert_close(label: &str, reference: &Tensor, output: &Tensor) -> Result<()> {
         let reference = reference.to_dtype(DType::F32)?.to_device(&Device::Cpu)?;
         let output = output.to_dtype(DType::F32)?.to_device(&Device::Cpu)?;
@@ -1660,7 +1660,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels, feature = "cutile"))]
+    #[cfg(all(feature = "cuda", has_fp8_mma_kernels, feature = "cutile"))]
     #[test]
     #[ignore = "requires a CUDA device with cuTile support"]
     fn cutile_fused_glu_matches_unfused() -> Result<()> {
@@ -1700,7 +1700,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels, feature = "cutile"))]
+    #[cfg(all(feature = "cuda", has_fp8_mma_kernels, feature = "cutile"))]
     #[test]
     #[ignore = "requires a CUDA device with cuTile support"]
     fn cutile_consumes_fused_rms_norm_group_major_activation() -> Result<()> {

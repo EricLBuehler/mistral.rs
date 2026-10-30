@@ -73,6 +73,7 @@ fn ggml_dtype_to_uqff_code(dtype: GgmlDType) -> u32 {
         GgmlDType::Q6K => 14,
         GgmlDType::Q8K => 15,
         GgmlDType::BF16 => 30,
+        GgmlDType::Mxfp4 => 39,
     }
 }
 
@@ -93,6 +94,7 @@ fn ggml_dtype_from_uqff_code(dtype: u32) -> Result<GgmlDType> {
         14 => Ok(GgmlDType::Q6K),
         15 => Ok(GgmlDType::Q8K),
         30 => Ok(GgmlDType::BF16),
+        39 => Ok(GgmlDType::Mxfp4),
         _ => candle_core::bail!("unknown dtype for quantized weight tensor {dtype}"),
     }
 }
@@ -114,6 +116,7 @@ fn gguf_dtype_label(dtype: u32) -> String {
         14 => "q6k",
         15 => "q8k",
         30 => "bf16",
+        39 => "mxfp4",
         _ => "unknown",
     }
     .to_string()

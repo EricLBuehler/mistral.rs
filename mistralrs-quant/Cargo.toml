@@ -46,6 +46,9 @@ cutile = { workspace = true, optional = true, features = ["experimental-tune"] }
 mistralrs-metal-compile = { workspace = true, optional = true, features = ["metal"] }
 
 [features]
+cuda-legacy-bf16 = ["cuda", "candle-core/cuda-legacy-bf16"]
+cuda-legacy-fp8 = ["cuda", "candle-core/cuda-legacy-fp8"]
+cuda-legacy-fp4 = ["cuda", "candle-core/cuda-legacy-fp4"]
 cuda = [
     "candle-core/cuda",
     "candle-nn/cuda",
