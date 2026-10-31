@@ -1,7 +1,7 @@
 use crate::{
     distributed,
     paged_attention::{
-        block_hash::{adapter_generation_key, compute_block_hashes, BlockHash},
+        block_hash::{compute_block_hashes, sequence_extra_keys, BlockHash},
         block_pool::PrefixBlockRetentionRevocationMonitor,
     },
     pipeline::{
@@ -2446,13 +2446,15 @@ impl Engine {
                                     }
 
                                     let num_blocks = encoded_len / block_size;
-                                    let adapter_key =
-                                        adapter_generation_key(seq.adapter_generation());
+                                    let extra_keys = sequence_extra_keys(
+                                        seq.adapter_generation(),
+                                        seq.cache_salt(),
+                                    );
                                     let block_hashes = compute_block_hashes(
                                         seq.get_toks(),
                                         block_size,
                                         seq.mm_features(),
-                                        adapter_key.as_slice(),
+                                        &extra_keys,
                                     );
                                     if block_hashes.len() < num_blocks {
                                         continue;

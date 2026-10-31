@@ -52,13 +52,23 @@ impl From<Vec<u32>> for Tokens {
 struct CacheKey {
     tokens: Tokens,
     adapter_generation: Option<AdapterGenerationId>,
+    cache_salt: Option<String>,
 }
 
 impl CacheKey {
     fn new(tokens: Vec<u32>, adapter_generation: Option<AdapterGenerationId>) -> Self {
+        Self::with_salt(tokens, adapter_generation, None)
+    }
+
+    fn with_salt(
+        tokens: Vec<u32>,
+        adapter_generation: Option<AdapterGenerationId>,
+        cache_salt: Option<String>,
+    ) -> Self {
         Self {
             tokens: tokens.into(),
             adapter_generation,
+            cache_salt,
         }
     }
 }
@@ -388,7 +398,11 @@ impl PrefixCacheManagerV2 {
             });
 
             self.caches.insert(
-                CacheKey::new(seq.get_toks().to_vec(), seq.adapter_generation()),
+                CacheKey::with_salt(
+                    seq.get_toks().to_vec(),
+                    seq.adapter_generation(),
+                    seq.cache_salt().map(str::to_string),
+                ),
                 CacheElement {
                     cache,
                     recurrent_snapshots,
@@ -717,6 +731,30 @@ impl PrefixCacheManagerV2 {
         audio_hashes: Option<&[u64]>,
         video_hashes: Option<&[u64]>,
     ) -> Result<Option<MatchingCache>> {
+        self.search_for_matching_cache_salted(
+            toks,
+            adapter_generation,
+            None,
+            mm_features,
+            image_hashes,
+            audio_hashes,
+            video_hashes,
+        )
+    }
+
+    /// Like [`Self::search_for_matching_cache`], but only matches entries stored with the same
+    /// cache salt, so requests with different salts never share a cached prefix.
+    #[allow(clippy::too_many_arguments)]
+    pub fn search_for_matching_cache_salted(
+        &mut self,
+        toks: &[u32],
+        adapter_generation: Option<AdapterGenerationId>,
+        cache_salt: Option<&str>,
+        mm_features: &[MultiModalFeature],
+        image_hashes: Option<&[u64]>,
+        audio_hashes: Option<&[u64]>,
+        video_hashes: Option<&[u64]>,
+    ) -> Result<Option<MatchingCache>> {
         // Do not search if prefix caching disabled or no tokens
         if self.no_prefix_cache || toks.is_empty() {
             return Ok(None);
@@ -742,7 +780,7 @@ impl PrefixCacheManagerV2 {
 
         let mut best_match: Option<(usize, &CacheElement)> = None;
         for (k, v) in &self.caches {
-            if k.adapter_generation != adapter_generation {
+            if k.adapter_generation != adapter_generation || k.cache_salt.as_deref() != cache_salt {
                 continue;
             }
             if v.video_hashes
@@ -1436,6 +1474,51 @@ mod tests {
             .is_none());
         assert!(prefix_cacher
             .search_for_matching_cache(&query, Some(generation_a), &[], None, None, None)?
+            .is_some());
+
+        Ok(())
+    }
+
+    #[test]
+    fn cache_salts_do_not_cross_hit() -> candle_core::Result<()> {
+        let mut prefix_cacher = PrefixCacheManagerV2::new(1, false, false);
+
+        prefix_cacher.caches.insert(
+            CacheKey::with_salt(vec![1, 2, 3], None, Some("tenant-a".to_string())),
+            CacheElement {
+                cache: vec![Some(make_normal_kv_cache(3)?)],
+                recurrent_snapshots: None,
+                audio_hashes: None,
+                image_hashes: None,
+                video_hashes: None,
+            },
+        );
+
+        let query = [1, 2, 3, 4];
+        assert!(prefix_cacher
+            .search_for_matching_cache(&query, None, &[], None, None, None)?
+            .is_none());
+        assert!(prefix_cacher
+            .search_for_matching_cache_salted(
+                &query,
+                None,
+                Some("tenant-b"),
+                &[],
+                None,
+                None,
+                None
+            )?
+            .is_none());
+        assert!(prefix_cacher
+            .search_for_matching_cache_salted(
+                &query,
+                None,
+                Some("tenant-a"),
+                &[],
+                None,
+                None,
+                None
+            )?
             .is_some());
 
         Ok(())

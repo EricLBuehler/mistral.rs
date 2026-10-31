@@ -771,6 +771,7 @@ pub struct Sequence {
     token_offset: usize,
     eos_tokens: Vec<u32>,
     adapter: Option<AdapterLease>,
+    cache_salt: Option<String>,
 
     // Multimodal data (images, diffusion settings, pixel caches)
     pub multimodal: MultimodalData,
@@ -970,6 +971,7 @@ impl Sequence {
             token_offset: 0,
             eos_tokens,
             adapter: None,
+            cache_salt: None,
             total_prompt_time: None,
             total_completion_time: None,
             step_start_instant: None,
@@ -1063,6 +1065,17 @@ impl Sequence {
 
     pub fn adapter_generation(&self) -> Option<AdapterGenerationId> {
         self.adapter.as_ref().map(AdapterLease::generation)
+    }
+
+    pub(crate) fn set_cache_salt(&mut self, cache_salt: Option<String>) {
+        if self.cache_salt != cache_salt {
+            self.cache_salt = cache_salt;
+            self.block_hash_revision = self.block_hash_revision.wrapping_add(1);
+        }
+    }
+
+    pub fn cache_salt(&self) -> Option<&str> {
+        self.cache_salt.as_deref()
     }
 
     pub fn is_running(&self) -> bool {

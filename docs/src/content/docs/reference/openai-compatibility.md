@@ -58,6 +58,7 @@ The selected effort is passed to the chat template as both `reasoning_effort` an
 - `agent_permission`, `code_execution_permission`: per-request permission tightening for server-executed tools.
 - `max_tool_rounds`: cap server-side tool loop rounds for one request.
 - `truncate_sequence`: truncate long prompts at the model's context limit instead of erroring.
+- `cache_salt`: isolate prefix-cache reuse; a request only reuses cached prompt prefixes from requests that sent the same salt. Omit it to share the default cache.
 - `adapter`: select a loaded dynamic LoRA alias string or an exact immutable generation object, `{"generation":"<generation-id>"}`. Omit it or use `null` for the base model. Unknown aliases, nonresident generations, and models without a dynamic LoRA runtime return an error.
 
 `GET /v1/lora_adapters` is always registered and returns detailed alias, generation, and capacity state for models started with dynamic LoRA. A model without that runtime returns 409 with `lora_runtime_unavailable`. Adapter source is redacted unless runtime mutation is enabled. With `mistralrs serve`, `POST /v1/load_lora_adapter` and `POST /v1/unload_lora_adapter` require `MISTRALRS_ALLOW_RUNTIME_LORA_UPDATING`; embedded servers configure mutation through `LoraAdapterApiConfig`. Read-only discovery does not require mutation access.
@@ -121,7 +122,7 @@ Uploaded skill versions remain available from the server's skills directory (`--
 
 ### mistralrs extensions on Responses
 
-`top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`, `adapter`. The `adapter` field selects a loaded dynamic LoRA alias string or exact generation object; omit it or use `null` for the base model. A loaded alias can instead be sent as `model`. The chat-only agentic fields (`session_id`, `agent_permission`, `files`, `max_tool_rounds`, `web_search_options`) are not part of this endpoint's schema. Use the Responses `tools` array for web search, code interpreter, shell, and OpenAI-compatible Skills.
+`top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`, `adapter`, `cache_salt`. The `adapter` field selects a loaded dynamic LoRA alias string or exact generation object; omit it or use `null` for the base model. A loaded alias can instead be sent as `model`. The chat-only agentic fields (`session_id`, `agent_permission`, `files`, `max_tool_rounds`, `web_search_options`) are not part of this endpoint's schema. Use the Responses `tools` array for web search, code interpreter, shell, and OpenAI-compatible Skills.
 
 Thinking, reasoning effort, and truncation are not top-level extension fields here; they are controlled through the standard Responses objects. Use `reasoning.effort` with `off`, `low`, `medium`, `high`, or `xhigh`; `none` is accepted as an alias for `off`. Omission enables thinking without choosing an effort. `reasoning.summary` is accepted for compatibility but currently does not change the response. Use `truncation` for sequence truncation. Top-level `enable_thinking`, `reasoning_effort`, and `truncate_sequence` keys are silently ignored on this endpoint.
 
@@ -141,7 +142,7 @@ Poll with `curl http://localhost:1234/v1/responses/<id>`, cancel with `curl -X P
 
 ## Completions (legacy)
 
-`/v1/completions` (non-chat) is supported with a subset of Chat Completions extensions: `top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`, `truncate_sequence`, `adapter`. LoRA accepts the same alias-as-`model`, adapter alias, and exact-generation forms as Chat Completions. The agentic, session, file, web-search, thinking, and reasoning-effort fields are not part of this endpoint's schema and have no effect.
+`/v1/completions` (non-chat) is supported with a subset of Chat Completions extensions: `top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`, `truncate_sequence`, `adapter`, `cache_salt`. LoRA accepts the same alias-as-`model`, adapter alias, and exact-generation forms as Chat Completions. The agentic, session, file, web-search, thinking, and reasoning-effort fields are not part of this endpoint's schema and have no effect.
 
 ## Embeddings
 

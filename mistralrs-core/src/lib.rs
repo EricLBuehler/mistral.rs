@@ -1675,6 +1675,7 @@ impl MistralRs {
                     model_id: None,
                     adapter: None,
                     truncate_sequence: false,
+                    cache_salt: None,
                     session_id: None,
                     files: None,
                     input_files: Vec::new(),

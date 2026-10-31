@@ -313,6 +313,7 @@ async fn oneshot_text(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, text: String) 
         model_id: None,
         adapter: adapter.map(AdapterSelection::alias),
         truncate_sequence: false,
+        cache_salt: None,
         files: None,
         input_files: Vec::new(),
     }));
@@ -496,6 +497,7 @@ async fn oneshot_multimodal(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, input: O
         model_id: None,
         adapter: None,
         truncate_sequence: false,
+        cache_salt: None,
         files: None,
         input_files: Vec::new(),
     }));
@@ -1001,6 +1003,7 @@ async fn text_interactive_mode(
             model_id: None,
             adapter: adapter.clone().map(AdapterSelection::alias),
             truncate_sequence: false,
+            cache_salt: None,
             files: None,
             input_files: Vec::new(),
         }));
@@ -1787,6 +1790,7 @@ async fn multimodal_interactive_mode(
             model_id: None,
             adapter: None,
             truncate_sequence: false,
+            cache_salt: None,
             files: None,
             input_files: Vec::new(),
         }));
@@ -1953,6 +1957,7 @@ async fn diffusion_interactive_mode(
             model_id: None,
             adapter: None,
             truncate_sequence: false,
+            cache_salt: None,
             files: None,
             input_files: Vec::new(),
         }));
@@ -2075,6 +2080,7 @@ async fn speech_interactive_mode(
             model_id: None,
             adapter: None,
             truncate_sequence: false,
+            cache_salt: None,
             files: None,
             input_files: Vec::new(),
         }));
