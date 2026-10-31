@@ -8,8 +8,11 @@ pub mod fast_mmq;
 pub mod fast_mmvq;
 #[cfg(feature = "cuda")]
 mod ffi;
+#[cfg(test)]
+mod kquant_gemv_tests;
 #[cfg(all(feature = "cuda", has_marlin_kernels))]
 mod packed_affine;
+pub(crate) mod q6k_gemv;
 mod weight_source;
 
 pub use weight_source::{
@@ -120,6 +123,41 @@ fn gguf_dtype_label(dtype: u32) -> String {
 }
 
 impl GgufMatMul {
+    /// m==1 decode matvec for Q6_K on CPU, straight off the mapped block bytes.
+    fn try_q6k_gemv_cpu(&self, a: &Tensor) -> Result<Option<Tensor>> {
+        #[cfg(target_arch = "aarch64")]
+        {
+            let QMatMul::QTensor(q) = &self.w else {
+                return Ok(None);
+            };
+            if !q.device().is_cpu() || q.dtype() != GgmlDType::Q6K || !a.is_contiguous() {
+                return Ok(None);
+            }
+            let (n, k) = q.shape().dims2()?;
+            let dims = a.dims();
+            let (last, init) = dims
+                .split_last()
+                .ok_or_else(|| candle_core::Error::msg("empty lhs"))?;
+            if *last != k || init.iter().product::<usize>() != 1 {
+                return Ok(None);
+            }
+            let bytes = q.data()?;
+            let mut dst = vec![0f32; n];
+            let lhs = a.flatten_all()?.to_vec1::<f32>()?;
+            if !q6k_gemv::gemv(n, k, &bytes, &lhs, &mut dst) {
+                return Ok(None);
+            }
+            let mut shape = dims.to_vec();
+            *shape.last_mut().expect("checked rank") = n;
+            Ok(Some(Tensor::from_vec(dst, shape, a.device())?))
+        }
+        #[cfg(not(target_arch = "aarch64"))]
+        {
+            let _ = a;
+            Ok(None)
+        }
+    }
+
     fn prepare(self) -> Result<Self> {
         #[cfg(feature = "metal")]
         self.prepare_metal_kernels(DType::F32)?;
@@ -487,6 +525,10 @@ impl QuantMethod for GgufMatMul {
         } else {
             a.to_dtype(DType::F32)?
         };
+        #[cfg(target_arch = "aarch64")]
+        if let Some(out) = self.try_q6k_gemv_cpu(&a_f32)? {
+            return self.add_bias(out);
+        }
         let x = self.w.forward(&a_f32)?;
         let x = if original_dtype == DType::F32 {
             x
@@ -500,13 +542,9 @@ impl QuantMethod for GgufMatMul {
     ///
     /// If `a` is (n_tokens, 1, cols), `self` weights are (n_experts, rows, cols),
     /// then the indices are (n_tokens, n_experts_per_tok).
+    /// Indexed matmul over stacked expert weights: x is (n_tokens, 1|topk, hidden),
+    /// indices (n_tokens, topk), weights (n_experts, out, in).
     fn gather_forward_raw(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
-        // Use indexed_moe_forward for efficient indexed matmul
-        // Expected shapes:
-        // - x: (n_tokens, 1, hidden_dim) or (n_tokens, n_experts_per_tok, hidden_dim)
-        // - indices: (n_tokens, n_experts_per_tok)
-        // - weights (self): (n_experts, out_features, in_features)
-        // For CPU and Metal: use dequantize-then-matmul approach
         #[cfg(feature = "cuda")]
         let res = if x.device().is_cuda() {
             cuda::qmatmul_indexed_moe_forward(&self.w, x, indices)?
