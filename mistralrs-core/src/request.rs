@@ -461,6 +461,10 @@ pub struct NormalRequest {
     pub adapter: Option<AdapterSelection>,
     #[serde(default)]
     pub truncate_sequence: bool,
+    /// Isolates prefix-cache reuse: only requests carrying the same salt share cached prefixes.
+    /// `None` keeps the shared, unsalted cache.
+    #[serde(default)]
+    pub cache_salt: Option<String>,
     /// Persistent agentic state. If `None`, a new session is created and the ID is returned in the response.
     #[serde(default)]
     pub session_id: Option<String>,
@@ -530,6 +534,7 @@ impl NormalRequest {
             model_id: None,
             adapter: None,
             truncate_sequence: false,
+            cache_salt: None,
             session_id: None,
             files: None,
             input_files: Vec::new(),

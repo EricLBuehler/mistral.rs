@@ -163,6 +163,9 @@ pub struct AnthropicMessagesRequest {
     pub web_search_options: Option<WebSearchOptions>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub truncate_sequence: Option<bool>,
+    /// Optional prefix-cache isolation key; see `ChatCompletionRequest::cache_salt`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_salt: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
@@ -640,6 +643,7 @@ impl AnthropicMessagesRequest {
             chat_template_kwargs: None,
             max_tool_rounds: self.max_tool_rounds,
             truncate_sequence: self.truncate_sequence,
+            cache_salt: self.cache_salt,
         })
     }
 }
@@ -2266,6 +2270,22 @@ mod tests {
         assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
         let body = error_body(response).await;
         assert_eq!(body["error"]["type"], "invalid_request_error");
+    }
+
+    #[test]
+    fn forwards_cache_salt_to_chat_request() {
+        let req: AnthropicMessagesRequest = serde_json::from_value(json!({
+            "model": "default",
+            "max_tokens": 32,
+            "cache_salt": "tenant-a",
+            "messages": [{"role": "user", "content": "Hello"}]
+        }))
+        .unwrap();
+        let chat = req.into_chat_completion_request().unwrap();
+        assert_eq!(chat.cache_salt.as_deref(), Some("tenant-a"));
+
+        let chat = basic_request().into_chat_completion_request().unwrap();
+        assert_eq!(chat.cache_salt, None);
     }
 
     #[test]

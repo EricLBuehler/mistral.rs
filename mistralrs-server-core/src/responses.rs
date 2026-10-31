@@ -606,6 +606,11 @@ pub struct OpenResponsesCreateRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub truncation: Option<crate::responses_types::enums::TruncationStrategy>,
 
+    /// Optional prefix-cache isolation key: requests only reuse cached prompt prefixes
+    /// computed for requests carrying the same salt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_salt: Option<String>,
+
     // ===== mistral.rs Extensions (non-standard) =====
     /// Stop sequences to end generation
     #[serde(rename = "stop", skip_serializing_if = "Option::is_none")]
@@ -2010,6 +2015,7 @@ async fn parse_openresponses_request(
         dry_sequence_breakers: oairequest.dry_sequence_breakers,
         enable_thinking,
         truncate_sequence,
+        cache_salt: oairequest.cache_salt,
         reasoning_effort,
         chat_template_kwargs: None,
         files: oairequest.files,

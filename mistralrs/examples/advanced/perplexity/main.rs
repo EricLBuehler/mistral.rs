@@ -69,6 +69,7 @@ async fn process_chunk(runner: &MistralRs, chunk: Vec<u32>) -> anyhow::Result<(T
         model_id: None,
         adapter: None,
         truncate_sequence: false,
+        cache_salt: None,
         session_id: None,
         files: None,
         input_files: Vec::new(),

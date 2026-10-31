@@ -141,7 +141,8 @@ Content blocks:
 
 mistral.rs agentic extensions accepted on this endpoint: `session_id`,
 `web_search_options`, `enable_code_execution`, `agent_permission`,
-`code_execution_permission`, `files`, `max_tool_rounds`, and `truncate_sequence`.
+`code_execution_permission`, `files`, `max_tool_rounds`, `truncate_sequence`, and
+`cache_salt` (prefix-cache isolation key).
 
 ## Compatibility status
 

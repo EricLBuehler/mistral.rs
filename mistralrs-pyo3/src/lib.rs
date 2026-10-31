@@ -1628,6 +1628,7 @@ impl Runner {
                 model_id: model_id.clone(),
                 adapter: request.adapter.clone(),
                 truncate_sequence: request.truncate_sequence,
+                cache_salt: None,
                 session_id: request.session_id.clone(),
                 files: request
                     .files
@@ -1726,6 +1727,7 @@ impl Runner {
                         model_id: model_id.clone(),
                         adapter: None,
                         truncate_sequence,
+                        cache_salt: None,
                         session_id: None,
                         files: None,
                         input_files: Vec::new(),
@@ -1858,6 +1860,7 @@ impl Runner {
                 model_id: model_id.clone(),
                 adapter: request.adapter.clone(),
                 truncate_sequence: request.truncate_sequence,
+                cache_salt: None,
                 session_id: None,
                 files: None,
                 input_files: Vec::new(),
@@ -1932,6 +1935,7 @@ impl Runner {
             model_id: model_id.clone(),
             adapter: None,
             truncate_sequence: false,
+            cache_salt: None,
             session_id: None,
             files: None,
             input_files: Vec::new(),
@@ -1998,6 +2002,7 @@ impl Runner {
             model_id: model_id.clone(),
             adapter: None,
             truncate_sequence: false,
+            cache_salt: None,
             session_id: None,
             files: None,
             input_files: Vec::new(),
@@ -2589,6 +2594,7 @@ impl Runner {
                 model_id: Some(model_id.clone()),
                 adapter: request.adapter.clone(),
                 truncate_sequence: request.truncate_sequence,
+                cache_salt: None,
                 session_id: request.session_id.clone(),
                 files: request
                     .files
@@ -2712,6 +2718,7 @@ impl Runner {
                 model_id: Some(model_id.clone()),
                 adapter: request.adapter.clone(),
                 truncate_sequence: request.truncate_sequence,
+                cache_salt: None,
                 session_id: None,
                 files: None,
                 input_files: Vec::new(),

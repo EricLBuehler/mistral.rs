@@ -292,6 +292,7 @@ pub fn parse_request(
             },
             adapter: oairequest.adapter.map(Into::into),
             truncate_sequence: oairequest.truncate_sequence.unwrap_or(false),
+            cache_salt: oairequest.cache_salt.clone(),
             session_id: None,
             files: None,
             input_files: Vec::new(),

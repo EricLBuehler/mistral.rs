@@ -416,6 +416,7 @@ async fn run_single_bench(
         model_id: None,
         adapter: adapter.map(AdapterSelection::alias),
         truncate_sequence: false,
+        cache_salt: None,
         files: None,
         input_files: Vec::new(),
     }));

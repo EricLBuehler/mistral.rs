@@ -172,7 +172,7 @@ use anyhow::Result;
 use candle_core::{DType, Device, DeviceLocation, IndexOp, Tensor, Var};
 
 use crate::paged_attention::block_hash::{
-    adapter_generation_key, compute_block_hashes, MultimodalAttentionPolicy,
+    compute_block_hashes, sequence_extra_keys, MultimodalAttentionPolicy,
 };
 use crate::sequence::{SeqStepType, Sequence, SequenceState};
 
@@ -1967,13 +1967,9 @@ pub trait Pipeline:
         } else {
             None
         };
-        let adapter_key = adapter_generation_key(seq.adapter_generation());
-        let block_hashes = compute_block_hashes(
-            seq.get_toks(),
-            block_size,
-            seq.mm_features(),
-            adapter_key.as_slice(),
-        );
+        let extra_keys = sequence_extra_keys(seq.adapter_generation(), seq.cache_salt());
+        let block_hashes =
+            compute_block_hashes(seq.get_toks(), block_size, seq.mm_features(), &extra_keys);
         let n_blocks = cached_tokens / block_size;
         if block_hashes.len() >= n_blocks {
             let owner = *block_hashes
