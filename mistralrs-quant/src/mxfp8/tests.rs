@@ -260,6 +260,40 @@ fn routed_mxfp8_preserves_expert_selection() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn routed_mxfp8_preserves_shared_and_expert_biases() -> Result<()> {
+    let device = &Device::Cpu;
+    let k = MXFP8_BLOCK_SIZE;
+    let mut layer = Mxfp8Linear::from_parts(
+        Tensor::from_vec(vec![F8E4M3::from_f32(1.0); 6 * k], (3, 2, k), device)?,
+        Tensor::full(127u8, (3, 2, 1), device)?,
+        None,
+        DType::F32,
+    )?;
+    let indices = Tensor::new(&[[2u32, 0], [1, 2]], device)?;
+    let input = Tensor::ones((2, 1, k), DType::F32, device)?;
+    for (bias, expected) in [
+        (
+            Tensor::new(&[1f32, 2.0], device)?,
+            vec![33f32, 34.0, 33.0, 34.0, 33.0, 34.0, 33.0, 34.0],
+        ),
+        (
+            Tensor::new(&[[1f32, 2.0], [3.0, 4.0], [5.0, 6.0]], device)?,
+            vec![37f32, 38.0, 33.0, 34.0, 35.0, 36.0, 37.0, 38.0],
+        ),
+    ] {
+        layer.bias = Some(bias);
+        assert_eq!(
+            layer
+                .gather_forward(&input, &indices)?
+                .flatten_all()?
+                .to_vec1::<f32>()?,
+            expected
+        );
+    }
+    Ok(())
+}
+
 #[cfg(feature = "cuda")]
 #[test]
 fn cuda_routed_mxfp8_matches_cpu() -> Result<()> {

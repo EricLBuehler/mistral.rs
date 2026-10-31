@@ -14,15 +14,9 @@ use candle_core::{DType, Device};
 use itertools::Itertools;
 use tracing::{info, warn};
 
-use super::DeviceMappedModelLoader;
+use super::{DeviceMappedModelLoader, LayerResource};
 
 const MIN_MAPPING_CACHE_BLOCKS: usize = 2;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum OptionalAllocationBacking {
-    Owned,
-    FileMapped,
-}
 
 fn checked_memory_sum<const N: usize>(parts: [usize; N]) -> Option<usize> {
     parts
@@ -215,21 +209,19 @@ struct DeviceMappingContext<'a> {
     devices: &'a [Device],
     dtype: DType,
     params: &'a AutoDeviceMapParams,
-    optional_backing: OptionalAllocationBacking,
+    resources: &'a [LayerResource],
     memory_query: &'a dyn Fn(&Device) -> Result<DeviceMemory>,
 }
 
 fn remove_optional_layer_bytes(
     layer_sizes: &mut [usize],
     total_model_size: usize,
-    optional: &[(usize, usize)],
+    optional: &[&LayerResource],
 ) -> usize {
-    optional
-        .iter()
-        .fold(total_model_size, |total, &(layer, bytes)| {
-            layer_sizes[layer] -= bytes;
-            total - bytes
-        })
+    optional.iter().fold(total_model_size, |total, resource| {
+        layer_sizes[resource.layer] -= resource.device_bytes;
+        total - resource.device_bytes
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -245,7 +237,7 @@ pub fn get_device_layers(
     dtype: DType,
     params: &AutoDeviceMapParams,
     paged_attn_config: Option<&mut PagedAttentionConfig>,
-    optional_backing: OptionalAllocationBacking,
+    resources: &[LayerResource],
 ) -> Result<DeviceMapMetadata> {
     get_device_layers_attempt(
         DeviceMappingContext {
@@ -256,7 +248,7 @@ pub fn get_device_layers(
             devices,
             dtype,
             params,
-            optional_backing,
+            resources,
             memory_query: &|device| Ok(MemoryUsage.query(device)?),
         },
         layer_sizes_in_bytes,
@@ -282,7 +274,7 @@ fn get_device_layers_attempt(
         devices,
         dtype,
         params,
-        optional_backing,
+        resources,
         memory_query,
     } = context;
     let (mapped_max, non_mapped_max) = if let Some(cfg) = paged_attn_config.as_deref_mut() {
@@ -311,12 +303,10 @@ fn get_device_layers_attempt(
         .as_ref()
         .map_or(MemoryGoal::Auto, |cfg| cfg.memory_goal);
 
-    let optional_layer_bytes = if allow_optional_retry {
-        loader.optional_layer_bytes(config)?
-    } else {
-        Vec::new()
-    };
-    let has_optional_bytes = optional_layer_bytes.iter().any(|(_, bytes)| *bytes > 0);
+    let optional_resources = if allow_optional_retry { resources } else { &[] };
+    let has_optional_bytes = optional_resources
+        .iter()
+        .any(|resource| resource.host_backing.is_some() && resource.device_bytes > 0);
     let mut layer_sizes_backup = if paged_attn_config.is_some() || has_optional_bytes {
         Some(layer_sizes_in_bytes.clone())
     } else {
@@ -533,29 +523,25 @@ fn get_device_layers_attempt(
         }
         layer += layers_on_dev;
     }
-    // Owned host allocations consume the same capacity on unified memory devices.
-    let can_use_host =
-        !has_unified_memory || optional_backing == OptionalAllocationBacking::FileMapped;
-    if has_optional_bytes && can_use_host && (remaining > 0 || includes_cpu) {
+    let offloaded = optional_resources
+        .iter()
+        .filter(|resource| resource.device_bytes > 0 && resource.can_offload(has_unified_memory))
+        .collect::<Vec<_>>();
+    if !offloaded.is_empty() && (remaining > 0 || includes_cpu) {
         let mut original_layers = layer_sizes_backup
             .take()
             .expect("layer sizes backup missing for optional allocation fallback");
         let required_model_bytes = remove_optional_layer_bytes(
             &mut original_layers,
             total_model_size_in_bytes,
-            &optional_layer_bytes,
+            &offloaded,
         );
         let optional_mib = b_to_mb!(total_model_size_in_bytes - required_model_bytes);
-        match optional_backing {
-            OptionalAllocationBacking::Owned => info!(
-                optional_mib,
-                "Retrying automatic device mapping with optional layer allocations accessed from host memory"
-            ),
-            OptionalAllocationBacking::FileMapped => info!(
-                optional_mib,
-                "Retrying automatic device mapping with optional layer allocations kept in existing file mappings"
-            ),
-        }
+        info!(
+            optional_mib,
+            resources = offloaded.len(),
+            "Retrying automatic device mapping with optional resources accessed from host storage"
+        );
         let metadata = get_device_layers_attempt(
             context,
             original_layers,
@@ -563,10 +549,10 @@ fn get_device_layers_attempt(
             paged_attn_config,
             false,
         )?;
-        return Ok(metadata.with_optional_host_layers(
-            optional_layer_bytes
-                .iter()
-                .filter_map(|&(layer, bytes)| (bytes > 0).then_some(layer))
+        return Ok(metadata.with_host_resources(
+            offloaded
+                .into_iter()
+                .map(|resource| resource.name.clone())
                 .collect(),
         ));
     }
@@ -607,7 +593,7 @@ mod tests {
     use super::*;
     use crate::matformer::MatformerSliceConfig;
     use crate::paged_attention::{KvCacheLayout, ModelConfigMetadata, PagedCacheType};
-    use crate::pipeline::loaders::{ActivationModelConfig, AutoDeviceMapQuantization};
+    use crate::pipeline::loaders::{ActivationModelConfig, AutoDeviceMapQuantization, HostBacking};
     use crate::vision_models::qwen4_exp::{
         config::{LayerType, QsaConfig},
         Qwen4ExpPagedConfig,
@@ -622,9 +608,16 @@ mod tests {
     const TEST_OWNED_OPTIONAL_BYTES: usize = 32 * MIB;
     const TEST_OWNED_MODEL_BYTES: usize = 42 * MIB;
 
+    fn test_resource(name: &str, bytes: usize, backing: HostBacking) -> LayerResource {
+        LayerResource {
+            name: name.to_owned(),
+            layer: TEST_OPTIONAL_LAYER,
+            device_bytes: bytes,
+            host_backing: Some(backing),
+        }
+    }
+
     struct OptionalAllocationLoader {
-        optional_bytes: usize,
-        optional_queries: Cell<usize>,
         attempts: Cell<usize>,
     }
 
@@ -674,11 +667,6 @@ mod tests {
             Ok(TEST_LAYERS)
         }
 
-        fn optional_layer_bytes(&self, _config: &str) -> Result<Vec<(usize, usize)>> {
-            self.optional_queries.set(self.optional_queries.get() + 1);
-            Ok(vec![(TEST_OPTIONAL_LAYER, self.optional_bytes)])
-        }
-
         fn model_config(&self, _config: &str) -> Result<Box<dyn ModelConfigLike>> {
             self.attempts.set(self.attempts.get() + 1);
             let mut model = cache_test_model();
@@ -695,8 +683,6 @@ mod tests {
             (TEST_OPTIONAL_BYTES, TEST_OPTIONAL_BYTES, false, 2),
         ] {
             let loader = OptionalAllocationLoader {
-                optional_bytes,
-                optional_queries: Cell::new(0),
                 attempts: Cell::new(0),
             };
             let mut layers = vec![TEST_REQUIRED_BYTES; TEST_LAYERS];
@@ -716,17 +702,20 @@ mod tests {
                     max_batch_size: 1,
                 },
                 None,
-                OptionalAllocationBacking::Owned,
+                &[test_resource(
+                    "optional",
+                    optional_bytes,
+                    HostBacking::Owned,
+                )],
             );
             assert_eq!(result.is_ok(), fits, "{result:?}");
-            assert_eq!(loader.optional_queries.get(), 1);
             assert_eq!(loader.attempts.get(), attempts);
             if let Ok(metadata) = result {
                 let mapper = crate::DeviceMapSetting::Map(metadata)
                     .into_mapper(TEST_LAYERS, &Device::Cpu, None, &[Device::Cpu])
                     .unwrap();
-                assert!(mapper.uses_host_memory_for_optional_allocations(TEST_OPTIONAL_LAYER));
-                assert!(!mapper.uses_host_memory_for_optional_allocations(0));
+                assert!(mapper.uses_host_memory_for_resource("optional"));
+                assert!(!mapper.uses_host_memory_for_resource("required"));
             }
         }
     }
@@ -740,38 +729,18 @@ mod tests {
             * DType::BF16.size_in_bytes();
         let required_capacity = TEST_OWNED_MODEL_BYTES + cache_bytes;
         for (unified, backing, available, fits, attempts) in [
+            (true, HostBacking::Owned, required_capacity, true, 1),
+            (true, HostBacking::Owned, required_capacity - MIB, false, 1),
+            (false, HostBacking::Owned, required_capacity - MIB, true, 2),
             (
                 true,
-                OptionalAllocationBacking::Owned,
-                required_capacity,
-                true,
-                1,
-            ),
-            (
-                true,
-                OptionalAllocationBacking::Owned,
-                required_capacity - MIB,
-                false,
-                1,
-            ),
-            (
-                false,
-                OptionalAllocationBacking::Owned,
-                required_capacity - MIB,
-                true,
-                2,
-            ),
-            (
-                true,
-                OptionalAllocationBacking::FileMapped,
+                HostBacking::FileMapped,
                 required_capacity - MIB,
                 true,
                 2,
             ),
         ] {
             let loader = OptionalAllocationLoader {
-                optional_bytes: TEST_OWNED_OPTIONAL_BYTES,
-                optional_queries: Cell::new(0),
                 attempts: Cell::new(0),
             };
             let queries = Cell::new(0);
@@ -804,7 +773,11 @@ mod tests {
                         max_batch_size: 1,
                     },
                     memory_query: &memory_query,
-                    optional_backing: backing,
+                    resources: &[test_resource(
+                        "optional",
+                        TEST_OWNED_OPTIONAL_BYTES,
+                        backing,
+                    )],
                 },
                 vec![MIB, MIB + TEST_OWNED_OPTIONAL_BYTES, MIB],
                 TEST_OWNED_MODEL_BYTES,
@@ -813,7 +786,6 @@ mod tests {
             );
             assert_eq!(result.is_ok(), fits, "{result:?}");
             assert_eq!(loader.attempts.get(), attempts);
-            assert_eq!(loader.optional_queries.get(), 1);
             if unified {
                 assert_eq!(queries.get(), attempts);
             }
@@ -825,11 +797,66 @@ mod tests {
                     &[Device::Cpu],
                 )?;
                 assert_eq!(
-                    mapper.uses_host_memory_for_optional_allocations(TEST_OPTIONAL_LAYER),
+                    mapper.uses_host_memory_for_resource("optional"),
                     attempts == 2,
                 );
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn unified_mapping_offloads_only_file_backed_resources_within_a_layer() -> Result<()> {
+        let loader = OptionalAllocationLoader {
+            attempts: Cell::new(0),
+        };
+        let resources = [
+            test_resource("owned", 8 * MIB, HostBacking::Owned),
+            test_resource("mapped", 24 * MIB, HostBacking::FileMapped),
+        ];
+        let model = cache_test_model();
+        let cache_bytes = (0..TEST_LAYERS)
+            .map(|layer| model.layer_kv_cache_elements_per_token(layer).unwrap_or(0))
+            .sum::<usize>()
+            * DType::BF16.size_in_bytes();
+        let available = TEST_OWNED_MODEL_BYTES - resources[1].device_bytes + cache_bytes;
+        let memory_query = |_: &Device| {
+            Ok(DeviceMemory::Unified {
+                total: 64 * MIB,
+                available,
+                allocated: 64 * MIB - available,
+                working_set_limit: 64 * MIB,
+            })
+        };
+        let metadata = get_device_layers_attempt(
+            DeviceMappingContext {
+                loader: &loader,
+                config: "",
+                num_layers: TEST_LAYERS,
+                non_mapped_size_in_bytes: 7 * MIB,
+                devices: &[Device::Cpu],
+                dtype: DType::BF16,
+                params: &AutoDeviceMapParams::Text {
+                    max_seq_len: 1,
+                    max_batch_size: 1,
+                },
+                memory_query: &memory_query,
+                resources: &resources,
+            },
+            vec![MIB, MIB + TEST_OWNED_OPTIONAL_BYTES, MIB],
+            TEST_OWNED_MODEL_BYTES,
+            None,
+            true,
+        )?;
+        let mapper = crate::DeviceMapSetting::Map(metadata).into_mapper(
+            TEST_LAYERS,
+            &Device::Cpu,
+            None,
+            &[Device::Cpu],
+        )?;
+        assert!(mapper.uses_host_memory_for_resource("mapped"));
+        assert!(!mapper.uses_host_memory_for_resource("owned"));
+        assert_eq!(loader.attempts.get(), 2);
         Ok(())
     }
 

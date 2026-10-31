@@ -163,7 +163,7 @@ pub fn quantize_expert_stack_with_bias(
     }
     if !ty.supports_stacked_gather() {
         candle_core::bail!(
-            "Cannot quantize stacked expert weights to {ty}: that target does not support stacked expert gather. Use a Q*K/Q*_0/Q*_1 target, AFQ, or omit ISQ."
+            "Cannot quantize stacked expert weights to {ty}: that target does not support stacked expert gather."
         );
     }
     if candle_core::quantized::GgmlDType::try_from(ty).is_ok() {

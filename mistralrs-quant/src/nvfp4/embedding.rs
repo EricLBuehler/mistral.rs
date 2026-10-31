@@ -93,6 +93,10 @@ impl Nvfp4Embedding {
         self.rows
     }
 
+    pub fn columns(&self) -> usize {
+        self.columns
+    }
+
     pub fn row_bytes(&self) -> usize {
         self.columns / VALUES_PER_BYTE + self.columns / NVFP4_BLOCK_SIZE
     }

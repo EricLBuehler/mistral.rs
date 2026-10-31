@@ -47,7 +47,7 @@ pub struct DeviceMapMetadata {
     device_layers: Option<Vec<DeviceLayerMapMetadata>>,
     host_layers: Option<usize>,
     #[serde(skip)]
-    optional_host_layers: Vec<usize>,
+    host_resources: Vec<String>,
 }
 
 impl DeviceMapMetadata {
@@ -55,7 +55,7 @@ impl DeviceMapMetadata {
         Self {
             device_layers: Some(device_layers),
             host_layers: None,
-            optional_host_layers: Vec::new(),
+            host_resources: Vec::new(),
         }
     }
     /// A device mapper to not map device.
@@ -63,7 +63,7 @@ impl DeviceMapMetadata {
         Self {
             device_layers: None,
             host_layers: None,
-            optional_host_layers: Vec::new(),
+            host_resources: Vec::new(),
         }
     }
 
@@ -75,8 +75,8 @@ impl DeviceMapMetadata {
         self.host_layers
     }
 
-    pub(crate) fn with_optional_host_layers(mut self, layers: Vec<usize>) -> Self {
-        self.optional_host_layers = layers;
+    pub(crate) fn with_host_resources(mut self, resources: Vec<String>) -> Self {
+        self.host_resources = resources;
         self
     }
 
@@ -102,12 +102,12 @@ impl DeviceMapMetadata {
         all_devices: &[Device],
     ) -> Result<MapperBox> {
         let mapper = self.build_inner_mapper(model_layers, device, topology, all_devices)?;
-        if self.optional_host_layers.is_empty() {
+        if self.host_resources.is_empty() {
             return Ok(mapper);
         }
         Ok(Box::new(OptionalHostDeviceMapper::new(
             mapper,
-            self.optional_host_layers.clone(),
+            self.host_resources.clone(),
         )))
     }
 
@@ -423,7 +423,7 @@ mod tests {
                     let metadata = if use_host {
                         metadata
                             .clone()
-                            .with_optional_host_layers(vec![OPTIONAL_HOST_LAYER])
+                            .with_host_resources(vec!["optional".to_owned()])
                     } else {
                         metadata.clone()
                     };
@@ -433,11 +433,8 @@ mod tests {
                         topology,
                         &[Device::Cpu],
                     )?;
-                    assert_eq!(
-                        mapper.uses_host_memory_for_optional_allocations(OPTIONAL_HOST_LAYER),
-                        use_host
-                    );
-                    assert!(!mapper.uses_host_memory_for_optional_allocations(0));
+                    assert_eq!(mapper.uses_host_memory_for_resource("optional"), use_host);
+                    assert!(!mapper.uses_host_memory_for_resource("required"));
                     assert!(mapper
                         .device_for(OPTIONAL_HOST_LAYER, false)
                         .unwrap()

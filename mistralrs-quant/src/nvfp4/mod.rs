@@ -700,13 +700,11 @@ impl Nvfp4Layer {
     #[cfg(feature = "cuda")]
     fn forward_cuda(&self, x: &Tensor) -> Result<Tensor> {
         #[cfg(feature = "cutile")]
-        {
+        if !self.portable {
             if decode::supports(x.dim(0)?, 1, x.dtype(), self.gemm_args()) {
                 return decode::forward(x, None, self.gemm_args());
             }
-            if !self.portable {
-                return self.forward_native(x);
-            }
+            return self.forward_native(x);
         }
         portable::matmul(x, self.portable_weights())
     }
@@ -714,19 +712,17 @@ impl Nvfp4Layer {
     #[cfg(feature = "cuda")]
     fn gather_cuda(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
         #[cfg(feature = "cutile")]
-        {
+        if !self.portable {
             let (tokens, topk) = indices.dims2()?;
             if decode::supports(tokens, topk, x.dtype(), self.gemm_args()) {
                 return decode::forward(x, Some(indices), self.gemm_args());
             }
-            if !self.portable {
-                return crate::cutile::cutile_nvfp4_gather_calibrated(
-                    x,
-                    indices,
-                    self.gemm_args(),
-                    self.input_global_scale.is_some(),
-                );
-            }
+            return crate::cutile::cutile_nvfp4_gather_calibrated(
+                x,
+                indices,
+                self.gemm_args(),
+                self.input_global_scale.is_some(),
+            );
         }
         portable::gather(x, indices, self.portable_weights())
     }
@@ -968,10 +964,6 @@ impl QuantMethod for Nvfp4Layer {
             candle_core::bail!("NVFP4 accelerator inference requires the cuda feature");
         }
         self.reference_forward(x)
-    }
-
-    fn supports_flat_gather(&self) -> bool {
-        true
     }
 
     fn routed_weights(&self) -> Option<crate::RoutedWeights> {

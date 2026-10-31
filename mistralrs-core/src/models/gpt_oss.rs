@@ -385,9 +385,9 @@ fn load_gpt_oss_packed_expert_projection(
     let projection_vb = vb.pp(name);
     if get_immediate_isq().is_some_and(|params| params.capture == IsqCaptureMode::Immediate) {
         if let Some(target) = immediate_isq_match(&projection_vb).and_then(|matched| matched.ty) {
-            if !MXFP4Layer::supports_stacked_isq(target) {
+            if !target.supports_stacked_gather() {
                 candle_core::bail!(
-                    "Cannot requantize raw GPT-OSS MXFP4 expert `{}` to {target}: that target does not support stacked expert gather. Use a Q*K/Q*_0/Q*_1 target, AFQ, MXFP4, or omit ISQ.",
+                    "Cannot requantize raw GPT-OSS MXFP4 expert `{}` to {target}: that target does not support stacked expert gather.",
                     projection_vb.prefix()
                 );
             }

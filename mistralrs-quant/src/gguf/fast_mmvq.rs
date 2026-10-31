@@ -23,6 +23,10 @@ const DENSE_PAIR_THREADS: usize = 256;
 const DENSE_PAIR_PREFETCH_BYTES_PER_THREAD: usize = 32;
 const PREFETCH_MIN_WEIGHT_BYTES: usize = 8 * 1024 * 1024;
 const PREFETCH_LOW_BIT_MIN_COLS: usize = 4096;
+const ROWS_PER_BLOCK: usize = 2;
+const SINGLE_TOKEN_WARPS: usize = 8;
+const FOUR_TOKEN_WARPS: usize = 4;
+const EIGHT_TOKEN_WARPS: usize = 2;
 
 fn use_single_row_prefetch(dtype: GgmlDType, columns: usize, weight_bytes: usize) -> bool {
     let block_bytes = dtype.type_size();
@@ -97,7 +101,18 @@ pub(super) fn prefers_weight_prefetch(dev: &CudaDevice) -> bool {
     if prefetch_tests::FORCE_PLAIN.with(|flag| flag.get()) {
         return false;
     }
-    cuda_device_info(dev).prefers_l2_weight_prefetch()
+    crate::cuda_policy::prefers_weight_prefetch(&cuda_device_info(dev))
+}
+
+pub(crate) fn prefers_fused_pair(dev: &CudaDevice, tokens: usize, rows: [usize; 2]) -> bool {
+    let info = cuda_device_info(dev);
+    let warps = match tokens {
+        1 => SINGLE_TOKEN_WARPS,
+        2..=4 => FOUR_TOKEN_WARPS,
+        _ => EIGHT_TOKEN_WARPS,
+    };
+    let blocks = rows.map(|rows| rows.div_ceil(ROWS_PER_BLOCK));
+    crate::cuda_policy::fuse_underfilled_grids(&info, &blocks, info.warp_size * warps)
 }
 
 fn workspace_ensure<'a>(

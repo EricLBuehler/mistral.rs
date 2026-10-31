@@ -619,10 +619,6 @@ impl RowParallelLayer {
         Some(&*self.weight)
     }
 
-    fn local_layer(&self) -> Option<&dyn QuantMethod> {
-        self.all_reduce.is_noop().then_some(&*self.weight)
-    }
-
     fn transparent_layer(&self) -> Option<&dyn QuantMethod> {
         (self.all_reduce.is_noop() && self.bias.is_none()).then_some(&*self.weight)
     }
@@ -640,8 +636,7 @@ impl RowParallelLayer {
 
 impl QuantMethod for RowParallelLayer {
     crate::forward_quant_hooks!(meta, activation: Self::weight_layer);
-    crate::forward_quant_hooks!(weights: Self::local_layer);
-    crate::forward_quant_hooks!(group: Self::transparent_layer);
+    crate::forward_quant_hooks!(weights, group: Self::transparent_layer);
 
     fn forward_quantized(&self, a: &QuantizedActivation) -> Result<Tensor> {
         self.reduce_output(self.weight.forward_quantized(a)?)
@@ -1223,8 +1218,8 @@ impl ColumnParallelLayer {
 }
 
 impl QuantMethod for ColumnParallelLayer {
-    crate::forward_quant_hooks!(meta, activation, weights: Self::weight_layer);
-    crate::forward_quant_hooks!(group: Self::transparent_layer);
+    crate::forward_quant_hooks!(meta, activation: Self::weight_layer);
+    crate::forward_quant_hooks!(weights, group: Self::transparent_layer);
 
     fn forward_quantized(&self, a: &QuantizedActivation) -> Result<Tensor> {
         self.add_bias(self.weight.forward_quantized(a)?)
@@ -3083,6 +3078,49 @@ mod tests {
         let tracked = tracker.get()[0].clone();
         crate::clear_immediate_isq();
         tracked
+    }
+
+    #[test]
+    fn distributed_raw_weight_hooks_require_transparent_wrappers() -> candle_core::Result<()> {
+        use candle_core::quantized::{GgmlDType, QTensor};
+
+        let device = Device::Cpu;
+        let tensor = Tensor::ones((32, 32), DType::F32, &device)?;
+        let quantized = Arc::new(crate::GgufMatMul::new(QuantMethodConfig::Gguf {
+            q_weight: Arc::new(QTensor::quantize(&tensor, GgmlDType::Q4_0)?),
+            b: None,
+        })?) as Arc<dyn QuantMethod>;
+        let dense = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+            candle_nn::Linear::new(tensor, None),
+        ))?) as Arc<dyn QuantMethod>;
+        let comm = Arc::new(Comm::from_device(Id::new(), &device, 0, 1)?);
+        for weight in [quantized, dense] {
+            for biased in [false, true] {
+                let bias = biased
+                    .then(|| Tensor::ones(32, DType::F32, &device))
+                    .transpose()?;
+                let row = RowParallelLayer {
+                    weight: weight.clone(),
+                    bias: bias.clone(),
+                    all_reduce: distributed::SumAllReduce::new(&comm),
+                };
+                let column = ColumnParallelLayer {
+                    weight: weight.clone(),
+                    bias,
+                };
+                for layer in [&row as &dyn QuantMethod, &column] {
+                    assert_eq!(
+                        layer.get_qtensor().is_some(),
+                        !biased && weight.get_qtensor().is_some()
+                    );
+                    assert_eq!(
+                        layer.unquant_forward_weight().is_some(),
+                        !biased && weight.unquant_forward_weight().is_some()
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 
     #[test]

@@ -727,18 +727,12 @@ impl DeviceMappedModelLoader for AutoMultimodalLoader {
     fn num_layers(&self, config: &str) -> Result<usize> {
         Self::get_loader(config)?.num_layers(config)
     }
-    fn unbound_layer_bytes(&self, config: &str) -> Result<Vec<(usize, usize)>> {
-        Self::get_loader(config)?.unbound_layer_bytes(config)
-    }
-    fn optional_layer_bytes(&self, config: &str) -> Result<Vec<(usize, usize)>> {
-        Self::get_loader(config)?.optional_layer_bytes(config)
-    }
-    fn supports_file_mapped_optional_allocations(
+    fn layer_resources(
         &self,
         config: &str,
-        weight_paths: &[std::path::PathBuf],
-    ) -> Result<bool> {
-        Self::get_loader(config)?.supports_file_mapped_optional_allocations(config, weight_paths)
+        source: super::ResourceSource<'_>,
+    ) -> Result<Vec<super::LayerResource>> {
+        Self::get_loader(config)?.layer_resources(config, source)
     }
     fn supports_checkpoint_weight_inventory(&self, config: &str) -> Result<bool> {
         Self::get_loader(config)?.supports_checkpoint_weight_inventory(config)
@@ -8519,6 +8513,14 @@ struct Qwen4ExpWeightSizes<'a, 'b> {
 }
 
 impl Qwen4ExpWeightSizes<'_, '_> {
+    fn text_prefix(&self) -> Result<&'static str> {
+        use crate::vision_models::qwen4_exp::checkpoint;
+        let alternate = self.quantization.is_some_and(|quantization| {
+            quantization.checkpoint_contains(checkpoint::ALTERNATE_TEXT_EMBEDDING)
+        });
+        Ok(checkpoint::text_model_prefix(alternate))
+    }
+
     fn tensor(&self, name: &str, shape: &[usize], promoted: bool) -> Result<usize> {
         let fallback = if promoted { 1 } else { self.weight_pack_factor };
         self.quantization.map_or_else(
@@ -8616,27 +8618,41 @@ impl Qwen4ExpWeightSizes<'_, '_> {
                     + 2 * text.linear_num_value_heads * DType::F32.size_in_bytes()
             }
         };
-        let moe = weight(
-            "mlp.experts.gate_up_proj",
-            &[text.num_experts, 2 * text.moe_intermediate_size, hidden],
-            false,
-        )? + weight(
-            "mlp.experts.down_proj",
-            &[text.num_experts, hidden, text.moe_intermediate_size],
-            false,
-        )? + weight(
-            "mlp.shared_expert.gate_proj",
-            &[text.shared_expert_intermediate_size, hidden],
-            false,
-        )? + weight(
-            "mlp.shared_expert.up_proj",
-            &[text.shared_expert_intermediate_size, hidden],
-            false,
-        )? + weight(
-            "mlp.shared_expert.down_proj",
-            &[hidden, text.shared_expert_intermediate_size],
-            false,
-        )? + (hidden * text.num_experts + hidden) * dense_bytes;
+        let routed = if let Some(quantization) = self.quantization {
+            quantization.expert_weights_size_in_bytes(
+                &format!("{prefix}.mlp.experts"),
+                [text.num_experts, hidden, text.moe_intermediate_size],
+                self.dtype,
+                self.weight_pack_factor,
+            )?
+        } else {
+            weight(
+                "mlp.experts.gate_up_proj",
+                &[text.num_experts, 2 * text.moe_intermediate_size, hidden],
+                false,
+            )? + weight(
+                "mlp.experts.down_proj",
+                &[text.num_experts, hidden, text.moe_intermediate_size],
+                false,
+            )?
+        };
+        let moe = routed
+            + weight(
+                "mlp.shared_expert.gate_proj",
+                &[text.shared_expert_intermediate_size, hidden],
+                false,
+            )?
+            + weight(
+                "mlp.shared_expert.up_proj",
+                &[text.shared_expert_intermediate_size, hidden],
+                false,
+            )?
+            + weight(
+                "mlp.shared_expert.down_proj",
+                &[hidden, text.shared_expert_intermediate_size],
+                false,
+            )?
+            + (hidden * text.num_experts + hidden) * dense_bytes;
         Ok(mixer
             + moe
             + self.hyper(&format!("{prefix}.attn_hyper_connection"), true)?
@@ -8806,10 +8822,9 @@ impl DeviceMappedModelLoader for Qwen4ExpLoader {
                 },
             )
         };
-        let mut embedding_names = vec![
-            "language_model.model.embed_tokens.weight",
-            "model.language_model.embed_tokens.weight",
-        ];
+        let text_prefix = sizes.text_prefix()?;
+        let embedding_name = format!("{text_prefix}.embed_tokens.weight");
+        let mut embedding_names = vec![embedding_name.as_str()];
         if tie
             && quantization.is_some_and(|quantization| {
                 matches!(
@@ -8826,7 +8841,7 @@ impl DeviceMappedModelLoader for Qwen4ExpLoader {
         } else {
             embedding_bytes(&["lm_head.weight"], false)?
         };
-        let final_mixer = sizes.hyper("model.language_model.hyper_connection_mixer", false)?;
+        let final_mixer = sizes.hyper(&format!("{text_prefix}.hyper_connection_mixer"), false)?;
 
         let vision = cfg.vision_config.as_ref().map_or(0, |vision| {
             let merge_hidden = vision.hidden_size * vision.spatial_merge_size.pow(2);
@@ -8905,17 +8920,12 @@ impl DeviceMappedModelLoader for Qwen4ExpLoader {
             weight_pack_factor,
             quantization,
         };
-        #[cfg(feature = "cuda")]
-        let table_bytes = ple.as_ref().map_or(0, |ple| {
-            crate::vision_models::qwen4_exp::planned_resident_table_bytes(text, ple)
-        });
-        #[cfg(not(feature = "cuda"))]
-        let table_bytes = 0;
+        let text_prefix = sizes.text_prefix()?;
         text.layer_types()
             .into_iter()
             .enumerate()
             .map(|(layer_idx, layer_type)| {
-                let prefix = format!("model.language_model.layers.{layer_idx}");
+                let prefix = format!("{text_prefix}.layers.{layer_idx}");
                 let mut bytes = sizes.layer(&prefix, layer_type)?;
                 if let Some(ple) = ple.as_ref().filter(|ple| ple.layer_idx == layer_idx) {
                     bytes += sizes.tensor(
@@ -8927,8 +8937,7 @@ impl DeviceMappedModelLoader for Qwen4ExpLoader {
                         &[text.hidden_size, ple.embed_dim],
                         true,
                     )? + 3 * hc_hidden * DType::F32.size_in_bytes()
-                        + hc_hidden * ple.conv_kernel_size * dtype.size_in_bytes()
-                        + table_bytes;
+                        + hc_hidden * ple.conv_kernel_size * dtype.size_in_bytes();
                 }
                 Ok(bytes)
             })
@@ -8940,52 +8949,12 @@ impl DeviceMappedModelLoader for Qwen4ExpLoader {
         Ok(cfg.text_config.num_hidden_layers)
     }
 
-    fn unbound_layer_bytes(&self, config: &str) -> Result<Vec<(usize, usize)>> {
-        let cfg: Qwen4ExpConfig = serde_json::from_str(config)?;
-        let text = &cfg.text_config;
-        #[cfg(feature = "cuda")]
-        return Ok(text.ple()?.map_or_else(Vec::new, |ple| {
-            vec![(
-                ple.layer_idx,
-                crate::vision_models::qwen4_exp::planned_resident_table_bytes(text, &ple),
-            )]
-        }));
-        #[cfg(not(feature = "cuda"))]
-        {
-            let _ = text;
-            Ok(Vec::new())
-        }
-    }
-
-    fn optional_layer_bytes(&self, config: &str) -> Result<Vec<(usize, usize)>> {
-        self.unbound_layer_bytes(config)
-    }
-
-    fn supports_file_mapped_optional_allocations(
+    fn layer_resources(
         &self,
         config: &str,
-        weight_paths: &[std::path::PathBuf],
-    ) -> Result<bool> {
-        let cfg: Qwen4ExpConfig = serde_json::from_str(config)?;
-        let Some(ple) = cfg.text_config.ple()? else {
-            return Ok(false);
-        };
-        if weight_paths.is_empty()
-            || weight_paths.iter().any(|path| {
-                path.extension().and_then(|extension| extension.to_str()) != Some("safetensors")
-            })
-        {
-            return Ok(false);
-        }
-        let raw =
-            unsafe { mistralrs_quant::safetensors::MmapedSafetensors::multi_unique(weight_paths)? };
-        let prefix = format!(
-            "model.language_model.layers.{}.ple.ple_embedding.ngram_embedding",
-            ple.layer_idx
-        );
-        Ok(crate::vision_models::qwen4_exp::checkpoint_table_is_packed(
-            &raw, &prefix,
-        ))
+        source: super::ResourceSource<'_>,
+    ) -> Result<Vec<super::LayerResource>> {
+        crate::vision_models::qwen4_exp::layer_resources(config, source)
     }
 
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
@@ -11021,6 +10990,7 @@ mod tests {
     const QWEN4_DENSE_FINAL_HYPER_HALF_BYTES: usize = 13_148_160;
     const QWEN4_DENSE_FINAL_HYPER_F32_BYTES: usize = 26_255_360;
     const QWEN4_PLE_PROJECTION_AND_STATE_BYTES: usize = 27_084_800;
+    #[cfg(feature = "cuda")]
     const QWEN4_PLE_HEAD_DIM: usize = 160;
 
     fn qwen_activation_config(architecture: &str) -> serde_json::Value {
@@ -11226,6 +11196,81 @@ mod tests {
     }
 
     #[test]
+    fn qwen4_exp_topology_uses_the_checkpoint_namespace() -> Result<()> {
+        use super::super::ResourceSource;
+        use mistralrs_quant::ShardedSafeTensors;
+
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("weights.safetensors");
+        let config = qwen4_sizing_config().to_string();
+        let embedding_extra =
+            mistralrs_quant::estimate_isq_weight_bytes(&[248320, 2560], DType::BF16, IsqType::Q8_0)
+                - mistralrs_quant::estimate_isq_weight_bytes(
+                    &[248320, 2560],
+                    DType::BF16,
+                    IsqType::Q6K,
+                );
+        for root in ["model.language_model", "language_model.model"] {
+            let tensors = HashMap::from([(
+                format!("{root}.embed_tokens.weight"),
+                Tensor::zeros((1, 1), DType::BF16, &Device::Cpu)?,
+            )]);
+            candle_core::safetensors::save(&tensors, &path)?;
+            let weights = ShardedSafeTensors::wrap(tensors, DType::BF16, Device::Cpu);
+            for source in [
+                ResourceSource {
+                    weights: None,
+                    paths: std::slice::from_ref(&path),
+                },
+                ResourceSource {
+                    weights: Some(&weights),
+                    paths: &[],
+                },
+            ] {
+                let checkpoint = source.checkpoint_tensors()?;
+                for pattern_root in ["model.language_model", "language_model.model"] {
+                    let escaped = regex::escape(pattern_root);
+                    let topology = crate::Topology::from_str(&format!(
+                        "'/^{escaped}\\.layers\\.0\\.mlp\\.experts\\.down_proj\\.weight$/':\n  isq: Q8_0\n'/^{escaped}\\.embed_tokens\\.weight$/':\n  isq: Q8_0\n"
+                    ))?;
+                    let quantization =
+                        AutoDeviceMapQuantization::isq(Some(IsqType::Q4K), Some(&topology))
+                            .with_checkpoint(&checkpoint);
+                    let matches = root == pattern_root;
+                    for loader in [
+                        &Qwen4ExpLoader as &dyn DeviceMappedModelLoader,
+                        &AutoMultimodalLoader,
+                    ] {
+                        let layers = loader.layer_sizes_in_bytes_with_quantization(
+                            &config,
+                            DType::BF16,
+                            1,
+                            Some(&quantization),
+                            None,
+                        )?;
+                        assert_eq!(
+                            layers[0],
+                            QWEN4_Q4K_LINEAR_BYTES
+                                + usize::from(matches) * QWEN4_EXPERT_DOWN_Q8_EXTRA_BYTES,
+                        );
+                        assert_eq!(
+                            loader.non_mapped_size_in_bytes(
+                                &config,
+                                DType::BF16,
+                                1,
+                                Some(&quantization),
+                                None,
+                            )?,
+                            QWEN4_Q4K_NON_MAPPED_BYTES + usize::from(matches) * embedding_extra,
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn qwen4_exp_topology_only_sizes_keep_unlisted_weights_dense() -> Result<()> {
         const EXPERT_DOWN_ELEMENTS: usize = 512 * 2560 * 640;
         const Q8_BLOCK_ELEMENTS: usize = 32;
@@ -11287,68 +11332,110 @@ mod tests {
             Some(&quantization),
             None,
         )?;
-        let optional = AutoMultimodalLoader.optional_layer_bytes(&config)?;
-        let table_bytes = optional.iter().map(|(_, bytes)| bytes).sum::<usize>();
-        assert_eq!(optional, Qwen4ExpLoader.unbound_layer_bytes(&config)?);
+        let resources = AutoMultimodalLoader
+            .layer_resources(&config, super::super::ResourceSource::default())?;
+        assert_eq!(
+            resources,
+            Qwen4ExpLoader.layer_resources(&config, super::super::ResourceSource::default())?
+        );
         assert_eq!(
             sizes[1],
-            QWEN4_Q4K_LINEAR_BYTES + QWEN4_PLE_PROJECTION_AND_STATE_BYTES + table_bytes
+            QWEN4_Q4K_LINEAR_BYTES + QWEN4_PLE_PROJECTION_AND_STATE_BYTES
         );
         assert_eq!(sizes[0], QWEN4_Q4K_LINEAR_BYTES);
         assert_eq!(sizes[3], QWEN4_Q4K_ATTENTION_BYTES);
         Ok(())
     }
 
+    #[cfg(feature = "cuda")]
     #[test]
-    fn qwen4_exp_packed_ple_keeps_checkpoint_file_backing() -> Result<()> {
+    fn qwen4_exp_resource_inventory_matches_both_checkpoint_namespaces() -> Result<()> {
+        use super::super::{HostBacking, ResourceSource};
         use safetensors::{serialize_to_file, tensor::TensorView, Dtype};
 
         let dir = tempfile::tempdir()?;
         let path = dir.path().join("weights.safetensors");
         let mut config = qwen4_sizing_config();
         config["text_config"]["ple_layer_ids"] = serde_json::json!([2]);
-        let name = "model.language_model.layers.1.ple.ple_embedding.ngram_embedding.shard_0.weight";
-        for (dtype, columns, bytes, mapped) in [
-            (
-                Dtype::BF16,
-                QWEN4_PLE_HEAD_DIM,
-                QWEN4_PLE_HEAD_DIM * 2,
-                false,
-            ),
-            (
-                Dtype::U8,
-                QWEN4_PLE_HEAD_DIM / 2,
-                QWEN4_PLE_HEAD_DIM / 2,
-                true,
-            ),
-        ] {
-            let data = vec![0u8; bytes];
-            let tensor = TensorView::new(dtype, vec![1, columns], &data)?;
-            serialize_to_file([(name, tensor)], None, &path)?;
-            for loader in [
-                &Qwen4ExpLoader as &dyn DeviceMappedModelLoader,
-                &AutoMultimodalLoader,
-            ] {
-                assert_eq!(
-                    loader.supports_file_mapped_optional_allocations(
+        for root in ["model.language_model", "language_model.model"] {
+            let prefix = format!("{root}.layers.1.ple.ple_embedding.ngram_embedding");
+            for packed in [false, true] {
+                let columns = if packed {
+                    QWEN4_PLE_HEAD_DIM / 2
+                } else {
+                    QWEN4_PLE_HEAD_DIM
+                };
+                let data = vec![0u8; columns * if packed { 1 } else { 2 }];
+                let marker = [0u8; 2];
+                let scales = vec![0x38u8; QWEN4_PLE_HEAD_DIM / mistralrs_quant::NVFP4_BLOCK_SIZE];
+                let global = 1f32.to_le_bytes();
+                let mut tensors = vec![
+                    (
+                        format!("{prefix}.shard_0.weight"),
+                        TensorView::new(
+                            if packed { Dtype::U8 } else { Dtype::BF16 },
+                            vec![1, columns],
+                            &data,
+                        )?,
+                    ),
+                    (
+                        format!("{root}.embed_tokens.weight"),
+                        TensorView::new(Dtype::BF16, vec![1, 1], &marker)?,
+                    ),
+                ];
+                if packed {
+                    tensors.push((
+                        format!("{prefix}.shard_0.weight_scale"),
+                        TensorView::new(Dtype::F8_E4M3, vec![1, scales.len()], &scales)?,
+                    ));
+                    tensors.push((
+                        format!("{prefix}.weight_scale_2"),
+                        TensorView::new(Dtype::F32, vec![1], &global)?,
+                    ));
+                }
+                serialize_to_file(tensors, None, &path)?;
+                for loader in [
+                    &Qwen4ExpLoader as &dyn DeviceMappedModelLoader,
+                    &AutoMultimodalLoader,
+                ] {
+                    let resources = loader.layer_resources(
                         &config.to_string(),
-                        std::slice::from_ref(&path),
-                    )?,
-                    mapped,
-                );
+                        ResourceSource {
+                            weights: None,
+                            paths: std::slice::from_ref(&path),
+                        },
+                    )?;
+                    assert_eq!(resources.len(), 1);
+                    assert_eq!(resources[0].name, prefix);
+                    assert_eq!(resources[0].layer, 1);
+                    assert_eq!(
+                        resources[0].host_backing,
+                        Some(if packed {
+                            HostBacking::FileMapped
+                        } else {
+                            HostBacking::Owned
+                        })
+                    );
+                    let expected = if packed {
+                        data.len() + scales.len()
+                    } else {
+                        QWEN4_PLE_HEAD_DIM / 2
+                            + QWEN4_PLE_HEAD_DIM / mistralrs_quant::embedding::SYMMETRIC_GROUP * 2
+                    };
+                    assert_eq!(resources[0].device_bytes, expected);
+                }
             }
         }
         config["text_config"]["ple_layer_ids"] = serde_json::json!([]);
-        assert!(
-            !AutoMultimodalLoader.supports_file_mapped_optional_allocations(
-                &config.to_string(),
-                std::slice::from_ref(&path),
+        assert!(AutoMultimodalLoader
+            .layer_resources(&config.to_string(), ResourceSource::default())?
+            .is_empty());
+        assert!(Qwen3VLLoader
+            .layer_resources(
+                &qwen_activation_config("Qwen3VLForConditionalGeneration").to_string(),
+                ResourceSource::default(),
             )?
-        );
-        assert!(!Qwen3VLLoader.supports_file_mapped_optional_allocations(
-            &qwen_activation_config("Qwen3VLForConditionalGeneration").to_string(),
-            std::slice::from_ref(&path),
-        )?);
+            .is_empty());
         Ok(())
     }
 
@@ -11498,7 +11585,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_loader_preserves_unbound_layer_reservations_and_errors() -> Result<()> {
+    fn auto_loader_preserves_resource_reservations_and_errors() -> Result<()> {
         let mut config = qwen_activation_config("Qwen4ExpForConditionalGeneration");
         config["text_config"]["ple_layer_ids"] = serde_json::json!([1]);
         config["text_config"]["ple_embed_dim"] = 32.into();
@@ -11506,21 +11593,25 @@ mod tests {
         config["text_config"]["heads_per_ngram"] = 1.into();
         config["text_config"]["ngram_vocab_size_base"] = 17.into();
         config["text_config"]["eos_token_id"] = 2.into();
-        let expected = Qwen4ExpLoader.unbound_layer_bytes(&config.to_string())?;
+        let expected = Qwen4ExpLoader
+            .layer_resources(&config.to_string(), super::super::ResourceSource::default())?;
         #[cfg(feature = "cuda")]
-        assert!(matches!(expected.as_slice(), [(0, bytes)] if *bytes > 0));
+        assert!(
+            matches!(expected.as_slice(), [resource] if resource.layer == 0 && resource.device_bytes > 0 && resource.host_backing.is_none())
+        );
         #[cfg(not(feature = "cuda"))]
         assert!(expected.is_empty());
         assert_eq!(
-            AutoMultimodalLoader.unbound_layer_bytes(&config.to_string())?,
+            AutoMultimodalLoader
+                .layer_resources(&config.to_string(), super::super::ResourceSource::default())?,
             expected
         );
         config["text_config"]["hidden_size"] = serde_json::Value::Null;
         assert!(Qwen4ExpLoader
-            .unbound_layer_bytes(&config.to_string())
+            .layer_resources(&config.to_string(), super::super::ResourceSource::default())
             .is_err());
         assert!(AutoMultimodalLoader
-            .unbound_layer_bytes(&config.to_string())
+            .layer_resources(&config.to_string(), super::super::ResourceSource::default())
             .is_err());
         Ok(())
     }

@@ -64,6 +64,8 @@ pub use isq::{
     UQFF_MULTI_FILE_DELIMITER,
 };
 use llguidance::toktrie::TokEnv;
+#[cfg(feature = "cuda")]
+pub(crate) use loaders::HostBacking;
 pub(crate) use loaders::{apply_model_activation_memory, checkpoint_runtime_size};
 pub use loaders::{
     ActivationMemoryContext, ActivationMemoryEstimate, ActivationModelConfig, AdapterKind,
@@ -85,20 +87,27 @@ pub use loaders::{
     Qwen3_5TextLoader, Qwen4ExpLoader, SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader,
     VLlamaLoader, VoxtralLoader,
 };
+pub use loaders::{LayerResource, ResourceSource};
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn get_device_layers_for_loader(
     loader: &dyn loaders::DeviceMappedModelLoader,
     config: &str,
     num_layers: usize,
-    layer_sizes_in_bytes: Vec<usize>,
+    mut layer_sizes_in_bytes: Vec<usize>,
     non_mapped_size_in_bytes: usize,
     total_model_size_in_bytes: usize,
     devices: &[Device],
     dtype: DType,
     params: &loaders::AutoDeviceMapParams,
     paged_attn_config: Option<&mut PagedAttentionConfig>,
-) -> Result<crate::device_map::DeviceMapMetadata> {
-    loaders::auto_device_map::get_device_layers(
+) -> Result<(crate::device_map::DeviceMapMetadata, usize)> {
+    let resources = loader.layer_resources(config, loaders::ResourceSource::default())?;
+    let total_model_size_in_bytes = loaders::add_resource_bytes(
+        &mut layer_sizes_in_bytes,
+        total_model_size_in_bytes,
+        &resources,
+    )?;
+    let mapping = loaders::auto_device_map::get_device_layers(
         loader,
         config,
         num_layers,
@@ -109,8 +118,9 @@ pub(crate) fn get_device_layers_for_loader(
         dtype,
         params,
         paged_attn_config,
-        loaders::auto_device_map::OptionalAllocationBacking::Owned,
-    )
+        &resources,
+    )?;
+    Ok((mapping, total_model_size_in_bytes))
 }
 
 fn finish_dynamic_lora_runtime(

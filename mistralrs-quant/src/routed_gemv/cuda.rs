@@ -1,16 +1,15 @@
 use std::{ffi::c_void, sync::OnceLock};
 
 use candle_core::{
-    cuda::cudarc::driver::{sys::CUstream, CudaStream},
+    cuda::cudarc::driver::{sys::CUstream, CudaStream, SyncOnDrop},
     CudaDevice, CudaStorage, DType, Result, Storage, Tensor,
 };
-use float8::F8E4M3;
 use half::{bf16, f16};
 
 use super::{RoutedCodec, RoutedWeights};
 use crate::{
     cuda_device::cuda_device_info,
-    utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream},
+    utils::{slice_ptr_mut_on_stream, CudaReadView},
     GluActivationType,
 };
 
@@ -154,7 +153,7 @@ fn prefetch(dev: &CudaDevice) -> bool {
     if let Some(forced) = FORCE_PREFETCH.with(|flag| flag.get()) {
         return forced;
     }
-    cuda_device_info(dev).prefers_l2_weight_prefetch()
+    crate::cuda_policy::prefers_weight_prefetch(&cuda_device_info(dev))
 }
 
 fn lanes(units: usize) -> i32 {
@@ -180,26 +179,40 @@ fn dtype_code(dtype: DType) -> Option<i32> {
     }
 }
 
-// Raw device address of a contiguous tensor; callers keep the tensor alive across the launch.
-fn address(tensor: &Tensor, stream: &CudaStream) -> Result<Option<u64>> {
-    if !tensor.is_contiguous() {
-        return Ok(None);
+struct WeightViews<'a> {
+    data: CudaReadView<'a>,
+    scales: CudaReadView<'a>,
+    extra: Option<CudaReadView<'a>>,
+    bias: Option<CudaReadView<'a>>,
+}
+
+impl<'a> WeightViews<'a> {
+    fn new(weights: &'a RoutedWeights) -> Result<Option<Self>> {
+        if [
+            Some(&weights.data),
+            Some(&weights.scales),
+            weights.extra.as_ref(),
+            weights.bias.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|tensor| {
+            !tensor.is_contiguous()
+                || !tensor.device().is_cuda()
+                || !matches!(
+                    tensor.dtype(),
+                    DType::U8 | DType::U32 | DType::F8E4M3 | DType::F32 | DType::F16 | DType::BF16
+                )
+        }) {
+            return Ok(None);
+        }
+        Ok(Some(Self {
+            data: CudaReadView::new(&weights.data)?,
+            scales: CudaReadView::new(&weights.scales)?,
+            extra: CudaReadView::optional(weights.extra.as_ref())?,
+            bias: CudaReadView::optional(weights.bias.as_ref())?,
+        }))
     }
-    let (storage, layout) = tensor.storage_and_layout();
-    let Storage::Cuda(storage) = &*storage else {
-        return Ok(None);
-    };
-    let offset = layout.start_offset();
-    let pointer = match tensor.dtype() {
-        DType::U8 => slice_ptr_on_stream(storage.as_cuda_slice::<u8>()?, offset, stream).0,
-        DType::U32 => slice_ptr_on_stream(storage.as_cuda_slice::<u32>()?, offset, stream).0,
-        DType::F8E4M3 => slice_ptr_on_stream(storage.as_cuda_slice::<F8E4M3>()?, offset, stream).0,
-        DType::F32 => slice_ptr_on_stream(storage.as_cuda_slice::<f32>()?, offset, stream).0,
-        DType::F16 => slice_ptr_on_stream(storage.as_cuda_slice::<f16>()?, offset, stream).0,
-        DType::BF16 => slice_ptr_on_stream(storage.as_cuda_slice::<bf16>()?, offset, stream).0,
-        _ => return Ok(None),
-    };
-    Ok(Some(pointer))
 }
 
 fn aligned(address: u64, bytes: usize) -> bool {
@@ -254,36 +267,33 @@ fn codec(w: &RoutedWeights) -> Option<Codec> {
         })
 }
 
-fn operand(w: &RoutedWeights, dtype: DType, stream: &CudaStream) -> Result<Option<Operand>> {
+fn operand<'a>(
+    w: &RoutedWeights,
+    views: &'a WeightViews<'_>,
+    dtype: DType,
+    stream: &'a CudaStream,
+) -> Result<Option<(Operand, [SyncOnDrop<'a>; 4])>> {
     let Some(codec) = codec(w) else {
         return Ok(None);
     };
     let (n, k) = (w.n, w.k);
-    let Some(data) = address(&w.data, stream)? else {
-        return Ok(None);
-    };
-    let Some(scales) = address(&w.scales, stream)? else {
-        return Ok(None);
-    };
+    let (data, data_guard) = views.data.read(stream)?;
+    let (scales, scale_guard) = views.scales.read(stream)?;
     if !aligned(data, load_alignment(codec.unit_bytes)) {
         return Ok(None);
     }
-    let extra = match &w.extra {
-        Some(extra) => match address(extra, stream)? {
-            Some(extra) => extra,
-            None => return Ok(None),
-        },
-        None => 0,
-    };
-    let (bias, bias_expert) = match &w.bias {
+    let (extra, extra_guard) = CudaReadView::read_optional(views.extra.as_ref(), stream)?;
+    let (bias, bias_guard) = CudaReadView::read_optional(views.bias.as_ref(), stream)?;
+    let bias_expert = match &w.bias {
         Some(bias) if bias.dtype() == dtype && bias.dims().last() == Some(&n) => {
-            let Some(pointer) = address(bias, stream)? else {
-                return Ok(None);
-            };
-            (pointer, if bias.rank() > 1 { n as i64 } else { 0 })
+            if bias.rank() > 1 {
+                n as i64
+            } else {
+                0
+            }
         }
         Some(_) => return Ok(None),
-        None => (0, 0),
+        None => 0,
     };
     let mut op = Operand {
         data: data as *const u8,
@@ -341,7 +351,10 @@ fn operand(w: &RoutedWeights, dtype: DType, stream: &CudaStream) -> Result<Optio
             op.group = i32::try_from(group).map_err(candle_core::Error::wrap)?;
         }
     }
-    Ok(Some(op))
+    Ok(Some((
+        op,
+        [data_guard, scale_guard, extra_guard, bias_guard],
+    )))
 }
 
 struct RouteShape {
@@ -398,7 +411,12 @@ fn launch(run: Run<'_>) -> Result<Option<Tensor>> {
         return Ok(None);
     }
     let mut x = x.contiguous()?;
-    if address(&x, &stream)?.is_some_and(|input| !aligned(input, VECTOR_BYTES)) {
+    let input_aligned = {
+        let view = CudaReadView::new(&x)?;
+        let (pointer, _guard) = view.read(&stream)?;
+        aligned(pointer, VECTOR_BYTES)
+    };
+    if !input_aligned {
         x = x.force_contiguous()?;
     }
     let indices = run.indices.contiguous()?;
@@ -406,29 +424,33 @@ fn launch(run: Run<'_>) -> Result<Option<Tensor>> {
         .routing
         .map(|r| r.to_dtype(DType::F32)?.contiguous())
         .transpose()?;
-    let Some(a) = operand(w, x.dtype(), &stream)? else {
+    let Some(a_views) = WeightViews::new(w)? else {
         return Ok(None);
     };
-    let b = match run.b {
-        Some(b) => match operand(b, x.dtype(), &stream)? {
-            Some(b) => b,
+    let b_views = match run.b {
+        Some(b) => match WeightViews::new(b)? {
+            Some(views) => Some(views),
             None => return Ok(None),
         },
-        None => Operand::empty(),
+        None => None,
     };
-    let Some(input) = address(&x, &stream)? else {
+    let Some((a, _a_guards)) = operand(w, &a_views, x.dtype(), &stream)? else {
         return Ok(None);
     };
-    let Some(ids) = address(&indices, &stream)? else {
-        return Ok(None);
-    };
-    let routing_ptr = match &routing {
-        Some(routing) => match address(routing, &stream)? {
-            Some(p) => p,
+    let (b, _b_guards) = match run.b.zip(b_views.as_ref()) {
+        Some((b, views)) => match operand(b, views, x.dtype(), &stream)? {
+            Some((operand, guards)) => (operand, Some(guards)),
             None => return Ok(None),
         },
-        None => 0,
+        None => (Operand::empty(), None),
     };
+    let input_view = CudaReadView::new(&x)?;
+    let ids_view = CudaReadView::new(&indices)?;
+    let routing_view = CudaReadView::optional(routing.as_ref())?;
+    let (input, _input_guard) = input_view.read(&stream)?;
+    let (ids, _ids_guard) = ids_view.read(&stream)?;
+    let (routing_ptr, _routing_guard) =
+        CudaReadView::read_optional(routing_view.as_ref(), &stream)?;
     let RouteShape {
         tokens,
         topk,

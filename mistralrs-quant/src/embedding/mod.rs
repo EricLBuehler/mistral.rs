@@ -13,6 +13,17 @@ mod cuda;
 #[cfg(feature = "metal")]
 mod metal;
 
+#[cfg(feature = "cuda")]
+mod mapped_lifetime;
+#[cfg(feature = "cuda")]
+mod packing;
+mod storage;
+
+pub use storage::{
+    EmbeddingBacking, EmbeddingGatherMode, EmbeddingMetadata, EmbeddingPacking, EmbeddingSource,
+    ManagedEmbedding, WeightAllocationBudget, SYMMETRIC_GROUP,
+};
+
 const UNIT: usize = 8;
 const IQ4_BLOCK: usize = 32;
 const IQ4_BLOCK_BYTES: usize = 18;
@@ -419,6 +430,8 @@ pub struct MappedRows {
     shards: Vec<MappedShard>,
     index: Option<Tensor>,
     _owner: std::sync::Arc<dyn std::any::Any + Send + Sync>,
+    #[cfg(feature = "cuda")]
+    cuda_lifetime: Option<std::sync::Arc<mapped_lifetime::CudaMappedLifetime>>,
 }
 
 // Shards point into `_owner`, which is immutable and shared.
@@ -428,7 +441,7 @@ unsafe impl Sync for MappedRows {}
 impl MappedRows {
     /// # Safety
     /// Every shard must point into memory `owner` keeps mapped and unchanged, sized for its rows. Shards must
-    /// be sorted by `first_row` and contiguous. GPU work and graph replays must finish before the last drop.
+    /// be sorted by `first_row` and contiguous.
     pub unsafe fn new(
         shards: Vec<MappedShard>,
         owner: std::sync::Arc<dyn std::any::Any + Send + Sync>,
@@ -437,6 +450,8 @@ impl MappedRows {
             shards,
             index: None,
             _owner: owner,
+            #[cfg(feature = "cuda")]
+            cuda_lifetime: None,
         }
     }
 
@@ -446,14 +461,41 @@ impl MappedRows {
 
     /// Uploads the shard index so `device` can gather directly; the device must read pageable memory.
     pub fn with_device_index(mut self, device: &Device) -> Result<Self> {
+        if !device.is_cuda() {
+            candle_core::bail!("mapped embedding device indices require CUDA");
+        }
+        #[cfg(feature = "cuda")]
+        if !device_reads_pageable_memory(device)? {
+            candle_core::bail!(
+                "mapped embedding device indices require CUDA pageable memory access"
+            );
+        }
         let index = self
             .shards
             .iter()
             .flat_map(|s| [s.data as i64, s.scales as i64, s.first_row as i64])
             .collect::<Vec<_>>();
         let len = index.len();
-        self.index = Some(Tensor::from_vec(index, len, device)?);
+        let index = Tensor::from_vec(index, len, device)?;
+        #[cfg(feature = "cuda")]
+        if device.is_cuda() {
+            self.cuda_lifetime = Some(std::sync::Arc::new(
+                mapped_lifetime::CudaMappedLifetime::new(index.clone(), self._owner.clone()),
+            ));
+        }
+        self.index = Some(index);
         Ok(self)
+    }
+
+    #[cfg(feature = "cuda")]
+    fn cuda_read<'a>(
+        &'a self,
+        stream: &'a std::sync::Arc<candle_core::cuda::cudarc::driver::CudaStream>,
+    ) -> Result<mapped_lifetime::MappedRead<'a>> {
+        self.cuda_lifetime
+            .as_ref()
+            .ok_or_else(|| candle_core::Error::msg("mapped embedding rows have no CUDA index"))?
+            .read(stream)
     }
 
     pub fn rows(&self) -> usize {
@@ -573,7 +615,14 @@ impl<'a> EmbeddingTable<'a> {
         let cuda = cfg!(feature = "cuda") && device.is_cuda();
         let metal = cfg!(feature = "metal") && device.is_metal();
         match self.storage {
-            TableStorage::Mapped(rows) => device.is_cpu() || cuda && rows.has_device_index(),
+            TableStorage::Mapped(rows) => {
+                device.is_cpu()
+                    || cuda
+                        && rows
+                            .index
+                            .as_ref()
+                            .is_some_and(|index| index.device().same_device(device))
+            }
             TableStorage::Device { .. } => {
                 self.device().is_some_and(|d| d.same_device(device))
                     && (device.is_cpu() || cuda || metal)
@@ -588,7 +637,7 @@ impl<'a> EmbeddingTable<'a> {
         shape.push(self.columns);
         let device = self.device().unwrap_or_else(|| ids.device().clone());
         #[cfg(feature = "cuda")]
-        if device.is_cuda() {
+        if device.is_cuda() && self.gathers_on(&device) {
             let ids = ids.to_device(&device)?;
             return cuda::gather(self, &ids, out)?.reshape(shape);
         }
@@ -701,6 +750,20 @@ impl<'a> EmbeddingTable<'a> {
         }
         Tensor::from_vec(values, (ids.len(), self.columns), &Device::Cpu)?.to_dtype(out.dtype)
     }
+}
+
+#[cfg(feature = "cuda")]
+fn device_reads_pageable_memory(device: &Device) -> Result<bool> {
+    use candle_core::cuda::cudarc::driver::{result, sys};
+    let dev = device.as_cuda_device()?.cuda_stream().context().cu_device();
+    let supported = unsafe {
+        result::device::get_attribute(
+            dev,
+            sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_PAGEABLE_MEMORY_ACCESS,
+        )
+    }
+    .map_err(candle_core::Error::wrap)?;
+    Ok(supported == 1)
 }
 
 /// Applies `out` to rows a format decoded on its own.

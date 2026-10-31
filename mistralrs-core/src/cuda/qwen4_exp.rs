@@ -69,15 +69,6 @@ mod ffi {
             hist_len: i32,
             stream: i64,
         );
-        pub(super) fn qwen4_ple_quantize_table(
-            source: *const c_void,
-            data: *mut u8,
-            scales: *mut c_void,
-            groups: i32,
-            bits: i32,
-            dtype: i32,
-            stream: i64,
-        );
         #[cfg(feature = "cutile")]
         pub(super) fn qwen4_qsa_topk(
             scores: *const f32,
@@ -428,26 +419,6 @@ pub(crate) fn ple_hash(
         );
     }
     Ok(rows)
-}
-
-pub(crate) fn ple_quantize_table(
-    source: &Tensor,
-    data: &Tensor,
-    scales: &Tensor,
-    bits: usize,
-) -> Result<()> {
-    unsafe {
-        ffi::qwen4_ple_quantize_table(
-            dev_ptr(source)? as *const _,
-            dev_ptr(data)? as *mut u8,
-            dev_ptr(scales)? as *mut _,
-            scales.elem_count() as i32,
-            bits as i32,
-            half_dtype_code(source.dtype())?,
-            stream(source.device())?,
-        );
-    }
-    Ok(())
 }
 
 pub(crate) struct PleGateWeights<'a> {

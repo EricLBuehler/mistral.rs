@@ -224,11 +224,9 @@ pub struct Qwen4ExpTextModel {
 }
 
 fn text_model_vb(vb: &ShardedVarBuilder) -> ShardedVarBuilder {
-    if layers::contains_tensor_or_uqff(vb, "language_model.model.embed_tokens.weight") {
-        vb.pp("language_model").pp("model")
-    } else {
-        vb.pp("model").pp("language_model")
-    }
+    vb.pp(super::checkpoint::text_model_prefix(
+        layers::contains_tensor_or_uqff(vb, super::checkpoint::ALTERNATE_TEXT_EMBEDDING),
+    ))
 }
 
 impl Qwen4ExpTextModel {
@@ -389,10 +387,10 @@ impl Qwen4ExpTextModel {
         #[cfg(feature = "cuda")]
         let mut layers = layers;
         #[cfg(feature = "cuda")]
-        for (layer_idx, layer) in layers.iter_mut().enumerate() {
+        for layer in &mut layers {
             if let Some(ple) = layer.ple.as_mut() {
                 ple.allow_resident_table =
-                    !mapper.uses_host_memory_for_optional_allocations(layer_idx);
+                    !mapper.uses_host_memory_for_resource(ple.table_resource_id());
             }
         }
         let mtp = mtp

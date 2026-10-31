@@ -102,9 +102,6 @@ mod cuda {
         GluActivationType, GroupEntry, GroupKind,
     };
 
-    // Measured on GB10: the pair kernel wins for tiny-output pairs, shared_lhs wins once rows grow.
-    const FUSED_PAIR_MAX_ROWS: usize = 1024;
-
     pub(super) fn forward_group(
         xs: &Tensor,
         entries: &[GroupEntry<'_>],
@@ -187,8 +184,11 @@ mod cuda {
                 }
                 [left, right]
                     if same_dtype(&weights)
-                        && left.shape().dims2()?.0 + right.shape().dims2()?.0
-                            <= FUSED_PAIR_MAX_ROWS =>
+                        && fast_mmvq::prefers_fused_pair(
+                            xs.device().as_cuda_device()?,
+                            tokens,
+                            [left.shape().dims2()?.0, right.shape().dims2()?.0],
+                        ) =>
                 {
                     let (left, right) = fast_mmvq::fused_pair(left, right, xs)?;
                     Ok(Some(vec![left, right]))

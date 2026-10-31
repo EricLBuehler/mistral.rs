@@ -204,44 +204,6 @@ q4_ple_hist_update_kernel(const unsigned int *__restrict__ tokens, Q4Tokens l,
   }
 }
 
-#define Q4_PLE_GROUP 32
-#define Q4_PLE_QUANT_WARPS 8
-
-template <typename T>
-__global__ void q4_ple_quantize_table_kernel(
-    const T *__restrict__ source, unsigned char *__restrict__ data,
-    __half *__restrict__ scales, int groups, int bits) {
-  const int group = blockIdx.x * Q4_PLE_QUANT_WARPS + (threadIdx.x >> 5);
-  const int lane = threadIdx.x & 31;
-  if (group >= groups) {
-    return;
-  }
-  const float value = q4_f(source[(size_t)group * Q4_PLE_GROUP + lane]);
-  float amax = fabsf(value);
-#pragma unroll
-  for (int offset = Q4_PLE_GROUP / 2; offset > 0; offset >>= 1) {
-    amax = fmaxf(amax, __shfl_xor_sync(0xffffffff, amax, offset));
-  }
-  const float qmax = bits == 8 ? 127.0f : 7.0f;
-  const __half scale = __float2half_rn(__fdiv_rn(amax, qmax));
-  if (lane == 0) {
-    scales[group] = scale;
-  }
-  const float d = __half2float(scale);
-  const float inv = d > 0.0f ? __fdiv_rn(1.0f, d) : 0.0f;
-  // Match the host quantizer's ties away from zero and rounded f16 scale.
-  const int q = (int)fminf(qmax, fmaxf(-qmax, roundf(__fmul_rn(value, inv))));
-  if (bits == 8) {
-    data[(size_t)group * Q4_PLE_GROUP + lane] = (unsigned char)(signed char)q;
-  } else {
-    const int next = __shfl_down_sync(0xffffffff, q, 1);
-    if ((lane & 1) == 0) {
-      data[(size_t)group * (Q4_PLE_GROUP / 2) + lane / 2] =
-          (unsigned char)((q + 8) | ((next + 8) << 4));
-    }
-  }
-}
-
 template <typename T>
 __global__ void
 q4_ple_gate_kernel(const T *__restrict__ key,
@@ -981,19 +943,6 @@ extern "C" void qwen4_ple_hist_update(const unsigned int *tokens,
   const cudaStream_t s = (cudaStream_t)stream;
   q4_ple_hist_update_kernel<<<(layout.n_seqs + 63) / 64, 64, 0, s>>>(
       tokens, layout, hist_pool, slots, hist_len);
-}
-
-extern "C" void qwen4_ple_quantize_table(const void *source, unsigned char *data,
-                                         void *scales, int groups, int bits,
-                                         int dtype, int64_t stream) {
-  if (groups == 0) {
-    return;
-  }
-  const cudaStream_t s = (cudaStream_t)stream;
-  const int blocks = (groups + Q4_PLE_QUANT_WARPS - 1) / Q4_PLE_QUANT_WARPS;
-  Q4_DISPATCH(dtype, q4_ple_quantize_table_kernel<scalar_t>
-              <<<blocks, Q4_PLE_QUANT_WARPS * Q4_PLE_GROUP, 0, s>>>(
-                  (const scalar_t *)source, data, (__half *)scales, groups, bits));
 }
 
 extern "C" void qwen4_ple_gate(const void *key, const void *hidden_states,

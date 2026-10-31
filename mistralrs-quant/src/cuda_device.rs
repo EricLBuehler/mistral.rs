@@ -28,7 +28,6 @@ pub struct CudaDeviceInfo {
     pub l2_bytes: usize,
     pub smem_optin: usize,
     pub warp_size: usize,
-    // Unified-memory parts (GB10, Jetson) stream weights from LPDDR, so L2 prefetch/staging pays off there.
     pub integrated: bool,
 }
 
@@ -68,10 +67,6 @@ impl CudaDeviceInfo {
 
     pub fn resident_threads(&self) -> usize {
         self.sms * self.threads_per_sm
-    }
-
-    pub fn prefers_l2_weight_prefetch(&self) -> bool {
-        self.integrated && self.has_cp_async()
     }
 
     pub fn has_bf16_mma(&self) -> bool {

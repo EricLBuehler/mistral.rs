@@ -25,6 +25,8 @@ pub mod cuda_device;
 mod cuda_headers;
 #[cfg(feature = "cuda")]
 pub mod cuda_memory;
+#[cfg(feature = "cuda")]
+pub mod cuda_policy;
 #[cfg(test)]
 #[path = "build_support/cuda_toolkit.rs"]
 mod cuda_toolkit;
@@ -52,6 +54,7 @@ mod pending_layer;
 mod pertensor_fp8;
 pub mod rotary;
 mod routed_gemv;
+pub mod routed_moe;
 pub mod safetensors;
 mod scalar_fp8;
 mod unquantized;
@@ -1282,7 +1285,15 @@ impl IsqType {
         GgmlDType::try_from(self).is_ok()
             || matches!(
                 self,
-                Self::AFQ2 | Self::AFQ3 | Self::AFQ4 | Self::AFQ6 | Self::AFQ8
+                Self::AFQ2
+                    | Self::AFQ3
+                    | Self::AFQ4
+                    | Self::AFQ6
+                    | Self::AFQ8
+                    | Self::HQQ4
+                    | Self::HQQ8
+                    | Self::F8E4M3
+                    | Self::MXFP4
             )
     }
 
@@ -2026,11 +2037,8 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
     /// Callers should use `forward` instead.
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor>;
 
-    /// Compute gather matmul of `self` and `a`. `self` should contain the weights.
-    /// Automatically casts to the required quantization activation type and back.
-    ///
-    /// If `a` is (n_tokens, n_experts, cols), `self` weights are (n_experts, rows, cols),
-    /// then the indices are (n_tokens, n_experts).
+    /// Routed matmul: inputs `[tokens, 1|topk, in]`, indices `[tokens, topk]`, output `[tokens, topk, out]`.
+    /// Weights are `[experts, out, in]`; activation dtype conversion is handled here.
     fn gather_forward(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
         if let Some(t) = self.quantized_act_type() {
             let original_ty = a.dtype();
@@ -2039,11 +2047,6 @@ pub trait QuantMethod: Send + Sync + Debug + QuantizedSerde {
         } else {
             self.gather_forward_raw(a, indices)
         }
-    }
-
-    /// Whether `gather_forward` accepts flat `(tokens, 1, k)` routes with `(tokens, topk)` ids on every device.
-    fn supports_flat_gather(&self) -> bool {
-        false
     }
 
     /// Raw gather matmul without dtype casting. Implementors override this.
@@ -2212,9 +2215,6 @@ macro_rules! forward_quant_hooks {
             }
         }
 
-        fn supports_flat_gather(&self) -> bool {
-            $acc(self).is_some_and(|inner| inner.supports_flat_gather())
-        }
 
         fn begin_track_stats(&self) -> candle_core::Result<()> {
             match $acc(self) {

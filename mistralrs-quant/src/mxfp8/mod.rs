@@ -295,20 +295,21 @@ impl QuantMethod for Mxfp8Linear {
                 block: [1, MXFP8_BLOCK_SIZE],
             };
             if let Some(output) = crate::moe::grouped_fp8::gather(input, indices, view)? {
-                return Ok(output);
+                return crate::routed_gemv::add_routed_bias(output, self.bias.as_ref(), indices);
             }
         }
         let input = input
             .contiguous()?
             .reshape((rows * input_topk, k))?
             .apply_op1_no_bwd(&Quantize)?;
-        input.apply_op3_no_bwd(
+        let output = input.apply_op3_no_bwd(
             &self.weight,
             &self.scales,
             &Matmul {
                 indices: Some(indices.contiguous()?),
             },
-        )
+        )?;
+        crate::routed_gemv::add_routed_bias(output, self.bias.as_ref(), indices)
     }
 
     fn activation_quantization_scheme_for(

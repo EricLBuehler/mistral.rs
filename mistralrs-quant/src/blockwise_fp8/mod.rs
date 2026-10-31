@@ -765,10 +765,7 @@ impl QuantMethod for BlockwiseFP8Linear {
                 block: [block_n, block_k],
             };
             if let Some(result) = crate::moe::grouped_fp8::gather(x, indices, view)? {
-                return match &self.bias {
-                    Some(bias) => result.broadcast_add(bias),
-                    None => Ok(result),
-                };
+                return crate::routed_gemv::add_routed_bias(result, self.bias.as_ref(), indices);
             }
         }
         // Try to use native FP8 indexed MoE GEMM kernel on CUDA
@@ -785,54 +782,12 @@ impl QuantMethod for BlockwiseFP8Linear {
                     indices,
                     &self.weight_block_size,
                 )?;
-                // Apply bias if present (broadcast over tokens and topk)
-                if let Some(ref bias) = self.bias {
-                    return result.broadcast_add(bias);
-                }
-                return Ok(result);
+                return crate::routed_gemv::add_routed_bias(result, self.bias.as_ref(), indices);
             }
         }
 
-        // Fallback: dequantize weights and compute manually
         let weight = self.dequantize_w()?;
-
-        // Expected shapes:
-        // - x: (n_tokens, 1, hidden_dim) or (n_tokens, n_experts_per_tok, hidden_dim)
-        // - indices: (n_tokens, n_experts_per_tok)
-        // - weight: (n_experts, out_features, in_features)
-
-        let (n_tokens, n_experts_per_tok) = indices.dims2()?;
-        let (_n_experts, out_features, _in_features) = weight.dims3()?;
-
-        // Flatten indices to select expert weights
-        let flat_indices = indices.flatten_all()?;
-
-        // Select weights for each (token, expert) pair
-        // weight_selected: (n_tokens * n_experts_per_tok, out_features, in_features)
-        let weight_selected = weight.index_select(&flat_indices, 0)?;
-
-        // Reshape x for batched matmul
-        let hidden = x.dim(candle_core::D::Minus1)?;
-        let x_expanded = x
-            .reshape((n_tokens, (), hidden))?
-            .broadcast_as((n_tokens, n_experts_per_tok, hidden))?
-            .contiguous()?
-            .reshape((n_tokens * n_experts_per_tok, 1, hidden))?;
-
-        // Batched matmul: (batch, 1, k) @ (batch, k, n).T = (batch, 1, n)
-        // weight_selected is (batch, n, k), so we need to transpose last two dims
-        let weight_t = weight_selected.transpose(1, 2)?;
-        let result = x_expanded.matmul(&weight_t)?;
-
-        // Reshape result to (n_tokens, n_experts_per_tok, out_features)
-        let result = result.reshape((n_tokens, n_experts_per_tok, out_features))?;
-
-        // Apply bias if present
-        if let Some(ref bias) = self.bias {
-            result.broadcast_add(bias)
-        } else {
-            Ok(result)
-        }
+        crate::routed_gemv::dense_gather(&weight, self.bias.as_ref(), x, indices)
     }
 
     fn quantized_act_type(&self) -> Option<DType> {
@@ -1410,6 +1365,73 @@ mod tests {
 
     use super::*;
     use crate::{QuantizedConfig, ShardedSafeTensors};
+
+    fn routed_biases(device: &Device, dtype: DType) -> Result<()> {
+        const FEATURES: usize = 128;
+        const TOPK: usize = 2;
+        for experts in [2, 4] {
+            for per_expert in [false, true] {
+                let bias = if per_expert {
+                    Tensor::from_vec(
+                        (1..=experts)
+                            .flat_map(|expert| vec![expert as f32; FEATURES])
+                            .collect::<Vec<_>>(),
+                        (experts, FEATURES),
+                        device,
+                    )?
+                } else {
+                    Tensor::full(5f32, FEATURES, device)?
+                };
+                let layer = BlockwiseFP8Linear::new(QuantMethodConfig::BlockwiseFP8 {
+                    weight: Tensor::zeros((experts, FEATURES, FEATURES), DType::F8E4M3, device)?,
+                    weight_scale_inv: Tensor::ones((experts, 1, 1), DType::F32, device)?,
+                    bias: Some(bias.to_dtype(dtype)?),
+                    dequant_dtype: dtype,
+                    weight_block_size: vec![FEATURES, FEATURES],
+                    activation_scheme: None,
+                })?;
+                for tokens in [1, 32] {
+                    let ids = Tensor::from_vec(
+                        (0..tokens)
+                            .flat_map(|_| [(experts - 1) as u32, 0])
+                            .collect::<Vec<_>>(),
+                        (tokens, TOPK),
+                        device,
+                    )?;
+                    for input_routes in [1, TOPK] {
+                        let input = Tensor::zeros((tokens, input_routes, FEATURES), dtype, device)?;
+                        let result = layer.gather_forward(&input, &ids)?.to_dtype(DType::F32)?;
+                        for token in result.to_vec3::<f32>()? {
+                            assert_eq!(
+                                token[0],
+                                vec![if per_expert { experts as f32 } else { 5.0 }; FEATURES]
+                            );
+                            assert_eq!(
+                                token[1],
+                                vec![if per_expert { 1.0 } else { 5.0 }; FEATURES]
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn cpu_routed_biases_follow_expert_ids() -> Result<()> {
+        routed_biases(&Device::Cpu, DType::F32)
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn cuda_routed_biases_survive_gemv_and_grouped_dispatch() -> Result<()> {
+        let device = Device::new_cuda(0)?;
+        for dtype in [DType::F16, DType::BF16] {
+            routed_biases(&device, dtype)?;
+        }
+        Ok(())
+    }
 
     fn fp8_config(exclusions: &[&str]) -> QuantizedConfig {
         QuantizedConfig::Fp8 {

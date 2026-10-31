@@ -1,6 +1,6 @@
 use std::sync::{atomic::AtomicUsize, Arc};
 
-use candle_core::{DType, Device, Result, Shape, Tensor};
+use candle_core::{DType, Device, Result, Shape, Tensor, D};
 use safetensors::tensor::Dtype;
 
 use crate::uqff::{UqffHeaderMatch, UqffLayerHeaderView};
@@ -271,8 +271,14 @@ impl QuantMethod for AfqLayer {
             }
         }
         let output = if x.device().is_metal() {
-            ops::afq_mm_op(
-                x,
+            let canonical = x.rank() == 3 && indices.rank() == 2;
+            let input = if canonical {
+                x.unsqueeze(D::Minus2)?
+            } else {
+                x.clone()
+            };
+            let output = ops::afq_mm_op(
+                &input,
                 &self.w_q,
                 &self.scales,
                 &self.biases,
@@ -281,7 +287,12 @@ impl QuantMethod for AfqLayer {
                 self.group_size,
                 self.bits,
                 true,
-            )?
+            )?;
+            if canonical {
+                output.squeeze(D::Minus2)?
+            } else {
+                output
+            }
         } else {
             self.gather_by_expert(x, indices)?
         };
@@ -380,7 +391,7 @@ impl QuantMethod for AfqLayer {
         }
         if shape.len() == 3 && request.ty.is_some_and(|ty| !ty.supports_stacked_gather()) {
             candle_core::bail!(
-                "Cannot requantize stacked AFQ expert weights to {}: that target does not support stacked expert gather. Use a Q*K/Q*_0/Q*_1 target, AFQ, or omit ISQ.",
+                "Cannot requantize stacked AFQ expert weights to {}: that target does not support stacked expert gather.",
                 request.ty.expect("rank-3 rejection requires an ISQ target")
             );
         }

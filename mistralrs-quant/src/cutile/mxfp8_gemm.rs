@@ -42,8 +42,8 @@ const SMALL_BATCH_SPLITS: usize = 4;
 const SMALL_BATCH_MIN_K_TILES_PER_SPLIT: usize = 4;
 const SMALL_BATCH_SPLIT_SM_DIVISOR: usize = 3;
 const TUNE_KERNEL: &str = "mxfp8_gemm";
-/// Decode batches keep the split-K and narrow-tile policy; only prefill rows are tuned.
-const TUNE_MIN_ROWS: usize = 64;
+// Single-token layers use GEMV rather than this GEMM.
+const TUNE_MIN_ROWS: usize = 1;
 /// Rows scanned for policy changes; past this the policy depends on rows only through the tail.
 const TUNE_SCAN_ROWS: usize = 8192;
 const TUNE_PREFILL_PROBE: usize = 2048;
@@ -245,15 +245,33 @@ fn tune_space(bucket: Bucket, key: TuneKey, multiprocessors: usize, smem: usize)
     Space::new()
         .joint(
             ["bm", "bn"],
-            [[64, 128], [128, 128], [64, 64], [128, 64], [32, 128]],
+            [
+                [16, 64],
+                [16, 128],
+                [32, 64],
+                [32, 128],
+                [64, 64],
+                [64, 128],
+                [128, 64],
+                [128, 128],
+            ],
         )
         .axis("bk", [128, 64, 256])
         .axis("static_k", [0, 1])
         .axis("group_m", [8, 16, 4])
         .axis("blocks_per_sm", [2, 1, 3])
         .axis("latency", [3, 2, 4])
-        .axis("splits", [policy.splits as i64])
-        .constrain(move |c| Config::from_config(c).is_some_and(|cfg| fits_smem(cfg, smem)))
+        .axis("splits", [1, 2, 4, 8])
+        .constrain(move |c| {
+            Config::from_config(c).is_some_and(|cfg| {
+                fits_smem(cfg, smem)
+                    && (cfg.splits == 1
+                        || (bucket.probe.div_ceil(cfg.bm) * key.n.div_ceil(cfg.bn)
+                            < multiprocessors
+                            && key.k.div_ceil(cfg.bk)
+                                >= cfg.splits * SMALL_BATCH_MIN_K_TILES_PER_SPLIT))
+            })
+        })
         .policy(policy.to_config())
 }
 
@@ -666,15 +684,18 @@ fn tune_shape(key: TuneKey, dev: &CudaDevice, mode: TuneMode) -> Result<Vec<Tune
         buckets: &buckets,
         space: &space,
     };
-    let weight = random_quantized(key.n, key.k, key.dtype, dev)?;
-    let (weight, scales) = (weight.quantized().clone(), weight.scales().clone());
+    let mut weight = None;
     let mut inputs = std::collections::HashMap::new();
     Ok(TUNED.tune(key, dev, mode, &request, |rows, cfg| {
+        if weight.is_none() {
+            weight = Some(random_quantized(key.n, key.k, key.dtype, dev)?);
+        }
+        let weight = weight.as_ref().unwrap();
         let activation = probe_input(&mut inputs, rows, || {
             random_quantized(rows, key.k, key.dtype, dev)
         })?
         .clone();
-        let (weight, scales) = (weight.clone(), scales.clone());
+        let (weight, scales) = (weight.quantized().clone(), weight.scales().clone());
         Prepared::from_launch(move || forward_config(&activation, &weight, &scales, Some(cfg)))
     }))
 }

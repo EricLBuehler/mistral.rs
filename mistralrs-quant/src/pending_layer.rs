@@ -17,6 +17,7 @@ use crate::{
 enum PendingState {
     Pending(Receiver<Result<IsqJobOutput<Arc<dyn QuantMethod>>>>),
     Ready(Arc<dyn QuantMethod>),
+    Failed(Arc<candle_core::Error>),
     /// Transitional state used during resolve to avoid holding both the old
     /// receiver and the new layer simultaneously.
     Taken,
@@ -47,6 +48,7 @@ impl PendingIsqLayer {
         let mut state = self.inner.lock().expect("PendingIsqLayer lock poisoned");
         match &*state {
             PendingState::Ready(layer) => Ok(layer.clone()),
+            PendingState::Failed(error) => Err(candle_core::Error::wrap(error.clone())),
             PendingState::Taken => {
                 candle_core::bail!("PendingIsqLayer is in an invalid transitional state")
             }
@@ -57,7 +59,8 @@ impl PendingIsqLayer {
                 if let PendingState::Pending(rx) = old {
                     let result = rx
                         .recv()
-                        .map_err(|e| candle_core::Error::Msg(format!("ISQ channel error: {e}")))?;
+                        .map_err(|e| candle_core::Error::Msg(format!("ISQ channel error: {e}")))
+                        .and_then(|result| result);
                     match result {
                         Ok(output) => {
                             let layer = output.value;
@@ -65,8 +68,9 @@ impl PendingIsqLayer {
                             Ok(layer)
                         }
                         Err(e) => {
-                            // Leave in Taken state; the error is propagated.
-                            Err(e)
+                            let error = Arc::new(e);
+                            *state = PendingState::Failed(error.clone());
+                            Err(candle_core::Error::wrap(error))
                         }
                     }
                 } else {
@@ -88,6 +92,7 @@ impl Debug for PendingIsqLayer {
         let state_str = match &*self.inner.lock().unwrap() {
             PendingState::Pending(_) => "Pending",
             PendingState::Ready(_) => "Ready",
+            PendingState::Failed(_) => "Failed",
             PendingState::Taken => "Taken",
         };
         write!(f, "PendingIsqLayer({state_str})")
@@ -116,7 +121,77 @@ impl QuantizedSerde for PendingIsqLayer {
 }
 
 impl QuantMethod for PendingIsqLayer {
-    crate::forward_quant_hooks!(meta, activation, output, weights, group: Self::resolved);
+    crate::forward_quant_hooks!(weights: Self::resolved);
+
+    #[cfg(feature = "metal")]
+    fn prepare_metal_kernels(&self, dtype: DType) -> Result<()> {
+        self.resolve()?.prepare_metal_kernels(dtype)
+    }
+
+    fn begin_track_stats(&self) -> Result<()> {
+        self.resolve()?.begin_track_stats()
+    }
+
+    fn end_track_stats(&self) -> Result<Tensor> {
+        self.resolve()?.end_track_stats()
+    }
+
+    fn stats_snapshot(&self) -> Option<(usize, usize)> {
+        self.resolved()?.stats_snapshot()
+    }
+
+    fn process_routed_stats(&self, x: &Tensor, ids: &Tensor) -> Result<()> {
+        self.resolve()?.process_routed_stats(x, ids)
+    }
+
+    fn activation_quantization_scheme(&self) -> Option<crate::ActivationQuantizationScheme> {
+        self.resolved()?.activation_quantization_scheme()
+    }
+
+    fn activation_quantization_scheme_for(
+        &self,
+        x: &Tensor,
+    ) -> Option<crate::ActivationQuantizationScheme> {
+        self.resolved()?.activation_quantization_scheme_for(x)
+    }
+
+    fn preferred_activation_scale_layout_for(
+        &self,
+        x: &Tensor,
+    ) -> Option<crate::ActivationScaleLayout> {
+        self.resolved()?.preferred_activation_scale_layout_for(x)
+    }
+
+    fn activation_calibration(&self) -> crate::ActivationCalibration {
+        self.resolved()
+            .map_or(crate::ActivationCalibration::Dynamic, |inner| {
+                inner.activation_calibration()
+            })
+    }
+
+    fn quantize_activation(&self, x: &Tensor) -> Result<crate::QuantizedActivation> {
+        self.resolve()?.quantize_activation(x)
+    }
+
+    fn forward_quantized(&self, x: &crate::QuantizedActivation) -> Result<Tensor> {
+        self.resolve()?.forward_quantized(x)
+    }
+
+    fn forward_glu(
+        &self,
+        input: crate::GluInput<'_>,
+        activation: crate::GluActivationType,
+    ) -> Result<Option<Tensor>> {
+        self.resolve()?.forward_glu(input, activation)
+    }
+
+    fn group_member(
+        &self,
+        x: &Tensor,
+        kind: crate::GroupKind<'_>,
+    ) -> Result<Option<crate::GroupMember>> {
+        self.resolve()?.group_member(x, kind)
+    }
 
     fn new(_method: QuantMethodConfig) -> Result<Self>
     where
@@ -212,4 +287,29 @@ pub type IsqReceiver = Receiver<Result<IsqJobOutput<Arc<dyn QuantMethod>>>>;
 /// given to a thread pool task; the receiver is passed to `PendingIsqLayer::new`.
 pub fn pending_isq_channel() -> (IsqSender, IsqReceiver) {
     mpsc::sync_channel(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_resolution_survives_capability_queries_and_fallible_hooks() -> Result<()> {
+        let (sender, receiver) = pending_isq_channel();
+        sender
+            .send(Err(candle_core::Error::msg("quantization failed")))
+            .unwrap();
+        let layer = PendingIsqLayer::new(receiver);
+        let input = Tensor::zeros((1, 1), DType::F32, &Device::Cpu)?;
+        let ids = Tensor::zeros((1, 1), DType::U32, &Device::Cpu)?;
+        assert!(layer.stats_snapshot().is_none());
+        for error in [
+            layer.process_routed_stats(&input, &ids).unwrap_err(),
+            layer.begin_track_stats().unwrap_err(),
+            layer.forward(&input).unwrap_err(),
+        ] {
+            assert!(error.to_string().contains("quantization failed"), "{error}");
+        }
+        Ok(())
+    }
 }

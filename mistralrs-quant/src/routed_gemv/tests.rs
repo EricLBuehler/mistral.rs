@@ -19,6 +19,8 @@ const OFFSET_TOKENS: usize = 2;
 const OFFSET_TOPK: usize = 2;
 const INPUT_OFFSETS: [usize; 4] = [1, 3, 8, 17];
 const OFFSET_IDS: [u32; 4] = [3, 1, 2, 0];
+const STREAM_ROWS: usize = 65_536;
+const STREAM_COLUMNS: usize = 128;
 const ACTIVATIONS: [GluActivationType; 5] = [
     GluActivationType::Silu,
     GluActivationType::Gelu,
@@ -28,6 +30,53 @@ const ACTIVATIONS: [GluActivationType; 5] = [
 ];
 
 struct Rng(u64);
+
+#[test]
+fn routed_gather_keeps_cross_stream_input_alive() -> Result<()> {
+    use candle_core::{CudaStorage, Storage};
+
+    let device = Device::new_cuda_with_stream(0)?;
+    let cuda = device.as_cuda_device()?;
+    let consumer = cuda.cuda_stream();
+    let producer = consumer
+        .context()
+        .new_stream_with_priority(-1)
+        .map_err(candle_core::Error::wrap)?;
+    let values = vec![F8E4M3::from_f32(1.).to_bits(); STREAM_ROWS * STREAM_COLUMNS];
+    let data = producer
+        .clone_htod(&values)
+        .map_err(candle_core::Error::wrap)?;
+    let data = Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(data, cuda.clone())),
+        (1, STREAM_ROWS, STREAM_COLUMNS),
+    ));
+    let weights = RoutedWeights::new(
+        RoutedCodec::Fp8 {
+            block_rows: 1,
+            block_cols: STREAM_COLUMNS,
+        },
+        data,
+        Tensor::ones((1, STREAM_ROWS, 1), DType::F32, &device)?,
+        None,
+        None,
+        [1, STREAM_ROWS, STREAM_COLUMNS],
+    );
+    let input = Tensor::ones((cuda::MAX_TOKENS, 1, STREAM_COLUMNS), DType::F32, &device)?;
+    let ids = Tensor::zeros((cuda::MAX_TOKENS, 1), DType::U32, &device)?;
+    let _delay = crate::utils::cuda_test::delay_stream(&consumer)?;
+    let output = cuda::gather(&input, &ids, &weights)?.expect("routed FP8 gather");
+    drop(weights);
+    let _replacement = producer
+        .alloc_zeros::<u8>(values.len())
+        .map_err(candle_core::Error::wrap)?;
+    producer.synchronize().map_err(candle_core::Error::wrap)?;
+    assert!(output
+        .flatten_all()?
+        .to_vec1::<f32>()?
+        .iter()
+        .all(|&v| v == STREAM_COLUMNS as f32));
+    Ok(())
+}
 
 impl Rng {
     fn next(&mut self) -> u64 {

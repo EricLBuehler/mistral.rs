@@ -187,20 +187,7 @@ impl RuntimeMemoryPlan {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct WeightAllocationBudget {
-    pub persistent_bytes: usize,
-    pub execution_bytes: usize,
-}
-
-impl WeightAllocationBudget {
-    pub fn fits(self, persistent_bytes: usize, workspace_bytes: usize) -> bool {
-        persistent_bytes <= self.persistent_bytes
-            && persistent_bytes
-                .checked_add(workspace_bytes)
-                .is_some_and(|total| total <= self.execution_bytes)
-    }
-}
+pub use mistralrs_quant::embedding::WeightAllocationBudget;
 
 #[derive(Clone, Copy, Debug)]
 pub struct DeviceMemoryBudget {

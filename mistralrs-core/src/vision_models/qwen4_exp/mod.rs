@@ -32,6 +32,7 @@ use crate::{
     },
 };
 
+pub(crate) mod checkpoint;
 pub(crate) mod config;
 mod mtp;
 mod ple;
@@ -40,10 +41,8 @@ mod speculative;
 mod text;
 
 pub(crate) use crate::vision_models::qwen3_vl::Qwen3VLProcessor as Qwen4ExpProcessor;
+pub(crate) use checkpoint::layer_resources;
 pub(crate) use config::Config;
-pub(crate) use ple::checkpoint_table_is_packed;
-#[cfg(feature = "cuda")]
-pub(crate) use ple::planned_resident_table_bytes;
 
 /// Hybrid paged config that also budgets for the per-token QSA aux cache beside the KV cache.
 pub(crate) struct Qwen4ExpPagedConfig {

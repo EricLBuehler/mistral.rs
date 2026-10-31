@@ -145,16 +145,26 @@ pub(crate) fn dense_gather(
         .broadcast_as((tokens, topk, k))?
         .contiguous()?
         .reshape((tokens * topk, 1, k))?;
-    let output = x.matmul(&selected.transpose(1, 2)?)?;
-    let output = match bias {
-        Some(bias) if bias.rank() == 2 => output.broadcast_add(
-            &bias
-                .to_dtype(output.dtype())?
-                .index_select(&ids, 0)?
-                .unsqueeze(1)?,
-        )?,
-        Some(bias) => output.broadcast_add(&bias.to_dtype(output.dtype())?)?,
-        None => output,
+    let output = x
+        .matmul(&selected.transpose(1, 2)?)?
+        .reshape((tokens, topk, n))?;
+    add_routed_bias(output, bias, indices)
+}
+
+pub(crate) fn add_routed_bias(
+    output: Tensor,
+    bias: Option<&Tensor>,
+    indices: &Tensor,
+) -> Result<Tensor> {
+    let Some(bias) = bias else {
+        return Ok(output);
     };
-    output.reshape((tokens, topk, n))
+    let bias = bias.to_dtype(output.dtype())?;
+    let bias = if bias.rank() == 2 {
+        bias.index_select(&indices.flatten_all()?, 0)?
+            .reshape(output.shape())?
+    } else {
+        bias
+    };
+    output.broadcast_add(&bias)
 }

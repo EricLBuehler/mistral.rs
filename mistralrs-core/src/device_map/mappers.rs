@@ -24,7 +24,7 @@ pub trait DeviceMapper: Debug {
 
     fn get_min_dtype(&self, dtype: &dyn TryIntoDType) -> Result<DType>;
 
-    fn uses_host_memory_for_optional_allocations(&self, _layer: usize) -> bool {
+    fn uses_host_memory_for_resource(&self, _name: &str) -> bool {
         false
     }
 }
@@ -32,12 +32,12 @@ pub trait DeviceMapper: Debug {
 #[derive(Debug)]
 pub(super) struct OptionalHostDeviceMapper {
     inner: Box<dyn DeviceMapper + Send + Sync>,
-    layers: Vec<usize>,
+    resources: Vec<String>,
 }
 
 impl OptionalHostDeviceMapper {
-    pub(super) fn new(inner: Box<dyn DeviceMapper + Send + Sync>, layers: Vec<usize>) -> Self {
-        Self { inner, layers }
+    pub(super) fn new(inner: Box<dyn DeviceMapper + Send + Sync>, resources: Vec<String>) -> Self {
+        Self { inner, resources }
     }
 }
 
@@ -83,8 +83,8 @@ impl DeviceMapper for OptionalHostDeviceMapper {
         self.inner.get_min_dtype(dtype)
     }
 
-    fn uses_host_memory_for_optional_allocations(&self, layer: usize) -> bool {
-        self.layers.contains(&layer)
+    fn uses_host_memory_for_resource(&self, name: &str) -> bool {
+        self.resources.iter().any(|resource| resource == name)
     }
 }
 

@@ -28,6 +28,56 @@ const NVFP4_SCALE_BASE: u8 = 0x28;
 const NVFP4_SCALE_SPAN: u8 = 0x20;
 const FP8_SCALE_GROUPS: [usize; 9] = [1, 2, 3, 4, 7, 8, 12, 16, 128];
 const FP8_SCALE_TEST_COLUMNS: [usize; 4] = [16, 17, 24, 129];
+#[cfg(feature = "cuda")]
+const STREAM_ROWS: usize = 262_144;
+#[cfg(feature = "cuda")]
+const STREAM_COLUMNS: usize = 64;
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_gather_keeps_cross_stream_input_alive() -> Result<()> {
+    use candle_core::{CudaStorage, Storage};
+
+    let device = Device::new_cuda_with_stream(0)?;
+    let cuda = device.as_cuda_device()?;
+    let consumer = cuda.cuda_stream();
+    let producer = consumer
+        .context()
+        .new_stream_with_priority(-1)
+        .map_err(candle_core::Error::wrap)?;
+    let ids = Tensor::from_vec(
+        (0..STREAM_ROWS as u32).collect::<Vec<_>>(),
+        STREAM_ROWS,
+        &device,
+    )?;
+    let values = vec![1f32; STREAM_ROWS * STREAM_COLUMNS];
+    let data = producer
+        .clone_htod(&values)
+        .map_err(candle_core::Error::wrap)?;
+    let weight = Tensor::from((
+        Storage::Cuda(CudaStorage::wrap_cuda_slice(data, cuda.clone())),
+        (STREAM_ROWS, STREAM_COLUMNS),
+    ));
+    let _delay = crate::utils::cuda_test::delay_stream(&consumer)?;
+    let output = EmbeddingTable::new(
+        RowCodec::Dense(DType::F32),
+        STREAM_ROWS,
+        STREAM_COLUMNS,
+        &weight,
+    )
+    .gather(&ids, DType::F32.into())?;
+    drop(weight);
+    let _replacement = producer
+        .alloc_zeros::<f32>(values.len())
+        .map_err(candle_core::Error::wrap)?;
+    producer.synchronize().map_err(candle_core::Error::wrap)?;
+    assert!(output
+        .flatten_all()?
+        .to_vec1::<f32>()?
+        .iter()
+        .all(|&v| v == 1.));
+    Ok(())
+}
 
 fn ids(rows: usize) -> Vec<u32> {
     let last = rows as u32 - 1;

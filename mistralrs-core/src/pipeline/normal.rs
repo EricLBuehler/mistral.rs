@@ -790,10 +790,16 @@ impl Loader for NormalLoader {
         } else if let DeviceMapSetting::Auto(params) = mapper.clone() {
             // Initial dtype
             let dtype = dtype.try_into_dtype(&available_devices.iter().collect::<Vec<_>>())?;
+            let sizing_source = super::loaders::ResourceSource {
+                weights: self.prepared_source.as_ref().map(|source| &source.weights),
+                paths: paths.get_weight_filenames(),
+            };
+            let checkpoint = sizing_source.checkpoint_tensors()?;
+            let source_quantization = QuantizationConfigShim::get_quantization_config(&config)?;
 
             // ISQ or UQFF: quantized path
             // Match logic below where UQFF has priority
-            let (layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
+            let (mut layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
                 match super::isq_flow::resolve_auto_device_map_sizing(
                     uqff_reader.is_some(),
                     has_prepared_weight_source,
@@ -809,7 +815,6 @@ impl Loader for NormalLoader {
                                 source.as_ref(),
                                 dtype,
                                 self.inner.num_layers(&config)?,
-                                &self.inner.unbound_layer_bytes(&config)?,
                             )?
                         } else {
                             None
@@ -830,14 +835,19 @@ impl Loader for NormalLoader {
                                         self.config.topology.as_ref(),
                                     )
                                 };
+                            let quantization = quantization
+                                .with_checkpoint(&checkpoint)
+                                .with_source_quantization(source_quantization.as_ref());
                             let weight_pack_factor = quantization
                                 .conservative_pack_factor(dtype, source.pack_factor(dtype)?);
-                            let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
-                                &config,
-                                dtype,
-                                weight_pack_factor,
-                                None,
-                            )?;
+                            let layer_sizes_in_bytes =
+                                self.inner.layer_sizes_in_bytes_with_quantization(
+                                    &config,
+                                    dtype,
+                                    weight_pack_factor,
+                                    Some(&quantization),
+                                    None,
+                                )?;
                             let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
                                 &config,
                                 dtype,
@@ -897,12 +907,17 @@ impl Loader for NormalLoader {
                                 quantization,
                             )
                         };
-                        let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
-                            &config,
-                            dtype,
-                            weight_pack_factor,
-                            None,
-                        )?;
+                        let quantization = quantization
+                            .with_checkpoint(&checkpoint)
+                            .with_source_quantization(source_quantization.as_ref());
+                        let layer_sizes_in_bytes =
+                            self.inner.layer_sizes_in_bytes_with_quantization(
+                                &config,
+                                dtype,
+                                weight_pack_factor,
+                                (!moqe).then_some(&quantization),
+                                None,
+                            )?;
                         let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
                             &config,
                             dtype,
@@ -951,7 +966,12 @@ impl Loader for NormalLoader {
                             let quantization = AutoDeviceMapQuantization::checkpoint(
                                 checkpoint_quantization.as_ref(),
                                 self.config.topology.as_ref(),
-                            );
+                            )
+                            .map(|quantization| {
+                                quantization
+                                    .with_checkpoint(&checkpoint)
+                                    .with_source_quantization(source_quantization.as_ref())
+                            });
                             let weight_pack_factor =
                                 quantization
                                     .as_ref()
@@ -984,6 +1004,12 @@ impl Loader for NormalLoader {
                     }
                 };
 
+            let resources = self.inner.layer_resources(&config, sizing_source)?;
+            let total_model_size_in_bytes = super::loaders::add_resource_bytes(
+                &mut layer_sizes_in_bytes,
+                total_model_size_in_bytes,
+                &resources,
+            )?;
             let new = auto_device_map::get_device_layers(
                 &*self.inner,
                 &config,
@@ -995,7 +1021,7 @@ impl Loader for NormalLoader {
                 dtype,
                 &params,
                 paged_attn_config.as_mut(),
-                auto_device_map::OptionalAllocationBacking::Owned,
+                &resources,
             )?;
             mapper = DeviceMapSetting::Map(new);
         }
@@ -2972,19 +2998,13 @@ fn exact_weight_source_sizes(
     source: &dyn mistralrs_quant::QuantizedWeightSource,
     dtype: DType,
     num_layers: usize,
-    unbound_layer_bytes: &[(usize, usize)],
 ) -> Result<Option<(Vec<usize>, usize, usize)>> {
     let Some(exact) = source.resident_layer_bytes(dtype)? else {
         return Ok(None);
     };
-    let mut layers = (0..num_layers)
+    let layers = (0..num_layers)
         .map(|layer| exact.layers.get(&layer).copied().unwrap_or(0))
         .collect::<Vec<_>>();
-    for &(layer, bytes) in unbound_layer_bytes {
-        if let Some(size) = layers.get_mut(layer) {
-            *size += bytes;
-        }
-    }
     let total = layers.iter().sum::<usize>() + exact.outside;
     Ok(Some((layers, exact.outside, total)))
 }
@@ -3068,8 +3088,18 @@ mod tests {
         let archive = Arc::new(GgufArchive::open_file(file.path())?);
         let source = GgufWeightSource::new(archive, &bindings, DType::BF16)?;
         assert_eq!(source.pack_factor(DType::BF16)?, 1);
-        let (layers, outside, total) =
-            exact_weight_source_sizes(&source, DType::BF16, 2, &[(1, UNBOUND_BYTES)])?.unwrap();
+        let (mut layers, outside, total) =
+            exact_weight_source_sizes(&source, DType::BF16, 2)?.unwrap();
+        let total = crate::pipeline::loaders::add_resource_bytes(
+            &mut layers,
+            total,
+            &[crate::pipeline::loaders::LayerResource {
+                name: "extra".to_owned(),
+                layer: 1,
+                device_bytes: UNBOUND_BYTES,
+                host_backing: None,
+            }],
+        )?;
         let attention = WIDTH * WIDTH / Q8_BLOCK_ELEMS * Q8_BLOCK_BYTES;
         let experts = 2 * WIDTH * Q3_BLOCK_BYTES;
         let dense = 3 * WIDTH * DType::BF16.size_in_bytes();

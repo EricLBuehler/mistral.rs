@@ -566,7 +566,7 @@ fn warmed_offset_scale_views_capture_without_jit() -> Result<()> {
 }
 
 #[test]
-fn tune_buckets_never_mix_policies_and_skip_decode_rows() {
+fn tune_buckets_never_mix_policies_and_include_decode_rows() {
     for multiprocessors in [24, 48, 132] {
         for (n, k) in [(128, 2048), (4096, 4096), (12288, 4096), (8192, 2048)] {
             let key = TuneKey {
@@ -576,6 +576,7 @@ fn tune_buckets_never_mix_policies_and_skip_decode_rows() {
                 dtype: DType::BF16,
             };
             let buckets = tune_buckets(key, multiprocessors);
+            assert!(buckets[0].probe <= 16);
             let mut lower = TUNE_MIN_ROWS + 1;
             for bucket in &buckets {
                 assert!(bucket.probe >= lower && bucket.probe <= bucket.upper);
@@ -597,9 +598,30 @@ fn tune_buckets_never_mix_policies_and_skip_decode_rows() {
 }
 
 const SMALL_SMEM: usize = 99 << 10;
+const OVERSIZED_WEIGHT_DIM: usize = 1 << 20;
 
 #[test]
-fn launch_config_consults_the_table_only_for_prefill_rows() {
+fn cached_and_disabled_tuning_do_not_materialize_weights() -> Result<()> {
+    let device = Device::new_cuda(0)?;
+    let dev = device.as_cuda_device()?;
+    if !super::super::block_scaled_mma_supported(dev) {
+        return Ok(());
+    }
+    let key = TuneKey {
+        ordinal: dev.cuda_stream().context().ordinal(),
+        n: OVERSIZED_WEIGHT_DIM,
+        k: OVERSIZED_WEIGHT_DIM,
+        dtype: DType::BF16,
+    };
+    for mode in [TuneMode::Off, TuneMode::Cached] {
+        let configs = tune_shape(key, dev, mode)?;
+        assert!(!configs.is_empty());
+    }
+    Ok(())
+}
+
+#[test]
+fn launch_config_consults_the_table_for_decode_and_prefill_rows() {
     let key = TuneKey {
         ordinal: 0,
         n: 4224,
@@ -627,7 +649,7 @@ fn launch_config_consults_the_table_only_for_prefill_rows() {
         launch_config(key, TUNE_MIN_ROWS, 48),
         config(TUNE_MIN_ROWS, key.n, key.k, 48)
     );
-    assert_eq!(launch_config(key, 8, 48), config(8, key.n, key.k, 48));
+    assert_eq!(launch_config(key, 8, 48), forced);
     let rows = warm_rows(key, 48);
     assert!(rows.contains(&(TUNE_MIN_ROWS + 1)) && rows.contains(&2049));
 }

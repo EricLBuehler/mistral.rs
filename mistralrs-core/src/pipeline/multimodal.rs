@@ -758,10 +758,16 @@ impl Loader for MultimodalLoader {
 
             // Initial dtype
             let dtype = dtype.try_into_dtype(&available_devices.iter().collect::<Vec<_>>())?;
+            let sizing_source = super::loaders::ResourceSource {
+                weights: self.prepared_source.as_ref().map(|source| &source.weights),
+                paths: paths.get_weight_filenames(),
+            };
+            let checkpoint = sizing_source.checkpoint_tensors()?;
+            let source_quantization = QuantizationConfigShim::get_quantization_config(&config)?;
 
             // ISQ or UQFF: quantized path
             // Match logic below where UQFF has priority
-            let (layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
+            let (mut layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
                 match super::isq_flow::resolve_auto_device_map_sizing(
                     uqff_reader.is_some(),
                     has_prepared_weight_source,
@@ -780,14 +786,9 @@ impl Loader for MultimodalLoader {
                             None
                         };
                         if let Some(exact) = exact {
-                            let mut layer_sizes = (0..self.inner.num_layers(&config)?)
+                            let layer_sizes = (0..self.inner.num_layers(&config)?)
                                 .map(|layer| exact.layers.get(&layer).copied().unwrap_or(0))
                                 .collect::<Vec<_>>();
-                            for (layer, bytes) in self.inner.unbound_layer_bytes(&config)? {
-                                if let Some(size) = layer_sizes.get_mut(layer) {
-                                    *size += bytes;
-                                }
-                            }
                             let total = layer_sizes.iter().sum::<usize>() + exact.outside;
                             (layer_sizes, exact.outside, total)
                         } else {
@@ -800,6 +801,9 @@ impl Loader for MultimodalLoader {
                                         self.config.topology.as_ref(),
                                     )
                                 };
+                            let quantization = quantization
+                                .with_checkpoint(&checkpoint)
+                                .with_source_quantization(source_quantization.as_ref());
                             let weight_pack_factor = quantization
                                 .conservative_pack_factor(dtype, source.pack_factor(dtype)?);
                             let non_mapped_pack_factor =
@@ -808,12 +812,14 @@ impl Loader for MultimodalLoader {
                                 } else {
                                     1
                                 };
-                            let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
-                                &config,
-                                dtype,
-                                weight_pack_factor,
-                                matformer_slicing_config.as_ref(),
-                            )?;
+                            let layer_sizes_in_bytes =
+                                self.inner.layer_sizes_in_bytes_with_quantization(
+                                    &config,
+                                    dtype,
+                                    weight_pack_factor,
+                                    Some(&quantization),
+                                    matformer_slicing_config.as_ref(),
+                                )?;
                             let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
                                 &config,
                                 dtype,
@@ -873,6 +879,9 @@ impl Loader for MultimodalLoader {
                                 quantization,
                             )
                         };
+                        let quantization = quantization
+                            .with_checkpoint(&checkpoint)
+                            .with_source_quantization(source_quantization.as_ref());
                         let layer_sizes_in_bytes =
                             self.inner.layer_sizes_in_bytes_with_quantization(
                                 &config,
@@ -932,7 +941,12 @@ impl Loader for MultimodalLoader {
                             let quantization = AutoDeviceMapQuantization::checkpoint(
                                 checkpoint_quantization.as_ref(),
                                 self.config.topology.as_ref(),
-                            );
+                            )
+                            .map(|quantization| {
+                                quantization
+                                    .with_checkpoint(&checkpoint)
+                                    .with_source_quantization(source_quantization.as_ref())
+                            });
                             let weight_pack_factor =
                                 quantization
                                     .as_ref()
@@ -965,6 +979,12 @@ impl Loader for MultimodalLoader {
                     }
                 };
 
+            let resources = self.inner.layer_resources(&config, sizing_source)?;
+            let total_model_size_in_bytes = super::loaders::add_resource_bytes(
+                &mut layer_sizes_in_bytes,
+                total_model_size_in_bytes,
+                &resources,
+            )?;
             let new = auto_device_map::get_device_layers(
                 &*self.inner,
                 &config,
@@ -976,19 +996,7 @@ impl Loader for MultimodalLoader {
                 dtype,
                 &params,
                 paged_attn_config.as_mut(),
-                if self
-                    .prepared_source
-                    .as_ref()
-                    .is_some_and(|source| source.weights.raw_gguf().is_some())
-                    || self.inner.supports_file_mapped_optional_allocations(
-                        &config,
-                        paths.get_weight_filenames(),
-                    )?
-                {
-                    auto_device_map::OptionalAllocationBacking::FileMapped
-                } else {
-                    auto_device_map::OptionalAllocationBacking::Owned
-                },
+                &resources,
             )?;
             mapper = DeviceMapSetting::Map(new);
         }

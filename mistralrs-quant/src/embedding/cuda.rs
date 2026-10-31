@@ -1,13 +1,15 @@
 use std::ffi::c_void;
 
 use candle_core::{
-    cuda::cudarc::driver::{sys::CUstream, CudaStream, DevicePtr, DevicePtrMut},
+    cuda::cudarc::driver::{sys::CUstream, DevicePtrMut},
     CudaStorage, DType, Result, Shape, Storage, Tensor,
 };
 
 use super::{
     EmbeddingOutput, EmbeddingTable, RowCodec, RowScale, ScaleType, TableBytes, TableStorage, UNIT,
 };
+
+use crate::utils::CudaReadView;
 
 const VECTOR_ALIGN: u64 = 16;
 const ROW_SCALE_NONE: i32 = 0;
@@ -46,38 +48,6 @@ unsafe extern "C" {
     fn mistralrs_gather_rows(args: *const GatherArgs, scalar: i32, stream: CUstream);
 }
 
-/// Device address of `t`'s first element; the caller keeps `t` alive through the launch.
-fn tensor_ptr(t: &Tensor, stream: &CudaStream) -> Result<u64> {
-    let (storage, layout) = t.storage_and_layout();
-    let Storage::Cuda(storage) = &*storage else {
-        candle_core::bail!("embedding gather expects CUDA tensors");
-    };
-    if !layout.is_contiguous() {
-        candle_core::bail!("embedding gather expects contiguous tensors");
-    }
-    macro_rules! ptr {
-        ($ty:ty) => {{
-            let base = storage.as_cuda_slice::<$ty>()?.device_ptr(stream).0;
-            base + (layout.start_offset() * std::mem::size_of::<$ty>()) as u64
-        }};
-    }
-    Ok(match t.dtype() {
-        DType::U8 => ptr!(u8),
-        DType::U32 => ptr!(u32),
-        DType::I32 => ptr!(i32),
-        DType::I64 => ptr!(i64),
-        DType::BF16 => ptr!(half::bf16),
-        DType::F16 => ptr!(half::f16),
-        DType::F32 => ptr!(f32),
-        DType::F8E4M3 => ptr!(float8::F8E4M3),
-        other => candle_core::bail!("unsupported embedding tensor dtype {other:?}"),
-    })
-}
-
-fn optional_ptr(t: Option<&Tensor>, stream: &CudaStream) -> Result<u64> {
-    t.map_or(Ok(0), |t| tensor_ptr(t, stream))
-}
-
 pub(super) fn gather(
     table: &EmbeddingTable<'_>,
     ids: &Tensor,
@@ -102,34 +72,49 @@ pub(super) fn gather(
     let lookups = ids.elem_count();
     let columns = table.columns;
     let codec = table.codec;
+    let _mapped_use = match table.storage {
+        TableStorage::Mapped(rows) => Some(rows.cuda_read(&stream)?),
+        _ => None,
+    };
 
-    let (data, scales, aux, shards, shard_count) = match table.storage {
+    let (data_tensor, scales, aux, index, qtensor, shard_count) = match table.storage {
         TableStorage::Device { data, scales, aux } => {
-            let data = match data {
-                TableBytes::Tensor(t) => tensor_ptr(t, &stream)?,
-                TableBytes::QTensor(q) => q.device_ptr_with_guard(&stream)?.0 as u64,
+            let (data, qtensor) = match data {
+                TableBytes::Tensor(t) => (Some(t), None),
+                TableBytes::QTensor(q) => (None, Some(q)),
             };
-            (
-                data,
-                optional_ptr(scales, &stream)?,
-                optional_ptr(aux, &stream)?,
-                0,
-                0,
-            )
+            (data, scales, aux, None, qtensor, 0)
         }
         TableStorage::Mapped(rows) => {
             let index = rows.index.as_ref().ok_or_else(|| {
                 candle_core::Error::msg("mapped embedding rows have no device index")
             })?;
             (
-                0,
-                0,
-                0,
-                tensor_ptr(index, &stream)?,
+                None,
+                None,
+                None,
+                Some(index),
+                None,
                 rows.shards.len() as i32,
             )
         }
     };
+    let data_view = CudaReadView::optional(data_tensor)?;
+    let scale_view = CudaReadView::optional(scales)?;
+    let aux_view = CudaReadView::optional(aux)?;
+    let index_view = CudaReadView::optional(index)?;
+    let ids_view = CudaReadView::new(&ids)?;
+    let (data, _data_guard) = match qtensor {
+        Some(q) => {
+            let (pointer, guard) = q.device_ptr_with_guard(&stream)?;
+            (pointer as u64, guard)
+        }
+        None => CudaReadView::read_optional(data_view.as_ref(), &stream)?,
+    };
+    let (scales, _scale_guard) = CudaReadView::read_optional(scale_view.as_ref(), &stream)?;
+    let (aux, _aux_guard) = CudaReadView::read_optional(aux_view.as_ref(), &stream)?;
+    let (shards, _index_guard) = CudaReadView::read_optional(index_view.as_ref(), &stream)?;
+    let (ids_ptr, _ids_guard) = ids_view.read(&stream)?;
 
     let (row_scale_mode, row_scale) = match table.row_scale {
         RowScale::None | RowScale::Value(_) => (ROW_SCALE_NONE, None),
@@ -139,7 +124,9 @@ pub(super) fn gather(
     let row_scale_type = row_scale.map_or(Ok(0), |t| {
         Ok::<_, candle_core::Error>(ScaleType::from_dtype(t.dtype())? as i32)
     })?;
-    let row_scales = optional_ptr(row_scale, &stream)?;
+    let row_scale_view = CudaReadView::optional(row_scale)?;
+    let (row_scales, _row_scale_guard) =
+        CudaReadView::read_optional(row_scale_view.as_ref(), &stream)?;
 
     let data_stride = codec.row_bytes(columns) as u64;
     let scalar = match codec {
@@ -166,7 +153,7 @@ pub(super) fn gather(
             let mut output = unsafe { device.alloc::<$ty>(lookups * columns)? };
             let (out_ptr, out_guard) = output.device_ptr_mut(&stream);
             let args = GatherArgs {
-                ids: tensor_ptr(&ids, &stream)? as *const c_void,
+                ids: ids_ptr as *const c_void,
                 data: data as *const u8,
                 scales: scales as *const u8,
                 aux: aux as *const u8,
