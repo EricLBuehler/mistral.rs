@@ -671,13 +671,94 @@ impl<'a> EmbeddingTable<'a> {
         }
     }
 
-    /// Host decode of `ids` into a CPU `[ids.len(), columns]` tensor of `out.dtype`.
-    pub fn gather_host(&self, ids: &[u64], out: EmbeddingOutput) -> Result<Tensor> {
+    /// Copies selected encoded host rows to `device`, then decodes them with its gather kernel.
+    pub fn gather_staged(
+        &self,
+        ids: &[u64],
+        out: EmbeddingOutput,
+        device: &Device,
+    ) -> Result<Tensor> {
         self.codec.validate(self.columns)?;
+        if ids.is_empty() {
+            return Tensor::zeros((0, self.columns), out.dtype, device);
+        }
         let row_bytes = self.codec.row_bytes(self.columns);
         let grid = self.codec.grid();
         let scale_bytes = grid.map_or(0, |g| g.row_bytes(self.columns));
-        let rows_per_scale = grid.map_or(1, |g| g.rows_per_scale);
+        let host = HostRows::new(self.storage)?;
+        let mut data = Vec::with_capacity(ids.len() * row_bytes);
+        let mut scales = grid.map(|_| Vec::with_capacity(ids.len() * scale_bytes));
+        let mut aux = matches!(self.codec, RowCodec::Afq { .. })
+            .then(|| Vec::with_capacity(ids.len() * scale_bytes));
+        for &row in ids {
+            let r = row as usize;
+            if r >= self.rows {
+                candle_core::bail!("embedding row {row} is outside {} rows", self.rows);
+            }
+            let (src, scale_src, aux_src) = host.row(r, self.codec, self.columns)?;
+            data.extend_from_slice(src);
+            if let Some(scales) = &mut scales {
+                scales.extend_from_slice(scale_src);
+            }
+            if let Some(aux) = &mut aux {
+                aux.extend_from_slice(aux_src);
+            }
+        }
+        let data = match self.codec {
+            RowCodec::Dense(dtype) => {
+                Tensor::from_raw_buffer(&data, dtype, &[ids.len(), self.columns], device)?
+            }
+            _ => Tensor::from_vec(data, (ids.len(), row_bytes), device)?,
+        };
+        let upload = |bytes: Vec<u8>| Tensor::from_vec(bytes, (ids.len(), scale_bytes), device);
+        let scales = scales.map(upload).transpose()?;
+        let aux = aux.map(upload).transpose()?;
+        let row_scales = match self.row_scale {
+            RowScale::Scalar(t) => Some(t.to_device(device)?),
+            RowScale::PerRow(t) => {
+                let indices = Tensor::from_vec(
+                    ids.iter().map(|&id| id as i64).collect::<Vec<_>>(),
+                    ids.len(),
+                    t.device(),
+                )?;
+                Some(
+                    t.flatten_all()?
+                        .index_select(&indices, 0)?
+                        .to_device(device)?,
+                )
+            }
+            RowScale::None | RowScale::Value(_) => None,
+        };
+        let mut codec = self.codec;
+        match &mut codec {
+            RowCodec::Fp4(grid)
+            | RowCodec::Fp8(Some(grid))
+            | RowCodec::Afq { grid, .. }
+            | RowCodec::SymInt { grid, .. } => grid.rows_per_scale = 1,
+            _ => {}
+        }
+        let row_scale = match (self.row_scale, row_scales.as_ref()) {
+            (RowScale::Scalar(_), Some(t)) => RowScale::Scalar(t),
+            (RowScale::PerRow(_), Some(t)) => RowScale::PerRow(t),
+            _ => self.row_scale,
+        };
+        let table = EmbeddingTable {
+            codec,
+            rows: ids.len(),
+            columns: self.columns,
+            storage: TableStorage::Device {
+                data: TableBytes::Tensor(&data),
+                scales: scales.as_ref(),
+                aux: aux.as_ref(),
+            },
+            row_scale,
+        };
+        table.gather(&Tensor::arange(0i64, ids.len() as i64, device)?, out)
+    }
+
+    /// Host decode of `ids` into a CPU `[ids.len(), columns]` tensor of `out.dtype`.
+    pub fn gather_host(&self, ids: &[u64], out: EmbeddingOutput) -> Result<Tensor> {
+        self.codec.validate(self.columns)?;
         let multiplier = self.host_multiplier(out);
         let row_scales = match self.row_scale {
             RowScale::Scalar(t) | RowScale::PerRow(t) => Some(
@@ -689,58 +770,14 @@ impl<'a> EmbeddingTable<'a> {
             RowScale::None | RowScale::Value(_) => None,
         };
         let per_row = matches!(self.row_scale, RowScale::PerRow(_));
-        let guards = match self.storage {
-            TableStorage::Device { data, scales, aux } => {
-                let host = |t: Option<&'a Tensor>| {
-                    t.map(|t| HostBytes::new(TableBytes::Tensor(t))).transpose()
-                };
-                Some((HostBytes::new(data)?, host(scales)?, host(aux)?))
-            }
-            TableStorage::Mapped(_) => None,
-        };
-        let bufs = match &guards {
-            Some((data, scales, aux)) => Some((
-                data.bytes()?,
-                scales.as_ref().map(HostBytes::bytes).transpose()?,
-                aux.as_ref().map(HostBytes::bytes).transpose()?,
-            )),
-            None => None,
-        };
+        let host = HostRows::new(self.storage)?;
         let mut values = vec![0f32; ids.len() * self.columns];
         for (dst, &row) in values.chunks_exact_mut(self.columns).zip(ids) {
             let r = row as usize;
             if r >= self.rows {
                 candle_core::bail!("embedding row {row} is outside {} rows", self.rows);
             }
-            let (data, scales, aux) = match (bufs, self.storage) {
-                (Some((data, scales, aux)), _) => {
-                    let srow = r / rows_per_scale;
-                    (
-                        &data[r * row_bytes..(r + 1) * row_bytes],
-                        scale_row(scales, srow, scale_bytes),
-                        scale_row(aux, srow, scale_bytes),
-                    )
-                }
-                (None, TableStorage::Mapped(mapped)) => {
-                    let shard = mapped.shard(r);
-                    let local = r - shard.first_row;
-                    let data = unsafe {
-                        std::slice::from_raw_parts(shard.data.add(local * row_bytes), row_bytes)
-                    };
-                    let scales = if shard.scales.is_null() {
-                        &[][..]
-                    } else {
-                        unsafe {
-                            std::slice::from_raw_parts(
-                                shard.scales.add(local / rows_per_scale * scale_bytes),
-                                scale_bytes,
-                            )
-                        }
-                    };
-                    (data, scales, &[][..])
-                }
-                (None, TableStorage::Device { .. }) => unreachable!(),
-            };
+            let (data, scales, aux) = host.row(r, self.codec, self.columns)?;
             self.codec.decode_row(data, scales, aux, dst);
             let m = multiplier
                 * row_scales
@@ -850,6 +887,73 @@ impl<'a> HostBytes<'a> {
                 Ok(&cpu_bytes(cpu)?[*offset..*offset + *len])
             }
         }
+    }
+}
+
+enum HostRows<'a> {
+    Contiguous {
+        data: HostBytes<'a>,
+        scales: Option<HostBytes<'a>>,
+        aux: Option<HostBytes<'a>>,
+    },
+    Mapped(&'a MappedRows),
+}
+
+impl<'a> HostRows<'a> {
+    fn new(storage: TableStorage<'a>) -> Result<Self> {
+        Ok(match storage {
+            TableStorage::Device { data, scales, aux } => {
+                let host = |t: Option<&'a Tensor>| {
+                    t.map(|t| HostBytes::new(TableBytes::Tensor(t))).transpose()
+                };
+                Self::Contiguous {
+                    data: HostBytes::new(data)?,
+                    scales: host(scales)?,
+                    aux: host(aux)?,
+                }
+            }
+            TableStorage::Mapped(rows) => Self::Mapped(rows),
+        })
+    }
+
+    fn row(&self, row: usize, codec: RowCodec, columns: usize) -> Result<(&[u8], &[u8], &[u8])> {
+        let row_bytes = codec.row_bytes(columns);
+        let grid = codec.grid();
+        let scale_bytes = grid.map_or(0, |g| g.row_bytes(columns));
+        let rows_per_scale = grid.map_or(1, |g| g.rows_per_scale);
+        Ok(match self {
+            Self::Contiguous { data, scales, aux } => (
+                &data.bytes()?[row * row_bytes..(row + 1) * row_bytes],
+                scale_row(
+                    scales.as_ref().map(HostBytes::bytes).transpose()?,
+                    row / rows_per_scale,
+                    scale_bytes,
+                ),
+                scale_row(
+                    aux.as_ref().map(HostBytes::bytes).transpose()?,
+                    row / rows_per_scale,
+                    scale_bytes,
+                ),
+            ),
+            Self::Mapped(mapped) => {
+                let shard = mapped.shard(row);
+                let local = row - shard.first_row;
+                let data = unsafe {
+                    std::slice::from_raw_parts(shard.data.add(local * row_bytes), row_bytes)
+                };
+                let scales = if shard.scales.is_null() {
+                    &[][..]
+                } else {
+                    unsafe {
+                        std::slice::from_raw_parts(
+                            shard.scales.add(local / rows_per_scale * scale_bytes),
+                            scale_bytes,
+                        )
+                    }
+                };
+                (data, scales, &[][..])
+            }
+        })
     }
 }
 

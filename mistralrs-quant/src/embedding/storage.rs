@@ -945,15 +945,15 @@ impl ManagedEmbedding {
                 && !matches!(self.source, TableSource::Shards { .. });
         if use_host {
             let ids = rows.flatten_all()?.to_dtype(DType::I64)?.to_vec1::<i64>()?;
+            let ids = ids.into_iter().map(|id| id as u64).collect::<Vec<_>>();
             let mut shape = rows.dims().to_vec();
             shape.push(self.columns);
-            return table
-                .gather_host(
-                    &ids.into_iter().map(|id| id as u64).collect::<Vec<_>>(),
-                    out,
-                )?
-                .to_device(rows.device())?
-                .reshape(shape);
+            let gathered = if rows.device().is_cpu() {
+                table.gather_host(&ids, out)?
+            } else {
+                table.gather_staged(&ids, out, rows.device())?
+            };
+            return gathered.reshape(shape);
         }
         table.gather(rows, out)
     }

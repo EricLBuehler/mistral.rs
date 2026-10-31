@@ -28,6 +28,11 @@ const NVFP4_SCALE_BASE: u8 = 0x28;
 const NVFP4_SCALE_SPAN: u8 = 0x20;
 const FP8_SCALE_GROUPS: [usize; 9] = [1, 2, 3, 4, 7, 8, 12, 16, 128];
 const FP8_SCALE_TEST_COLUMNS: [usize; 4] = [16, 17, 24, 129];
+const STAGED_SHARD_ROWS: [usize; 2] = [3, 4];
+const STAGED_COLUMNS: usize = 16;
+const STAGED_SCALE_GROUP: usize = 8;
+const STAGED_ROWS_PER_SCALE: usize = 2;
+const STAGED_IDS: [u64; 8] = [6, 0, 2, 3, 3, 4, 1, 5];
 #[cfg(feature = "cuda")]
 const STREAM_ROWS: usize = 262_144;
 #[cfg(feature = "cuda")]
@@ -367,6 +372,226 @@ fn host_gather_matches_dequantized_index_select_for_every_codec() -> Result<()> 
         );
     }
     Ok(())
+}
+
+fn check_staged_codecs(device: &Device) -> Result<()> {
+    for case in cases()? {
+        let table = case.layer.embedding_table().unwrap();
+        let host_ids = Tensor::from_vec(ids(table.rows), (2, 4), &Device::Cpu)?;
+        let expected = reference(&case, &host_ids)?.reshape((8, table.columns))?;
+        let ids = ids(table.rows)
+            .into_iter()
+            .map(u64::from)
+            .collect::<Vec<_>>();
+        for dtype in [DType::F32, DType::F16, DType::BF16] {
+            let actual =
+                table.gather_staged(&ids, EmbeddingOutput::scaled(dtype, SCALE), device)?;
+            assert_eq!(actual.dtype(), dtype, "{}", case.name);
+            assert!(actual.device().same_device(device));
+            assert_close(
+                &format!("staged {} {dtype:?}", case.name),
+                &actual.to_device(&Device::Cpu)?,
+                &(&expected * SCALE)?.to_dtype(dtype)?.to_dtype(DType::F32)?,
+                if dtype == DType::F32 { TOLERANCE } else { 1e-2 },
+            )?;
+        }
+        assert!(table
+            .gather_staged(&[table.rows as u64], DType::F32.into(), device)
+            .is_err());
+        assert_eq!(
+            table.gather_staged(&[], DType::F32.into(), device)?.dims(),
+            &[0, table.columns]
+        );
+    }
+    for bits in [4, 8] {
+        let (data, scales, expected) = sym_int_table(bits)?;
+        let table = EmbeddingTable::new(
+            RowCodec::SymInt {
+                bits,
+                grid: ScaleGrid::per_row(ScaleType::F16, 32),
+            },
+            ROWS,
+            BLOCK_COLUMNS,
+            &data,
+        )
+        .with_scales(&scales);
+        let ids = ids(ROWS).into_iter().map(u64::from).collect::<Vec<_>>();
+        let expected = ids
+            .iter()
+            .flat_map(|&row| {
+                expected[row as usize * BLOCK_COLUMNS..(row as usize + 1) * BLOCK_COLUMNS].to_vec()
+            })
+            .collect::<Vec<_>>();
+        assert_close(
+            "staged symmetric",
+            &table
+                .gather_staged(&ids, DType::F32.into(), device)?
+                .to_device(&Device::Cpu)?,
+            &Tensor::from_vec(expected, (ids.len(), BLOCK_COLUMNS), &Device::Cpu)?,
+            TOLERANCE,
+        )?;
+    }
+    Ok(())
+}
+
+fn check_staged_shared_rows(device: &Device) -> Result<()> {
+    let grid = ScaleGrid {
+        ty: ScaleType::F32,
+        group: STAGED_SCALE_GROUP,
+        rows_per_scale: STAGED_ROWS_PER_SCALE,
+    };
+    let columns = STAGED_COLUMNS;
+    let scale_columns = columns / grid.group;
+    let rows = STAGED_SHARD_ROWS.iter().sum::<usize>();
+    let scales = (0..rows.div_ceil(grid.rows_per_scale) * scale_columns)
+        .map(|i| (i + 1) as f32 * 0.5)
+        .collect::<Vec<_>>();
+    let scales = Tensor::from_vec(
+        scales,
+        (rows.div_ceil(grid.rows_per_scale), scale_columns),
+        &Device::Cpu,
+    )?;
+    let aux = (&scales + 0.25)?;
+    let multipliers = Tensor::from_vec(
+        (0..rows).map(|r| (r + 1) as f32).collect::<Vec<_>>(),
+        rows,
+        &Device::Cpu,
+    )?;
+    let scalar = Tensor::new(0.5f32, &Device::Cpu)?;
+    for (codec, code, value) in [
+        (RowCodec::Fp4(grid), 0x22u8, 1.0),
+        (RowCodec::Fp8(Some(grid)), 0x38, 1.0),
+        (RowCodec::Afq { bits: 3, grid }, 0xff, 7.0),
+        (RowCodec::SymInt { bits: 4, grid }, 0x99, 1.0),
+        (RowCodec::SymInt { bits: 8, grid }, 1, 1.0),
+    ] {
+        let data = Tensor::from_vec(
+            vec![code; rows * codec.row_bytes(columns)],
+            (rows, codec.row_bytes(columns)),
+            &Device::Cpu,
+        )?;
+        let table = EmbeddingTable::new(codec, rows, columns, &data)
+            .with_scales(&scales)
+            .with_aux(&aux);
+        for row_scale in [
+            RowScale::None,
+            RowScale::Value(0.5),
+            RowScale::Scalar(&scalar),
+            RowScale::PerRow(&multipliers),
+        ] {
+            let table = table.with_row_scale(row_scale);
+            let expected = STAGED_IDS
+                .iter()
+                .flat_map(|&row| {
+                    (0..columns).map(move |column| {
+                        let scale = ((row as usize / grid.rows_per_scale * scale_columns
+                            + column / grid.group)
+                            + 1) as f32
+                            * 0.5;
+                        let decoded = value * scale
+                            + if matches!(codec, RowCodec::Afq { .. }) {
+                                scale + 0.25
+                            } else {
+                                0.0
+                            };
+                        let multiplier = match row_scale {
+                            RowScale::None => 1.0,
+                            RowScale::PerRow(_) => (row + 1) as f32,
+                            _ => 0.5,
+                        };
+                        decoded * multiplier * 2.0
+                    })
+                })
+                .collect::<Vec<_>>();
+            assert_close(
+                &format!("staged shared rows {codec:?} {row_scale:?}"),
+                &table
+                    .gather_staged(
+                        &STAGED_IDS,
+                        EmbeddingOutput::scaled(DType::F32, 2.0),
+                        device,
+                    )?
+                    .to_device(&Device::Cpu)?,
+                &Tensor::from_vec(expected, (STAGED_IDS.len(), columns), &Device::Cpu)?,
+                TOLERANCE,
+            )?;
+        }
+    }
+    let owner = Arc::new(STAGED_SHARD_ROWS.map(|rows| {
+        (
+            vec![0x22u8; rows * columns / 2],
+            (0..rows.div_ceil(grid.rows_per_scale) * scale_columns)
+                .map(|i| (rows * 10 + i) as f32)
+                .collect::<Vec<_>>(),
+        )
+    }));
+    let mut first_row = 0;
+    let shards = owner
+        .iter()
+        .zip(STAGED_SHARD_ROWS)
+        .map(|((data, scales), rows)| {
+            let shard = MappedShard {
+                data: data.as_ptr(),
+                scales: scales.as_ptr().cast(),
+                first_row,
+                rows,
+            };
+            first_row += rows;
+            shard
+        })
+        .collect();
+    let mapped = unsafe { MappedRows::new(shards, owner) };
+    let table = EmbeddingTable::mapped(RowCodec::Fp4(grid), columns, &mapped)
+        .with_row_scale(RowScale::Value(0.5));
+    let expected = STAGED_IDS
+        .iter()
+        .flat_map(|&row| {
+            (0..columns).map(move |column| {
+                let (local, shard_rows) = if row < STAGED_SHARD_ROWS[0] as u64 {
+                    (row as usize, STAGED_SHARD_ROWS[0])
+                } else {
+                    (row as usize - STAGED_SHARD_ROWS[0], STAGED_SHARD_ROWS[1])
+                };
+                (shard_rows * 10
+                    + local / grid.rows_per_scale * scale_columns
+                    + column / grid.group) as f32
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_close(
+        "staged mapped shared scales",
+        &table
+            .gather_staged(
+                &STAGED_IDS,
+                EmbeddingOutput::scaled(DType::F32, 2.0),
+                device,
+            )?
+            .to_device(&Device::Cpu)?,
+        &Tensor::from_vec(expected, (STAGED_IDS.len(), columns), &Device::Cpu)?,
+        TOLERANCE,
+    )
+}
+
+#[test]
+fn host_staged_gather_preserves_codecs_and_shared_rows() -> Result<()> {
+    check_staged_codecs(&Device::Cpu)?;
+    check_staged_shared_rows(&Device::Cpu)
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_staged_gather_preserves_codecs_and_shared_rows() -> Result<()> {
+    let device = Device::new_cuda_with_stream(0)?;
+    check_staged_codecs(&device)?;
+    check_staged_shared_rows(&device)
+}
+
+#[cfg(feature = "metal")]
+#[test]
+fn metal_staged_gather_preserves_codecs_and_shared_rows() -> Result<()> {
+    let device = Device::new_metal(0)?;
+    check_staged_codecs(&device)?;
+    check_staged_shared_rows(&device)
 }
 
 fn sym_int_table(bits: usize) -> Result<(Tensor, Tensor, Vec<f32>)> {
