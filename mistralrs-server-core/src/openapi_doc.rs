@@ -286,6 +286,32 @@ mod tests {
     }
 
     #[test]
+    fn chat_audio_formats_and_payloads_are_in_the_api_schema() {
+        let value = serde_json::to_value(get_openapi_doc(None)).unwrap();
+        let schemas = &value["components"]["schemas"];
+        assert_eq!(
+            schemas["ChatAudioFormat"]["enum"],
+            serde_json::json!(["wav", "pcm16"])
+        );
+        for name in [
+            "ChatCompletionRequest",
+            "ChatCompletionResponseMessage",
+            "ChatCompletionChunkDelta",
+        ] {
+            assert!(
+                schemas[name]["properties"].get("audio").is_some(),
+                "missing audio in {name}"
+            );
+        }
+        assert!(schemas["ChatCompletionRequest"]["properties"]
+            .get("modalities")
+            .is_some());
+        assert!(schemas["ChatAudioResponse"]["properties"]
+            .get("data")
+            .is_some());
+    }
+
+    #[test]
     fn inference_responses_have_schemas_with_adapter_generation() {
         let value = serde_json::to_value(get_openapi_doc(None)).unwrap();
         for schema in [

@@ -687,6 +687,46 @@ mod tests {
     }
 
     #[test]
+    fn lfm3_audio_auto_detection_selects_native_loader() {
+        let mut loader = detector();
+        loader.dynamic_lora_enabled = false;
+        let detected = loader
+            .detect(&ConfigArtifacts {
+                contents: Some(
+                    r#"{"architectures":["Lfm3AudioForConditionalGeneration"]}"#.to_string(),
+                ),
+                sentence_transformers_present: false,
+                repo_files: Vec::new(),
+                remote_access_issue: None,
+            })
+            .unwrap();
+        assert!(matches!(
+            detected,
+            Detected::Multimodal(MultimodalLoaderType::Lfm3Audio)
+        ));
+    }
+
+    #[test]
+    fn lfm3_omni_auto_detection_selects_native_loader() {
+        let mut loader = detector();
+        loader.dynamic_lora_enabled = false;
+        let detected = loader
+            .detect(&ConfigArtifacts {
+                contents: Some(
+                    r#"{"architectures":["Lfm3OmniForConditionalGeneration"]}"#.to_string(),
+                ),
+                sentence_transformers_present: false,
+                repo_files: Vec::new(),
+                remote_access_issue: None,
+            })
+            .unwrap();
+        assert!(matches!(
+            detected,
+            Detected::Multimodal(MultimodalLoaderType::Lfm3Omni)
+        ));
+    }
+
+    #[test]
     fn qwen3_5_moe_auto_detection_routes_dynamic_lora_to_multimodal() {
         let detected = detector()
             .detect(&ConfigArtifacts {

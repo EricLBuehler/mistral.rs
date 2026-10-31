@@ -275,6 +275,10 @@ impl MetadataMixin for AnyMoePipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for AnyMoePipeline {
+    fn release_generation_sequences(&self, sequence_ids: &[usize]) {
+        get_mut_arcmutex!(self.target).release_generation_sequences(sequence_ids);
+    }
+
     fn requires_uniform_prompt_batch(&self) -> bool {
         get_mut_arcmutex!(self.target).requires_uniform_prompt_batch()
     }

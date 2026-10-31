@@ -43,6 +43,8 @@ Three endpoints stream, each in its own event dialect:
 
 `stream: true` on `POST /v1/chat/completions` returns [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events) (SSE). Unnamed `data:` lines carry chat completion chunks in OpenAI format; the stream terminates with `data: [DONE]`. SSE keep-alive comments (lines starting with `:`) are sent every 10 seconds by default (`KEEP_ALIVE_INTERVAL` env var, milliseconds).
 
+Models with chat speech output can return `audio` in the final chat delta when `modalities` includes `"audio"` and `audio.format` is `"pcm16"`. The whole audio waveform is buffered until generation finishes. See [LFM3-Omni](/guides/models/model-family-notes/#lfm3-omni) for request and output details.
+
 Named events carry the agentic timeline:
 
 | Event | Body |

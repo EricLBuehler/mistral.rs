@@ -80,6 +80,8 @@ are omitted, thinking is enabled with no selected effort. Contradictory
 | `input_files` | `list[InputFile] \| None` | `None` |
 | `ignore_eos` | `bool` | `False` |
 | `adapter` | `str \| LoraAdapterGeneration \| None` | `None (keyword-only)` |
+| `modalities` | `list[Literal['text', 'audio']] \| None` | `None (keyword-only)` |
+| `audio` | `dict[str, str] \| None` | `None (keyword-only)` |
 
 
 ## `CompletionRequest`

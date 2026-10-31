@@ -5,6 +5,11 @@ use crate::{layers::Activation, serde_default_fn};
 serde_default_fn!(f64, default_projector_layer_norm_eps, 1e-6);
 serde_default_fn!(bool, default_true, true);
 
+const VISION_START_TOKEN_ID: u32 = 125_009;
+const VISION_END_TOKEN_ID: u32 = 125_010;
+serde_default_fn!(u32, default_vision_start_token_id, VISION_START_TOKEN_ID);
+serde_default_fn!(u32, default_vision_end_token_id, VISION_END_TOKEN_ID);
+
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
 pub enum LayerType {
     #[serde(rename = "conv")]
@@ -41,7 +46,9 @@ pub struct Config {
     pub vision_config: VisionConfig,
     pub image_token_id: u32,
     pub video_token_id: u32,
+    #[serde(default = "default_vision_start_token_id")]
     pub vision_start_token_id: u32,
+    #[serde(default = "default_vision_end_token_id")]
     pub vision_end_token_id: u32,
     pub projector_hidden_act: Activation,
     pub projector_hidden_size: usize,

@@ -63,6 +63,7 @@ pub fn parse_request(
     validate_model_name(&oairequest.model, state.clone())?;
 
     let request = Request::Normal(Box::new(NormalRequest {
+        audio_output: None,
         id: state.next_request_id(),
         queued_at: None,
         messages: RequestMessage::SpeechGeneration {

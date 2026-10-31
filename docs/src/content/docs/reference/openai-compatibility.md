@@ -28,6 +28,8 @@ Loaded dynamic LoRA aliases receive stable qualified model-card IDs from `GET /v
 
 ### Implemented with deviation
 
+- `modalities`, `audio`: models with chat speech output, such as [LFM3-Omni](/guides/models/model-family-notes/#lfm3-omni), support `["audio"]` or `["text", "audio"]`, WAV or PCM16, and the fixed `"default"` voice. Streaming requires PCM16 and delivers buffered audio in the final `delta.audio`; it does not stream speech incrementally. Output is base64 in `message.audio.data` or `delta.audio.data`. Audio output cannot be combined with tools, constrained decoding, custom logits processors, or logprobs.
+
 - `tool_choice`: `"auto"`, `"none"`, `"required"`, Chat Completions specific function objects (`{"type":"function","function":{"name":"..."}}`), Responses-style specific function objects (`{"type":"function","name":"..."}`), and `{"type":"allowed_tools","mode":"auto"|"required","tools":[{"type":"function","name":"..."}]}` work for function tools. `"required"` rejects requests with no available tools.
 - `tools[*].function.strict`: accepted on function tools. When `true`, mistral.rs constrains generated tool arguments to the tool's `parameters` JSON Schema. See [tool calling](/guides/agents/tool-calling-basics/).
 - `tools[*].type="code_interpreter"`: accepted as the OpenAI-compatible opt-in for the built-in Python executor. The server must be started with code execution enabled. The only supported container form is `{"type":"auto"}`. Container ids, `container.file_ids`, `container.memory_limit`, and OpenAI container lifecycle endpoints are not supported.
@@ -49,7 +51,7 @@ Accepted alongside the base Chat Completions fields. Several are mistral.rs exte
 - `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`: DRY sampling parameters.
 - `grammar`: llguidance constraints beyond JSON schemas.
 - `reasoning_effort`: `off`, `low`, `medium`, `high`, or `xhigh`. `none` is accepted as an alias for `off`. Values are trimmed and case-insensitive.
-- `enable_thinking`: legacy boolean toggle. If both controls are omitted, mistral.rs enables thinking and leaves the effort unspecified. An explicit positive effort enables thinking; `off` disables it. Contradictory pairs such as `reasoning_effort: "off"` with `enable_thinking: true` return a validation error.
+- `enable_thinking`: legacy boolean toggle. If both controls are omitted, mistral.rs enables thinking for text output and disables it for speech output, leaving the effort unspecified. An explicit positive effort enables thinking; `off` disables it. Contradictory pairs such as `reasoning_effort: "off"` with `enable_thinking: true` return a validation error.
 
 The selected effort is passed to the chat template as both `reasoning_effort` and the compatibility name `reasoning_strength`. The template determines how each tier affects the model; it may treat positive tiers alike or ignore controls it does not use. The Python SDK uses the same values and defaults.
 - `web_search_options`: search tool configuration (de facto OpenAI field, not yet universal).

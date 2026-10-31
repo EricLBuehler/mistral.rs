@@ -40,6 +40,162 @@ pub enum ImageGenerationResponseFormat {
 
 pub type MessageContent = Either<String, Vec<IndexMap<String, Value>>>;
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub enum ChatAudioMode {
+    Audio,
+    TextAudio,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub enum ChatAudioFormat {
+    Wav,
+    Pcm16,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChatAudioRequest {
+    pub mode: ChatAudioMode,
+    pub format: ChatAudioFormat,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub struct ChatAudioConfig {
+    pub format: ChatAudioFormat,
+    pub voice: Option<String>,
+}
+
+impl ChatAudioRequest {
+    pub fn from_modalities(
+        modalities: Option<&[String]>,
+        audio: Option<&ChatAudioConfig>,
+        streaming: bool,
+    ) -> anyhow::Result<Option<Self>> {
+        let Some(modalities) = modalities else {
+            anyhow::ensure!(
+                audio.is_none(),
+                "audio requires modalities containing audio"
+            );
+            return Ok(None);
+        };
+        let mut text = false;
+        let mut speech = false;
+        for modality in modalities {
+            match modality.as_str() {
+                "text" if !text => text = true,
+                "audio" if !speech => speech = true,
+                _ => anyhow::bail!("modalities must contain unique text and/or audio entries"),
+            }
+        }
+        anyhow::ensure!(text || speech, "modalities must not be empty");
+        if !speech {
+            anyhow::ensure!(
+                audio.is_none(),
+                "audio requires modalities containing audio"
+            );
+            return Ok(None);
+        }
+        let audio = audio.ok_or_else(|| anyhow::anyhow!("Audio output requires audio.format"))?;
+        anyhow::ensure!(
+            audio
+                .voice
+                .as_deref()
+                .is_none_or(|voice| voice == "default"),
+            "This model uses its default voice; set audio.voice to default or omit it"
+        );
+        anyhow::ensure!(
+            !streaming || audio.format == ChatAudioFormat::Pcm16,
+            "Streaming audio requires audio.format=pcm16"
+        );
+        Ok(Some(Self {
+            mode: if text {
+                ChatAudioMode::TextAudio
+            } else {
+                ChatAudioMode::Audio
+            },
+            format: audio.format,
+        }))
+    }
+}
+
+#[cfg(test)]
+mod chat_audio_tests {
+    use super::*;
+
+    #[test]
+    fn modalities_select_audio_only_or_interleaved_output() -> anyhow::Result<()> {
+        let config = ChatAudioConfig {
+            format: ChatAudioFormat::Wav,
+            voice: None,
+        };
+        assert_eq!(ChatAudioRequest::from_modalities(None, None, false)?, None);
+        assert_eq!(
+            ChatAudioRequest::from_modalities(Some(&["text".into()]), None, false)?,
+            None
+        );
+        assert_eq!(
+            ChatAudioRequest::from_modalities(Some(&["audio".into()]), Some(&config), false)?,
+            Some(ChatAudioRequest {
+                mode: ChatAudioMode::Audio,
+                format: ChatAudioFormat::Wav
+            })
+        );
+        let config = ChatAudioConfig {
+            format: ChatAudioFormat::Pcm16,
+            voice: Some("default".into()),
+        };
+        assert_eq!(
+            ChatAudioRequest::from_modalities(
+                Some(&["text".into(), "audio".into()]),
+                Some(&config),
+                true
+            )?
+            .unwrap()
+            .mode,
+            ChatAudioMode::TextAudio
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_audio_request_combinations_are_rejected() {
+        let config = ChatAudioConfig {
+            format: ChatAudioFormat::Wav,
+            voice: None,
+        };
+        assert!(ChatAudioRequest::from_modalities(None, Some(&config), false).is_err());
+        assert!(ChatAudioRequest::from_modalities(Some(&[]), None, false).is_err());
+        assert!(
+            ChatAudioRequest::from_modalities(Some(&["text".into()]), Some(&config), false)
+                .is_err()
+        );
+        assert!(ChatAudioRequest::from_modalities(Some(&["image".into()]), None, false).is_err());
+        assert!(ChatAudioRequest::from_modalities(Some(&["audio".into()]), None, false).is_err());
+        assert!(
+            ChatAudioRequest::from_modalities(Some(&["audio".into()]), Some(&config), true)
+                .is_err()
+        );
+        assert!(ChatAudioRequest::from_modalities(
+            Some(&["text".into(), "text".into()]),
+            None,
+            false
+        )
+        .is_err());
+        let config = ChatAudioConfig {
+            voice: Some("custom".into()),
+            ..config
+        };
+        assert!(
+            ChatAudioRequest::from_modalities(Some(&["audio".into()]), Some(&config), false)
+                .is_err()
+        );
+    }
+}
+
 /// Reasoning effort passed to chat templates. `none` is a parse-only alias for `off`.
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq, eq_int))]
@@ -413,6 +569,8 @@ impl WebSearchOptions {
 /// - `return_raw_logits`: Return raw logits.
 /// - `truncate_sequence`: Whether to truncate the prompt if it exceeds the model's maximum context length.
 pub struct NormalRequest {
+    #[serde(default)]
+    pub audio_output: Option<ChatAudioRequest>,
     pub messages: RequestMessage,
     pub sampling_params: SamplingParams,
     /// Initializes an independent sampling stream for every generated choice.
@@ -503,6 +661,7 @@ impl NormalRequest {
     ) -> Self {
         Self {
             messages,
+            audio_output: None,
             sampling_params,
             seed: None,
             response,

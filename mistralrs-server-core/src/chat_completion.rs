@@ -583,6 +583,26 @@ pub async fn parse_request(
     // Validate that the requested model matches the loaded model
     validate_model_name(&oairequest.model, state.clone())?;
 
+    let audio_output = mistralrs_core::ChatAudioRequest::from_modalities(
+        oairequest.modalities.as_deref(),
+        oairequest.audio.as_ref(),
+        oairequest.stream.unwrap_or(false),
+    )?;
+    if audio_output.is_some() {
+        let model = (oairequest.model != "default").then_some(oairequest.model.as_str());
+        let config = state.config(model).map_err(anyhow::Error::msg)?;
+        anyhow::ensure!(
+            matches!(
+                config.category,
+                ModelCategory::Text | ModelCategory::Multimodal { .. }
+            ) && config
+                .modalities
+                .output
+                .contains(&mistralrs_core::SupportedModality::Audio),
+            "The requested model does not support audio output"
+        );
+    }
+
     let mut enable_thinking = oairequest.enable_thinking;
     let mut reasoning_effort = oairequest.reasoning_effort.clone();
     if let Some(kwargs) = &oairequest.chat_template_kwargs {
@@ -1047,6 +1067,7 @@ pub async fn parse_request(
 
     Ok((
         Request::Normal(Box::new(NormalRequest {
+            audio_output,
             id: state.next_request_id(),
             queued_at: None,
             messages,

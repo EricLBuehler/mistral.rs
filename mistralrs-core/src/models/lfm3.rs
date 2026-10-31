@@ -1026,6 +1026,24 @@ impl Model {
         input_embeds: Tensor,
         ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
+        let hidden = self.forward_hidden(input_ids, input_embeds, ctx)?;
+        self.logits_from_hidden(&hidden, ctx)
+    }
+
+    pub(crate) fn logits_from_hidden(
+        &self,
+        hidden: &Tensor,
+        ctx: &ModelForwardContext<'_>,
+    ) -> Result<Tensor> {
+        ctx.lm_head(&*self.lm_head, hidden)
+    }
+
+    pub(crate) fn forward_hidden(
+        &self,
+        input_ids: &Tensor,
+        input_embeds: Tensor,
+        ctx: &mut ModelForwardContext<'_>,
+    ) -> Result<Tensor> {
         let mut x = input_embeds;
         let recurrent_metadata = ctx.recurrent_metadata().cloned();
         let has_conv_layers = self.layer_types.contains(&LayerType::Conv);
@@ -1170,8 +1188,7 @@ impl Model {
 
         let x = x.to_device(&self.device)?;
         let x = self.embedding_norm.forward(&x)?;
-        let x = ctx.logits(&x)?;
-        ctx.lm_head(&*self.lm_head, &x)
+        ctx.logits(&x)
     }
 
     pub fn residual_tensors_m(&self, uvb_m: UnVarBuilder) -> Vec<(String, Tensor)> {

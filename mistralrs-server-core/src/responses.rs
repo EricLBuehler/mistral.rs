@@ -1974,6 +1974,8 @@ async fn parse_openresponses_request(
 
     // Convert to ChatCompletionRequest
     let chat_request = ChatCompletionRequest {
+        modalities: None,
+        audio: None,
         messages: Either::Left(final_messages.clone()),
         model: oairequest.model,
         adapter: oairequest.adapter,

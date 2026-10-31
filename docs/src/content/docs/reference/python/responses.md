@@ -76,6 +76,7 @@ sidebar:
 | `role` | `str` | required |
 | `tool_calls` | `list[ToolCallResponse] \| None` | `None` |
 | `reasoning_content` | `str \| None` | `None` |
+| `audio` | `ChatAudioResponse \| None` | `None` |
 
 
 ## `ResponseMessage`
@@ -86,6 +87,17 @@ sidebar:
 | `role` | `str` | required |
 | `tool_calls` | `list[ToolCallResponse] \| None` | required |
 | `reasoning_content` | `str \| None` | `None` |
+| `audio` | `ChatAudioResponse \| None` | `None` |
+
+
+## `ChatAudioResponse`
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `id` | `str \| None` | `None` |
+| `data` | `str \| None` | `None` |
+| `expires_at` | `int \| None` | `None` |
+| `transcript` | `str \| None` | `None` |
 
 
 ## `CompletionResponse`

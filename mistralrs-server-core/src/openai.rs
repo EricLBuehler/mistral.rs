@@ -1125,6 +1125,10 @@ fn normalize_openai_tools(
 /// Chat completion request following OpenAI's specification
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct ChatCompletionRequest {
+    /// Output modalities: text (default), audio, or both.
+    pub modalities: Option<Vec<String>>,
+    /// Audio format and optional default voice for speech output.
+    pub audio: Option<mistralrs_core::ChatAudioConfig>,
     /// The conversation so far, or a single raw prompt string.
     #[schema(
         schema_with = messages_schema,
@@ -1342,6 +1346,7 @@ pub struct CompletionUsageResponse {
 
 #[derive(Debug, ToSchema)]
 pub struct ChatCompletionResponseMessage {
+    pub audio: Option<mistralrs_core::ChatAudioResponse>,
     pub content: Option<String>,
     pub role: String,
     pub tool_calls: Option<Vec<Value>>,
@@ -1374,6 +1379,7 @@ pub struct ChatCompletionResponseBody {
 
 #[derive(Debug, ToSchema)]
 pub struct ChatCompletionChunkDelta {
+    pub audio: Option<mistralrs_core::ChatAudioResponse>,
     pub content: Option<String>,
     pub role: String,
     pub tool_calls: Option<Vec<Value>>,

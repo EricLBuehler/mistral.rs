@@ -16,6 +16,9 @@ use serde_json::{json, Value};
 ///
 /// Implemented by [`TextMessages`], [`MultimodalMessages`], and [`RequestBuilder`].
 pub trait RequestLike {
+    fn audio_output(&self) -> Option<ChatAudioRequest> {
+        None
+    }
     /// Borrow the current list of chat messages.
     fn messages_ref(&self) -> &[IndexMap<String, MessageContent>];
     /// Borrow the current list of images (empty for text-only requests).
@@ -566,6 +569,7 @@ impl RequestLike for MultimodalMessages {
 /// - Sampling
 /// - Enable thinking for models that support the configuration
 pub struct RequestBuilder {
+    audio_output: Option<ChatAudioRequest>,
     messages: Vec<IndexMap<String, MessageContent>>,
     images: Vec<DynamicImage>,
     audios: Vec<AudioInput>,
@@ -611,6 +615,7 @@ impl From<TextMessages> for RequestBuilder {
             logits_processors: Vec::new(),
             adapter: None,
             return_logprobs: false,
+            audio_output: None,
             constraint: Constraint::None,
             tools: Vec::new(),
             tool_choice: ToolChoice::Auto,
@@ -645,6 +650,7 @@ impl From<MultimodalMessages> for RequestBuilder {
             logits_processors: Vec::new(),
             adapter: None,
             return_logprobs: false,
+            audio_output: None,
             constraint: Constraint::None,
             tools: Vec::new(),
             tool_choice: ToolChoice::Auto,
@@ -670,6 +676,12 @@ impl From<MultimodalMessages> for RequestBuilder {
 }
 
 impl RequestBuilder {
+    /// Enable speech output; streaming requests require PCM16.
+    pub fn with_audio_output(mut self, mode: ChatAudioMode, format: ChatAudioFormat) -> Self {
+        self.audio_output = Some(ChatAudioRequest { mode, format });
+        self
+    }
+
     /// Create an empty request builder with deterministic sampling defaults.
     pub fn new() -> Self {
         Self {
@@ -680,6 +692,7 @@ impl RequestBuilder {
             logits_processors: Vec::new(),
             adapter: None,
             return_logprobs: false,
+            audio_output: None,
             constraint: Constraint::None,
             tools: Vec::new(),
             tool_choice: ToolChoice::Auto,
@@ -1181,6 +1194,9 @@ impl RequestBuilder {
 }
 
 impl RequestLike for RequestBuilder {
+    fn audio_output(&self) -> Option<ChatAudioRequest> {
+        self.audio_output
+    }
     fn messages_ref(&self) -> &[IndexMap<String, MessageContent>] {
         &self.messages
     }

@@ -235,6 +235,7 @@ pub fn parse_request(
 
     Ok((
         Request::Normal(Box::new(NormalRequest {
+            audio_output: None,
             id: state.next_request_id(),
             queued_at: None,
             messages: RequestMessage::Completion {

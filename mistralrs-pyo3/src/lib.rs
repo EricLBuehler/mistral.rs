@@ -1584,6 +1584,7 @@ impl Runner {
             );
 
             let model_request = _Request::Normal(Box::new(NormalRequest {
+                audio_output: request.audio_output,
                 id: next_request_id(),
                 queued_at: None,
                 messages,
@@ -1698,6 +1699,7 @@ impl Runner {
                     let request_id = next_request_id();
 
                     let model_request = _Request::Normal(Box::new(NormalRequest {
+                        audio_output: None,
                         id: request_id,
                         queued_at: None,
                         messages: message,
@@ -1811,6 +1813,7 @@ impl Runner {
             };
 
             let model_request = _Request::Normal(Box::new(NormalRequest {
+                audio_output: None,
                 id: next_request_id(),
                 queued_at: None,
                 messages: RequestMessage::Completion {
@@ -1899,6 +1902,7 @@ impl Runner {
         let (tx, mut rx) = channel(1);
 
         let request = _Request::Normal(Box::new(NormalRequest {
+            audio_output: None,
             id: 0,
             queued_at: None,
             messages: RequestMessage::ImageGeneration {
@@ -1970,6 +1974,7 @@ impl Runner {
         let (tx, mut rx) = channel(1);
 
         let request = _Request::Normal(Box::new(NormalRequest {
+            audio_output: None,
             id: 0,
             queued_at: None,
             messages: RequestMessage::SpeechGeneration { prompt },
@@ -2545,6 +2550,7 @@ impl Runner {
             );
 
             let model_request = _Request::Normal(Box::new(NormalRequest {
+                audio_output: request.audio_output,
                 id: next_request_id(),
                 queued_at: None,
                 messages,
@@ -2665,6 +2671,7 @@ impl Runner {
             };
 
             let model_request = _Request::Normal(Box::new(NormalRequest {
+                audio_output: None,
                 id: next_request_id(),
                 queued_at: None,
                 messages: RequestMessage::Completion {
@@ -3147,6 +3154,7 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SpeechLoaderType>()?;
 
     m.add_class::<mistralrs_core::ResponseMessage>()?;
+    m.add_class::<mistralrs_core::ChatAudioResponse>()?;
     m.add_class::<mistralrs_core::Delta>()?;
     m.add_class::<mistralrs_core::ResponseLogprob>()?;
     m.add_class::<mistralrs_core::Logprobs>()?;

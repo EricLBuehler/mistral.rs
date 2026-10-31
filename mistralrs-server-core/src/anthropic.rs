@@ -601,6 +601,8 @@ impl AnthropicMessagesRequest {
         }
 
         Ok(ChatCompletionRequest {
+            modalities: None,
+            audio: None,
             messages: Either::Left(messages),
             model: self.model,
             adapter: None,
@@ -2076,6 +2078,7 @@ mod tests {
                 stop_sequence: stop_sequence.map(str::to_string),
                 index: 0,
                 delta: Delta {
+                    audio: None,
                     content: text.map(str::to_string),
                     role: "assistant".to_string(),
                     tool_calls,
@@ -2656,6 +2659,7 @@ mod tests {
                 stop_sequence: Some("END".to_string()),
                 index: 0,
                 message: ResponseMessage {
+                    audio: None,
                     content: Some("done".to_string()),
                     role: "assistant".to_string(),
                     tool_calls: Some(vec![ToolCallResponse {

@@ -198,6 +198,8 @@ class ChatCompletionRequest:
     input_files: list[InputFile] | None = None
     ignore_eos: bool = False
     adapter: str | LoraAdapterGeneration | None = field(default=None, kw_only=True)
+    modalities: list[Literal["text", "audio"]] | None = field(default=None, kw_only=True)
+    audio: dict[str, str] | None = field(default=None, kw_only=True)
 
 @dataclass
 class CompletionRequest:
@@ -284,6 +286,8 @@ class MultimodalArchitecture(Enum):
     LLaVA = "llava"
     Lfm2Vl = "lfm2vl"
     Lfm3Vl = "lfm3vl"
+    Lfm3Audio = "lfm3audio"
+    Lfm3Omni = "lfm3omni"
     VLlama = "vllama"
     Qwen2VL = "qwen2vl"
     Idefics3 = "idefics3"
@@ -1170,11 +1174,19 @@ class ToolCallResponse:
     function: CalledFunction
 
 @dataclass
+class ChatAudioResponse:
+    id: str | None = None
+    data: str | None = None
+    expires_at: int | None = None
+    transcript: str | None = None
+
+@dataclass
 class ResponseMessage:
     content: str | None
     role: str
     tool_calls: list[ToolCallResponse] | None
     reasoning_content: str | None = None
+    audio: ChatAudioResponse | None = None
 
 @dataclass
 class TopLogprob:
@@ -1229,6 +1241,7 @@ class Delta:
     role: str
     tool_calls: list[ToolCallResponse] | None = None
     reasoning_content: str | None = None
+    audio: ChatAudioResponse | None = None
 
 @dataclass
 class ChunkChoice:

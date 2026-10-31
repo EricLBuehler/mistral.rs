@@ -40,6 +40,18 @@ fn tools_for_chat_template(
     }
 }
 
+fn chat_enable_thinking(
+    audio_output: bool,
+    enable_thinking: Option<bool>,
+    reasoning_effort: Option<crate::ReasoningEffort>,
+) -> Option<bool> {
+    if audio_output && reasoning_effort.is_none() {
+        enable_thinking.or(Some(false))
+    } else {
+        enable_thinking
+    }
+}
+
 fn choice_seed(seed: Option<u64>, response_index: usize) -> Option<u64> {
     seed.map(|seed| {
         let stream = u64::try_from(response_index).expect("choice index must fit into u64");
@@ -165,6 +177,47 @@ impl Engine {
             request.messages,
             RequestMessage::Chat { .. } | RequestMessage::MultimodalChat { .. }
         );
+        if let Some(audio) = request.audio_output {
+            let supports_audio = {
+                let pipeline = get_mut_arcmutex!(self.pipeline);
+                matches!(
+                    pipeline.category(),
+                    ModelCategory::Text | ModelCategory::Multimodal { .. }
+                ) && pipeline
+                    .get_metadata()
+                    .modalities
+                    .output
+                    .contains(&crate::SupportedModality::Audio)
+            };
+            let error = if !is_chat || !supports_audio {
+                Some("The requested model does not support chat audio output")
+            } else if request.return_logprobs || request.return_raw_logits {
+                Some("Audio output does not support logprobs or raw logits")
+            } else if !matches!(request.constraint, crate::Constraint::None)
+                || request
+                    .tools
+                    .as_ref()
+                    .is_some_and(|tools| !tools.is_empty())
+                || request
+                    .logits_processors
+                    .as_ref()
+                    .is_some_and(|processors| !processors.is_empty())
+            {
+                Some("Audio output does not support tools, constrained decoding, or custom logits processors")
+            } else if request.is_streaming && audio.format != crate::ChatAudioFormat::Pcm16 {
+                Some("Streaming audio requires PCM16 output")
+            } else {
+                None
+            };
+            if let Some(error) = error {
+                request
+                    .response
+                    .send(Response::ValidationError(error.into()))
+                    .await
+                    .unwrap_or_else(|_| warn!("Receiver disconnected"));
+                return;
+            }
+        }
         let echo_prompt = matches!(
             request.messages,
             RequestMessage::Completion {
@@ -328,6 +381,11 @@ impl Engine {
                 enable_thinking,
                 reasoning_effort,
             } => {
+                let enable_thinking = chat_enable_thinking(
+                    request.audio_output.is_some(),
+                    enable_thinking,
+                    reasoning_effort,
+                );
                 let pipeline = &*get_mut_arcmutex!(self.pipeline);
                 let tools = tools_for_chat_template(
                     request.tools.as_deref(),
@@ -799,6 +857,7 @@ impl Engine {
                 eos_toks,
                 choice_seed(request.seed, response_index),
             );
+            seq.set_audio_output(request.audio_output);
             if let Some(adapter_lease) = &adapter_lease {
                 seq.bind_adapter(adapter_lease.clone());
             }
@@ -847,11 +906,8 @@ impl Engine {
                 }
             }
 
-            // Run the inputs processor to normalize multimodal prompts before prefix-cache lookup.
-            // Rely on the sequence's attached modalities rather than just the top-level request
-            // fields so historical images/audios in a reconstructed multi-turn conversation
-            // still get their prompt rewrite and mm-feature setup before cache matching.
-            if seq.has_images() || seq.has_audios() || seq.has_videos() {
+            // Media expansion and speech output markers must precede prefix matching and scheduler chunk boundaries.
+            if seq.needs_prompt_planning() {
                 let pipeline = get_mut_arcmutex!(self.pipeline);
                 let result = pipeline
                     .get_processor()
@@ -1141,6 +1197,28 @@ mod tests {
     use ahash::AHashMap;
     use indexmap::IndexMap;
     use tokenizers::{models::wordlevel::WordLevel, Tokenizer};
+
+    #[test]
+    fn speech_defaults_disable_thinking_without_overriding_explicit_controls() {
+        use crate::ReasoningEffort;
+        assert_eq!(chat_enable_thinking(false, None, None), None);
+        assert_eq!(chat_enable_thinking(true, None, None), Some(false));
+        for enabled in [false, true] {
+            assert_eq!(
+                chat_enable_thinking(true, Some(enabled), None),
+                Some(enabled)
+            );
+        }
+        for effort in [ReasoningEffort::Off, ReasoningEffort::High] {
+            assert_eq!(chat_enable_thinking(true, None, Some(effort)), None);
+            for enabled in [false, true] {
+                assert_eq!(
+                    chat_enable_thinking(true, Some(enabled), Some(effort)),
+                    Some(enabled)
+                );
+            }
+        }
+    }
 
     #[test]
     fn paged_requests_do_not_allocate_a_second_sequence_kv_cache() {

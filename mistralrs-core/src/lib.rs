@@ -188,12 +188,12 @@ pub use pipeline::{
 };
 pub use request::{
     resolve_reasoning_controls, ApproximateUserLocation, CalibrationAction, CalibrationRequest,
-    Constraint, DetokenizationRequest, ImageGenerationResponseFormat, LlguidanceGrammar,
-    MessageContent, NormalRequest, ReasoningControlError, ReasoningEffort,
-    ReasoningEffortParseError, Request, RequestMessage, ResolvedReasoningControls,
-    SearchContextSize, TokenizationRequest, WebSearchContentType, WebSearchFilters,
-    WebSearchImageSettings, WebSearchOptions, WebSearchReturnTokenBudget, WebSearchUserLocation,
-    DEFAULT_ENABLE_THINKING,
+    ChatAudioConfig, ChatAudioFormat, ChatAudioMode, ChatAudioRequest, Constraint,
+    DetokenizationRequest, ImageGenerationResponseFormat, LlguidanceGrammar, MessageContent,
+    NormalRequest, ReasoningControlError, ReasoningEffort, ReasoningEffortParseError, Request,
+    RequestMessage, ResolvedReasoningControls, SearchContextSize, TokenizationRequest,
+    WebSearchContentType, WebSearchFilters, WebSearchImageSettings, WebSearchOptions,
+    WebSearchReturnTokenBudget, WebSearchUserLocation, DEFAULT_ENABLE_THINKING,
 };
 pub use resource_plan::{
     plan_paged_kv, PagedKvModelRequest, PagedKvPlan, PagedKvPolicy, RuntimeResourcePlanOptions,
@@ -1640,6 +1640,7 @@ impl MistralRs {
             tokio::task::block_in_place(|| {
                 let (tx, mut rx) = channel(1);
                 let req = Request::Normal(Box::new(NormalRequest {
+                    audio_output: None,
                     id: 0,
                     queued_at: None,
                     messages: RequestMessage::Completion {

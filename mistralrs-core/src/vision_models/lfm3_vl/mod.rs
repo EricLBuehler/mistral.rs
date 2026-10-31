@@ -91,7 +91,7 @@ impl MultiModalProjector {
 }
 
 pub struct Lfm3VlModel {
-    language_model: crate::models::lfm3::Model,
+    pub(crate) language_model: crate::models::lfm3::Model,
     vision_tower: VisionModel,
     multi_modal_projector: MultiModalProjector,
     merge_size: usize,
@@ -135,6 +135,69 @@ impl Lfm3VlModel {
             merge_size: config.downsample_factor,
             encoder_cache: Mutex::new(EncoderCacheManager::new(ENCODER_CACHE_CAPACITY)),
         })
+    }
+
+    pub(crate) fn input_embeddings(
+        &self,
+        input_ids: &Tensor,
+        pixel_values: Option<Tensor>,
+        args: Lfm3VlSpecificArgs,
+    ) -> Result<Tensor> {
+        let Lfm3VlSpecificArgs {
+            pixel_values_videos,
+            image_grid_thw,
+            video_grid_thw,
+            image_hashes,
+            video_hashes,
+            continuous_img_pad,
+            continuous_vid_pad,
+            packed_layout,
+            ..
+        } = args;
+        let video_pixels = pixel_values_videos.or_else(|| {
+            (image_grid_thw.is_none() && video_grid_thw.is_some())
+                .then(|| pixel_values.clone())
+                .flatten()
+        });
+        let image_pixels = image_grid_thw.as_ref().and(pixel_values);
+        let mut input = self.language_model.embed(input_ids)?;
+        let mut packed_outputs: MultimodalEncoderOutputs = HashMap::new();
+        for (pixels, grid, hashes, spans, modality, kind) in [
+            (
+                image_pixels,
+                image_grid_thw,
+                image_hashes,
+                continuous_img_pad,
+                CacheModality::Image,
+                MultimodalKind::Image,
+            ),
+            (
+                video_pixels,
+                video_grid_thw,
+                video_hashes,
+                continuous_vid_pad,
+                CacheModality::Video,
+                MultimodalKind::Video,
+            ),
+        ] {
+            if let Some(pixels) = pixels {
+                let grid = grid.ok_or_else(|| {
+                    candle_core::Error::msg("LFM3-VL visual inputs require grid dimensions")
+                })?;
+                let outputs = self.encode(&pixels, &grid, &hashes, modality)?;
+                if packed_layout.is_some() {
+                    for (hash, values) in hashes.into_iter().zip(outputs) {
+                        packed_outputs.insert(MultimodalEncoderKey { kind, hash }, values);
+                    }
+                } else {
+                    input = Self::splice(&input, &outputs, &spans)?;
+                }
+            }
+        }
+        if let Some(layout) = packed_layout {
+            input = layout.splice_embeddings(&input, &packed_outputs)?;
+        }
+        Ok(input)
     }
 
     fn encode(
@@ -279,62 +342,10 @@ impl MultimodalModel for Lfm3VlModel {
         model_specific_args: Box<dyn std::any::Any>,
         ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        let Lfm3VlSpecificArgs {
-            pixel_values_videos,
-            image_grid_thw,
-            video_grid_thw,
-            image_hashes,
-            video_hashes,
-            continuous_img_pad,
-            continuous_vid_pad,
-            packed_layout,
-            ..
-        } = *model_specific_args
+        let args = *model_specific_args
             .downcast::<Lfm3VlSpecificArgs>()
             .expect("Cannot downcast LFM3-VL inputs");
-        let video_pixels = pixel_values_videos.or_else(|| {
-            (image_grid_thw.is_none() && video_grid_thw.is_some())
-                .then(|| pixel_values.clone())
-                .flatten()
-        });
-        let image_pixels = image_grid_thw.as_ref().and(pixel_values);
-        let mut input = self.language_model.embed(input_ids)?;
-        let mut packed_outputs: MultimodalEncoderOutputs = HashMap::new();
-        for (pixels, grid, hashes, spans, modality, kind) in [
-            (
-                image_pixels,
-                image_grid_thw,
-                image_hashes,
-                continuous_img_pad,
-                CacheModality::Image,
-                MultimodalKind::Image,
-            ),
-            (
-                video_pixels,
-                video_grid_thw,
-                video_hashes,
-                continuous_vid_pad,
-                CacheModality::Video,
-                MultimodalKind::Video,
-            ),
-        ] {
-            if let Some(pixels) = pixels {
-                let grid = grid.ok_or_else(|| {
-                    candle_core::Error::msg("LFM3-VL visual inputs require grid dimensions")
-                })?;
-                let outputs = self.encode(&pixels, &grid, &hashes, modality)?;
-                if packed_layout.is_some() {
-                    for (hash, values) in hashes.into_iter().zip(outputs) {
-                        packed_outputs.insert(MultimodalEncoderKey { kind, hash }, values);
-                    }
-                } else {
-                    input = Self::splice(&input, &outputs, &spans)?;
-                }
-            }
-        }
-        if let Some(layout) = packed_layout {
-            input = layout.splice_embeddings(&input, &packed_outputs)?;
-        }
+        let input = self.input_embeddings(input_ids, pixel_values, args)?;
         self.language_model.forward_embeds(input_ids, input, ctx)
     }
 

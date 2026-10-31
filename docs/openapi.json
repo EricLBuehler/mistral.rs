@@ -2721,6 +2721,61 @@
           }
         }
       },
+      "ChatAudioConfig": {
+        "type": "object",
+        "required": [
+          "format"
+        ],
+        "properties": {
+          "format": {
+            "$ref": "#/components/schemas/ChatAudioFormat"
+          },
+          "voice": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ChatAudioFormat": {
+        "type": "string",
+        "enum": [
+          "wav",
+          "pcm16"
+        ]
+      },
+      "ChatAudioResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expires_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "transcript": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "ChatCompletionChunkChoice": {
         "type": "object",
         "required": [
@@ -2750,6 +2805,16 @@
           "role"
         ],
         "properties": {
+          "audio": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ChatAudioResponse"
+              }
+            ]
+          },
           "content": {
             "type": [
               "string",
@@ -2856,6 +2921,17 @@
             ],
             "description": "Permission policy for agentic tools.",
             "example": null
+          },
+          "audio": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ChatAudioConfig",
+                "description": "Audio format and optional default voice for speech output."
+              }
+            ]
           },
           "chat_template_kwargs": {
             "type": [
@@ -3022,6 +3098,16 @@
             "format": "double",
             "description": "Drop tokens below this fraction of the top token's probability.",
             "example": null
+          },
+          "modalities": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Output modalities: text (default), audio, or both."
           },
           "model": {
             "type": "string",
@@ -3282,6 +3368,16 @@
           "role"
         ],
         "properties": {
+          "audio": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ChatAudioResponse"
+              }
+            ]
+          },
           "content": {
             "type": [
               "string",

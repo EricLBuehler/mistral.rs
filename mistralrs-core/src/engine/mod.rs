@@ -779,6 +779,7 @@ impl Engine {
             if let Err(err) = pipeline.release_speculative_sequences(&finished_sequence_ids) {
                 tracing::error!("Failed to release speculative sequence state: {err}");
             }
+            pipeline.release_generation_sequences(&finished_sequence_ids);
             if !recurrent_release_errors.is_empty() {
                 tracing::error!(
                     "Failed to release recurrent state for finished sequences: {}",

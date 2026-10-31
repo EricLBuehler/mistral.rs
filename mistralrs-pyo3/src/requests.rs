@@ -294,6 +294,7 @@ fn convert_token(value: i64) -> PyResult<u32> {
 #[derive(Debug)]
 /// An OpenAI API compatible chat completion request.
 pub struct ChatCompletionRequest {
+    pub(crate) audio_output: Option<mistralrs_core::ChatAudioRequest>,
     #[allow(clippy::type_complexity)]
     pub(crate) messages: Either<
         Vec<
@@ -399,6 +400,8 @@ impl ChatCompletionRequest {
         ignore_eos=false,
         *,
         adapter=None,
+        modalities=None,
+        audio=None,
     ))]
     fn new(
         messages: Py<PyAny>,
@@ -442,6 +445,8 @@ impl ChatCompletionRequest {
         input_files: Option<Vec<crate::files::InputFile>>,
         ignore_eos: bool,
         adapter: Option<Py<PyAny>>,
+        modalities: Option<Vec<String>>,
+        audio: Option<HashMap<String, String>>,
     ) -> PyResult<Self> {
         let messages = Python::with_gil(|py| {
             if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
@@ -499,8 +504,22 @@ impl ChatCompletionRequest {
         mistralrs_core::resolve_reasoning_controls(enable_thinking, reasoning_effort)
             .map_err(|error| PyValueError::new_err(error.to_string()))?;
 
+        let audio = audio
+            .map(|audio| {
+                serde_json::from_value::<mistralrs_core::ChatAudioConfig>(serde_json::json!(audio))
+            })
+            .transpose()
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        let audio_output = mistralrs_core::ChatAudioRequest::from_modalities(
+            modalities.as_deref(),
+            audio.as_ref(),
+            stream.unwrap_or(false),
+        )
+        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+
         Ok(Self {
             messages,
+            audio_output,
             _model: model,
             adapter: parse_adapter_selection(adapter)?,
             logit_bias,
@@ -597,7 +616,7 @@ mod tests {
         assert!(chat.starts_with("(messages, model, logprobs=False"));
         assert!(chat.contains("reasoning_effort=None"));
         assert!(chat.contains("ignore_eos=False"));
-        assert!(chat.ends_with("*, adapter=None)"));
+        assert!(chat.ends_with("*, adapter=None, modalities=None, audio=None)"));
     }
 
     #[test]
