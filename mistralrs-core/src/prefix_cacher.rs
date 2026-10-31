@@ -180,7 +180,6 @@ pub struct PrefixCacheManagerV2 {
     paged_recurrent_caches: IndexMap<Vec<BlockHash>, PagedRecurrentCacheEntry>,
     paged_recurrent_sequence_keys: IndexMap<BlockHash, Vec<BlockHash>>,
     paged_recurrent_bytes: usize,
-    paged_recurrent_reported: bool,
     paged_block_retention: Option<PrefixBlockRetention>,
     #[cfg(any(feature = "cuda", test))]
     runtime_memory_reservation: Option<Arc<crate::resource_plan::RuntimeMemoryReservation>>,
@@ -239,7 +238,6 @@ impl PrefixCacheManagerV2 {
             paged_recurrent_caches: IndexMap::new(),
             paged_recurrent_sequence_keys: IndexMap::new(),
             paged_recurrent_bytes: 0,
-            paged_recurrent_reported: false,
             paged_block_retention: None,
             #[cfg(any(feature = "cuda", test))]
             runtime_memory_reservation: None,
@@ -604,18 +602,6 @@ impl PrefixCacheManagerV2 {
             self.paged_recurrent_caches.len() <= self.paged_recurrent_sequence_keys.len()
                 && self.paged_recurrent_caches.len() <= self.paged_recurrent_capacity()
         );
-
-        if self.paged_recurrent_sequence_keys.len() == self.paged_recurrent_capacity()
-            && !self.paged_recurrent_reported
-        {
-            self.paged_recurrent_reported = true;
-            info!(
-                "Recurrent prefix cache full at {} sequences, {} checkpoints, {} MB. Adjust with `--prefix-cache-n`.",
-                self.paged_recurrent_sequence_keys.len(),
-                self.paged_recurrent_caches.len(),
-                self.paged_recurrent_bytes / (1024 * 1024),
-            );
-        }
     }
 
     /// Lookup a recurrent-state snapshot for a paged-attention block-hash prefix key.

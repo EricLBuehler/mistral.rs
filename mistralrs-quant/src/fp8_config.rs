@@ -254,6 +254,61 @@ pub enum CheckpointLinearSpec {
     Nvfp4(Nvfp4LinearSpec),
 }
 
+impl CheckpointLinearSpec {
+    pub fn bits(self) -> usize {
+        match self {
+            Self::Nvfp4(_) => NVFP4_BITS as usize,
+            Self::Fp8(_) | Self::Mxfp8(_) => FP8_BITS as usize,
+        }
+    }
+
+    pub fn pack_factor(self, dtype: DType) -> usize {
+        (dtype.size_in_bytes() * u8::BITS as usize / self.bits()).max(1)
+    }
+
+    /// Resident weight and scale bytes for a matrix or stack of matrices.
+    pub fn size_in_bytes(self, shape: &[usize]) -> CandleResult<usize> {
+        let matrices = shape[..shape.len() - 2].iter().product::<usize>();
+        let rows = shape[shape.len() - 2];
+        let cols = shape[shape.len() - 1];
+        let elements = rows * cols;
+        let float_bytes = DType::F32.size_in_bytes();
+        let matrix_bytes = match self {
+            Self::Nvfp4(spec) => {
+                elements.div_ceil(2)
+                    + rows * cols.div_ceil(NVFP4_BLOCK_SIZE)
+                    + rows * float_bytes
+                    + usize::from(spec.activation == Nvfp4ActivationMode::DynamicBlock)
+                        * float_bytes
+            }
+            Self::Mxfp8(spec) => elements + rows * cols.div_ceil(spec.group_size),
+            Self::Fp8(spec) => {
+                let scales = spec
+                    .weight_scale
+                    .logical_shape([rows, cols])?
+                    .iter()
+                    .product::<usize>();
+                elements
+                    + scales * float_bytes
+                    + usize::from(spec.activation == Fp8ActivationMode::StaticTensor) * float_bytes
+            }
+        };
+        Ok(matrices * matrix_bytes)
+    }
+
+    pub fn has_weight_scales(self, vb: &crate::ShardedVarBuilder) -> bool {
+        match self {
+            Self::Fp8(spec) => spec
+                .scale_names
+                .weight
+                .iter()
+                .any(|name| vb.contains_tensor(name)),
+            Self::Nvfp4(spec) => crate::Nvfp4Layer::has_checkpoint_scales(vb, spec),
+            Self::Mxfp8(_) => vb.contains_tensor("weight_scale"),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct CheckpointPattern(Arc<Regex>);
 

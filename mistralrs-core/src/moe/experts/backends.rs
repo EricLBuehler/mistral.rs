@@ -190,13 +190,10 @@ impl CutileFp8ExpertsWeights {
         if forward.lora.is_some() {
             candle_core::bail!("dynamic LoRA is not supported on cuTile FP8 experts");
         }
-        let activation = match config.act {
-            Activation::Silu => mistralrs_quant::GluActivationType::Silu,
-            Activation::NewGelu | Activation::GeluPytorchTanh => {
+        let activation = match gated_act(config.act)? {
+            mistralrs_quant::moe::cuda::GatedAct::Silu => mistralrs_quant::GluActivationType::Silu,
+            mistralrs_quant::moe::cuda::GatedAct::GeluTanh => {
                 mistralrs_quant::GluActivationType::Gelu
-            }
-            other => {
-                candle_core::bail!("activation {other:?} is not supported by cuTile FP8 experts")
             }
         };
         let dev = forward.xs_flat.device().as_cuda_device()?;

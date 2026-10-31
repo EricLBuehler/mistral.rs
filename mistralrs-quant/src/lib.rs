@@ -803,6 +803,15 @@ impl QuantizedConfig {
         }
     }
 
+    /// Explicit rules require quantized loading; global hints require scale tensors at this prefix.
+    pub fn has_checkpoint_quantization(&self, vb: &ShardedVarBuilder) -> Result<bool> {
+        let prefix = vb.prefix();
+        Ok(self.resolve_explicit_checkpoint(&prefix)?.is_some()
+            || self
+                .resolve_checkpoint(&prefix)?
+                .is_some_and(|spec| spec.has_weight_scales(vb)))
+    }
+
     pub fn name(&self) -> &'static str {
         match self {
             Self::GptqAwq { .. } => "gptq",
@@ -821,10 +830,7 @@ impl QuantizedConfig {
             Self::Fp8 { .. } => "8 bits".to_string(),
             Self::CompressedTensors { .. } | Self::ModelOpt { .. } => {
                 match self.resolve_checkpoint(&vb.prefix()) {
-                    Ok(Some(CheckpointLinearSpec::Nvfp4(_))) => "4 bits".to_string(),
-                    Ok(Some(CheckpointLinearSpec::Fp8(_) | CheckpointLinearSpec::Mxfp8(_))) => {
-                        "8 bits".to_string()
-                    }
+                    Ok(Some(spec)) => format!("{} bits", spec.bits()),
                     _ => "unquantized".to_string(),
                 }
             }

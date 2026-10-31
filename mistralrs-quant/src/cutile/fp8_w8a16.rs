@@ -37,15 +37,16 @@ mod kernels {
     use cutile::core::*;
 
     #[cutile::entry(unchecked_accesses = false)]
-    fn fp8_w8a16_post_bf16<
+    fn fp8_w8a16_post<
+        T: ElementType,
         const BM: i32,
         const BN: i32,
         const BK: i32,
         const MAP_SHAPE: [i32; 2],
         const LATENCY: i32,
     >(
-        mut y: MappedPartitionMut<bf16, { [BM, BN] }, MAP_SHAPE>,
-        x: &Tensor<bf16, { [-1, -1] }>,
+        mut y: MappedPartitionMut<T, { [BM, BN] }, MAP_SHAPE>,
+        x: &Tensor<T, { [-1, -1] }>,
         w: &Tensor<f8e4m3fn, { [-1, -1] }>,
         ws: &Tensor<f32, { [-1] }>,
     ) {
@@ -60,7 +61,7 @@ mod kernels {
             let (bid_m, bid_n) = out_idx.components();
             let mut acc: Tile<f32, { [BM, BN] }> = constant(0.0f32, const_shape![BM, BN]);
             for kg in 0..k {
-                let xt: Tile<bf16, { [BM, BK] }> = if LATENCY > 0 {
+                let xt: Tile<T, { [BM, BK] }> = if LATENCY > 0 {
                     px.load_pipelined::<LATENCY>([bid_m, kg])
                 } else {
                     px.load([bid_m, kg])
@@ -70,29 +71,30 @@ mod kernels {
                 } else {
                     pw.load([bid_n, kg])
                 };
-                let wt: Tile<bf16, { [BN, BK] }> = convert_tile(wt);
-                let wt: Tile<bf16, { [BK, BN] }> = permute(wt, transpose);
+                let wt: Tile<T, { [BN, BK] }> = convert_tile(wt);
+                let wt: Tile<T, { [BK, BN] }> = permute(wt, transpose);
                 acc = mmaf(xt, wt, acc);
             }
             let scale: Tile<f32, { [BN] }> = pws.load([bid_n]);
             let scale: Tile<f32, { [BM, BN] }> = scale
                 .reshape(const_shape![1, BN])
                 .broadcast(const_shape![BM, BN]);
-            let out: Tile<bf16, { [BM, BN] }> = convert_tile(acc * scale);
+            let out: Tile<T, { [BM, BN] }> = convert_tile(acc * scale);
             y.store(out, out_idx);
         }
     }
 
     #[cutile::entry(unchecked_accesses = false)]
-    fn fp8_w8a16_block_bf16<
+    fn fp8_w8a16_block<
+        T: ElementType,
         const BM: i32,
         const BN: i32,
         const BK: i32,
         const MAP_SHAPE: [i32; 2],
         const LATENCY: i32,
     >(
-        mut y: MappedPartitionMut<bf16, { [BM, BN] }, MAP_SHAPE>,
-        x: &Tensor<bf16, { [-1, -1] }>,
+        mut y: MappedPartitionMut<T, { [BM, BN] }, MAP_SHAPE>,
+        x: &Tensor<T, { [-1, -1] }>,
         w: &Tensor<f8e4m3fn, { [-1, -1] }>,
         ws: &Tensor<f32, { [-1, -1] }>,
     ) {
@@ -107,7 +109,7 @@ mod kernels {
             let (bid_m, bid_n) = out_idx.components();
             let mut acc: Tile<f32, { [BM, BN] }> = constant(0.0f32, const_shape![BM, BN]);
             for kg in 0..k {
-                let xt: Tile<bf16, { [BM, BK] }> = if LATENCY > 0 {
+                let xt: Tile<T, { [BM, BK] }> = if LATENCY > 0 {
                     px.load_pipelined::<LATENCY>([bid_m, kg])
                 } else {
                     px.load([bid_m, kg])
@@ -117,107 +119,14 @@ mod kernels {
                 } else {
                     pw.load([bid_n, kg])
                 };
-                let wt: Tile<bf16, { [BN, BK] }> = convert_tile(wt);
-                let wt: Tile<bf16, { [BK, BN] }> = permute(wt, transpose);
+                let wt: Tile<T, { [BN, BK] }> = convert_tile(wt);
+                let wt: Tile<T, { [BK, BN] }> = permute(wt, transpose);
                 let zero: Tile<f32, { [BM, BN] }> = constant(0.0f32, const_shape![BM, BN]);
                 let part: Tile<f32, { [BM, BN] }> = mmaf(xt, wt, zero);
                 let scale: Tile<f32, { [1, 1] }> = pws.load([bid_n, kg]);
                 acc = acc + part * scale.broadcast(const_shape![BM, BN]);
             }
-            let out: Tile<bf16, { [BM, BN] }> = convert_tile(acc);
-            y.store(out, out_idx);
-        }
-    }
-
-    #[cutile::entry(unchecked_accesses = false)]
-    fn fp8_w8a16_post_f16<
-        const BM: i32,
-        const BN: i32,
-        const BK: i32,
-        const MAP_SHAPE: [i32; 2],
-        const LATENCY: i32,
-    >(
-        mut y: MappedPartitionMut<f16, { [BM, BN] }, MAP_SHAPE>,
-        x: &Tensor<f16, { [-1, -1] }>,
-        w: &Tensor<f8e4m3fn, { [-1, -1] }>,
-        ws: &Tensor<f32, { [-1] }>,
-    ) {
-        let px = x.partition(const_shape![BM, BK]);
-        let pw = w.partition(const_shape![BN, BK]);
-        let k = num_tiles(&px, 1);
-        let pws = ws.partition(const_shape![BN]);
-        let transpose: Array<{ [1, 0] }> = Array::<{ [1, 0] }> {
-            dims: &[1i32, 0i32],
-        };
-        for out_idx in y.iter_indices() {
-            let (bid_m, bid_n) = out_idx.components();
-            let mut acc: Tile<f32, { [BM, BN] }> = constant(0.0f32, const_shape![BM, BN]);
-            for kg in 0..k {
-                let xt: Tile<f16, { [BM, BK] }> = if LATENCY > 0 {
-                    px.load_pipelined::<LATENCY>([bid_m, kg])
-                } else {
-                    px.load([bid_m, kg])
-                };
-                let wt: Tile<f8e4m3fn, { [BN, BK] }> = if LATENCY > 0 {
-                    pw.load_pipelined::<LATENCY>([bid_n, kg])
-                } else {
-                    pw.load([bid_n, kg])
-                };
-                let wt: Tile<f16, { [BN, BK] }> = convert_tile(wt);
-                let wt: Tile<f16, { [BK, BN] }> = permute(wt, transpose);
-                acc = mmaf(xt, wt, acc);
-            }
-            let scale: Tile<f32, { [BN] }> = pws.load([bid_n]);
-            let scale: Tile<f32, { [BM, BN] }> = scale
-                .reshape(const_shape![1, BN])
-                .broadcast(const_shape![BM, BN]);
-            let out: Tile<f16, { [BM, BN] }> = convert_tile(acc * scale);
-            y.store(out, out_idx);
-        }
-    }
-
-    #[cutile::entry(unchecked_accesses = false)]
-    fn fp8_w8a16_block_f16<
-        const BM: i32,
-        const BN: i32,
-        const BK: i32,
-        const MAP_SHAPE: [i32; 2],
-        const LATENCY: i32,
-    >(
-        mut y: MappedPartitionMut<f16, { [BM, BN] }, MAP_SHAPE>,
-        x: &Tensor<f16, { [-1, -1] }>,
-        w: &Tensor<f8e4m3fn, { [-1, -1] }>,
-        ws: &Tensor<f32, { [-1, -1] }>,
-    ) {
-        let px = x.partition(const_shape![BM, BK]);
-        let pw = w.partition(const_shape![BN, BK]);
-        let pws = ws.partition(const_shape![1, 1]);
-        let k = num_tiles(&px, 1);
-        let transpose: Array<{ [1, 0] }> = Array::<{ [1, 0] }> {
-            dims: &[1i32, 0i32],
-        };
-        for out_idx in y.iter_indices() {
-            let (bid_m, bid_n) = out_idx.components();
-            let mut acc: Tile<f32, { [BM, BN] }> = constant(0.0f32, const_shape![BM, BN]);
-            for kg in 0..k {
-                let xt: Tile<f16, { [BM, BK] }> = if LATENCY > 0 {
-                    px.load_pipelined::<LATENCY>([bid_m, kg])
-                } else {
-                    px.load([bid_m, kg])
-                };
-                let wt: Tile<f8e4m3fn, { [BN, BK] }> = if LATENCY > 0 {
-                    pw.load_pipelined::<LATENCY>([bid_n, kg])
-                } else {
-                    pw.load([bid_n, kg])
-                };
-                let wt: Tile<f16, { [BN, BK] }> = convert_tile(wt);
-                let wt: Tile<f16, { [BK, BN] }> = permute(wt, transpose);
-                let zero: Tile<f32, { [BM, BN] }> = constant(0.0f32, const_shape![BM, BN]);
-                let part: Tile<f32, { [BM, BN] }> = mmaf(xt, wt, zero);
-                let scale: Tile<f32, { [1, 1] }> = pws.load([bid_n, kg]);
-                acc = acc + part * scale.broadcast(const_shape![BM, BN]);
-            }
-            let out: Tile<f16, { [BM, BN] }> = convert_tile(acc);
+            let out: Tile<T, { [BM, BN] }> = convert_tile(acc);
             y.store(out, out_idx);
         }
     }
@@ -585,6 +494,7 @@ fn launch(operands: &GemmOperands<'_>, cfg: Fp8W8A16Config, compile_only: bool) 
     let blocks_per_sm = usize::try_from(cfg.blocks_per_sm).unwrap_or(1).max(1);
     let tile_blocks = (blocks_per_sm * device_multiprocessor_count(dev)).clamp(1, tiles) as u32;
     let generics = vec![
+        activation.dtype().as_str().to_owned(),
         cfg.bm.to_string(),
         BLOCK_SIZE.to_string(),
         BLOCK_SIZE.to_string(),
@@ -621,119 +531,68 @@ fn launch(operands: &GemmOperands<'_>, cfg: Fp8W8A16Config, compile_only: bool) 
         }};
     }
 
+    macro_rules! launch {
+        ($dtype:ty) => {{
+            let (a_addr, _a_guard) = slice_ptr_on_stream(
+                a_cuda.as_cuda_slice::<$dtype>()?,
+                a_layout.start_offset(),
+                &stream,
+            );
+            let mut output = unsafe { dev.alloc::<$dtype>(padded_rows * n)? };
+            let (out_addr, out_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
+            let (shape, strides) = dims(padded_rows, k);
+            let x = unsafe {
+                cutile::tensor::Tensor::<$dtype>::borrow_raw_parts(
+                    a_addr as CUdeviceptr,
+                    ordinal,
+                    shape,
+                    strides,
+                )
+            };
+            let (shape, strides) = dims(padded_rows, n);
+            let y = unsafe {
+                cutile::tensor::Tensor::<$dtype>::borrow_raw_parts(
+                    out_addr as CUdeviceptr,
+                    ordinal,
+                    shape,
+                    strides,
+                )
+            };
+            let mapped = y
+                .partition([bm, BLOCK_SIZE])
+                .map([cfg.map_m as usize, cfg.map_n as usize], tile_blocks);
+            match operands.scale_layout {
+                Fp8WeightScaleLayout::Tensor | Fp8WeightScaleLayout::Channel => run!(
+                    kernels::fp8_w8a16_post(
+                        mapped,
+                        Arc::new(x),
+                        Arc::new(w),
+                        Arc::new(post_scales())
+                    ),
+                    "W8A16 post-scale GEMM"
+                ),
+                Fp8WeightScaleLayout::Block([BLOCK_SIZE, BLOCK_SIZE]) => run!(
+                    kernels::fp8_w8a16_block(
+                        mapped,
+                        Arc::new(x),
+                        Arc::new(w),
+                        Arc::new(block_scales())
+                    ),
+                    "W8A16 block-scale GEMM"
+                ),
+                Fp8WeightScaleLayout::Block(_) => unreachable!(),
+            }
+            drop(out_guard);
+            Tensor::from((
+                Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
+                Shape::from_dims(&[padded_rows, n]),
+            ))
+        }};
+    }
+
     let output = match activation.dtype() {
-        DType::BF16 => {
-            let (a_addr, _a_guard) = slice_ptr_on_stream(
-                a_cuda.as_cuda_slice::<bf16>()?,
-                a_layout.start_offset(),
-                &stream,
-            );
-            let mut output = unsafe { dev.alloc::<bf16>(padded_rows * n)? };
-            let (out_addr, out_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
-            let (shape, strides) = dims(padded_rows, k);
-            let x = unsafe {
-                cutile::tensor::Tensor::<bf16>::borrow_raw_parts(
-                    a_addr as CUdeviceptr,
-                    ordinal,
-                    shape,
-                    strides,
-                )
-            };
-            let (shape, strides) = dims(padded_rows, n);
-            let y = unsafe {
-                cutile::tensor::Tensor::<bf16>::borrow_raw_parts(
-                    out_addr as CUdeviceptr,
-                    ordinal,
-                    shape,
-                    strides,
-                )
-            };
-            let mapped = y
-                .partition([bm, BLOCK_SIZE])
-                .map([cfg.map_m as usize, cfg.map_n as usize], tile_blocks);
-            match operands.scale_layout {
-                Fp8WeightScaleLayout::Tensor | Fp8WeightScaleLayout::Channel => run!(
-                    kernels::fp8_w8a16_post_bf16(
-                        mapped,
-                        Arc::new(x),
-                        Arc::new(w),
-                        Arc::new(post_scales())
-                    ),
-                    "W8A16 BF16 post-scale GEMM"
-                ),
-                Fp8WeightScaleLayout::Block([BLOCK_SIZE, BLOCK_SIZE]) => run!(
-                    kernels::fp8_w8a16_block_bf16(
-                        mapped,
-                        Arc::new(x),
-                        Arc::new(w),
-                        Arc::new(block_scales())
-                    ),
-                    "W8A16 BF16 block-scale GEMM"
-                ),
-                Fp8WeightScaleLayout::Block(_) => unreachable!(),
-            }
-            drop(out_guard);
-            Tensor::from((
-                Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
-                Shape::from_dims(&[padded_rows, n]),
-            ))
-        }
-        DType::F16 => {
-            let (a_addr, _a_guard) = slice_ptr_on_stream(
-                a_cuda.as_cuda_slice::<f16>()?,
-                a_layout.start_offset(),
-                &stream,
-            );
-            let mut output = unsafe { dev.alloc::<f16>(padded_rows * n)? };
-            let (out_addr, out_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
-            let (shape, strides) = dims(padded_rows, k);
-            let x = unsafe {
-                cutile::tensor::Tensor::<f16>::borrow_raw_parts(
-                    a_addr as CUdeviceptr,
-                    ordinal,
-                    shape,
-                    strides,
-                )
-            };
-            let (shape, strides) = dims(padded_rows, n);
-            let y = unsafe {
-                cutile::tensor::Tensor::<f16>::borrow_raw_parts(
-                    out_addr as CUdeviceptr,
-                    ordinal,
-                    shape,
-                    strides,
-                )
-            };
-            let mapped = y
-                .partition([bm, BLOCK_SIZE])
-                .map([cfg.map_m as usize, cfg.map_n as usize], tile_blocks);
-            match operands.scale_layout {
-                Fp8WeightScaleLayout::Tensor | Fp8WeightScaleLayout::Channel => run!(
-                    kernels::fp8_w8a16_post_f16(
-                        mapped,
-                        Arc::new(x),
-                        Arc::new(w),
-                        Arc::new(post_scales())
-                    ),
-                    "W8A16 F16 post-scale GEMM"
-                ),
-                Fp8WeightScaleLayout::Block([BLOCK_SIZE, BLOCK_SIZE]) => run!(
-                    kernels::fp8_w8a16_block_f16(
-                        mapped,
-                        Arc::new(x),
-                        Arc::new(w),
-                        Arc::new(block_scales())
-                    ),
-                    "W8A16 F16 block-scale GEMM"
-                ),
-                Fp8WeightScaleLayout::Block(_) => unreachable!(),
-            }
-            drop(out_guard);
-            Tensor::from((
-                Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
-                Shape::from_dims(&[padded_rows, n]),
-            ))
-        }
+        DType::BF16 => launch!(bf16),
+        DType::F16 => launch!(f16),
         _ => unreachable!(),
     };
     output.narrow(0, 0, rows)

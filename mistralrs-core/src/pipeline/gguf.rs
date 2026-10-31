@@ -11,20 +11,19 @@ use crate::device_map::{self, DeviceMapper};
 use crate::distributed::WorkerTransferData;
 use crate::gguf::{
     arch_registry::{
-        arch_spec, GgufMultimodalRoute, GgufSynthesisInputs, GgufTextRoute, SynthesizeFn,
+        arch_spec, GgufArchSpec, GgufMultimodalRoute, GgufSynthesisInputs, GgufTextRoute,
+        SynthesizeFn,
     },
     base_model::infer_hf_base_model_id,
     convert_gguf_metadata_to_hf_tokenizer, generation_config_from_metadata, get_gguf_chat_template,
     get_gguf_chat_template_from_metadata,
     multimodal_vision_registry::NativeMultimodalGguf,
-    muse_glimmer_bindings::normalize_muse_glimmer_config,
     normal_bindings::build_normal_bindings,
     normal_config::{
         normal_loader_hint_from_external_config, normalize_external_normal_config,
         synthesize_normal_config, validate_normal_config_tensor_inventory,
     },
     normal_registry::{resolve_native_adapter, GgufDescriptor, RopePairing},
-    qwen_multimodal_bindings::normalize_qwen_multimodal_config,
     validate_external_gguf_tokenizer, GgufTokenizerConversion,
 };
 use crate::gguf::{Content, GGUFArchitecture};
@@ -185,12 +184,15 @@ struct NativeMultimodalLoadArgs<'a> {
 }
 
 fn prepare_native_multimodal_config(
+    spec: &GgufArchSpec,
     loader_type: &MultimodalLoaderType,
     config: &str,
 ) -> Result<String> {
     let config = super::isq::sanitize_quantized_weight_source_config(config)?;
-    let config = normalize_qwen_multimodal_config(loader_type, &config)?;
-    normalize_muse_glimmer_config(loader_type, &config)
+    match spec.normalize_multimodal_config {
+        Some(normalize) => normalize(loader_type, &config),
+        None => Ok(config),
+    }
 }
 
 struct NativeNormalLoadArgs<'a> {
@@ -879,6 +881,7 @@ impl GGUFLoader {
             );
         }
         let config = prepare_native_multimodal_config(
+            spec,
             &loader_type,
             &fs::read_to_string(paths.get_config_filename())?,
         )?;
@@ -1621,9 +1624,10 @@ fn read_external_config(paths: &dyn ModelPaths) -> Result<Option<String>> {
 #[cfg(test)]
 mod tests {
     use super::{
-        preferred_hf_config, prepare_native_multimodal_config, resolve_tokenizer_candidate,
-        validate_legacy_gguf_adapter_qk_layout, validate_native_dynamic_lora, DynamicLoraConfig,
-        GGUFSpecificConfig, GgufTokenizerConversion, TokenizerFallback,
+        arch_spec, preferred_hf_config, prepare_native_multimodal_config,
+        resolve_tokenizer_candidate, validate_legacy_gguf_adapter_qk_layout,
+        validate_native_dynamic_lora, DynamicLoraConfig, GGUFSpecificConfig,
+        GgufTokenizerConversion, TokenizerFallback,
     };
     use crate::{
         gdn::GDN_V_HEAD_LAYOUT_CONFIG_KEY,
@@ -1686,23 +1690,25 @@ mod tests {
             },
             "vision_config":{"hidden_size":64}
         }"#;
-        for loader_type in [
-            MultimodalLoaderType::Gemma3,
-            MultimodalLoaderType::Gemma3n,
-            MultimodalLoaderType::Gemma4,
-            MultimodalLoaderType::Idefics3,
-            MultimodalLoaderType::Llama4,
-            MultimodalLoaderType::Lfm2Vl,
-            MultimodalLoaderType::Mistral3,
-            MultimodalLoaderType::MuseGlimmer,
-            MultimodalLoaderType::Qwen2VL,
-            MultimodalLoaderType::Qwen2_5VL,
-            MultimodalLoaderType::Qwen3VL,
-            MultimodalLoaderType::Qwen3VLMoE,
-            MultimodalLoaderType::Qwen3_5,
-            MultimodalLoaderType::Qwen3_5Moe,
+        for (architecture, loader_type) in [
+            ("gemma3", MultimodalLoaderType::Gemma3),
+            ("gemma3n", MultimodalLoaderType::Gemma3n),
+            ("gemma4", MultimodalLoaderType::Gemma4),
+            ("idefics3", MultimodalLoaderType::Idefics3),
+            ("llama4", MultimodalLoaderType::Llama4),
+            ("lfm2", MultimodalLoaderType::Lfm2Vl),
+            ("mistral3", MultimodalLoaderType::Mistral3),
+            ("muse-glimmer", MultimodalLoaderType::MuseGlimmer),
+            ("qwen2vl", MultimodalLoaderType::Qwen2VL),
+            ("qwen2vl", MultimodalLoaderType::Qwen2_5VL),
+            ("qwen3vl", MultimodalLoaderType::Qwen3VL),
+            ("qwen3vlmoe", MultimodalLoaderType::Qwen3VLMoE),
+            ("qwen35", MultimodalLoaderType::Qwen3_5),
+            ("qwen35moe", MultimodalLoaderType::Qwen3_5Moe),
         ] {
-            let config = prepare_native_multimodal_config(&loader_type, raw).unwrap();
+            let config =
+                prepare_native_multimodal_config(arch_spec(architecture), &loader_type, raw)
+                    .unwrap();
             let config: serde_json::Value = serde_json::from_str(&config).unwrap();
             assert!(config["quantization_config"].is_null(), "{loader_type:?}");
             assert!(

@@ -4,8 +4,7 @@ use std::sync::Arc;
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::{Embedding, LayerNorm, LayerNormConfig, Module};
 use mistralrs_quant::{
-    CheckpointLinearSpec, Nvfp4Layer, QuantMethod, QuantMethodConfig, QuantizedConfig,
-    ShardedVarBuilder, UnquantLinear,
+    QuantMethod, QuantMethodConfig, QuantizedConfig, ShardedVarBuilder, UnquantLinear,
 };
 
 use crate::{
@@ -24,19 +23,7 @@ fn vision_linear(
     vb: ShardedVarBuilder,
 ) -> Result<Arc<dyn QuantMethod>> {
     let configured = if let Some(config) = quantization {
-        config.resolve_explicit_checkpoint(&vb.prefix())?.is_some()
-            || match config.resolve_checkpoint(&vb.prefix())? {
-                Some(CheckpointLinearSpec::Fp8(spec)) => spec
-                    .scale_names
-                    .weight
-                    .iter()
-                    .any(|name| vb.contains_tensor(name)),
-                Some(CheckpointLinearSpec::Nvfp4(spec)) => {
-                    Nvfp4Layer::has_checkpoint_scales(&vb, spec)
-                }
-                Some(CheckpointLinearSpec::Mxfp8(_)) => vb.contains_tensor("weight_scale"),
-                None => false,
-            }
+        config.has_checkpoint_quantization(&vb)?
     } else {
         false
     };

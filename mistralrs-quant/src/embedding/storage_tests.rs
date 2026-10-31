@@ -10,6 +10,12 @@ const MAPPED_RELEASE_POLL: std::time::Duration = std::time::Duration::from_milli
 const LIFETIME_ROWS: usize = 1024;
 #[cfg(feature = "cuda")]
 const LIFETIME_COLUMNS: usize = 64;
+#[cfg(feature = "cuda")]
+const FALLBACK_ROWS: usize = 4;
+#[cfg(feature = "cuda")]
+const FALLBACK_COLUMNS: usize = 2 * SYMMETRIC_GROUP;
+#[cfg(feature = "cuda")]
+const FALLBACK_IDS: [u32; 4] = [3, 0, 3, 1];
 
 fn device_test_rows() -> MappedRows {
     let owner = Arc::new([1f32, 2., 3., 4.]);
@@ -76,6 +82,77 @@ fn mapped_lifetime_table(
     let owner = Arc::downgrade(&raw);
     let source = EmbeddingSource::dense_shards(raw, vec!["weight".to_owned()], LIFETIME_COLUMNS)?;
     Ok((ManagedEmbedding::new(source, device)?, owner))
+}
+
+#[cfg(feature = "cuda")]
+#[test]
+fn unified_dense_fallback_preserves_mapped_rows() -> Result<()> {
+    let device = Device::new_cuda_with_stream(0)?;
+    if !crate::cuda_device::cuda_device_info(device.as_cuda_device()?).integrated {
+        return Ok(());
+    }
+    let ids = Tensor::new(&FALLBACK_IDS, &Device::Cpu)?;
+    let device_ids = ids.to_device(&device)?;
+    for dtype in [DType::BF16, DType::F16, DType::F32] {
+        let weights = Tensor::from_vec(
+            (0..FALLBACK_ROWS * FALLBACK_COLUMNS)
+                .map(|i| (i % 17) as f32 / 8.0 - 1.0)
+                .collect::<Vec<_>>(),
+            (FALLBACK_ROWS, FALLBACK_COLUMNS),
+            &Device::Cpu,
+        )?
+        .to_dtype(dtype)?;
+        let expected = (weights.index_select(&ids, 0)?.to_dtype(DType::F32)? * 1.5)?
+            .to_dtype(DType::BF16)?
+            .flatten_all()?
+            .to_vec1::<half::bf16>()?;
+        let file = tempfile::NamedTempFile::new().map_err(candle_core::Error::wrap)?;
+        candle_core::safetensors::save(
+            &std::collections::HashMap::from([("weight", weights)]),
+            file.path(),
+        )?;
+        let raw = Arc::new(unsafe { MmapedSafetensors::new(file.path())? });
+        for allow_resident in [false, true] {
+            let source = EmbeddingSource::dense_shards(
+                raw.clone(),
+                vec!["weight".to_owned()],
+                FALLBACK_COLUMNS,
+            )?
+            .with_packing(EmbeddingPacking::Symmetric {
+                preferred_bits: 8,
+                fallback_bits: 4,
+            })?;
+            assert_eq!(source.metadata().host_backing, EmbeddingBacking::FileMapped);
+            let mut table = ManagedEmbedding::new(source, &device)?;
+            table.prepare(
+                &device,
+                &|_| {
+                    assert!(
+                        allow_resident,
+                        "nonresident choice queried a residency budget"
+                    );
+                    Ok(WeightAllocationBudget {
+                        persistent_bytes: 0,
+                        execution_bytes: 0,
+                    })
+                },
+                allow_resident,
+                true,
+            )?;
+            assert!(table.resident.is_none());
+            assert!(matches!(table.source, TableSource::Shards { .. }));
+            assert!(table.reclaimable_weight_cache_bytes().is_none());
+            for mode in [EmbeddingGatherMode::Prefill, EmbeddingGatherMode::Decode] {
+                let output = table.gather(
+                    &device_ids,
+                    super::super::EmbeddingOutput::scaled(DType::BF16, 1.5),
+                    mode,
+                )?;
+                assert_eq!(output.flatten_all()?.to_vec1::<half::bf16>()?, expected);
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(feature = "cuda")]

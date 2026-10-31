@@ -10,9 +10,13 @@ use super::{
     gemma3_config::ensure_gemma3_vision_config,
     multimodal_bindings::build_gemma4_bindings,
     multimodal_vision_registry::{resolve_native_multimodal_gguf, NativeMultimodalGguf},
+    muse_glimmer_bindings::normalize_muse_glimmer_config,
     normal_registry::RopePairing,
     qwen4exp::{self, synthesize_qwen4exp},
-    qwen_multimodal_bindings::{build_qwen_multimodal_bindings, qwen_multimodal_loader_type},
+    qwen_multimodal_bindings::{
+        build_qwen_multimodal_bindings, normalize_qwen_multimodal_config,
+        qwen_multimodal_loader_type,
+    },
 };
 
 /// Inputs for an architecture that builds its own config and bindings from the GGUF.
@@ -55,6 +59,7 @@ pub(crate) struct GgufArchSpec {
     pub text: GgufTextRoute,
     pub multimodal: GgufMultimodalRoute,
     pub validate_multimodal_config: Option<fn(&str) -> Result<()>>,
+    pub normalize_multimodal_config: Option<fn(&MultimodalLoaderType, &str) -> Result<String>>,
 }
 
 impl GgufArchSpec {
@@ -64,6 +69,7 @@ impl GgufArchSpec {
             text: GgufTextRoute::NormalRegistry,
             multimodal: GgufMultimodalRoute::ProjectorRegistry,
             validate_multimodal_config: None,
+            normalize_multimodal_config: None,
         }
     }
 
@@ -79,6 +85,14 @@ impl GgufArchSpec {
 
     const fn validate_multimodal_config(mut self, validate: fn(&str) -> Result<()>) -> Self {
         self.validate_multimodal_config = Some(validate);
+        self
+    }
+
+    const fn normalize_multimodal_config(
+        mut self,
+        normalize: fn(&MultimodalLoaderType, &str) -> Result<String>,
+    ) -> Self {
+        self.normalize_multimodal_config = Some(normalize);
         self
     }
 
@@ -122,9 +136,12 @@ static ARCH_SPECS: &[GgufArchSpec] = &[
         .text(GgufTextRoute::ProjectorRequired)
         .multimodal(GgufMultimodalRoute::Resolve(resolve_qwen_multimodal)),
     GgufArchSpec::new(&["qwen35", "qwen35moe"])
-        .multimodal(GgufMultimodalRoute::Resolve(resolve_qwen_multimodal)),
-    GgufArchSpec::new(&["gemma3n", "llama4", "muse-glimmer"])
-        .text(GgufTextRoute::ProjectorRequired),
+        .multimodal(GgufMultimodalRoute::Resolve(resolve_qwen_multimodal))
+        .normalize_multimodal_config(normalize_qwen_multimodal_config),
+    GgufArchSpec::new(&["muse-glimmer"])
+        .text(GgufTextRoute::ProjectorRequired)
+        .normalize_multimodal_config(normalize_muse_glimmer_config),
+    GgufArchSpec::new(&["gemma3n", "llama4"]).text(GgufTextRoute::ProjectorRequired),
 ];
 
 pub(crate) fn arch_spec(architecture: &str) -> &'static GgufArchSpec {

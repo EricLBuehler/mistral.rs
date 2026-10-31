@@ -751,7 +751,7 @@ impl<'a> AutoDeviceMapQuantization<'a> {
             for name in names {
                 let prefix = name.strip_suffix(".weight").unwrap_or(name);
                 if let Some(spec) = config.resolve_checkpoint(prefix)? {
-                    return checkpoint_linear_bytes(spec, shape);
+                    return Ok(spec.size_in_bytes(shape)?);
                 }
             }
             return Ok(shape.iter().product::<usize>() * dtype.size_in_bytes());
@@ -928,12 +928,7 @@ impl<'a> AutoDeviceMapQuantization<'a> {
                 for name in names {
                     let prefix = name.strip_suffix(".weight").unwrap_or(name);
                     if let Some(spec) = config.resolve_checkpoint(prefix)? {
-                        let bits = match spec {
-                            mistralrs_quant::CheckpointLinearSpec::Nvfp4(_) => 4,
-                            mistralrs_quant::CheckpointLinearSpec::Fp8(_)
-                            | mistralrs_quant::CheckpointLinearSpec::Mxfp8(_) => 8,
-                        };
-                        return Ok((dtype.size_in_bytes() * u8::BITS as usize / bits).max(1));
+                        return Ok(spec.pack_factor(dtype));
                     }
                 }
                 Ok(1)
@@ -963,39 +958,6 @@ impl<'a> AutoDeviceMapQuantization<'a> {
             }
         }
     }
-}
-
-fn checkpoint_linear_bytes(
-    spec: mistralrs_quant::CheckpointLinearSpec,
-    shape: &[usize],
-) -> Result<usize> {
-    use mistralrs_quant::{CheckpointLinearSpec, Fp8ActivationMode, Nvfp4ActivationMode};
-
-    let matrices = shape[..shape.len() - 2].iter().product::<usize>();
-    let rows = shape[shape.len() - 2];
-    let cols = shape[shape.len() - 1];
-    let elements = rows * cols;
-    let float_bytes = DType::F32.size_in_bytes();
-    let matrix_bytes = match spec {
-        CheckpointLinearSpec::Nvfp4(spec) => {
-            elements.div_ceil(2)
-                + rows * cols.div_ceil(mistralrs_quant::NVFP4_BLOCK_SIZE)
-                + rows * float_bytes
-                + usize::from(spec.activation == Nvfp4ActivationMode::DynamicBlock) * float_bytes
-        }
-        CheckpointLinearSpec::Mxfp8(spec) => elements + rows * cols.div_ceil(spec.group_size),
-        CheckpointLinearSpec::Fp8(spec) => {
-            let scales = spec
-                .weight_scale
-                .logical_shape([rows, cols])?
-                .iter()
-                .product::<usize>();
-            elements
-                + scales * float_bytes
-                + usize::from(spec.activation == Fp8ActivationMode::StaticTensor) * float_bytes
-        }
-    };
-    Ok(matrices * matrix_bytes)
 }
 
 fn promoted_tensor_pack_factor(

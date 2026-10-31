@@ -37,14 +37,15 @@ mod kernels {
     use cutile::core::*;
 
     #[cutile::entry(unchecked_accesses = false)]
-    fn fp8_w8a8_bf16<
+    fn fp8_w8a8<
+        T: ElementType,
         const BM: i32,
         const BN: i32,
         const BK: i32,
         const MAP_SHAPE: [i32; 2],
         const LATENCY: i32,
     >(
-        mut y: MappedPartitionMut<bf16, { [BM, BN] }, MAP_SHAPE>,
+        mut y: MappedPartitionMut<T, { [BM, BN] }, MAP_SHAPE>,
         x: &Tensor<f8e4m3fn, { [-1, -1] }>,
         w: &Tensor<f8e4m3fn, { [-1, -1] }>,
         xs: &Tensor<f32, { [-1] }>,
@@ -83,59 +84,7 @@ mod kernels {
             let sw: Tile<f32, { [BM, BN] }> = sw
                 .reshape(const_shape![1, BN])
                 .broadcast(const_shape![BM, BN]);
-            let out: Tile<bf16, { [BM, BN] }> = convert_tile(acc * sx * sw);
-            y.store(out, out_idx);
-        }
-    }
-
-    #[cutile::entry(unchecked_accesses = false)]
-    fn fp8_w8a8_f16<
-        const BM: i32,
-        const BN: i32,
-        const BK: i32,
-        const MAP_SHAPE: [i32; 2],
-        const LATENCY: i32,
-    >(
-        mut y: MappedPartitionMut<f16, { [BM, BN] }, MAP_SHAPE>,
-        x: &Tensor<f8e4m3fn, { [-1, -1] }>,
-        w: &Tensor<f8e4m3fn, { [-1, -1] }>,
-        xs: &Tensor<f32, { [-1] }>,
-        ws: &Tensor<f32, { [-1] }>,
-    ) {
-        let px = x.partition(const_shape![BM, BK]);
-        let pw = w.partition(const_shape![BN, BK]);
-        let pxs = xs.partition(const_shape![BM]);
-        let pws = ws.partition(const_shape![BN]);
-        let k = num_tiles(&px, 1);
-        let transpose: Array<{ [1, 0] }> = Array::<{ [1, 0] }> {
-            dims: &[1i32, 0i32],
-        };
-        for out_idx in y.iter_indices() {
-            let (bid_m, bid_n) = out_idx.components();
-            let mut acc: Tile<f32, { [BM, BN] }> = constant(0.0f32, const_shape![BM, BN]);
-            for kg in 0..k {
-                let xt: Tile<f8e4m3fn, { [BM, BK] }> = if LATENCY > 0 {
-                    px.load_pipelined::<LATENCY>([bid_m, kg])
-                } else {
-                    px.load([bid_m, kg])
-                };
-                let wt: Tile<f8e4m3fn, { [BN, BK] }> = if LATENCY > 0 {
-                    pw.load_pipelined::<LATENCY>([bid_n, kg])
-                } else {
-                    pw.load([bid_n, kg])
-                };
-                let wt: Tile<f8e4m3fn, { [BK, BN] }> = permute(wt, transpose);
-                acc = mmaf(xt, wt, acc);
-            }
-            let sx: Tile<f32, { [BM] }> = pxs.load([bid_m]);
-            let sx: Tile<f32, { [BM, BN] }> = sx
-                .reshape(const_shape![BM, 1])
-                .broadcast(const_shape![BM, BN]);
-            let sw: Tile<f32, { [BN] }> = pws.load([bid_n]);
-            let sw: Tile<f32, { [BM, BN] }> = sw
-                .reshape(const_shape![1, BN])
-                .broadcast(const_shape![BM, BN]);
-            let out: Tile<f16, { [BM, BN] }> = convert_tile(acc * sx * sw);
+            let out: Tile<T, { [BM, BN] }> = convert_tile(acc * sx * sw);
             y.store(out, out_idx);
         }
     }
@@ -644,6 +593,7 @@ fn launch(
     let blocks_per_sm = usize::try_from(cfg.blocks_per_sm).unwrap_or(1).max(1);
     let tile_blocks = (blocks_per_sm * device_multiprocessor_count(dev)).clamp(1, tiles) as u32;
     let generics = vec![
+        operands.scheme.output_dtype.as_str().to_owned(),
         cfg.bm.to_string(),
         TILE_SIZE.to_string(),
         TILE_SIZE.to_string(),
@@ -680,63 +630,37 @@ fn launch(
         }};
     }
 
+    macro_rules! launch {
+        ($dtype:ty) => {{
+            let mut output = unsafe { dev.alloc::<$dtype>(padded_rows * n)? };
+            let (out_addr, out_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
+            let (shape, strides) = dims(padded_rows, n);
+            let y = unsafe {
+                cutile::tensor::Tensor::<$dtype>::borrow_raw_parts(
+                    out_addr as CUdeviceptr,
+                    ordinal,
+                    shape,
+                    strides,
+                )
+            };
+            let mapped = y
+                .partition([bm, TILE_SIZE])
+                .map([cfg.map_m as usize, cfg.map_n as usize], tile_blocks);
+            run!(
+                kernels::fp8_w8a8(mapped, Arc::new(x), Arc::new(w), Arc::new(xs), Arc::new(ws)),
+                "W8A8 GEMM"
+            );
+            drop(out_guard);
+            Tensor::from((
+                Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
+                Shape::from_dims(&[padded_rows, n]),
+            ))
+        }};
+    }
+
     let output = match operands.scheme.output_dtype {
-        DType::BF16 => {
-            let mut output = unsafe { dev.alloc::<bf16>(padded_rows * n)? };
-            let (out_addr, out_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
-            let (shape, strides) = dims(padded_rows, n);
-            let y = unsafe {
-                cutile::tensor::Tensor::<bf16>::borrow_raw_parts(
-                    out_addr as CUdeviceptr,
-                    ordinal,
-                    shape,
-                    strides,
-                )
-            };
-            let mapped = y
-                .partition([bm, TILE_SIZE])
-                .map([cfg.map_m as usize, cfg.map_n as usize], tile_blocks);
-            run!(
-                kernels::fp8_w8a8_bf16(
-                    mapped,
-                    Arc::new(x),
-                    Arc::new(w),
-                    Arc::new(xs),
-                    Arc::new(ws)
-                ),
-                "W8A8 BF16 GEMM"
-            );
-            drop(out_guard);
-            Tensor::from((
-                Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
-                Shape::from_dims(&[padded_rows, n]),
-            ))
-        }
-        DType::F16 => {
-            let mut output = unsafe { dev.alloc::<f16>(padded_rows * n)? };
-            let (out_addr, out_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
-            let (shape, strides) = dims(padded_rows, n);
-            let y = unsafe {
-                cutile::tensor::Tensor::<f16>::borrow_raw_parts(
-                    out_addr as CUdeviceptr,
-                    ordinal,
-                    shape,
-                    strides,
-                )
-            };
-            let mapped = y
-                .partition([bm, TILE_SIZE])
-                .map([cfg.map_m as usize, cfg.map_n as usize], tile_blocks);
-            run!(
-                kernels::fp8_w8a8_f16(mapped, Arc::new(x), Arc::new(w), Arc::new(xs), Arc::new(ws)),
-                "W8A8 F16 GEMM"
-            );
-            drop(out_guard);
-            Tensor::from((
-                Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
-                Shape::from_dims(&[padded_rows, n]),
-            ))
-        }
+        DType::BF16 => launch!(bf16),
+        DType::F16 => launch!(f16),
         _ => unreachable!(),
     };
     output.narrow(0, 0, rows)

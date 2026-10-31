@@ -1159,7 +1159,7 @@ impl Loader for MultimodalLoader {
                     ..
                 } => {
                     if let Some(source) = self.prepared_source.as_ref() {
-                        let layers = Arc::new(mistralrs_quant::LoraLayerRegistry::new());
+                        let layers = Arc::new(self.inner.new_lora_registry(&runtime_config)?);
                         let sharded_vb = sharded_vb.with_lora_registry(layers.clone());
                         let tracker = sharded_vb.tracker().clone();
                         let model = self.inner.load(
@@ -1263,7 +1263,7 @@ impl Loader for MultimodalLoader {
                     ..
                 } => {
                     if let Some(source) = self.prepared_source.as_ref() {
-                        let layers = Arc::new(mistralrs_quant::LoraLayerRegistry::new());
+                        let layers = Arc::new(self.inner.new_lora_registry(&runtime_config)?);
                         let vb = source
                             .weights
                             .clone()

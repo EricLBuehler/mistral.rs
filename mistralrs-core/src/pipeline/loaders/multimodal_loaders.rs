@@ -200,6 +200,11 @@ pub trait MultimodalModel:
 }
 
 pub trait MultimodalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoader {
+    fn new_lora_registry(&self, config: &str) -> Result<mistralrs_quant::LoraLayerRegistry> {
+        serde_json::from_str::<serde_json::Value>(config)?;
+        Ok(mistralrs_quant::LoraLayerRegistry::new())
+    }
+
     fn load(
         &self,
         config: &str,
@@ -525,6 +530,10 @@ impl AutoMultimodalLoader {
 }
 
 impl MultimodalModelLoader for AutoMultimodalLoader {
+    fn new_lora_registry(&self, config: &str) -> Result<mistralrs_quant::LoraLayerRegistry> {
+        Self::get_loader(config)?.new_lora_registry(config)
+    }
+
     fn load(
         &self,
         config: &str,

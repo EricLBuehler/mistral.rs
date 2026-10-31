@@ -73,6 +73,7 @@ pub struct EmbeddingMetadata {
     pub rows: usize,
     pub columns: usize,
     pub device_bytes: usize,
+    /// Fallback backing; `device_bytes` may describe a separately packed copy.
     pub host_backing: EmbeddingBacking,
 }
 
@@ -183,10 +184,10 @@ impl EmbeddingSource {
             device_bytes: self
                 .storage
                 .device_bytes(self.columns, packing.map_or(0, |(_, bits)| bits)),
-            host_backing: if packing.is_some() {
-                EmbeddingBacking::Owned
-            } else {
-                EmbeddingBacking::FileMapped
+            host_backing: match &self.storage {
+                #[cfg(feature = "cuda")]
+                TableSource::Packed { .. } => EmbeddingBacking::Owned,
+                _ => EmbeddingBacking::FileMapped,
             },
         }
     }
@@ -407,31 +408,14 @@ impl ManagedEmbedding {
         self.silent = silent;
         if device.is_cuda() {
             let unified = crate::cuda_device::cuda_device_info(device.as_cuda_device()?).integrated;
-            let device_budget = if allow_resident || unified {
-                let available = budget(device)?;
-                self.make_resident(device, available)?;
-                available
-            } else {
-                WeightAllocationBudget {
-                    persistent_bytes: 0,
-                    execution_bytes: 0,
-                }
-            };
+            if allow_resident {
+                self.make_resident(device, budget(device)?)?;
+            }
             if self.resident.is_none() {
                 let native = matches!(self.source, TableSource::Shards { .. });
-                if unified && native && self.packing.bits(self.columns).is_some() {
-                    let required = resident_bytes(
-                        self.mapped.rows(),
-                        self.columns,
-                        self.packing.bits(self.columns).unwrap().1,
-                    );
-                    candle_core::bail!(
-                        "Packed embedding table requires {required} persistent bytes of unified RAM \
-                         and {RESIDENT_RESERVE_BYTES} temporary preparation bytes, but its persistent \
-                         budget is {} bytes and execution budget is {} bytes; host RAM shares the same capacity",
-                        device_budget.persistent_bytes,
-                        device_budget.execution_bytes,
-                    );
+                if unified && native {
+                    tracing::info!("Embedding table kept in its original file mapping");
+                    return Ok(());
                 }
                 let host_budget = if native {
                     available_memory(&Device::Cpu)?
@@ -502,13 +486,9 @@ impl ManagedEmbedding {
     #[cfg(feature = "cuda")]
     fn fallback_path(&self) -> &'static str {
         if self.mapped.has_device_index() {
-            if !matches!(self.source, TableSource::Shards { .. }) {
-                "prompt rows are gathered on the CPU; decode uses mapped GPU access"
-            } else {
-                "the GPU gathers rows from mapped host storage"
-            }
+            "prompt rows are staged from host storage; decode uses mapped GPU access"
         } else {
-            "rows are gathered on the host"
+            "rows are staged from host storage"
         }
     }
 
@@ -831,10 +811,12 @@ impl ManagedEmbedding {
         let packed_bytes = data_bytes + rows * scale_row_bytes;
         let required = packed_bytes + RESIDENT_RESERVE_BYTES;
         if required > budget {
-            candle_core::bail!(
-                "Packed embedding table requires {packed_bytes} bytes of host RAM plus \
-                 {RESIDENT_RESERVE_BYTES} bytes of preparation reserve, but only {budget} bytes are available"
+            tracing::info!(
+                packed_bytes,
+                host_budget_bytes = budget,
+                "Embedding table kept in its original file mapping because host packing exceeds the memory budget"
             );
+            return Ok(());
         }
         let device_workspace_budget = available_memory(device)?;
         let chunk_rows = preparation_chunk_rows(
@@ -939,10 +921,8 @@ impl ManagedEmbedding {
             return resident.table(self.columns)?.gather(rows, out);
         }
         let table = self.table();
-        // CPU gathers avoid first-touch stalls from scattered GPU reads of compressed mapped rows.
-        let use_host = !table.gathers_on(rows.device())
-            || mode == EmbeddingGatherMode::Prefill
-                && !matches!(self.source, TableSource::Shards { .. });
+        // CPU gathers avoid first-touch stalls from scattered GPU reads of mapped rows.
+        let use_host = !table.gathers_on(rows.device()) || mode == EmbeddingGatherMode::Prefill;
         if use_host {
             let ids = rows.flatten_all()?.to_dtype(DType::I64)?.to_vec1::<i64>()?;
             let ids = ids.into_iter().map(|id| id as u64).collect::<Vec<_>>();

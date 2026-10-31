@@ -363,7 +363,7 @@ impl MoeMlp {
         let (bs, seq, hidden) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden))?;
 
-        let router_logits = self.gate.forward(&xs_flat)?;
+        let router_logits = crate::layers::router_linear(&self.gate, &xs_flat)?;
         let router_logits = match &self.gate_lora {
             Some(site) => mistralrs_quant::apply_dynamic_lora_delta(site, &xs_flat, router_logits)?,
             None => router_logits,
