@@ -269,10 +269,6 @@ struct GroupedMmqLaunch {
 
 impl GroupedMmqLaunch {
     fn compact_type(&self) -> Option<i32> {
-        #[cfg(test)]
-        if compact_mmq_tests::FORCE_REGULAR.with(|flag| flag.get()) {
-            return None;
-        }
         let workspace_bytes = (self.assignments / COMPACT_COLUMNS + self.experts + 1)
             * std::mem::size_of::<[i32; 2]>();
         if !compact_mmq_supported(&self.device)
@@ -1537,10 +1533,6 @@ pub fn grouped_pair(
     let up = output.narrow(1, nrows, nrows)?.contiguous()?;
     Ok((gate, up))
 }
-
-#[cfg(test)]
-#[path = "compact_mmq_tests.rs"]
-mod compact_mmq_tests;
 
 #[cfg(test)]
 pub(super) mod tests {

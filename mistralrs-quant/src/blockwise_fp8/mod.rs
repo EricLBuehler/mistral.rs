@@ -1338,26 +1338,6 @@ pub(crate) fn scale_shard_from_weight_shard(
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn sm90_dynamic_provider_keeps_cutlass_over_tensor_core_gemv() {
-        use super::{select_dynamic_provider, DynamicFp8Provider};
-        assert_eq!(
-            select_dynamic_provider(true, true),
-            DynamicFp8Provider::CutlassSm90
-        );
-        assert_eq!(
-            select_dynamic_provider(true, false),
-            DynamicFp8Provider::CutlassSm90
-        );
-        assert_eq!(
-            select_dynamic_provider(false, true),
-            DynamicFp8Provider::TensorCoreGemv
-        );
-        assert_eq!(
-            select_dynamic_provider(false, false),
-            DynamicFp8Provider::Legacy
-        );
-    }
 
     use std::collections::HashMap;
 

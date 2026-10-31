@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regenerate the v0.9.5 throughput figures from the canonical summary."""
+"""Regenerate the v0.9.5 throughput figures from the aggregate results."""
 
 import argparse
 import json
@@ -192,7 +192,8 @@ def plot_concurrency(cells: list[dict], figure_dir: Path) -> None:
                 color="#111827",
             )
         for position, cell in zip(positions, cells):
-            gain = cell["gain_percent"][metric]
+            ratio = cell["mistralrs"][metric] / cell["baseline"][metric]
+            gain = 100 * (1 - ratio if metric == "ttft_ms" else ratio - 1)
             label = f"{gain:.1f}% lower" if metric == "ttft_ms" else f"{gain:+.1f}%"
             axis.text(
                 position,
@@ -256,21 +257,15 @@ def plot_concurrency(cells: list[dict], figure_dir: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "--summary", type=Path, default=RELEASE / "raw" / "summary.json"
-    )
+    parser.add_argument("--data", type=Path, default=RELEASE / "results.json")
     parser.add_argument("--output-dir", type=Path, default=RELEASE / "figures")
     args = parser.parse_args()
-    summary = json.loads(args.summary.read_text(encoding="utf-8"))
+    results = json.loads(args.data.read_text(encoding="utf-8"))
     args.output_dir.mkdir(parents=True, exist_ok=True)
     with plt.rc_context({"font.family": "DejaVu Sans", "axes.axisbelow": True}):
         for spec in COMPARISONS:
-            plot_comparison(
-                summary["comparisons"][spec.key]["cells"], spec, args.output_dir
-            )
-        plot_concurrency(
-            summary["comparisons"]["fp4_concurrency"]["cells"], args.output_dir
-        )
+            plot_comparison(results[spec.key], spec, args.output_dir)
+        plot_concurrency(results["fp4_concurrency"], args.output_dir)
 
 
 if __name__ == "__main__":

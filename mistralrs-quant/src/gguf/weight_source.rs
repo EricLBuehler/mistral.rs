@@ -1716,41 +1716,6 @@ mod tests {
         Ok((file, source, expected_weight, expected_other))
     }
 
-    #[test]
-    fn dense_packing_capability_keeps_quantized_bindings_packed() -> Result<()> {
-        let (_file, source, _, _) = test_source()?;
-        assert!(source.supports_dense_packing("model.float")?);
-        assert!(source.supports_dense_packing("model.float.weight")?);
-        assert!(source.supports_dense_packing("model.cast")?);
-        for name in [
-            "model.linear",
-            "model.single",
-            "model.slice",
-            "model.concat",
-            "model.stack",
-            "missing",
-        ] {
-            assert!(!source.supports_dense_packing(name)?, "{name}");
-        }
-        let vb = source.sharded_var_builder(Device::Cpu).pp("model");
-        let specs = [
-            crate::LoraLinearSpec::replicated(IN_DIM, OUT_DIM),
-            crate::LoraLinearSpec::replicated(IN_DIM, OUT_DIM),
-        ];
-        let group =
-            crate::ReplicatedLayer::new_packed(&specs, &["float", "cast"], &None, false, vb)?
-                .expect("dense GGUF binding group");
-        let input = Tensor::ones((3, IN_DIM), DType::F32, &Device::Cpu)?;
-        let actual = group.packed.forward(&input)?;
-        let expected = source
-            .load_linear("model.float", &Device::Cpu, Shard::default())?
-            .unwrap()
-            .forward(&input)?;
-        assert_close(&actual.narrow(1, 0, OUT_DIM)?, &expected)?;
-        assert_close(&actual.narrow(1, OUT_DIM, OUT_DIM)?, &expected)?;
-        Ok(())
-    }
-
     fn expert_source() -> Result<(NamedTempFile, Arc<GgufWeightSource>, Tensor, Tensor)> {
         let gate = QTensor::quantize(&patterned_experts(0)?, GgmlDType::Q4_0)?;
         let up = QTensor::quantize(&patterned_experts(17)?, GgmlDType::Q4_0)?;

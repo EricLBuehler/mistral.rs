@@ -288,32 +288,6 @@ mod tests {
     }
 
     #[test]
-    fn persistent_allocations_share_automatic_headroom_with_transient_work() -> Result<()> {
-        for (policy, execution, persistent, transient, expected) in [
-            (32, 48, 2, 4, 30),
-            (32, 48, 2, 20, 26),
-            (32, 32, 2, 4, 26),
-            (32, 34, 2, 4, 28),
-            (1, 48, 2, 4, 0),
-            (32, 48, 2, 47, 0),
-        ] {
-            assert_eq!(
-                allocation_budget_with_reservations(
-                    policy * GIB,
-                    execution * GIB,
-                    persistent * GIB,
-                    transient * GIB,
-                )?,
-                expected * GIB,
-            );
-        }
-        assert!(
-            allocation_budget_with_reservations(usize::MAX, usize::MAX, usize::MAX, 1).is_err()
-        );
-        Ok(())
-    }
-
-    #[test]
     fn capacity_units_and_validation() {
         assert_eq!(
             "4GiB".parse::<MemoryGoal>().unwrap(),

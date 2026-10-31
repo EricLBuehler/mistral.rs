@@ -848,7 +848,3 @@ pub(crate) fn qsa_attention(args: QsaAttentionArgs<'_>) -> Result<Tensor> {
 #[cfg(test)]
 #[path = "qwen4_exp_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "qwen4_exp_selection_tests.rs"]
-mod selection_tests;

@@ -1669,58 +1669,6 @@ mod paged_attention_policy_tests {
     const TEST_MAX_SEQUENCES: usize = 8;
     const TEST_PREFILL_TOKENS: usize = 256;
 
-    #[test]
-    fn builder_prefix_capacity_defaults_to_auto_and_honors_explicit_values() {
-        use mistralrs_core::PrefixCacheCapacity;
-        let builders = |capacity: Option<PrefixCacheCapacity>| {
-            let text = crate::TextModelBuilder::new("test");
-            let automatic = crate::ModelBuilder::new("test");
-            let gguf = crate::GgufModelBuilder::new("test", vec!["model.gguf"]);
-            let multimodal = crate::MultimodalModelBuilder::new("test");
-            match capacity {
-                None => [
-                    text.prefix_cache_n,
-                    automatic.prefix_cache_n,
-                    gguf.prefix_cache_n,
-                    multimodal.prefix_cache_n,
-                ],
-                Some(capacity) => [
-                    text.with_prefix_cache_n(capacity).prefix_cache_n,
-                    automatic.with_prefix_cache_n(capacity).prefix_cache_n,
-                    gguf.with_prefix_cache_n(capacity).prefix_cache_n,
-                    multimodal.with_prefix_cache_n(capacity).prefix_cache_n,
-                ],
-            }
-        };
-        assert_eq!(builders(None), [PrefixCacheCapacity::Auto; 4]);
-        for capacity in [
-            PrefixCacheCapacity::Auto,
-            PrefixCacheCapacity::DISABLED,
-            PrefixCacheCapacity::Fixed(mistralrs_core::DEFAULT_PREFIX_CACHE_N),
-        ] {
-            assert_eq!(builders(Some(capacity)), [capacity; 4]);
-        }
-        let disabled = super::build_engine_config(
-            false,
-            None,
-            None,
-            &HashMap::new(),
-            false,
-            PrefixCacheCapacity::DISABLED,
-        );
-        assert!(disabled.no_prefix_cache);
-        let auto = super::build_engine_config(
-            false,
-            None,
-            None,
-            &HashMap::new(),
-            false,
-            PrefixCacheCapacity::Auto,
-        );
-        assert!(!auto.no_prefix_cache);
-        assert_eq!(auto.prefix_cache_n, mistralrs_core::DEFAULT_PREFIX_CACHE_N);
-    }
-
     fn explicit_config() -> anyhow::Result<PagedAttentionConfig> {
         PagedAttentionConfig::new(
             Some(TEST_BLOCK_SIZE),

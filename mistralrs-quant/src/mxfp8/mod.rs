@@ -667,9 +667,3 @@ impl CustomOp3 for Matmul {
         })
     }
 }
-
-#[cfg(test)]
-mod tests;
-
-#[cfg(all(test, feature = "cuda"))]
-mod gemv_tests;

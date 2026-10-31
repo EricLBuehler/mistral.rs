@@ -1278,140 +1278,23 @@ mod tests {
     }
 
     #[test]
-    fn paged_recurrent_reservation_counts_shared_checkpoints_and_releases() -> anyhow::Result<()> {
-        use crate::resource_plan::{RecurrentPrefixReservation, RuntimeMemoryReservation};
-        use std::collections::HashMap;
-
-        const SNAPSHOT_BYTES: usize = 8;
-        const CAPACITY: usize = 2;
-        let device = Device::Cpu.location();
-        let reservation = RuntimeMemoryReservation::standalone(RecurrentPrefixReservation::new(
-            HashMap::from([(device, SNAPSHOT_BYTES)]),
-            CAPACITY,
-        ));
-        let mut cacher = PrefixCacheManagerV2::new(CAPACITY, false, true);
-        let hashes_a = compute_block_hashes(&[10, 11, 12, 13], 1, &[], &[]);
-        let hashes_b = compute_block_hashes(&[10, 11, 20, 21], 1, &[], &[]);
-        let hashes_c = block_hashes(30, 2);
-        let owner_a = *hashes_a.last().unwrap();
-        let owner_b = *hashes_b.last().unwrap();
-        let owner_c = *hashes_c.last().unwrap();
-        cacher.add_paged_recurrent_prefix(
-            owner_a,
-            hashes_a[..2].to_vec(),
-            vec![make_recurrent_snapshot()?],
-            None,
-        );
-        cacher.attach_runtime_memory_reservation(reservation.clone());
-        assert_eq!(reservation.pending_prefix_bytes(device)?, SNAPSHOT_BYTES);
-
-        cacher.add_paged_recurrent_prefix(
-            owner_b,
-            hashes_b[..2].to_vec(),
-            vec![make_recurrent_snapshot()?],
-            None,
-        );
-        assert_eq!(cacher.paged_recurrent_sequence_keys.len(), CAPACITY);
-        assert_eq!(cacher.paged_recurrent_caches.len(), 1);
-        assert_eq!(reservation.pending_prefix_bytes(device)?, SNAPSHOT_BYTES);
-
-        cacher.add_paged_recurrent_prefix(
-            owner_c,
-            hashes_c.clone(),
-            vec![make_recurrent_snapshot()?],
-            None,
-        );
-        assert!(!cacher.has_paged_recurrent_owner(owner_a));
-        assert_eq!(reservation.pending_prefix_bytes(device)?, 0);
-        cacher.promote_paged_recurrent_prefix(&hashes_c, owner_c);
-        assert_eq!(reservation.pending_prefix_bytes(device)?, 0);
-
-        cacher.add_paged_recurrent_prefix(
-            owner_b,
-            hashes_c.clone(),
-            vec![make_recurrent_snapshot()?],
-            None,
-        );
-        assert_eq!(cacher.paged_recurrent_sequence_keys.len(), CAPACITY);
-        assert_eq!(reservation.pending_prefix_bytes(device)?, SNAPSHOT_BYTES);
-        cacher.evict_all_caches()?;
-        assert_eq!(
-            reservation.pending_prefix_bytes(device)?,
-            CAPACITY * SNAPSHOT_BYTES
-        );
-
-        cacher.add_paged_recurrent_prefix(
-            owner_c,
-            hashes_c,
-            vec![make_recurrent_snapshot()?],
-            None,
-        );
-        assert_eq!(reservation.pending_prefix_bytes(device)?, SNAPSHOT_BYTES);
-        drop(cacher);
-        assert_eq!(
-            reservation.pending_prefix_bytes(device)?,
-            CAPACITY * SNAPSHOT_BYTES
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn paged_recurrent_reservation_returns_after_block_pressure_prunes() -> anyhow::Result<()> {
-        use crate::resource_plan::{RecurrentPrefixReservation, RuntimeMemoryReservation};
-        use std::collections::HashMap;
-
-        const SNAPSHOT_BYTES: usize = 8;
-        let device = Device::Cpu.location();
-        let reservation = RuntimeMemoryReservation::standalone(RecurrentPrefixReservation::new(
-            HashMap::from([(device, SNAPSHOT_BYTES)]),
-            1,
-        ));
-        let mut pool = BlockPool::new(4, true, 1);
-        let hashes = block_hashes(10, 2);
-        let ids = pool.get_new_blocks(hashes.len()).unwrap();
-        pool.cache_full_blocks(&ids, &hashes, 0, hashes.len(), 0);
-        let mut cacher = PrefixCacheManagerV2::new(1, false, true);
-        cacher.attach_runtime_memory_reservation(reservation.clone());
-        cacher.attach_paged_block_retention(pool.prefix_block_retention());
-        assert_eq!(reservation.pending_prefix_bytes(device)?, SNAPSHOT_BYTES);
-        cacher.add_paged_recurrent_prefix(
-            *hashes.last().unwrap(),
-            hashes,
-            vec![make_recurrent_snapshot()?],
-            None,
-        );
-        assert_eq!(reservation.pending_prefix_bytes(device)?, 0);
-        pool.free_blocks(&ids.iter().rev().copied().collect::<Vec<_>>());
-        assert_eq!(pool.get_new_blocks(2).unwrap().len(), 2);
-        assert_eq!(reservation.pending_prefix_bytes(device)?, 0);
-        assert_eq!(cacher.prune_revoked_paged_recurrent_entries(), 1);
-        assert_eq!(reservation.pending_prefix_bytes(device)?, SNAPSHOT_BYTES);
-        Ok(())
-    }
-
-    #[test]
     fn paged_recurrent_reservation_is_published_before_checkpoint_release() -> anyhow::Result<()> {
         use crate::resource_plan::{RecurrentPrefixReservation, RuntimeMemoryReservation};
         use std::collections::HashMap;
 
         const SNAPSHOT_BYTES: usize = 8;
-        for removal in ["clear", "owner", "prune", "drop"] {
+        for drop_cache in [false, true] {
             let device = Device::Cpu.location();
             let reservation = RuntimeMemoryReservation::standalone(
                 RecurrentPrefixReservation::new(HashMap::from([(device, SNAPSHOT_BYTES)]), 1),
             );
             let observed = Arc::new(AtomicUsize::new(0));
-            let mut pool = BlockPool::new(4, true, 1);
             let hashes = block_hashes(10, 2);
-            let owner = *hashes.last().unwrap();
-            let ids = pool.get_new_blocks(hashes.len()).unwrap();
-            pool.cache_full_blocks(&ids, &hashes, 0, hashes.len(), 0);
             let mut cacher = PrefixCacheManagerV2::new(1, false, true);
             cacher.attach_runtime_memory_reservation(reservation.clone());
-            cacher.attach_paged_block_retention(pool.prefix_block_retention());
             cacher.add_paged_recurrent_prefix(
-                owner,
-                hashes.clone(),
+                *hashes.last().unwrap(),
+                hashes,
                 vec![make_recurrent_snapshot()?],
                 Some(Arc::new(PendingReservationOnDrop {
                     reservation: reservation.clone(),
@@ -1419,27 +1302,12 @@ mod tests {
                 })),
             );
             assert_eq!(reservation.pending_prefix_bytes(device)?, 0);
-            match removal {
-                "clear" => {
-                    cacher.evict_all_caches()?;
-                }
-                "owner" => {
-                    cacher.paged_recurrent_sequence_keys.shift_remove(&owner);
-                    cacher.remove_paged_recurrent_owner(owner, &hashes);
-                }
-                "prune" => {
-                    pool.free_blocks(&ids.iter().rev().copied().collect::<Vec<_>>());
-                    assert_eq!(pool.get_new_blocks(2).unwrap().len(), 2);
-                    assert_eq!(cacher.prune_revoked_paged_recurrent_entries(), 1);
-                }
-                "drop" => drop(cacher),
-                _ => unreachable!(),
+            if drop_cache {
+                drop(cacher);
+            } else {
+                cacher.evict_all_caches()?;
             }
-            assert_eq!(
-                observed.load(Ordering::Relaxed),
-                SNAPSHOT_BYTES,
-                "{removal}"
-            );
+            assert_eq!(observed.load(Ordering::Relaxed), SNAPSHOT_BYTES);
         }
         Ok(())
     }

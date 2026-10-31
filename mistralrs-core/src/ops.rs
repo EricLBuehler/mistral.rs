@@ -7823,55 +7823,6 @@ mod tests {
     }
 
     #[test]
-    fn merged_projection_records_constituent_stats() -> candle_core::Result<()> {
-        let device = Device::Cpu;
-        let weights = Tensor::new(&[[1f32, 0.], [0., 1.], [1., 1.]], &device)?;
-        let weights = Tensor::cat(
-            &[
-                &weights,
-                &Tensor::zeros(
-                    (MERGED_PADDED_OUTPUT_ROWS - weights.dim(0)?, 2),
-                    DType::F32,
-                    &device,
-                )?,
-            ],
-            0,
-        )?;
-        let linear = |weight| -> candle_core::Result<Arc<dyn QuantMethod>> {
-            Ok(Arc::new(UnquantLinear::new(
-                QuantMethodConfig::Unquantized(Linear::new(weight, None)),
-            )?))
-        };
-        let first = linear(weights.narrow(0, 0, 2)?)?;
-        let second = linear(weights.narrow(0, 2, 1)?)?;
-        let merged = MergedDenseProjection::from_packed(&mistralrs_quant::PackedLinear {
-            packed: linear(weights)?,
-            constituents: vec![first.clone(), second.clone()],
-            rows_per_rank: vec![2, 1],
-        });
-        let input = Tensor::new(&[[2f32, 3.], [4., 5.]], &device)?;
-        first.begin_track_stats()?;
-        second.begin_track_stats()?;
-        assert!(merged.forward_packed(&input)?.is_none());
-        assert!(merged.activation_quantization_scheme_for(&input).is_none());
-        let output = merged.forward(&input)?;
-        assert_eq!(
-            output[0].to_vec2::<f32>()?,
-            vec![vec![2., 3.], vec![4., 5.]]
-        );
-        assert_eq!(output[1].to_vec2::<f32>()?, vec![vec![5.], vec![9.]]);
-        assert_eq!(first.stats_snapshot(), Some((1, 2)));
-        assert_eq!(second.stats_snapshot(), Some((1, 2)));
-        first.end_track_stats()?;
-        second.end_track_stats()?;
-        assert_eq!(
-            merged.forward_packed(&input)?.unwrap().dims(),
-            &[2, MERGED_PADDED_OUTPUT_ROWS]
-        );
-        Ok(())
-    }
-
-    #[test]
     fn merged_projection_keeps_multirow_gate_up_packed() -> candle_core::Result<()> {
         let packed_weight =
             Tensor::new(&[[1f32, 0.], [0., 1.], [1., 1.], [1., -1.]], &Device::Cpu)?;

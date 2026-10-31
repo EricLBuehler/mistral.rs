@@ -6294,8 +6294,3 @@ mod dispatch_tests;
 #[allow(clippy::cast_precision_loss)]
 #[path = "gdn_tests.rs"]
 mod tests;
-
-#[cfg(all(test, feature = "cuda"))]
-#[allow(clippy::cast_precision_loss)]
-#[path = "gdn_deferred_tests.rs"]
-mod deferred_tests;

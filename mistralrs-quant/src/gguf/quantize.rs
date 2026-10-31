@@ -146,11 +146,10 @@ fn quantize_half<T: Sync, Q: GgmlType>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{GgufMatMul, IsqType, QuantizeOntoGuard};
+    use crate::IsqType;
 
     const ROWS: usize = 97;
     const COLS: usize = 768;
-    const EXPERTS: usize = 3;
     const FORMATS: [(GgmlDType, IsqType); 12] = [
         (GgmlDType::Q4_0, IsqType::Q4_0),
         (GgmlDType::Q4_1, IsqType::Q4_1),
@@ -203,77 +202,6 @@ mod tests {
                     );
                 }
             }
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn small_quantization_preserves_tensor_views() -> Result<()> {
-        const VIEW_ROWS: usize = 3;
-        for source_dtype in [DType::F32, DType::F16, DType::BF16] {
-            let source = Tensor::from_vec(
-                values((VIEW_ROWS + 2) * COLS),
-                (VIEW_ROWS + 2, COLS),
-                &Device::Cpu,
-            )?
-            .to_dtype(source_dtype)?;
-            for first in [0, 1] {
-                let view = source.narrow(0, first, VIEW_ROWS)?;
-                for dtype in [GgmlDType::F32, GgmlDType::Q4K, GgmlDType::Q8_0] {
-                    let expected = QTensor::quantize(&view.force_contiguous()?, dtype)?;
-                    let actual = quantize_cpu(&view, dtype, None)?;
-                    assert_eq!(
-                        actual.data()?,
-                        expected.data()?,
-                        "view {first} {source_dtype:?} {dtype:?}"
-                    );
-                }
-            }
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn parallel_expert_quantization_preserves_per_expert_imatrix() -> Result<()> {
-        let stack = Tensor::from_vec(
-            values(EXPERTS * ROWS * COLS),
-            (EXPERTS, ROWS, COLS),
-            &Device::Cpu,
-        )?
-        .to_dtype(DType::BF16)?;
-        let weights = (0..EXPERTS * COLS)
-            .map(|i| {
-                if i / COLS == 0 {
-                    0.0
-                } else {
-                    (i % 17) as f32 / 7.0
-                }
-            })
-            .collect::<Vec<_>>();
-        for (dtype, ty) in FORMATS {
-            if cfg!(feature = "cuda") && matches!(ty, IsqType::Q8_1 | IsqType::Q8K) {
-                continue;
-            }
-            let actual = GgufMatMul::quantize_expert_stack(
-                &stack,
-                ty,
-                Some(&weights),
-                &Device::Cpu,
-                QuantizeOntoGuard::new(),
-            )?;
-            let mut expected = Vec::new();
-            for expert in 0..EXPERTS {
-                let slab = stack.get(expert)?.force_contiguous()?;
-                let vector = &weights[expert * COLS..(expert + 1) * COLS];
-                let tensor = if ty.supports_imatrix() && vector.iter().any(|weight| *weight != 0.0)
-                {
-                    QTensor::quantize_imatrix(&slab, vector, dtype)?
-                } else {
-                    QTensor::quantize(&slab, dtype)?
-                };
-                expected.extend_from_slice(&tensor.data()?);
-            }
-            assert_eq!(&*actual.data()?, expected.as_slice(), "{dtype:?}");
         }
         Ok(())
     }

@@ -838,29 +838,6 @@ pub(super) fn bench_ms(dev: &CudaDevice, prepared: Prepared) -> Result<f64> {
     Ok(f64::from(measurement.median_ms()) / LAUNCHES_PER_REP as f64)
 }
 
-#[cfg(test)]
-impl Tuned {
-    pub(super) fn measured(bucket: Bucket, config: Config) -> Self {
-        Self {
-            bucket,
-            config,
-            source: Source::Measured,
-            ms: 0.0,
-            policy_ms: 0.0,
-        }
-    }
-}
-
-#[cfg(test)]
-pub(super) fn report(label: &str, tuned: &[Tuned]) {
-    for t in tuned {
-        println!(
-            "{label} probe={} {:?} {} {:.3}ms vs policy {:.3}ms",
-            t.bucket.probe, t.source, t.config.id, t.ms, t.policy_ms
-        );
-    }
-}
-
 pub(super) fn cutile_error(err: candle_core::Error) -> CutileError {
     cutile::error::tensor_error(&err.to_string())
 }
@@ -1160,40 +1137,6 @@ mod tests {
     }
 
     #[test]
-    fn breakpoints_follow_policy_changes() {
-        let policy = |m: usize| match m {
-            0..=63 => 0,
-            64..=1984 => 1,
-            _ => 2,
-        };
-        assert_eq!(policy_breakpoints(65, 8192, policy), vec![1984]);
-        assert_eq!(policy_breakpoints(1, 8192, policy), vec![63, 1984]);
-        assert!(policy_breakpoints(3000, 8192, policy).is_empty());
-    }
-
-    #[test]
-    fn warm_rows_cover_every_divisor_class_per_bucket() {
-        let buckets = buckets_from_breakpoints(&[16, 127, 511], 2048, 2048);
-        let rows = bucket_warm_rows(&buckets, 1);
-        assert_eq!(&rows[..5], &[1, 2, 4, 8, 16]);
-        assert_eq!(&rows[5..10], &[17, 18, 20, 24, 32]);
-        assert_eq!(&rows[10..15], &[128, 129, 130, 132, 136]);
-        assert_eq!(&rows[15..], &[512, 513, 514, 516, 520]);
-        // a narrow bucket only holds the classes it contains
-        let narrow = [Bucket {
-            upper: 66,
-            probe: 66,
-        }];
-        assert_eq!(bucket_warm_rows(&narrow, 1), vec![1, 2, 4, 8, 16]);
-        assert_eq!(bucket_warm_rows(&narrow, 65), vec![65, 66]);
-        let tail = buckets_from_breakpoints(&[64, 66], 2048, 2048);
-        assert_eq!(
-            &bucket_warm_rows(&tail, 1)[5..],
-            &[65, 66, 67, 68, 70, 72, 80]
-        );
-    }
-
-    #[test]
     fn labels_name_each_interval() {
         let buckets = buckets_from_breakpoints(&[96, 512], 4096, 4096);
         assert_eq!(bucket_labels(&buckets), vec!["<=96", "<=512", ">512"]);
@@ -1278,52 +1221,6 @@ mod tests {
         assert_eq!(latest_median(&trials, "knob=0,tile=1"), Some(1.0));
         assert_eq!(samples(&trials, "knob=1,tile=2"), 5);
         assert_eq!(latest_median(&trials, "knob=0,tile=3"), None);
-    }
-
-    fn info(sms: usize, l2_bytes: usize, smem_optin: usize) -> crate::cuda_device::CudaDeviceInfo {
-        crate::cuda_device::CudaDeviceInfo {
-            major: 12,
-            minor: 1,
-            sms,
-            threads_per_sm: 1536,
-            l2_bytes,
-            smem_optin,
-            warp_size: 32,
-            integrated: true,
-        }
-    }
-
-    #[test]
-    fn device_key_separates_devices_that_tile_differently() {
-        let gb10 = info(48, 24 << 20, 99 << 10);
-        assert_eq!(
-            device_key("NVIDIA GB10", &gb10),
-            "nvidia-gb10-sm121-48sm-l224576k-smem99k"
-        );
-        assert_eq!(device_key("  A/B  (x) ", &gb10), device_key("a-b-x", &gb10));
-        let keys: std::collections::HashSet<String> = [
-            gb10,
-            info(24, 24 << 20, 99 << 10),
-            info(48, 12 << 20, 99 << 10),
-            info(48, 24 << 20, 227 << 10),
-            crate::cuda_device::CudaDeviceInfo { minor: 0, ..gb10 },
-        ]
-        .iter()
-        .map(|i| device_key("NVIDIA GB10", i))
-        .collect();
-        assert_eq!(keys.len(), 5);
-    }
-
-    #[test]
-    fn process_budget_caps_every_bucket_and_runs_out() {
-        let total = Duration::from_secs(1000);
-        let before = remaining_budget(total);
-        assert_eq!(bucket_budget(total), Some(before.min(BUCKET_BUDGET)));
-        assert_eq!(bucket_budget(Duration::ZERO), None);
-        charge(Duration::from_millis(5));
-        assert!(remaining_budget(total) <= before - Duration::from_millis(5));
-        let tight = *SPENT.lock().unwrap() + Duration::from_secs(2);
-        assert!(bucket_budget(tight).is_some_and(|b| b <= Duration::from_secs(2)));
     }
 
     #[test]

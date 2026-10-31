@@ -112,7 +112,3 @@ pub fn moe_weighted_reduce(input: &Tensor, weights: &Tensor, dtype: DType) -> Re
     drop((input_guard, weight_guard));
     Ok(Tensor::from((Storage::Cuda(output), (tokens, hidden))))
 }
-
-#[cfg(test)]
-#[path = "weighted_reduce_tests.rs"]
-mod tests;

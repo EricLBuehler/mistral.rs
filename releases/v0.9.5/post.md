@@ -69,10 +69,10 @@ The concurrency work improves batched NVFP4 expert and MXFP8 execution and prese
 
 These paths dispatch on quantization format, dimensions, routing, and hardware capabilities. The serving results measure their combined effect; they do not isolate each kernel's contribution.
 
-## Evidence and reproduction
+## Measurement scope and figures
 
 Effective prefill is prompt tokens divided by client-observed TTFT, so it includes scheduling and first-token work. Decode is the rate after the first token, excluding prompt processing. The earlier FP4 C1 sweep uses reciprocal mean latency across 18 requests per length; GGUF uses medians of three. The concurrency sweep reports median whole-round output throughput and mean request latencies, including the workload's ramp and drain. The three measurement sets have separately recorded source identities.
 
-The package includes curated raw responses, exact prompts, full configuration and precision disclosures, normalized JSONL/CSV, and scripts that regenerate all three figures without running inference. Serving runners print the recorded launch settings for a fresh reproduction.
+The package includes [aggregate results](results.json) and a plotting script that regenerates all three figures without running inference. Exact prompts, raw responses, logs, and historical source patches are not included.
 
-Read the [full report](report.md) for methodology, environment measurements, source provenance, and commands. These results cover warmed text generation on this GB10: GGUF at C1 and official FP4 at C1-C8, measured October 27-29, 2026 UTC.
+Read the [full report](report.md) for methodology, environment measurements, source identities, and the figure-generation command. These results cover warmed text generation on this GB10: GGUF at C1 and official FP4 at C1-C8, measured October 27-29, 2026 UTC.

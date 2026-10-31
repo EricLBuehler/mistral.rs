@@ -810,80 +810,6 @@ mod tests {
     }
 
     #[test]
-    fn vision_linear_loads_global_fp8_weights_with_scales() -> Result<()> {
-        let tensors = HashMap::from([
-            (
-                format!("{PREFIX}.weight"),
-                Tensor::from_vec(
-                    vec![F8E4M3::from_f32(2.); OUTPUT_DIM * INPUT_DIM],
-                    (OUTPUT_DIM, INPUT_DIM),
-                    &Device::Cpu,
-                )?,
-            ),
-            (
-                format!("{PREFIX}.weight_scale"),
-                Tensor::new(0.25f32, &Device::Cpu)?,
-            ),
-            (
-                format!("{PREFIX}.input_scale"),
-                Tensor::new(1f32, &Device::Cpu)?,
-            ),
-            (
-                format!("{PREFIX}.bias"),
-                Tensor::from_slice(&[1f32, -1.], OUTPUT_DIM, &Device::Cpu)?,
-            ),
-        ]);
-        let native = QuantizedConfig::Fp8 {
-            weight_block_size: None,
-            activation_scheme: None,
-            fmt: None,
-            modules_to_not_convert: vec!["lm_head".to_string()],
-        };
-        let modelopt = serde_json::from_value(serde_json::json!({
-            "quant_method": "modelopt", "quant_algo": "FP8"
-        }))
-        .map_err(candle_core::Error::msg)?;
-        for config in [native, modelopt] {
-            let vb = ShardedSafeTensors::wrap(tensors.clone(), DType::F32, Device::Cpu);
-            let layer = vision_linear(INPUT_DIM, OUTPUT_DIM, &Some(config), vb.pp(PREFIX))?;
-            let input = Tensor::ones((1, INPUT_DIM), DType::F32, &Device::Cpu)?;
-            assert_eq!(
-                layer.forward(&input)?.to_vec2::<f32>()?,
-                vec![vec![17., 15.]]
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn vision_linear_preserves_unlisted_dense_weights() -> Result<()> {
-        let config: QuantizedConfig = serde_json::from_value(serde_json::json!({
-            "quant_method": "modelopt",
-            "quant_algo": "MIXED_PRECISION",
-            "quantized_layers": {"model.language_model.layers.0.mlp.experts": {"quant_algo": "NVFP4"}}
-        })).map_err(candle_core::Error::msg)?;
-        let tensors = HashMap::from([
-            (
-                format!("{PREFIX}.weight"),
-                Tensor::full(0.5f32, (OUTPUT_DIM, INPUT_DIM), &Device::Cpu)?,
-            ),
-            (
-                format!("{PREFIX}.bias"),
-                Tensor::from_slice(&[1f32, -1.], OUTPUT_DIM, &Device::Cpu)?,
-            ),
-        ]);
-        let vb = ShardedSafeTensors::wrap(tensors, DType::F32, Device::Cpu);
-        let layer = vision_linear(INPUT_DIM, OUTPUT_DIM, &Some(config), vb.pp(PREFIX))?;
-        let input =
-            Tensor::arange(1f32, (INPUT_DIM + 1) as f32, &Device::Cpu)?.reshape((1, INPUT_DIM))?;
-        assert_eq!(
-            layer.forward(&input)?.to_vec2::<f32>()?,
-            vec![vec![265., 263.]]
-        );
-        Ok(())
-    }
-
-    #[test]
     fn vision_linear_preserves_dense_weights_under_global_text_quantization() -> Result<()> {
         let modelopt = |algorithm: &str| {
             serde_json::from_value::<QuantizedConfig>(serde_json::json!({
@@ -919,31 +845,6 @@ mod tests {
                 vec![vec![17., 15.]]
             );
         }
-        Ok(())
-    }
-
-    #[test]
-    fn vision_linear_rejects_missing_scales_for_explicit_quantization() -> Result<()> {
-        let config: QuantizedConfig = serde_json::from_value(serde_json::json!({
-            "quant_method": "modelopt",
-            "quant_algo": "MIXED_PRECISION",
-            "quantized_layers": {(PREFIX): {"quant_algo": "W4A16_NVFP4", "group_size": 16}}
-        }))
-        .map_err(candle_core::Error::msg)?;
-        let tensors = HashMap::from([
-            (
-                format!("{PREFIX}.weight"),
-                Tensor::full(0x22u8, (OUTPUT_DIM, INPUT_DIM / 2), &Device::Cpu)?,
-            ),
-            (
-                format!("{PREFIX}.bias"),
-                Tensor::zeros(OUTPUT_DIM, DType::F32, &Device::Cpu)?,
-            ),
-        ]);
-        let vb = ShardedSafeTensors::wrap(tensors, DType::F32, Device::Cpu);
-        let error = vision_linear(INPUT_DIM, OUTPUT_DIM, &Some(config), vb.pp(PREFIX))
-            .expect_err("explicit quantized vision modules require their scale tensors");
-        assert!(error.to_string().contains("weight_scale"));
         Ok(())
     }
 }

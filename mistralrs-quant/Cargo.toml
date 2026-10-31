@@ -103,7 +103,3 @@ required-features = ["cuda", "cutile"]
 [[example]]
 name = "metal_fp8_bench"
 required-features = ["metal"]
-
-[[example]]
-name = "fastpath_scoreboard"
-required-features = ["cuda", "cutile"]

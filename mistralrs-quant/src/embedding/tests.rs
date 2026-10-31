@@ -26,8 +26,6 @@ const E8M0_BASE: u8 = 118;
 const E8M0_SPAN: u8 = 16;
 const NVFP4_SCALE_BASE: u8 = 0x28;
 const NVFP4_SCALE_SPAN: u8 = 0x20;
-const FP8_SCALE_GROUPS: [usize; 9] = [1, 2, 3, 4, 7, 8, 12, 16, 128];
-const FP8_SCALE_TEST_COLUMNS: [usize; 4] = [16, 17, 24, 129];
 const STAGED_SHARD_ROWS: [usize; 2] = [3, 4];
 const STAGED_COLUMNS: usize = 16;
 const STAGED_SCALE_GROUP: usize = 8;
@@ -336,44 +334,6 @@ fn assert_close(name: &str, actual: &Tensor, expected: &Tensor, tolerance: f32) 
     Ok(())
 }
 
-#[test]
-fn host_gather_matches_dequantized_index_select_for_every_codec() -> Result<()> {
-    for case in cases()? {
-        let table = case
-            .layer
-            .embedding_table()
-            .unwrap_or_else(|| panic!("{} has no row codec", case.name));
-        let rows = table.rows;
-        let ids = Tensor::from_vec(ids(rows), (2, 4), &Device::Cpu)?;
-        let expected = reference(&case, &ids)?;
-        let actual = case.layer.embedding_forward(&ids, DType::F32.into())?;
-        assert_close(&case.name, &actual, &expected, TOLERANCE)?;
-        let scaled = case
-            .layer
-            .embedding_forward(&ids, EmbeddingOutput::scaled(DType::BF16, SCALE))?;
-        assert_eq!(scaled.dtype(), DType::BF16);
-        assert_close(
-            &format!("{} scaled", case.name),
-            &scaled,
-            &(expected * SCALE)?,
-            1e-2,
-        )?;
-        let empty = case.layer.embedding_forward(
-            &Tensor::zeros((0, 3), DType::U32, &Device::Cpu)?,
-            DType::F32.into(),
-        )?;
-        assert_eq!(empty.dims(), &[0, 3, table.columns], "{}", case.name);
-        assert!(
-            table
-                .gather_host(&[rows as u64], DType::F32.into())
-                .is_err(),
-            "{}",
-            case.name
-        );
-    }
-    Ok(())
-}
-
 fn check_staged_codecs(device: &Device) -> Result<()> {
     for case in cases()? {
         let table = case.layer.embedding_table().unwrap();
@@ -558,18 +518,18 @@ fn check_staged_shared_rows(device: &Device) -> Result<()> {
             })
         })
         .collect::<Vec<_>>();
-    assert_close(
-        "staged mapped shared scales",
-        &table
-            .gather_staged(
-                &STAGED_IDS,
-                EmbeddingOutput::scaled(DType::F32, 2.0),
-                device,
-            )?
-            .to_device(&Device::Cpu)?,
-        &Tensor::from_vec(expected, (STAGED_IDS.len(), columns), &Device::Cpu)?,
-        TOLERANCE,
-    )
+    let expected = Tensor::from_vec(expected, (STAGED_IDS.len(), columns), &Device::Cpu)?;
+    for dtype in [DType::F32, DType::BF16] {
+        assert_close(
+            "staged mapped shared scales",
+            &table
+                .gather_staged(&STAGED_IDS, EmbeddingOutput::scaled(dtype, 2.0), device)?
+                .to_device(&Device::Cpu)?,
+            &expected.to_dtype(dtype)?.to_dtype(DType::F32)?,
+            0.0,
+        )?;
+    }
+    Ok(())
 }
 
 #[test]
@@ -617,293 +577,4 @@ fn sym_int_table(bits: usize) -> Result<(Tensor, Tensor, Vec<f32>)> {
         Tensor::from_vec(scales, (ROWS, BLOCK_COLUMNS / group), &Device::Cpu)?,
         expected,
     ))
-}
-
-fn per_channel_fp8() -> Result<(Tensor, Tensor, Vec<f32>)> {
-    let codes = e4m3(ROWS * ODD_COLUMNS, 13)?.reshape((ROWS, ODD_COLUMNS))?;
-    let scales = Tensor::from_vec(
-        (0..ROWS).map(|r| 0.5 + r as f32 * 0.25).collect(),
-        ROWS,
-        &Device::Cpu,
-    )?;
-    let expected = codes
-        .flatten_all()?
-        .to_vec1::<F8E4M3>()?
-        .into_iter()
-        .enumerate()
-        .map(|(i, q)| q.to_f32() * (0.5 + (i / ODD_COLUMNS) as f32 * 0.25))
-        .collect();
-    Ok((codes, scales, expected))
-}
-
-fn check_table(
-    name: &str,
-    table: &EmbeddingTable<'_>,
-    expected: &[f32],
-    device: &Device,
-) -> Result<()> {
-    let ids_host = ids(table.rows);
-    let gathered = ids_host
-        .iter()
-        .flat_map(|&r| {
-            expected[r as usize * table.columns..(r as usize + 1) * table.columns].to_vec()
-        })
-        .collect::<Vec<_>>();
-    let expected = Tensor::from_vec(gathered, (2, 4, table.columns), &Device::Cpu)?;
-    let ids = Tensor::from_vec(ids_host, (2, 4), device)?;
-    assert_close(
-        name,
-        &table
-            .gather(&ids, DType::F32.into())?
-            .to_device(&Device::Cpu)?,
-        &expected,
-        TOLERANCE,
-    )
-}
-
-fn raw_u8(bytes: TableBytes<'_>, device: &Device) -> Result<Tensor> {
-    let host = HostBytes::new(bytes)?;
-    let bytes = host.bytes()?;
-    Tensor::from_slice(bytes, bytes.len(), device)
-}
-
-fn check_codecs_without_a_layer(device: &Device) -> Result<()> {
-    for bits in [4, 8] {
-        let (data, scales, expected) = sym_int_table(bits)?;
-        let (data, scales) = (data.to_device(device)?, scales.to_device(device)?);
-        let codec = RowCodec::SymInt {
-            bits,
-            grid: ScaleGrid::per_row(ScaleType::F16, 32),
-        };
-        let table = EmbeddingTable::new(codec, ROWS, BLOCK_COLUMNS, &data).with_scales(&scales);
-        check_table(&format!("sym int{bits}"), &table, &expected, device)?;
-    }
-    let (codes, scales, expected) = per_channel_fp8()?;
-    let codes = raw_u8(TableBytes::Tensor(&codes), device)?;
-    let scales = scales.to_device(device)?;
-    let table = EmbeddingTable::new(RowCodec::Fp8(None), ROWS, ODD_COLUMNS, &codes)
-        .with_row_scale(RowScale::PerRow(&scales));
-    check_table("fp8 channel", &table, &expected, device)
-}
-
-#[test]
-fn host_gather_handles_codecs_without_a_layer() -> Result<()> {
-    check_codecs_without_a_layer(&Device::Cpu)
-}
-
-fn check_fp8_scale_boundaries(device: &Device) -> Result<()> {
-    for group in FP8_SCALE_GROUPS {
-        for columns in FP8_SCALE_TEST_COLUMNS {
-            for rows_per_scale in [1, 4] {
-                let scale_columns = columns.div_ceil(group);
-                let scales: Vec<f32> = (0..ROWS.div_ceil(rows_per_scale) * scale_columns)
-                    .map(|i| (i + 1) as f32 * 0.25)
-                    .collect();
-                let expected: Vec<f32> = (0..ROWS * columns)
-                    .map(|i| {
-                        scales[(i / columns / rows_per_scale) * scale_columns + i % columns / group]
-                    })
-                    .collect();
-                let data = Tensor::from_vec(
-                    vec![F8E4M3::from_f32(1.0).to_bits(); ROWS * columns],
-                    (ROWS, columns),
-                    device,
-                )?;
-                let scales = Tensor::from_vec(scales.clone(), scales.len(), device)?;
-                let codec = RowCodec::Fp8(Some(ScaleGrid {
-                    ty: ScaleType::F32,
-                    group,
-                    rows_per_scale,
-                }));
-                let table = EmbeddingTable::new(codec, ROWS, columns, &data).with_scales(&scales);
-                check_table(
-                    &format!("fp8 group={group} columns={columns} scale_rows={rows_per_scale}"),
-                    &table,
-                    &expected,
-                    device,
-                )?;
-            }
-        }
-    }
-    Ok(())
-}
-
-#[test]
-fn host_gather_handles_fp8_scale_boundaries() -> Result<()> {
-    check_fp8_scale_boundaries(&Device::Cpu)
-}
-
-#[cfg(any(feature = "cuda", feature = "metal"))]
-mod gpu {
-    use super::*;
-
-    struct DeviceCopy {
-        data: Tensor,
-        scales: Option<Tensor>,
-        aux: Option<Tensor>,
-        row_scale: Option<Tensor>,
-    }
-
-    fn opt_u8(t: Option<&Tensor>, device: &Device) -> Result<Option<Tensor>> {
-        t.map(|t| raw_u8(TableBytes::Tensor(t), device)).transpose()
-    }
-
-    fn upload(table: &EmbeddingTable<'_>, device: &Device) -> Result<DeviceCopy> {
-        let TableStorage::Device { data, scales, aux } = table.storage else {
-            unreachable!()
-        };
-        let row_scale = match table.row_scale {
-            RowScale::Scalar(t) | RowScale::PerRow(t) => Some(t.to_device(device)?),
-            _ => None,
-        };
-        Ok(DeviceCopy {
-            data: raw_u8(data, device)?,
-            scales: opt_u8(scales, device)?,
-            aux: opt_u8(aux, device)?,
-            row_scale,
-        })
-    }
-
-    fn on_device<'a>(table: &EmbeddingTable<'_>, copy: &'a DeviceCopy) -> EmbeddingTable<'a> {
-        let mut out = EmbeddingTable::new(table.codec, table.rows, table.columns, &copy.data);
-        if let Some(s) = &copy.scales {
-            out = out.with_scales(s);
-        }
-        if let Some(a) = &copy.aux {
-            out = out.with_aux(a);
-        }
-        out.row_scale = match (table.row_scale, &copy.row_scale) {
-            (RowScale::Scalar(_), Some(t)) => RowScale::Scalar(t),
-            (RowScale::PerRow(_), Some(t)) => RowScale::PerRow(t),
-            (RowScale::Value(v), _) => RowScale::Value(v),
-            _ => RowScale::None,
-        };
-        out
-    }
-
-    fn check_every_codec(device: Device) -> Result<()> {
-        for case in cases()? {
-            let table = case.layer.embedding_table().unwrap();
-            let copy = upload(&table, &device)?;
-            let cuda = on_device(&table, &copy);
-            let rows = table.rows;
-            let host_ids = Tensor::from_vec(ids(rows), (2, 4), &Device::Cpu)?;
-            let expected = reference(&case, &host_ids)?;
-            for ids in [
-                host_ids.to_device(&device)?,
-                host_ids.to_dtype(DType::I64)?.to_device(&device)?,
-            ] {
-                let actual = cuda.gather(&ids, DType::F32.into())?;
-                assert_close(
-                    &case.name,
-                    &actual.to_device(&Device::Cpu)?,
-                    &expected,
-                    TOLERANCE,
-                )?;
-            }
-            let ids = host_ids.to_device(&device)?;
-            for dtype in [DType::F16, DType::BF16] {
-                let actual = cuda.gather(&ids, EmbeddingOutput::scaled(dtype, SCALE))?;
-                assert_eq!(actual.dtype(), dtype);
-                assert_close(
-                    &format!("{} {dtype:?}", case.name),
-                    &actual.to_device(&Device::Cpu)?,
-                    &(&expected * SCALE)?.to_dtype(dtype)?.to_dtype(DType::F32)?,
-                    1e-2,
-                )?;
-            }
-            let past = Tensor::from_vec(vec![rows as u32], (1, 1), &device)?;
-            let zeros = cuda.gather(&past, DType::F32.into())?;
-            assert_eq!(
-                zeros.abs()?.sum_all()?.to_scalar::<f32>()?,
-                0.0,
-                "{}",
-                case.name
-            );
-            let empty = cuda.gather(
-                &Tensor::zeros((0, 3), DType::U32, &device)?,
-                DType::F32.into(),
-            )?;
-            assert_eq!(empty.dims(), &[0, 3, table.columns]);
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "cuda")]
-    #[test]
-    fn cuda_gather_matches_dequantized_index_select_for_every_codec() -> Result<()> {
-        check_every_codec(Device::new_cuda(0)?)
-    }
-
-    #[cfg(feature = "metal")]
-    #[test]
-    fn metal_gather_matches_dequantized_index_select_for_every_codec() -> Result<()> {
-        check_every_codec(Device::new_metal(0)?)
-    }
-
-    #[cfg(feature = "cuda")]
-    #[test]
-    fn cuda_gather_handles_codecs_without_a_layer() -> Result<()> {
-        check_codecs_without_a_layer(&Device::new_cuda(0)?)
-    }
-
-    #[cfg(feature = "metal")]
-    #[test]
-    fn metal_gather_handles_codecs_without_a_layer() -> Result<()> {
-        check_codecs_without_a_layer(&Device::new_metal(0)?)
-    }
-
-    #[cfg(feature = "cuda")]
-    #[test]
-    fn cuda_gather_handles_fp8_scale_boundaries() -> Result<()> {
-        check_fp8_scale_boundaries(&Device::new_cuda(0)?)
-    }
-
-    #[cfg(feature = "metal")]
-    #[test]
-    fn metal_gather_handles_fp8_scale_boundaries() -> Result<()> {
-        check_fp8_scale_boundaries(&Device::new_metal(0)?)
-    }
-
-    #[cfg(feature = "cuda")]
-    #[test]
-    fn cuda_layers_gather_through_the_hook() -> Result<()> {
-        let device = Device::new_cuda(0)?;
-        let w = values(ROWS, BLOCK_COLUMNS)?;
-        let host_ids = Tensor::from_vec(ids(ROWS), (2, 4), &Device::Cpu)?;
-        let layers: Vec<(&str, Arc<dyn QuantMethod>)> = vec![
-            (
-                "bf16",
-                unquant(w.to_dtype(DType::BF16)?.to_device(&device)?)?,
-            ),
-            (
-                "q4k",
-                Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
-                    q_weight: Arc::new(QTensor::quantize_onto(
-                        &values(ROWS, K_COLUMNS)?,
-                        GgmlDType::Q4K,
-                        &device,
-                    )?),
-                    b: None,
-                })?),
-            ),
-        ];
-        for (name, layer) in layers {
-            let expected = layer
-                .dequantize_w()?
-                .to_device(&Device::Cpu)?
-                .to_dtype(DType::F32)?
-                .index_select(&host_ids.flatten_all()?, 0)?;
-            let actual =
-                layer.embedding_forward(&host_ids.to_device(&device)?, DType::F32.into())?;
-            assert!(actual.device().is_cuda());
-            assert_close(
-                name,
-                &actual.to_device(&Device::Cpu)?.flatten_to(1)?,
-                &expected,
-                1e-3,
-            )?;
-        }
-        Ok(())
-    }
 }

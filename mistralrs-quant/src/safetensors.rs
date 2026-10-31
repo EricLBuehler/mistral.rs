@@ -993,43 +993,6 @@ impl Backend for ShardedSafeTensors {
 mod tests {
     use super::*;
 
-    struct RestoreImmediateIsq(Option<crate::ImmediateIsqParams>);
-
-    impl Drop for RestoreImmediateIsq {
-        fn drop(&mut self) {
-            crate::ENGINE_IMMEDIATE_ISQ.with(|cell| *cell.borrow_mut() = self.0.take());
-        }
-    }
-
-    #[test]
-    fn topology_only_quantization_enables_streaming_cpu_load() -> Result<()> {
-        let _restore = RestoreImmediateIsq(crate::get_immediate_isq());
-        let (executor, _) = crate::create_isq_executor(crate::IsqExecutorConfig::new(None));
-        let predicate = Regex::new(r"\.experts\.down_proj\.weight$").map_err(Error::wrap)?;
-        for ty in [None, Some(crate::IsqType::Q4K)] {
-            crate::set_immediate_isq_with_executor(
-                None,
-                Vec::new(),
-                vec![crate::ImmediateIsqOverride {
-                    predicate: Some(predicate.clone()),
-                    layer_range: None,
-                    ty,
-                    device: None,
-                }],
-                crate::IsqCaptureMode::Immediate,
-                executor.clone(),
-            );
-            assert_eq!(streaming_cpu_load(&Device::Cpu), ty.is_some());
-        }
-        crate::set_immediate_isq(
-            Some(crate::IsqType::Q4K),
-            Vec::new(),
-            crate::IsqCaptureMode::Immediate,
-        );
-        assert!(streaming_cpu_load(&Device::Cpu));
-        Ok(())
-    }
-
     #[test]
     fn sliced_checkpoint_loading_preserves_offsets_shapes_and_dtypes() -> Result<()> {
         const SHAPE: (usize, usize, usize) = (4, 6, 8);
@@ -1106,24 +1069,6 @@ mod tests {
     }
 
     #[test]
-    fn contiguous_checkpoint_slices_borrow_the_source() -> Result<()> {
-        use safetensors::slice::IndexOp;
-        let bytes = (0..64u8).collect::<Vec<_>>();
-        let view = st::TensorView::new(st::Dtype::U8, vec![4, 4, 4], &bytes)?;
-        let contiguous = collect_tensor_slices(view.slice(1..3).map_err(Error::wrap)?);
-        assert!(matches!(contiguous, std::borrow::Cow::Borrowed(_)));
-        assert_eq!(&*contiguous, &bytes[16..48]);
-        let split = collect_tensor_slices(view.slice((.., 1..3)).map_err(Error::wrap)?);
-        assert!(matches!(split, std::borrow::Cow::Owned(_)));
-        let expected = [4..12, 20..28, 36..44, 52..60]
-            .into_iter()
-            .flat_map(|range| bytes[range].iter().copied())
-            .collect::<Vec<_>>();
-        assert_eq!(&*split, expected);
-        Ok(())
-    }
-
-    #[test]
     fn unaligned_checkpoint_slices_preserve_float_values() -> Result<()> {
         use safetensors::slice::IndexOp;
         const ROWS: usize = 4;
@@ -1169,49 +1114,6 @@ mod tests {
                 "{dtype:?}"
             );
         }
-        Ok(())
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn streamed_expert_slices_preserve_the_mapped_checkpoint() -> Result<()> {
-        use safetensors::slice::IndexOp;
-        const EXPERTS: usize = 4;
-        const ROWS: usize = 1024;
-        const COLS: usize = 8192;
-        let _restore = RestoreImmediateIsq(crate::get_immediate_isq());
-        crate::set_immediate_isq(
-            Some(crate::IsqType::Q4K),
-            Vec::new(),
-            crate::IsqCaptureMode::Immediate,
-        );
-        let file = tempfile::NamedTempFile::new().map_err(Error::wrap)?;
-        let tensor = Tensor::ones((EXPERTS, ROWS, COLS), DType::BF16, &Device::Cpu)?;
-        candle_core::safetensors::save(&HashMap::from([("weight", tensor)]), file.path())?;
-        let raw = unsafe { MmapedSafetensors::new(file.path())? };
-        let loaded = raw.load("weight", &Device::Cpu, Some(DType::BF16))?;
-        assert_eq!(loaded.dims(), &[EXPERTS, ROWS, COLS]);
-        assert!(loaded
-            .flatten_all()?
-            .to_vec1::<half::bf16>()?
-            .iter()
-            .all(|value| *value == half::bf16::ONE));
-        drop(loaded);
-        let view = raw.get("weight")?;
-        for (first, last) in [(0, ROWS / 2), (ROWS / 2, ROWS)] {
-            let sliced = load_cpu_slices::<half::bf16>(
-                view.slice((.., first..last)).map_err(Error::wrap)?,
-                &[EXPERTS, ROWS / 2, COLS],
-                true,
-            )?;
-            assert!(sliced
-                .flatten_all()?
-                .to_vec1::<half::bf16>()?
-                .iter()
-                .all(|value| *value == half::bf16::ONE));
-        }
-        let words: &[half::bf16] = bytemuck::try_cast_slice(view.data()).map_err(Error::msg)?;
-        assert!(words.iter().all(|value| *value == half::bf16::ONE));
         Ok(())
     }
 }

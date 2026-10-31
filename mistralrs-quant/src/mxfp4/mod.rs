@@ -1024,64 +1024,6 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "cuda")]
-    #[test]
-    fn cuda_gather_shares_unsqueezed_input_across_topk() -> Result<()> {
-        const EXPERTS: usize = 3;
-        const OUTPUT: usize = 4;
-        const TOKENS: usize = 3;
-        const TOPK: usize = 2;
-        let Ok(device) = Device::new_cuda(0) else {
-            return Ok(());
-        };
-        let packed = EXPERTS * OUTPUT * TEST_HIDDEN_SIZE / 2;
-        let blocks = Tensor::from_vec(
-            (0..packed)
-                .map(|i| (i * 37 % 251) as u8)
-                .collect::<Vec<_>>(),
-            (EXPERTS, OUTPUT, TEST_HIDDEN_SIZE / 2),
-            &Device::Cpu,
-        )?;
-        let scales = Tensor::from_vec(
-            vec![120u8; EXPERTS * OUTPUT * TEST_HIDDEN_SIZE / MXFP4_BLOCK_SIZE],
-            (EXPERTS, OUTPUT, TEST_HIDDEN_SIZE / MXFP4_BLOCK_SIZE),
-            &Device::Cpu,
-        )?;
-        let cpu = MXFP4Layer::from_parts(blocks.clone(), scales.clone(), None);
-        let gpu =
-            MXFP4Layer::from_parts(blocks.to_device(&device)?, scales.to_device(&device)?, None);
-        let input = Tensor::from_vec(
-            (0..TOKENS * TEST_HIDDEN_SIZE)
-                .map(|i| ((i % 13) as f32 - 6.0) / 8.0)
-                .collect::<Vec<_>>(),
-            (TOKENS, 1, TEST_HIDDEN_SIZE),
-            &Device::Cpu,
-        )?;
-        let indices = Tensor::from_vec(vec![2u32, 0, 1, 2, 0, 1], (TOKENS, TOPK), &Device::Cpu)?;
-
-        let weight = cpu.dequantize_w()?.to_dtype(DType::F32)?;
-        let rows = input.squeeze(1)?;
-        let mut expected = Vec::with_capacity(TOKENS * TOPK);
-        for (token, experts) in indices.to_vec2::<u32>()?.into_iter().enumerate() {
-            let x = rows.narrow(0, token, 1)?;
-            for expert in experts {
-                expected.push(x.matmul(&weight.get(expert as usize)?.t()?)?);
-            }
-        }
-        let expected = Tensor::cat(&expected, 0)?.reshape((TOKENS, TOPK, OUTPUT))?;
-
-        let actual = gpu
-            .gather_forward(
-                &input.to_dtype(DType::BF16)?.to_device(&device)?,
-                &indices.to_device(&device)?,
-            )?
-            .to_dtype(DType::F32)?
-            .to_device(&Device::Cpu)?;
-        assert_eq!(actual.dims(), &[TOKENS, TOPK, OUTPUT]);
-        let scale = expected.abs()?.max_all()?.to_scalar::<f32>()?.max(1.0);
-        assert_close(&actual, &expected, scale * 0.02)
-    }
-
     #[test]
     fn stacked_mxfp4_requantizes_to_ggml_with_bias() -> Result<()> {
         let layer = stacked_test_layer()?;

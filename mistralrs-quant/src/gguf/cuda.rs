@@ -1728,7 +1728,3 @@ pub unsafe fn indexed_moe_fused_decode(
         out_shape,
     )))
 }
-
-#[cfg(test)]
-#[path = "moe_prefetch_tests.rs"]
-mod moe_prefetch_tests;

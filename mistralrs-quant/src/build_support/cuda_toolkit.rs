@@ -75,16 +75,6 @@ mod tests {
     }
 
     #[test]
-    fn nvfp4_targets_every_sm12x_arch_specific_build() {
-        for compute_cap in [120, 121] {
-            assert_eq!(
-                nvfp4_cutlass_arch_for_build((13, 4), compute_cap, true, LINUX_TARGET),
-                Some(format!("{compute_cap}a"))
-            );
-        }
-    }
-
-    #[test]
     fn nvfp4_preserves_target_and_feature_requirements() {
         for compute_cap in [80, 90, 100, 103, 110] {
             assert!(

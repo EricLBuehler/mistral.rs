@@ -391,7 +391,3 @@ fn launch(plan: Plan<'_>) -> Result<Tensor> {
     drop(routing_ptrs);
     Ok(Tensor::from((Storage::Cuda(output), (rows, n))))
 }
-
-#[cfg(test)]
-#[path = "portable_tests.rs"]
-mod tests;

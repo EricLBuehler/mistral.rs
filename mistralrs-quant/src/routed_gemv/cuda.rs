@@ -142,25 +142,11 @@ unsafe extern "C" {
     ) -> i32;
 }
 
-#[cfg(test)]
-thread_local! {
-    pub(super) static FORCE_PREFETCH: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
-    pub(super) static FORCE_LANES: std::cell::Cell<Option<i32>> = const { std::cell::Cell::new(None) };
-}
-
 fn prefetch(dev: &CudaDevice) -> bool {
-    #[cfg(test)]
-    if let Some(forced) = FORCE_PREFETCH.with(|flag| flag.get()) {
-        return forced;
-    }
     crate::cuda_policy::prefers_weight_prefetch(&cuda_device_info(dev))
 }
 
 fn lanes(units: usize) -> i32 {
-    #[cfg(test)]
-    if let Some(forced) = FORCE_LANES.with(|flag| flag.get()) {
-        return forced;
-    }
     if units >= WIDE_ROW_UNITS {
         LANES_WIDE
     } else if units >= MEDIUM_ROW_UNITS {

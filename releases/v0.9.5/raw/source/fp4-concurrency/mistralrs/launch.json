@@ -1,7 +1,0 @@
-{
-  "command": [
-    "bash",
-    "/tmp/qwen38-fp4-batch-gdn-final-20261029/launch-mistralrs.sh"
-  ],
-  "started_at": "2026-10-29T01:55:16.063629+00:00"
-}

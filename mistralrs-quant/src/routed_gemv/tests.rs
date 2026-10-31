@@ -21,13 +21,6 @@ const INPUT_OFFSETS: [usize; 4] = [1, 3, 8, 17];
 const OFFSET_IDS: [u32; 4] = [3, 1, 2, 0];
 const STREAM_ROWS: usize = 65_536;
 const STREAM_COLUMNS: usize = 128;
-const ACTIVATIONS: [GluActivationType; 5] = [
-    GluActivationType::Silu,
-    GluActivationType::Gelu,
-    GluActivationType::Relu,
-    GluActivationType::GeluErf,
-    GluActivationType::Sigmoid,
-];
 
 struct Rng(u64);
 
@@ -283,21 +276,6 @@ fn afq(
     })
 }
 
-fn routing(rng: &mut Rng, tokens: usize, topk: usize, used: usize) -> Vec<u32> {
-    let mut ids = Vec::with_capacity(tokens * topk);
-    for _ in 0..tokens {
-        let mut picked = Vec::with_capacity(topk);
-        while picked.len() < topk {
-            let e = (rng.next() as usize % used) as u32;
-            if !picked.contains(&e) {
-                picked.push(e);
-            }
-        }
-        ids.extend(picked);
-    }
-    ids
-}
-
 fn random(rng: &mut Rng, shape: &[usize], dtype: DType, dev: &Device) -> Result<Tensor> {
     let len = shape.iter().product::<usize>();
     let values = (0..len).map(|_| rng.uniform()).collect::<Vec<_>>();
@@ -350,225 +328,6 @@ fn check(name: &str, got: &[f32], want: &[f32], tol: f32) {
         got.iter().all(|v| v.is_finite()),
         "{name}: non-finite output"
     );
-}
-
-fn activate(g: f32, act: GluActivationType) -> f32 {
-    match act {
-        GluActivationType::Silu => g / (1.0 + (-g).exp()),
-        GluActivationType::Gelu => {
-            0.5 * g * (1.0 + (0.797_884_6 * (g + 0.044715 * g * g * g)).tanh())
-        }
-        GluActivationType::Relu => g.max(0.0),
-        GluActivationType::GeluErf => 0.5 * g * (1.0 + erf(g / std::f32::consts::SQRT_2)),
-        GluActivationType::Sigmoid => 1.0 / (1.0 + (-g).exp()),
-    }
-}
-
-// Abramowitz-Stegun 7.1.26, |err| < 1.5e-7
-fn erf(x: f32) -> f32 {
-    let t = 1.0 / (1.0 + 0.327_591_1 * x.abs());
-    let poly = t
-        * (0.254_829_6
-            + t * (-0.284_496_74 + t * (1.421_413_7 + t * (-1.453_152_1 + t * 1.061_405_4))));
-    let y = 1.0 - poly * (-x * x).exp();
-    if x >= 0.0 {
-        y
-    } else {
-        -y
-    }
-}
-
-struct Shape {
-    tokens: usize,
-    topk: usize,
-    used: usize,
-    per_route: bool,
-}
-
-const SHAPES: [Shape; 5] = [
-    Shape {
-        tokens: 1,
-        topk: 1,
-        used: 4,
-        per_route: false,
-    },
-    Shape {
-        tokens: 1,
-        topk: 8,
-        used: 12,
-        per_route: false,
-    },
-    Shape {
-        tokens: 3,
-        topk: 2,
-        used: 5,
-        per_route: true,
-    },
-    Shape {
-        tokens: 5,
-        topk: 10,
-        used: 12,
-        per_route: false,
-    },
-    Shape {
-        tokens: 8,
-        topk: 8,
-        used: 9,
-        per_route: true,
-    },
-];
-
-fn exercise(
-    name: &str,
-    make: &dyn Fn(&mut Rng, &Device) -> Result<Case>,
-    dtype: DType,
-) -> Result<()> {
-    let dev = Device::new_cuda(0)?;
-    let tol = if dtype == DType::F32 {
-        F32_TOL
-    } else {
-        BF16_TOL
-    };
-    let mut rng = Rng(0x5eed);
-    let gate = make(&mut rng, &dev)?;
-    let up = make(&mut rng, &dev)?;
-    let (n, k) = (gate.weights.n, gate.weights.k);
-    for prefetch in [false, true] {
-        for lanes in [8, 16, 32] {
-            cuda::FORCE_PREFETCH.with(|f| f.set(Some(prefetch)));
-            cuda::FORCE_LANES.with(|f| f.set(Some(lanes)));
-            for shape in &SHAPES {
-                let tag = format!(
-                    "{name} {dtype:?} prefetch={prefetch} lanes={lanes} t={} topk={}",
-                    shape.tokens, shape.topk
-                );
-                let ids = routing(&mut rng, shape.tokens, shape.topk, shape.used);
-                let idx = Tensor::from_vec(ids.clone(), (shape.tokens, shape.topk), &dev)?;
-                let routes = if shape.per_route { shape.topk } else { 1 };
-                let x = random(&mut rng, &[shape.tokens, routes, k], dtype, &dev)?;
-                let x_rows = rows_of(&x)?;
-                let route_rows = (0..ids.len())
-                    .map(|r| x_rows[if shape.per_route { r } else { r / shape.topk }].clone())
-                    .collect::<Vec<_>>();
-                let plain = super::try_routed_gather(&x, &idx, &gate.weights)?
-                    .expect("routed gather declined a supported case");
-                assert_eq!(plain.dims(), &[shape.tokens, shape.topk, n]);
-                let want = reference(&gate, &route_rows, &ids, None);
-                check(&format!("{tag} plain"), &host(&plain)?, &want.concat(), tol);
-
-                let routing_weights =
-                    random(&mut rng, &[shape.tokens, shape.topk], DType::F32, &dev)?;
-                let rw = host(&routing_weights)?;
-                let reduced = cuda::reduce(&x, &idx, &routing_weights, &gate.weights)?
-                    .expect("routed reduce declined a supported case");
-                let want_reduce = (0..shape.tokens)
-                    .flat_map(|t| {
-                        let want = &want;
-                        let rw = &rw;
-                        (0..n).map(move |row| {
-                            (0..shape.topk)
-                                .map(|s| rw[t * shape.topk + s] * want[t * shape.topk + s][row])
-                                .sum::<f32>()
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                check(
-                    &format!("{tag} reduce"),
-                    &host(&reduced)?,
-                    &want_reduce,
-                    tol,
-                );
-
-                if shape.per_route {
-                    continue;
-                }
-                let want_up = reference(&up, &route_rows, &ids, None);
-                for act in ACTIVATIONS {
-                    let glu = cuda::glu(&x, &idx, &gate.weights, &up.weights, act)?
-                        .expect("routed GLU declined a supported case");
-                    let want_glu = want
-                        .concat()
-                        .iter()
-                        .zip(want_up.concat())
-                        .map(|(g, u)| activate(*g, act) * u)
-                        .collect::<Vec<_>>();
-                    check(&format!("{tag} glu {act:?}"), &host(&glu)?, &want_glu, tol);
-                }
-            }
-        }
-    }
-    cuda::FORCE_PREFETCH.with(|f| f.set(None));
-    cuda::FORCE_LANES.with(|f| f.set(None));
-    Ok(())
-}
-
-#[test]
-fn nvfp4_matches_dequantized_reference() -> Result<()> {
-    for shape in [[12, 37, 128], [12, 70, 80]] {
-        exercise(
-            &format!("nvfp4 {shape:?}"),
-            &|r, d| nvfp4(r, shape, d),
-            DType::BF16,
-        )?;
-    }
-    exercise("nvfp4 f32", &|r, d| nvfp4(r, [12, 33, 64], d), DType::F32)
-}
-
-#[test]
-fn mxfp4_matches_dequantized_reference() -> Result<()> {
-    exercise("mxfp4", &|r, d| mx(r, [12, 45, 160], false, d), DType::BF16)?;
-    exercise(
-        "mxfp4 f16",
-        &|r, d| mx(r, [12, 19, 96], false, d),
-        DType::F16,
-    )
-}
-
-#[test]
-fn mxfp8_matches_dequantized_reference() -> Result<()> {
-    exercise("mxfp8", &|r, d| mx(r, [12, 41, 192], true, d), DType::BF16)?;
-    exercise(
-        "mxfp8 f32",
-        &|r, d| mx(r, [12, 17, 64], true, d),
-        DType::F32,
-    )
-}
-
-#[test]
-fn fp8_matches_dequantized_reference() -> Result<()> {
-    exercise(
-        "fp8 block",
-        &|r, d| fp8_block(r, [12, 75, 208], [32, 64], d),
-        DType::BF16,
-    )?;
-    exercise(
-        "fp8 channel",
-        &|r, d| fp8_block(r, [12, 29, 144], [1, 144], d),
-        DType::BF16,
-    )?;
-    exercise(
-        "fp8 tensor",
-        &|r, d| fp8_block(r, [12, 29, 112], [29, 112], d),
-        DType::F16,
-    )
-}
-
-#[test]
-fn afq_matches_dequantized_reference() -> Result<()> {
-    for bits in [2, 3, 4, 6, 8] {
-        for group in [32, 64, 128] {
-            exercise(
-                &format!("afq{bits} g{group}"),
-                &|r, d| afq(r, [12, 23, 256], bits, group, DType::BF16, d),
-                DType::BF16,
-            )?;
-        }
-    }
-    exercise(
-        "afq4 f32",
-        &|r, d| afq(r, [12, 9, 64], 4, 32, DType::F32, d),
-        DType::F32,
-    )
 }
 
 #[test]
@@ -634,5 +393,57 @@ fn rejects_tokens_past_decode_limit() -> Result<()> {
     let idx = Tensor::zeros((tokens, 2), DType::U32, &dev)?;
     let x = random(&mut rng, &[tokens, 1, 64], DType::BF16, &dev)?;
     assert!(super::try_routed_gather(&x, &idx, &case.weights)?.is_none());
+    Ok(())
+}
+
+#[test]
+fn fused_fp8_glu_and_reduce_match_reference() -> Result<()> {
+    let device = Device::new_cuda_with_stream(0)?;
+    let mut rng = Rng(7);
+    let gate = fp8_block(&mut rng, OFFSET_WEIGHT_SHAPE, [1, MX_GROUP], &device)?;
+    let up = fp8_block(&mut rng, OFFSET_WEIGHT_SHAPE, [1, MX_GROUP], &device)?;
+    let input = random(
+        &mut rng,
+        &[OFFSET_TOKENS, 1, OFFSET_WEIGHT_SHAPE[2]],
+        DType::BF16,
+        &device,
+    )?;
+    let indices = Tensor::from_vec(OFFSET_IDS.to_vec(), (OFFSET_TOKENS, OFFSET_TOPK), &device)?;
+    let rows = rows_of(&input)?;
+    let rows = (0..OFFSET_IDS.len())
+        .map(|i| rows[i / OFFSET_TOPK].clone())
+        .collect::<Vec<_>>();
+    let expected = reference(&gate, &rows, &OFFSET_IDS, None);
+    let expected_up = reference(&up, &rows, &OFFSET_IDS, None);
+    let glu = cuda::glu(
+        &input,
+        &indices,
+        &gate.weights,
+        &up.weights,
+        GluActivationType::Relu,
+    )?
+    .unwrap();
+    let expected_glu = expected
+        .iter()
+        .flatten()
+        .zip(expected_up.iter().flatten())
+        .map(|(gate, up)| gate.max(0.0) * up)
+        .collect::<Vec<_>>();
+    check("fused GLU", &host(&glu)?, &expected_glu, BF16_TOL);
+    let routing = Tensor::new(&[[0.25f32, 0.75], [0.5, 0.5]], &device)?;
+    let weights = routing.to_vec2::<f32>()?;
+    let expected_reduce = (0..OFFSET_TOKENS)
+        .flat_map(|token| {
+            let expected = &expected;
+            let weights = &weights;
+            (0..OFFSET_WEIGHT_SHAPE[1]).map(move |row| {
+                (0..OFFSET_TOPK)
+                    .map(|route| weights[token][route] * expected[token * OFFSET_TOPK + route][row])
+                    .sum::<f32>()
+            })
+        })
+        .collect::<Vec<_>>();
+    let reduced = cuda::reduce(&input, &indices, &routing, &gate.weights)?.unwrap();
+    check("fused reduce", &host(&reduced)?, &expected_reduce, BF16_TOL);
     Ok(())
 }

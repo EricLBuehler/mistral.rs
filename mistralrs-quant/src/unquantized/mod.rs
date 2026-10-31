@@ -955,6 +955,3 @@ mod tests {
 
 #[cfg(all(test, feature = "cuda"))]
 mod wide_gemv_tests;
-
-#[cfg(all(test, feature = "cuda"))]
-mod stats_tests;

@@ -1,9 +1,0 @@
-{
-  "command": [
-    "bash",
-    "/tmp/qwen38-fp4-c1-c8-20261028/launch-vllm.sh",
-    "exact",
-    "device"
-  ],
-  "started_at": "2026-10-28T20:22:38.160864+00:00"
-}

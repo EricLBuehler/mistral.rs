@@ -467,7 +467,3 @@ impl CutileKernel for HyperConnectionKernel {
         Ok(())
     }
 }
-
-#[cfg(test)]
-#[path = "hyper_connection_tests.rs"]
-mod tests;

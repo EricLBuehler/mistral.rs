@@ -1,2 +1,0 @@
-# Preserve terminal output verbatim in raw test logs.
-raw/*.log whitespace=-blank-at-eof

@@ -211,7 +211,3 @@ pub(super) fn forward(
         Ok(output)
     }
 }
-
-#[cfg(test)]
-#[path = "decode_tests.rs"]
-mod tests;

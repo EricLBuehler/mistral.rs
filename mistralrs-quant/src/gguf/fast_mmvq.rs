@@ -97,10 +97,6 @@ type WsMap = Mutex<HashMap<WorkspaceKey, &'static Mutex<WorkspaceSlot>>>;
 static WORKSPACE: OnceLock<WsMap> = OnceLock::new();
 
 pub(super) fn prefers_weight_prefetch(dev: &CudaDevice) -> bool {
-    #[cfg(test)]
-    if prefetch_tests::FORCE_PLAIN.with(|flag| flag.get()) {
-        return false;
-    }
     crate::cuda_policy::prefers_weight_prefetch(&cuda_device_info(dev))
 }
 
@@ -1325,15 +1321,3 @@ fn fused_qkv_optional(
         _ => unreachable!(),
     }
 }
-
-#[cfg(test)]
-#[path = "mmvq_prefetch_tests.rs"]
-mod prefetch_tests;
-
-#[cfg(test)]
-#[path = "shared_mmvq_tests.rs"]
-mod shared_tests;
-
-#[cfg(test)]
-#[path = "mixed_pair_tests.rs"]
-mod mixed_pair_tests;

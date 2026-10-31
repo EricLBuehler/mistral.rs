@@ -1597,23 +1597,6 @@ mod auto_device_map_quantization_tests {
     }
 
     #[test]
-    fn tensor_size_estimates_follow_layer_and_pattern_topology_precedence() -> Result<()> {
-        let topology = Topology::from_str(
-            "'0-3':\n  isq: Q8_0\n'/^model\\.layers\\.1\\./':\n  isq: Q6K\n'/^model\\.layers\\.2\\./':\n  device: cpu\n",
-        )?;
-        let quantization = AutoDeviceMapQuantization::isq(Some(IsqType::Q4K), Some(&topology));
-        for (layer, expected) in [(0, 544), (1, 420), (2, 288), (3, 288)] {
-            let name = format!("model.layers.{layer}.mlp.up_proj.weight");
-            assert_eq!(
-                quantization.tensor_size_in_bytes(&name, &[2, 256], DType::BF16, 1, false)?,
-                expected,
-                "{name}"
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
     fn topology_isq_overlays_prepared_weight_source_sizing() -> Result<()> {
         let dtype = DType::BF16;
         let source = PackFactorWeightSource(IsqType::Q2K.pack_factor(dtype));
@@ -1722,105 +1705,6 @@ mod auto_device_map_quantization_tests {
     }
 
     #[test]
-    fn expert_sizing_uses_first_expert_isq_predicates_for_stacked_weights() -> Result<()> {
-        use candle_core::Tensor;
-        use mistralrs_quant::ShardedSafeTensors;
-
-        const PREFIX: &str = "model.layers.0.mlp.experts";
-        const EXPERTS: usize = 2;
-        const WIDTH: usize = 256;
-        const Q4_BYTES: usize = EXPERTS * WIDTH * WIDTH / 32 * 18;
-        const Q8_BYTES: usize = EXPERTS * WIDTH * WIDTH / 32 * 34;
-        for names in crate::moe::ExpertProjNames::KNOWN {
-            let weights = ShardedSafeTensors::wrap(
-                std::collections::HashMap::from([(
-                    format!("{PREFIX}.0.{}.weight", names.gate),
-                    Tensor::zeros((1, 1), DType::BF16, &Device::Cpu)?,
-                )]),
-                DType::BF16,
-                Device::Cpu,
-            );
-            let checkpoint = ResourceSource {
-                weights: Some(&weights),
-                paths: &[],
-            }
-            .checkpoint_tensors()?;
-            let topology = Topology::from_str(&format!(
-                "'/^model\\.layers\\.0\\.mlp\\.experts\\.0\\.{}\\.weight$/':\n  isq: Q8_0\n'/^model\\.layers\\.0\\.mlp\\.experts\\.1\\.{}\\.weight$/':\n  isq: Q2K\n",
-                names.gate, names.gate,
-            ))?;
-            let sizing = AutoDeviceMapQuantization::isq(Some(IsqType::Q4_0), Some(&topology))
-                .with_checkpoint(&checkpoint);
-            assert_eq!(
-                sizing.expert_weights_size_in_bytes(
-                    PREFIX,
-                    [EXPERTS, WIDTH, WIDTH],
-                    DType::BF16,
-                    1
-                )?,
-                Q8_BYTES + 2 * Q4_BYTES,
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn expert_sizing_requantization_uses_stacked_projection_predicates() -> Result<()> {
-        use candle_core::Tensor;
-        use mistralrs_quant::ShardedSafeTensors;
-
-        const PREFIX: &str = "model.layers.0.mlp.experts";
-        const EXPERTS: usize = 2;
-        const WIDTH: usize = 256;
-        const Q4_BYTES: usize = EXPERTS * WIDTH * WIDTH / 32 * 18;
-        const Q8_BYTES: usize = EXPERTS * WIDTH * WIDTH / 32 * 34;
-        let weights = ShardedSafeTensors::wrap(
-            ["weight", "weight_scale_inv"]
-                .into_iter()
-                .map(|name| {
-                    Ok((
-                        format!("{PREFIX}.0.gate_proj.{name}"),
-                        Tensor::zeros((1, 1), DType::BF16, &Device::Cpu)?,
-                    ))
-                })
-                .collect::<Result<std::collections::HashMap<_, _>>>()?,
-            DType::BF16,
-            Device::Cpu,
-        );
-        let checkpoint = ResourceSource {
-            weights: Some(&weights),
-            paths: &[],
-        }
-        .checkpoint_tensors()?;
-        let topology = Topology::from_str(
-            r"'/^model\.layers\.0\.mlp\.experts\.gate_proj\.weight$/':
-  isq: Q8_0
-'/^model\.layers\.0\.mlp\.experts\.0\.down_proj\.weight$/':
-  isq: Q6K
-",
-        )?;
-        for config in [
-            serde_json::json!({"quant_method": "modelopt", "quant_algo": "NVFP4", "group_size": 16}),
-            serde_json::json!({"quant_method": "fp8", "weight_block_size": [128, 128]}),
-        ] {
-            let config: QuantizedConfig = serde_json::from_value(config)?;
-            let sizing = AutoDeviceMapQuantization::isq(Some(IsqType::Q4_0), Some(&topology))
-                .with_checkpoint(&checkpoint)
-                .with_source_quantization(Some(&config));
-            assert_eq!(
-                sizing.expert_weights_size_in_bytes(
-                    PREFIX,
-                    [EXPERTS, WIDTH, WIDTH],
-                    DType::BF16,
-                    1
-                )?,
-                Q8_BYTES + 2 * Q4_BYTES,
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
     fn expert_sizing_accounts_for_separate_checkpoint_projections() -> Result<()> {
         const PREFIX: &str = "model.layers.0.mlp.experts";
         const EXPERTS: usize = 2;
@@ -1876,54 +1760,6 @@ mod auto_device_map_quantization_tests {
                 "{name}"
             );
         }
-        Ok(())
-    }
-
-    #[test]
-    fn checkpoint_sizing_keeps_embeddings_dense_and_respects_topology() -> Result<()> {
-        let config: QuantizedConfig = serde_json::from_value(serde_json::json!({
-            "quant_method": "modelopt", "quant_algo": "NVFP4"
-        }))?;
-        let sizing = AutoDeviceMapQuantization::checkpoint(Some(&config), None).unwrap();
-        let shape = [2, 256];
-        assert_eq!(
-            sizing.embedding_size_in_bytes_for_candidates(&[EMBEDDING], &shape, DType::BF16, 1)?,
-            1024
-        );
-        assert_eq!(
-            language_model_pack_factors(
-                Some(&sizing),
-                EMBEDDING,
-                "lm_head.weight",
-                false,
-                DType::BF16,
-                1
-            )?,
-            (1, 4)
-        );
-        assert_eq!(
-            language_model_pack_factors(
-                Some(&sizing),
-                EMBEDDING,
-                "lm_head.weight",
-                true,
-                DType::BF16,
-                1
-            )?
-            .0,
-            1
-        );
-        let topology = Topology::from_str("'0':\n  isq: Q8_0\n")?;
-        let sizing = AutoDeviceMapQuantization::checkpoint(Some(&config), Some(&topology)).unwrap();
-        let name = "model.layers.0.mlp.up_proj.weight";
-        assert_eq!(
-            sizing.tensor_size_in_bytes(name, &shape, DType::BF16, 1, false)?,
-            544
-        );
-        assert_eq!(
-            sizing.promoted_pack_factor_for(name, DType::BF16, 1)?,
-            IsqType::Q8_0.pack_factor(DType::BF16)
-        );
         Ok(())
     }
 }

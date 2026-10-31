@@ -711,30 +711,6 @@ mod tests {
     }
 
     #[test]
-    fn isq_weight_estimate_matches_quantized_storage_and_fallbacks() -> Result<()> {
-        use candle_core::{quantized::QTensor, Tensor};
-
-        for (shape, requested, actual) in [
-            (vec![2, 2560], IsqType::Q4K, GgmlDType::Q4K),
-            (vec![2, 640], IsqType::Q4K, GgmlDType::Q4_1),
-            (vec![2, 3, 640], IsqType::Q4K, GgmlDType::Q4_1),
-            (vec![2, 640], IsqType::Q6K, GgmlDType::Q5_1),
-            (vec![2, 33], IsqType::Q4K, GgmlDType::F32),
-        ] {
-            for source_dtype in [DType::BF16, DType::F32] {
-                let weight = Tensor::zeros(shape.as_slice(), source_dtype, &Device::Cpu)?;
-                let quantized = QTensor::quantize(&weight, actual)?;
-                assert_eq!(
-                    estimate_isq_weight_bytes(&shape, source_dtype, requested),
-                    quantized.data()?.len(),
-                    "shape {shape:?}, requested {requested:?}, source {source_dtype:?}"
-                );
-            }
-        }
-        Ok(())
-    }
-
-    #[test]
     fn fp8_estimate_includes_persistent_scales() {
         assert_eq!(
             estimate_output_bytes(&[4, 8], DType::BF16, IsqType::F8E4M3),

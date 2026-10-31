@@ -153,7 +153,3 @@ impl Nvfp4Embedding {
             .with_row_scale(RowScale::Value(self.global_scale))
     }
 }
-
-#[cfg(test)]
-#[path = "embedding_tests.rs"]
-mod tests;

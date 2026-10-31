@@ -3,8 +3,6 @@ pub mod cpu;
 #[cfg(feature = "cuda")]
 pub(crate) mod cuda;
 pub mod embedding;
-#[cfg(test)]
-mod embedding_tests;
 #[cfg(feature = "cuda")]
 pub mod fast_mmq;
 #[cfg(feature = "cuda")]

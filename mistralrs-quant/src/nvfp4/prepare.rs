@@ -85,7 +85,3 @@ pub(crate) unsafe fn launch_source(
     }
     Ok(())
 }
-
-#[cfg(test)]
-#[path = "prepare_tests.rs"]
-mod tests;

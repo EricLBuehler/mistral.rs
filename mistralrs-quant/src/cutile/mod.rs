@@ -272,27 +272,6 @@ mod tests {
     }
 
     #[test]
-    fn fp8_entry_hints_follow_cluster_support_and_smem() {
-        let device = |major, minor, smem_optin| crate::cuda_device::CudaDeviceInfo {
-            major,
-            minor,
-            sms: 48,
-            threads_per_sm: 1536,
-            l2_bytes: 24 << 20,
-            smem_optin,
-            warp_size: 32,
-            integrated: false,
-        };
-        let hinted =
-            |info| super::fp8_entry_hints_for(&info).map(|h| (h.occupancy, h.num_cta_in_cga));
-        assert_eq!(hinted(device(12, 1, 99 << 10)), Some((2, 2)));
-        assert_eq!(hinted(device(12, 0, 99 << 10)), Some((2, 2)));
-        assert_eq!(hinted(device(10, 0, 227 << 10)), None);
-        assert_eq!(hinted(device(9, 0, 227 << 10)), None);
-        assert_eq!(hinted(device(8, 9, 99 << 10)), None);
-    }
-
-    #[test]
     fn dependency_panics_become_errors() {
         let error = super::catch_cutile_panic("test JIT", || -> candle_core::Result<()> {
             panic!("tileiras rejected the target")

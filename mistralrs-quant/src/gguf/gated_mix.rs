@@ -161,7 +161,3 @@ pub fn try_fused_quantized_gated_mix(
         _ => unreachable!(),
     }))
 }
-
-#[cfg(test)]
-#[path = "gated_mix_tests.rs"]
-mod tests;

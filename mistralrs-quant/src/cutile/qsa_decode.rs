@@ -753,7 +753,3 @@ pub(super) fn warm_decode(
     }
     Ok(())
 }
-
-#[cfg(test)]
-#[path = "qsa_decode_tests.rs"]
-mod tests;

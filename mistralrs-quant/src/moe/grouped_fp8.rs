@@ -364,6 +364,3 @@ pub(crate) fn dense(x: &Tensor, view: Fp8WeightView<'_>) -> Result<Option<Tensor
     )?;
     output.map(|y| y.reshape(shape)).transpose()
 }
-
-#[cfg(test)]
-mod tests;

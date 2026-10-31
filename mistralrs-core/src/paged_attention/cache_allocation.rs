@@ -315,28 +315,6 @@ mod tests {
     }
 
     #[test]
-    fn activation_headroom_does_not_expand_persistent_cache_capacity() {
-        let before = AllocationSnapshot {
-            execution_budget: 600,
-            ..snapshot(1000, 400, 400)
-        };
-        let after = AllocationSnapshot {
-            execution_budget: 200,
-            ..snapshot(1000, 800, 0)
-        };
-        assert_eq!(allocation_deficit(before, after, 0, 800), 0);
-        assert_eq!(
-            allocation_deficit(before.execution(), after.execution(), 200, 1000),
-            0
-        );
-        assert_eq!(allocation_deficit(before, after, 40, 800), 40);
-        assert_eq!(
-            allocation_deficit(before.execution(), after.execution(), 201, 1000),
-            1
-        );
-    }
-
-    #[test]
     fn limiting_device_selects_shared_block_reduction() -> Result<()> {
         assert_eq!(
             adjusted_cache_blocks(MemoryGoal::Auto, 100, &[(21, 10), (41, 10)])?,

@@ -18,7 +18,7 @@ Both engines load the same four `UD-Q4_K_XL` shards from `unsloth/Qwen3.8-Flash-
 | 2,048 | 1,849.43 | 1,093.76 | +69.1% | 30.58 | 27.44 | +11.4% |
 | 8,192 | 1,949.88 | 1,211.21 | +61.0% | 30.44 | 25.98 | +17.2% |
 
-mistral.rs uses 8,192-token batches and prefill chunks. The llama.cpp comparator deliberately takes the **highest recorded median independently for each prompt length and metric** across four controls: historical and fresh runs with 512- and 8,192-token chunks. It is not one simultaneous configuration. The winning prefill controls are fresh 8,192 / historical 8,192 / fresh 8,192; the historical 512 control wins all three decode cells. Every control and selection is retained in [summary.json](raw/summary.json).
+mistral.rs uses 8,192-token batches and prefill chunks. The llama.cpp comparator deliberately takes the **highest recorded median independently for each prompt length and metric** across four controls: historical and fresh runs with 512- and 8,192-token chunks. It is not one simultaneous configuration. The winning prefill controls are fresh 8,192 / historical 8,192 / fresh 8,192; the historical 512 control wins all three decode cells. The selected aggregate rates are included in [results.json](results.json).
 
 Both use BF16 KV caches. mistral.rs selects BF16 activations and casts F32 dense weights to BF16; llama.cpp retains F32 dense storage. Generated tokens and expert routing can differ. Historical GGUF full-model determinism was not established, so this comparison measures fixed-prompt serving rather than identical-token, teacher-forced decode. Native `--quant 4` results use different weights and are excluded.
 
@@ -36,7 +36,7 @@ Both load `nvidia/Qwen3.8-Flash-Next-FP4-Local` at revision `b9ce18a6887e18c089f
 | 2,048 | 684.93 | 777.11 | +13.5% | 26.11 | 25.52 | +2.3% |
 | 8,192 | 2,763.16 | 2,893.87 | +4.7% | 26.00 | 25.41 | +2.3% |
 
-The table uses all 18 measured requests per length: three rounds of six. Prefill rate is prompt tokens divided by mean TTFT; decode rate is the reciprocal of mean TPOT. All three individual rounds favor mistral.rs for both metrics at every length. Round values are included in [summary.json](raw/summary.json). These are observations from one warmed protocol per engine, not confidence bounds over independent server restarts.
+The table uses all 18 measured requests per length: three rounds of six. Prefill rate is prompt tokens divided by mean TTFT; decode rate is the reciprocal of mean TPOT. All three individual rounds favor mistral.rs for both metrics at every length. These are observations from one warmed protocol per engine, not confidence bounds over independent server restarts.
 
 The earlier C1 FP4 correctness checks passed on both engines:
 
@@ -70,9 +70,9 @@ Aggregate output throughput includes prompt processing, scheduling, and the clos
 
 The aggregate throughput and TTFT advantages hold at every tested concurrency; per-request decode is effectively tied at C4 and still trails at C8. These modest throughput margins are measurements from one warmed sweep per engine, not confidence bounds over independent restarts.
 
-Compared with the retained starting mistral.rs concurrency baseline, output throughput improved by 8.9% at C2, 13.9% at C4, and 24.2% at C8; C1 stayed within 0.2%. The final run matches all four serial and eight concurrent reference answers from vLLM. All 159 conditioning requests and 159 measured-stage requests pass fixture, token-count, stream-order, HTTP, and completion checks. Of the latter, 144 requests contribute to the measured cells. Long-prompt output repeats vary with batch composition, so the earlier C1 repeatability result is not extended to this sweep.
+Compared with the recorded starting mistral.rs concurrency baseline, output throughput improved by 8.9% at C2, 13.9% at C4, and 24.2% at C8; C1 stayed within 0.2%. The final run matches all four serial and eight concurrent reference answers from vLLM. All 159 conditioning requests and 159 measured-stage requests pass fixture, token-count, stream-order, HTTP, and completion checks. Of the latter, 144 requests contribute to the measured cells. Long-prompt output repeats vary with batch composition, so the earlier C1 repeatability result is not extended to this sweep.
 
-The mistral.rs run retained all 16 captured decode graphs with zero capture failures or memory-pressure evictions. Its minimum sampled available memory was 38.75 GiB; system-wide swap counters recorded 28.07 MiB in and no swap out during measurement. These counters do not attribute activity to inference. The [concurrency captures](raw/source/fp4-concurrency/) retain the final run, the saved comparator, and the starting baseline evidence.
+The mistral.rs run retained all 16 captured decode graphs with zero capture failures or memory-pressure evictions. Its minimum sampled available memory was 38.75 GiB; system-wide swap counters recorded 28.07 MiB in and no swap out during measurement. These counters do not attribute activity to inference.
 
 ## What changed
 
@@ -103,15 +103,15 @@ The tables measure the combined serving implementations, not the isolated contri
 | Samples per length | Three measured requests | 18 measured requests |
 | Aggregation | Median per run | Arithmetic mean latency, then conversion to rate |
 
-GGUF runs use a full fixture sweep to warm the service, followed by one discarded warmup and three measured requests at each length. The historical llama.cpp 512 control followed an exploratory full sweep; there is no separate retained prewarm capture for that control. llama.cpp receives token IDs; mistral.rs receives text with an exact tokenizer round-trip assertion and server token-count check. All retained canonical streams have 128 nonempty chunks and 128 completion tokens.
+GGUF runs use a full fixture sweep to warm the service, followed by one discarded warmup and three measured requests at each length. The historical llama.cpp 512 control followed an exploratory full sweep. llama.cpp receives token IDs; mistral.rs receives text with an exact tokenizer round-trip assertion and server token-count check. All recorded canonical streams have 128 nonempty chunks and 128 completion tokens.
 
-The earlier FP4 C1 runs use this order: four reference requests, nine logprob requests, five independent warmups, 57 conditioning requests, then 57 measured-stage requests. Each 57-request sweep contains three discarded warmups plus 54 requests across the three lengths. Reference requests use a 48-token maximum and normal EOS; performance and repeat-logprob requests use 128 tokens and ignore EOS. The checked-in prompt fixtures preserve exact request order and bytes.
+The earlier FP4 C1 runs use this order: four reference requests, nine logprob requests, five independent warmups, 57 conditioning requests, then 57 measured-stage requests. Each 57-request sweep contains three discarded warmups plus 54 requests across the three lengths. Reference requests use a 48-token maximum and normal EOS; performance and repeat-logprob requests use 128 tokens and ignore EOS. Request order and prompt bytes were fixed between engines.
 
-The concurrency protocol uses four serial and eight concurrent references, a complete 159-request conditioning sweep, and a separate 159-request measured-stage sweep. Each sweep discards one warmup wave per concurrency (15 requests total), then runs three rounds of `max(6, 3 * concurrency)` requests at C1, C2, C4, and C8. The measured totals are 18, 18, 36, and 72 requests respectively. The [exact concurrency fixture](raw/prompts/fp4-concurrency.json) preserves prompt bytes, request order, temperature 0, seed 20260904, thinking disabled, and EOS ignored. vLLM's already recorded concurrency sweep is reused; it was not rerun for this update.
+The concurrency protocol uses four serial and eight concurrent references, a complete 159-request conditioning sweep, and a separate 159-request measured-stage sweep. Each sweep discards one warmup wave per concurrency (15 requests total), then runs three rounds of `max(6, 3 * concurrency)` requests at C1, C2, C4, and C8. The measured totals are 18, 18, 36, and 72 requests respectively. Both engines used the same prompt bytes and request order, with temperature 0, seed 20260904, thinking disabled, and EOS ignored. vLLM's already recorded concurrency sweep is reused; it was not rerun for this update.
 
 TTFT is measured by the client from request start to the first nonempty stream delta. FP4 includes content or reasoning deltas. GGUF decode ends at the last nonempty chunk; FP4 decode ends at the `finish_reason` SSE event. In both cases, TPOT divides the interval after the first token by 127. Effective prefill includes client transport, scheduling, and first-token work; it is not pure GPU prefill throughput. Decode rate excludes prompt processing and is not aggregate end-to-end output throughput.
 
-Only one GPU server runs during each sweep, with no profiler attached. Competing CI work was paused during the earlier FP4 C1 measurements and resumed afterward. The retained system monitor shows nonzero global swap activity: the bracketing intervals record 63.08 MiB in / 2.57 MiB out for mistral.rs and 141.39 MiB in / 0 MiB out for vLLM. These are system-wide counters; the final mistral.rs sample follows CI resume. Available memory reached minima of 39.72 and 8.18 GiB respectively. Mean sampled SM clocks were 2,492 and 2,499 MHz; temperatures were 71.1 and 64.5 C. The [raw samples](raw/source/fp4/) and generated environment summaries preserve this context.
+Only one GPU server runs during each sweep, with no profiler attached. Competing CI work was paused during the earlier FP4 C1 measurements and resumed afterward. The system monitor recorded nonzero global swap activity: the bracketing intervals record 63.08 MiB in / 2.57 MiB out for mistral.rs and 141.39 MiB in / 0 MiB out for vLLM. These are system-wide counters; the final mistral.rs sample follows CI resume. Available memory reached minima of 39.72 and 8.18 GiB respectively. Mean sampled SM clocks were 2,492 and 2,499 MHz; temperatures were 71.1 and 64.5 C.
 
 This report covers one GPU, one model family, text-only warmed generation, GGUF at C1, and official FP4 at C1-C8. It does not measure cold start, multimodal requests, concurrency above eight, or other hardware.
 
@@ -121,9 +121,9 @@ This report covers one GPU, one model family, text-only warmed generation, GGUF 
 |---|---|
 | GGUF checkpoint | `unsloth/Qwen3.8-Flash-Next-GGUF`, revision `38bb39ee97821de2c9009abb7e93950eec396e66` |
 | Tokenizer / base model | `Qwen/Qwen3.8-Flash-Next`, revision `de4b8e4d43b917e7706784d8bb445c9af86a3540` |
-| GGUF mistral.rs | Modified tree over `142bc95a506512eb21d9458bce73400e6ec9f335`; source SHA256 `24b72dc9...`; binary SHA256 `6681778b...` |
-| llama.cpp | `7aca0d2ea8d92b56911233b822db01f9fbb1ae50`; binary SHA256 `b6704403...` |
-| Earlier FP4 C1 mistral.rs | Source matches commit `3f6f8cb24f08184c76e05df20acf08918cee7587`; binary SHA256 `14896314...` |
+| GGUF mistral.rs | Modified tree over `142bc95a506512eb21d9458bce73400e6ec9f335`; source SHA256 `24b72dc9f7a4bab0a215fbe87543ad0a7c23ad20b3bd856590d313d950c1ac77`; binary SHA256 `6681778b528263db9c729a69c98f74c0f1a8327f4d337d04cd3c79a7485b7ec5` |
+| llama.cpp | `7aca0d2ea8d92b56911233b822db01f9fbb1ae50`; binary SHA256 `b670440317d3356fb6bda9e4fe290a176157ecb04d95ea93b8b246958272aa76` |
+| Earlier FP4 C1 mistral.rs | Source matches commit `3f6f8cb24f08184c76e05df20acf08918cee7587`; binary SHA256 `14896314fb1d326137754fc648ede883a6ed139ee2277e2fcbc2f62015bffa32` |
 | Latest FP4 concurrency mistral.rs | Measured tree over `b56b9c0b47e4f99b0d96a8fbcc2b2d6e2cd6cabe`; binary SHA256 `0db790830256383e1aaaaf8319e9c50cda72947f6793401646a744bb32dd2282` |
 | Candle | `66a8cf184a5a519671454066b1b9efd446ec9f5c` |
 | vLLM optimized fork | `8244d1c44348ae8a5bbfc9f1b607021652283ed4` |
@@ -133,76 +133,16 @@ This report covers one GPU, one model family, text-only warmed generation, GGUF 
 | Rust / LLVM | 1.99.1 / 23.1.1 |
 | vLLM Python stack | PyTorch 2.13.0+cu130, Triton 3.7.1 |
 
-The earlier C1 FP4 binary was built before its commit, from a dirty tree over `ee47d306f1d375fe83d33679df1e6e579d8b4dc1`. [Source verification](raw/source/fp4/mistralrs/committed-source-verification.json) bridges its measured file hashes to the committed implementation. The GGUF source manifest is a hash inventory, not a reconstructable historical patch; building the current checkout does not recreate that exact historical binary. The concurrency [source verification](raw/source/fp4-concurrency/mistralrs/source-verification.json) records measured file hashes; its [source patch](raw/source/fp4-concurrency/mistralrs/measured-source.patch) reconstructs the tested code over `b56b9c0b47e4f99b0d96a8fbcc2b2d6e2cd6cabe`. Full hashes, command captures, shared-library identities, and configuration are in [run_manifest.json](raw/run_manifest.json) and its referenced sources.
+The earlier C1 FP4 binary was built before its commit, from a modified tree over `ee47d306f1d375fe83d33679df1e6e579d8b4dc1`; its measured source files were verified against `3f6f8cb24f08184c76e05df20acf08918cee7587` before publication. The GGUF and latest concurrency binaries used modified trees, so their base commits alone do not identify the exact tested code.
 
-## Regenerate the release artifacts
+The FP4 mistral.rs build enabled `cuda,flash-attn,cutile` with `profile.release.package.candle-core.codegen-units=1`. The vLLM configuration preserved the original head (`VLLM_MXFP8_LM_HEAD=0`) and used resident device PLE.
+
+## Regenerate the figures
 
 From the repository root, with Python and Matplotlib available:
 
 ```bash
-python3 releases/v0.9.5/scripts/merge_results.py
 python3 releases/v0.9.5/scripts/plot_results.py
-python3 releases/v0.9.5/scripts/merge_results.py --check
 ```
 
-The merger uses only the standard library. It verifies source checksums, counts, token usage, latency formulas, repeats, and aggregation before writing normalized records and summaries. The plotting script reads only the generated summary. Neither command starts a server or reruns inference.
-
-## Repeat the serving protocols
-
-The runners operate against separately launched servers. Their dry-runs print build, server, and client recipes without downloads, requests, or output files. Use an empty output directory for each new run, and run one engine at a time.
-
-For the earlier FP4 C1 prompt-length protocol, install `aiohttp` in the client environment and have the pinned model snapshot and container image available:
-
-```bash
-python3 releases/v0.9.5/scripts/run_fp4.py \
-  --engine mistralrs --output-dir ./fp4-reproduction/mistralrs --dry-run
-python3 releases/v0.9.5/scripts/run_fp4.py \
-  --engine vllm --output-dir ./fp4-reproduction/vllm --dry-run
-```
-
-Launch the corresponding printed recipe in another terminal, then rerun its client command without `--dry-run`. Options `--hf-cache`, `--cuda-root`, and `--kernel-cache` adapt the printed launch paths. The FP4 build uses `cuda,flash-attn,cutile` and `profile.release.package.candle-core.codegen-units=1`. The vLLM recipe preserves the original head (`VLLM_MXFP8_LM_HEAD=0`), A16 expert decode / A4 prefill, resident device PLE, and the pinned image digest. Existing capture scripts contain historical paths; the reproduction runner prints portable replacements.
-
-For the concurrency timings, use the retained [mistral.rs](raw/source/fp4-concurrency/mistralrs/launch.sh) or [vLLM](raw/source/fp4-concurrency/vllm/launch.sh) settings, adapting local paths and permitting eight sequences. With mistral.rs serving at port 8239, run the exact fixture once for conditioning and once for measurement:
-
-```bash
-for phase in conditioning measured; do
-  python3 scripts/bench_nvfp4_serving.py run \
-    --workload releases/v0.9.5/raw/prompts/fp4-concurrency.json \
-    --base-url http://127.0.0.1:8239/v1 --model default \
-    --engine mistralrs-concurrency \
-    --output-dir "./fp4-concurrency/mistralrs/${phase}"
-done
-```
-
-Run vLLM separately with its API port and served model name, using a new output directory. The retained reference responses document the serial and concurrent correctness checks performed before the timing sweeps.
-
-For GGUF, use the pinned shards, projector, and local tokenizer. The client uses standard-library HTTP and requires `tokenizers` for mistral.rs text transport:
-
-```bash
-python3 releases/v0.9.5/scripts/run_gguf.py \
-  --engine mistralrs --gguf-dir /path/to/gguf \
-  --text-tokenizer /path/to/tokenizer.json \
-  --output-dir ./gguf-reproduction/mistralrs --dry-run
-python3 releases/v0.9.5/scripts/run_gguf.py \
-  --engine llama --gguf-dir /path/to/gguf \
-  --output-dir ./gguf-reproduction/llama-512 --dry-run
-```
-
-The dry-run includes both llama.cpp chunk settings. Select one server command, then remove `--dry-run` to perform the full prewarm and measured sweeps. Repeat with a fresh output directory for the other chunk setting. The historical control selection remains frozen in this package; new runs belong in new output directories. Use the recorded llama.cpp revision and CUDA 13.2 to reconstruct its environment. The GGUF mistral.rs recipe evaluates the checkout being built, subject to the historical-source limitation above.
-
-## Artifact map
-
-| Path | Contents |
-|---|---|
-| [post.md](post.md) | Publication draft with the main results |
-| [figures/](figures/) | Three generated comparison figures |
-| [raw/run_manifest.json](raw/run_manifest.json) | Hardware, checkpoints, protocols, source identities, and checksums |
-| [raw/prompts/](raw/prompts/) | Exact GGUF, FP4 prompt-length and concurrency, independent warmup, and reference fixtures |
-| [raw/results.jsonl](raw/results.jsonl) | 492 normalized measured-stage request records, including discarded warmups, each linked to a source row |
-| [raw/summary.json](raw/summary.json), [raw/summary.csv](raw/summary.csv) | Derived cells, gains, selected GGUF controls, FP4 rounds, repeat checks, and environment summaries |
-| [raw/source/gguf/](raw/source/gguf/) | Candidate, four controls, available prewarms, and source/command provenance |
-| [raw/source/fp4/](raw/source/fp4/) | Both engines' phase captures, correctness responses, monitor samples, server logs, and provenance |
-| [raw/source/fp4-concurrency/](raw/source/fp4-concurrency/) | Final C1-C8 sweep, saved comparator, starting baseline evidence, and provenance |
-| [scripts/](scripts/) | Offline merger/plotter and portable serving protocol runners |
-
-Original captures remain byte-for-byte intact, including their original paths. Development experiments and superseded result sets remain available in Git history; they are not inputs to these figures.
+The script reads the aggregate rates and latencies in [results.json](results.json) and regenerates all three figures without running inference. Exact prompt fixtures, per-request captures, logs, and historical source patches are not included, so this directory cannot reproduce the original inference runs. The methods, software identities, precision differences, and measurement limits are recorded above.

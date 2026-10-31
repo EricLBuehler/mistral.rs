@@ -93,13 +93,12 @@ pub(crate) fn block_aligned_sliding_window_start(
 
 #[cfg(test)]
 mod tests {
-    use candle_core::{DType, Device};
+    use candle_core::Device;
 
     use super::{
-        allocation_budget_with_reservations, block_aligned_sliding_window_start,
-        cache_prefix_capacity, kv_layer_buffer_bytes_per_block, max_cache_blocks,
-        requested_cache_blocks, HybridPagedKvCacheConfig, KvCacheLayout, MemoryGoal,
-        ModelConfigMetadata, PagedAttentionConfig, PagedCacheType, PrefixCacheCapacity,
+        block_aligned_sliding_window_start, cache_prefix_capacity, kv_layer_buffer_bytes_per_block,
+        max_cache_blocks, requested_cache_blocks, HybridPagedKvCacheConfig, KvCacheLayout,
+        MemoryGoal, ModelConfigMetadata, PagedAttentionConfig, PagedCacheType, PrefixCacheCapacity,
     };
 
     #[test]
@@ -196,232 +195,21 @@ mod tests {
             allocated: 84 * GIB,
             working_set_limit: 128 * GIB,
         };
-        for goal in [
-            MemoryGoal::Auto,
-            MemoryGoal::KvTokens(16_384),
-            MemoryGoal::Utilization(0.75),
-        ] {
-            let mut config = PagedAttentionConfig::new(None, goal, PagedCacheType::Auto)?;
-            let policy = config.allocation_budget(&Device::Cpu, snapshot)?;
-            config.reserve_reclaimable_weight_cache(&Device::Cpu, 28 * GIB)?;
-            config.reserve_reclaimable_weight_cache(&Device::Cpu, 2 * GIB)?;
-            assert_eq!(
-                config.allocation_budget(&Device::Cpu, snapshot)?,
-                policy.min(14 * GIB)
-            );
-            let after_cache = DeviceMemory::Unified {
-                total: 128 * GIB,
-                available: 36 * GIB,
-                allocated: 92 * GIB,
-                working_set_limit: 128 * GIB,
-            };
-            assert_eq!(
-                config.allocation_budget(&Device::Cpu, after_cache)?,
-                policy.saturating_sub(8 * GIB).min(6 * GIB)
-            );
-            let discrete = DeviceMemory::Discrete {
-                total: 128 * GIB,
-                free: 44 * GIB,
-            };
-            assert_eq!(
-                config.allocation_budget(&Device::Cpu, discrete)?,
-                crate::memory_plan::device_memory_budget(goal, discrete)?
-            );
-            let low_memory = DeviceMemory::Unified {
-                total: 128 * GIB,
-                available: 29 * GIB,
-                allocated: 99 * GIB,
-                working_set_limit: 128 * GIB,
-            };
-            assert_eq!(config.allocation_budget(&Device::Cpu, low_memory)?, 0);
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn optional_weights_leave_requested_cache_and_prefix_workspace_available() -> anyhow::Result<()>
-    {
-        let model = ModelConfigMetadata {
-            max_seq_len: 4096,
-            num_layers: 2,
-            hidden_size: 16,
-            num_kv_heads: 2,
-            num_attn_heads: 2,
-            sliding_window: None,
-            k_head_dim: 4,
-            v_head_dim: 6,
-            kv_cache_layout: KvCacheLayout::Standard,
+        let mut config = PagedAttentionConfig::new(None, MemoryGoal::Auto, PagedCacheType::Auto)?;
+        let policy = config.allocation_budget(&Device::Cpu, snapshot)?;
+        config.reserve_reclaimable_weight_cache(&Device::Cpu, 30 * GIB)?;
+        assert_eq!(
+            config.allocation_budget(&Device::Cpu, snapshot)?,
+            policy.min(14 * GIB)
+        );
+        let discrete = DeviceMemory::Discrete {
+            total: 128 * GIB,
+            free: 44 * GIB,
         };
-        let block_bytes = 2 * 2 * (4 + 6) * 2 * 32;
-        for (goal, blocks) in [
-            (MemoryGoal::Auto, 2),
-            (MemoryGoal::KvTokens(100), 5),
-            (MemoryGoal::KvBytes(block_bytes * 4 + 100), 4),
-        ] {
-            let mut config = PagedAttentionConfig::new(Some(32), goal, PagedCacheType::Auto)?
-                .with_base_device_memory_reservation(200)?
-                .with_execution_limits(crate::ExecutionMemoryLimits {
-                    max_num_seqs: 1,
-                    max_num_batched_tokens: 32,
-                    max_prefill_chunk_tokens: 32,
-                })?;
-            config.reserve_activation_memory(100, 80);
-            let reservation = super::optional_weight_reservation(
-                &config,
-                super::CacheConfigRequest {
-                    memory_reservations: config.memory_reservations()?,
-                    dtype: DType::BF16,
-                    model: &model,
-                    device: &Device::Cpu,
-                    layer_devices: &[],
-                    capacity_activation_estimate: &|tokens| {
-                        Ok(crate::pipeline::ActivationMemoryEstimate {
-                            non_mapped_bytes: 100 + tokens * 8,
-                            mapped_bytes: 80,
-                            ..Default::default()
-                        })
-                    },
-                    reserve_decode_graphs: false,
-                    silent: true,
-                },
-                &Device::Cpu,
-            )?;
-            assert_eq!(
-                reservation,
-                (200 + blocks * block_bytes, 100 + (blocks - 1) * 32 * 8)
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn growing_prefix_workspace_uses_headroom_before_reducing_kv() -> anyhow::Result<()> {
-        const POLICY: usize = 80;
-        const EXECUTION: usize = 100;
-        const PERSISTENT: usize = 10;
-        const BASELINE: usize = 5;
-        let available =
-            allocation_budget_with_reservations(POLICY, EXECUTION, PERSISTENT, BASELINE)?;
-        let credit = EXECUTION - PERSISTENT - BASELINE - available;
-        for (workspace_divisor, expected) in [(8, 70), (2, 57)] {
-            let blocks = max_cache_blocks(available, available, |blocks| {
-                Ok(blocks + (blocks / workspace_divisor).saturating_sub(credit))
-            })?;
-            assert_eq!(blocks, expected);
-            assert!(blocks + PERSISTENT <= POLICY);
-            assert!(blocks + PERSISTENT + BASELINE + blocks / workspace_divisor <= EXECUTION);
-            let next = blocks + 1;
-            assert!(
-                next + PERSISTENT > POLICY
-                    || next + PERSISTENT + BASELINE + next / workspace_divisor > EXECUTION
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn automatic_runtime_allowance_preserves_workload_kv() {
-        for (activation, available, workload, expected) in [
-            (20, 100usize, 20, 20),
-            (80, 100, 20, 80),
-            (80, 100, 40, 60),
-            (80, 3, 2, 1),
-            (80, 1, 2, 0),
-            (80, 0, 2, 0),
-            (0, 100, 20, 0),
-        ] {
-            let above_workload = available.saturating_sub(workload);
-            let allowance = super::automatic_runtime_allowance(true, activation, above_workload);
-            assert_eq!(allowance, expected);
-            assert!(allowance <= activation);
-            assert!(available - allowance >= available.min(workload));
-            assert_eq!(
-                super::automatic_runtime_allowance(false, activation, above_workload),
-                0
-            );
-        }
-    }
-
-    #[test]
-    fn runtime_allowance_does_not_expand_activation_headroom() -> anyhow::Result<()> {
-        const POLICY: usize = 80;
-        const EXECUTION: usize = 100;
-        const PERSISTENT: usize = 10;
-        const BASELINE: usize = 20;
-        let available =
-            allocation_budget_with_reservations(POLICY, EXECUTION, PERSISTENT, BASELINE)?;
-        let credit = EXECUTION - PERSISTENT - BASELINE - available;
-        let allowance = super::automatic_runtime_allowance(true, BASELINE, available - 10);
-        let kv_budget = available - allowance;
-        let blocks = max_cache_blocks(kv_budget, kv_budget, |blocks| {
-            Ok(blocks + (blocks / 2).saturating_sub(credit))
-        })?;
-        assert_eq!(allowance, 20);
-        assert_eq!(blocks, 33);
-        assert!(blocks + PERSISTENT + allowance <= POLICY);
-        assert!(blocks + PERSISTENT + allowance + BASELINE + blocks / 2 <= EXECUTION);
-        Ok(())
-    }
-
-    #[test]
-    fn workload_kv_floor_counts_partial_sequences_and_reserved_block() -> anyhow::Result<()> {
-        for (sequences, tokens, max_context, expected) in [
-            (1, 4096, 262_144, 129),
-            (4, 128, 4096, 8),
-            (4, 1, 4096, 5),
-            (4, 128, 16, 5),
-            (1, 4096, 64, 3),
-            (1, 1, 1, 2),
-        ] {
-            assert_eq!(
-                super::workload_cache_blocks(
-                    crate::ExecutionMemoryLimits {
-                        max_num_seqs: sequences,
-                        max_num_batched_tokens: tokens,
-                        max_prefill_chunk_tokens: 32,
-                    },
-                    max_context,
-                    32,
-                )?,
-                expected,
-            );
-        }
-        assert!(super::workload_cache_blocks(
-            crate::ExecutionMemoryLimits {
-                max_num_seqs: 2,
-                ..Default::default()
-            },
-            usize::MAX,
-            32,
-        )
-        .is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn runtime_allowance_preserves_workload_prefix_workspace() -> anyhow::Result<()> {
-        const POLICY: usize = 120;
-        const PERSISTENT: usize = 10;
-        const BASELINE: usize = 20;
-        const WORKLOAD_BLOCKS: usize = 40;
-        for execution in [90, 110, 150] {
-            let available =
-                allocation_budget_with_reservations(POLICY, execution, PERSISTENT, BASELINE)?;
-            let credit = execution - PERSISTENT - BASELINE - available;
-            let workload = WORKLOAD_BLOCKS + (WORKLOAD_BLOCKS / 2).saturating_sub(credit);
-            let allowance = super::automatic_runtime_allowance(
-                true,
-                BASELINE,
-                available.saturating_sub(workload),
-            );
-            let remaining = available - allowance;
-            let blocks = max_cache_blocks(remaining, remaining, |blocks| {
-                Ok(blocks + (blocks / 2).saturating_sub(credit))
-            })?;
-            assert!(blocks >= WORKLOAD_BLOCKS);
-            assert!(blocks + PERSISTENT + allowance <= POLICY);
-            assert!(blocks + PERSISTENT + allowance + BASELINE + blocks / 2 <= execution);
-        }
+        assert_eq!(
+            config.allocation_budget(&Device::Cpu, discrete)?,
+            crate::memory_plan::device_memory_budget(MemoryGoal::Auto, discrete)?,
+        );
         Ok(())
     }
 

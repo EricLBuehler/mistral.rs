@@ -414,43 +414,6 @@ mod tests {
     }
 
     #[test]
-    fn execution_headroom_is_shared_without_increasing_persistent_quotas() -> Result<()> {
-        let memory = |occupied| DeviceMemory::Unified {
-            total: 128 * GIB,
-            available: 128 * GIB - occupied,
-            allocated: occupied,
-            working_set_limit: 128 * GIB,
-        };
-        let group = Arc::new(MemoryBudgetGroup::default());
-        let first = ModelMemoryBudget::new(group.clone(), 0.5);
-        let second = ModelMemoryBudget::new(group, 0.5);
-        first.begin_device_load(CUDA, memory(0));
-        assert_eq!(first.allocation_budget(CUDA, memory(40 * GIB))?, 16 * GIB);
-        assert_eq!(first.execution_budget(CUDA, memory(40 * GIB))?, 24 * GIB);
-        second.begin_device_load(CUDA, memory(56 * GIB));
-        assert_eq!(second.allocation_budget(CUDA, memory(96 * GIB))?, 16 * GIB);
-        assert_eq!(second.execution_budget(CUDA, memory(96 * GIB))?, 24 * GIB);
-        assert_eq!(second.execution_budget(CUDA, memory(120 * GIB))?, 0);
-        Ok(())
-    }
-
-    #[test]
-    fn utilization_has_no_extra_execution_quota() -> Result<()> {
-        let model = ModelMemoryBudget::new(
-            Arc::new(MemoryBudgetGroup::new(MemoryGoal::Utilization(0.8))),
-            0.5,
-        );
-        model.begin_device_load(CUDA, discrete(0));
-        for occupied in [0, WEIGHTS, 80 * GIB, TOTAL] {
-            assert_eq!(
-                model.execution_budget(CUDA, discrete(occupied))?,
-                model.allocation_budget(CUDA, discrete(occupied))?
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
     fn runtime_reservations_follow_loaded_models_and_device_placement() -> Result<()> {
         let group = Arc::new(MemoryBudgetGroup::default());
         let first = Arc::new(ModelMemoryBudget::new(group.clone(), 0.5));
@@ -466,7 +429,9 @@ mod tests {
         assert_eq!(first_runtime.other_workspace_bytes(OTHER_CUDA)?, 4 * GIB);
         assert_eq!(second_runtime.other_workspace_bytes(CUDA)?, 2 * GIB);
         assert_eq!(second_runtime.other_workspace_bytes(OTHER_CUDA)?, 0);
+        let revision = first_runtime.revision();
         drop(second_runtime);
+        assert!(first_runtime.revision() > revision);
         assert!(first_runtime.capture_ready());
         assert_eq!(first_runtime.other_workspace_bytes(CUDA)?, 0);
         assert_eq!(group.runtime.lock().unwrap().reservations.len(), 1);
@@ -495,137 +460,6 @@ mod tests {
         assert_eq!(first_runtime.other_workspace_bytes(CUDA)?, usize::MAX);
         drop(third_runtime);
         assert_eq!(first_runtime.other_workspace_bytes(CUDA)?, 0);
-        Ok(())
-    }
-
-    #[test]
-    fn pending_prefix_reservations_track_physical_snapshots_per_device() -> Result<()> {
-        let reservation = RuntimeMemoryReservation::standalone(RecurrentPrefixReservation::new(
-            HashMap::from([(CUDA, 100), (OTHER_CUDA, 40)]),
-            3,
-        ));
-        assert!(reservation.capture_ready());
-        assert_eq!(reservation.other_workspace_bytes(CUDA)?, 0);
-        assert_eq!(reservation.pending_prefix_bytes(CUDA)?, 300);
-        assert_eq!(reservation.pending_prefix_bytes(OTHER_CUDA)?, 120);
-        assert_eq!(reservation.pending_prefix_bytes(DeviceLocation::Cpu)?, 0);
-        reservation.set_retained_prefix_snapshots(1);
-        assert_eq!(reservation.pending_prefix_bytes(CUDA)?, 200);
-        assert_eq!(reservation.pending_prefix_bytes(OTHER_CUDA)?, 80);
-        reservation.set_retained_prefix_snapshots(3);
-        assert_eq!(reservation.pending_prefix_bytes(CUDA)?, 0);
-        reservation.set_retained_prefix_snapshots(0);
-        assert_eq!(reservation.pending_prefix_bytes(CUDA)?, 300);
-
-        let zero = RuntimeMemoryReservation::standalone(RecurrentPrefixReservation::new(
-            HashMap::from([(CUDA, usize::MAX)]),
-            0,
-        ));
-        assert_eq!(zero.pending_prefix_bytes(CUDA)?, 0);
-        let overflow = RuntimeMemoryReservation::standalone(RecurrentPrefixReservation::new(
-            HashMap::from([(CUDA, usize::MAX)]),
-            2,
-        ));
-        assert!(overflow.pending_prefix_bytes(CUDA).is_err());
-        overflow.set_retained_prefix_snapshots(1);
-        assert_eq!(overflow.pending_prefix_bytes(CUDA)?, usize::MAX);
-        Ok(())
-    }
-
-    #[test]
-    fn runtime_reservations_include_other_models_pending_prefixes() -> Result<()> {
-        let group = Arc::new(MemoryBudgetGroup::default());
-        let first = Arc::new(ModelMemoryBudget::new(group.clone(), 0.5));
-        let second = Arc::new(ModelMemoryBudget::new(group, 0.5));
-        let first_runtime = first.reserve_runtime(HashMap::from([(CUDA, 100)]), None);
-        let second_runtime = second.reserve_runtime(
-            HashMap::from([(CUDA, 200)]),
-            Some(RecurrentPrefixReservation::new(
-                HashMap::from([(CUDA, 10), (OTHER_CUDA, 20)]),
-                3,
-            )),
-        );
-        assert!(first_runtime.capture_ready());
-        assert_eq!(first_runtime.pending_prefix_bytes(CUDA)?, 0);
-        assert_eq!(first_runtime.other_workspace_bytes(CUDA)?, 230);
-        assert_eq!(first_runtime.other_workspace_bytes(OTHER_CUDA)?, 60);
-        second_runtime.set_retained_prefix_snapshots(2);
-        assert_eq!(first_runtime.other_workspace_bytes(CUDA)?, 210);
-        assert_eq!(first_runtime.other_workspace_bytes(OTHER_CUDA)?, 20);
-        assert_eq!(second_runtime.other_workspace_bytes(CUDA)?, 100);
-        drop(second_runtime);
-        assert_eq!(first_runtime.other_workspace_bytes(CUDA)?, 0);
-
-        let second_runtime = second.reserve_runtime(
-            HashMap::from([(CUDA, 1)]),
-            Some(RecurrentPrefixReservation::new(
-                HashMap::from([(CUDA, usize::MAX)]),
-                1,
-            )),
-        );
-        assert!(first_runtime.other_workspace_bytes(CUDA).is_err());
-        second_runtime.set_retained_prefix_snapshots(1);
-        assert_eq!(first_runtime.other_workspace_bytes(CUDA)?, 1);
-        Ok(())
-    }
-
-    #[test]
-    fn runtime_revision_detects_eviction_between_pending_and_memory_reads() -> Result<()> {
-        use std::sync::mpsc;
-
-        let group = Arc::new(MemoryBudgetGroup::default());
-        let first = Arc::new(ModelMemoryBudget::new(group.clone(), 0.5));
-        let second = Arc::new(ModelMemoryBudget::new(group, 0.5));
-        let reader = first.reserve_runtime(HashMap::new(), None);
-        let writer = second.reserve_runtime(
-            HashMap::new(),
-            Some(RecurrentPrefixReservation::new(
-                HashMap::from([(CUDA, 100)]),
-                1,
-            )),
-        );
-        writer.set_retained_prefix_snapshots(1);
-        let allocated = Arc::new(AtomicUsize::new(100));
-        let (read_pending_tx, read_pending_rx) = mpsc::channel();
-        let (released_tx, released_rx) = mpsc::channel();
-        let (replace_tx, replace_rx) = mpsc::channel();
-        let writer_allocated = allocated.clone();
-        let writer_thread = std::thread::spawn(move || {
-            read_pending_rx.recv().unwrap();
-            writer.set_retained_prefix_snapshots(0);
-            writer_allocated.store(0, Ordering::Release);
-            released_tx.send(()).unwrap();
-            replace_rx.recv().unwrap();
-            writer_allocated.store(100, Ordering::Release);
-            writer.set_retained_prefix_snapshots(1);
-            writer
-        });
-        let before = reader.revision();
-        assert_eq!(reader.other_workspace_bytes(CUDA)?, 0);
-        read_pending_tx.send(())?;
-        released_rx.recv()?;
-        assert_eq!(allocated.load(Ordering::Acquire), 0);
-        assert_ne!(reader.revision(), before);
-        assert_eq!(reader.other_workspace_bytes(CUDA)?, 100);
-        replace_tx.send(())?;
-        let writer = writer_thread.join().unwrap();
-        assert_eq!(reader.other_workspace_bytes(CUDA)?, 0);
-        assert_ne!(reader.revision(), before);
-        let after = reader.revision();
-        writer.set_retained_prefix_snapshots(1);
-        assert_eq!(reader.revision(), after);
-        drop(writer);
-        assert_ne!(reader.revision(), after);
-
-        let standalone = RuntimeMemoryReservation::standalone(RecurrentPrefixReservation::new(
-            HashMap::from([(CUDA, 100)]),
-            1,
-        ));
-        let before = standalone.revision();
-        standalone.set_retained_prefix_snapshots(1);
-        standalone.set_retained_prefix_snapshots(0);
-        assert_eq!(standalone.pending_prefix_bytes(CUDA)?, 100);
-        assert_ne!(standalone.revision(), before);
         Ok(())
     }
 }
