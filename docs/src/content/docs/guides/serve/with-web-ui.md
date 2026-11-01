@@ -9,8 +9,6 @@ mistralrs serve -m Qwen/Qwen3-4B --quant 4
 
 When the server is ready, open [http://localhost:1234/ui](http://localhost:1234/ui). Keep the terminal open while chatting; press Ctrl+C to stop. For installation, follow the [quickstart](/quickstart/).
 
-The built-in web UI is mounted at `/ui` by default whenever you run `mistralrs serve`. It is a single-page app bundled into the binary; nothing is fetched from the network at runtime.
-
 The UI provides:
 
 - A chat panel with markdown rendering, code block syntax highlighting, and streamed output.
@@ -32,11 +30,11 @@ When the model calls a tool, the UI renders a collapsed block in the conversatio
 
 The settings drawer controls search, code execution, shell, and tool approval per conversation without restarting the server. Set **Tool approval** to `ask` to approve or deny each agent action inline.
 
-On Linux and macOS, code and shell execution use the default [OS-level sandbox](/reference/sandbox/) unless the server is started with `--sandbox off`. For the server, HTTP, Python, Rust, and sandbox settings, see [enable code execution](/guides/agents/enable-code-execution/) and [enable shell execution](/guides/agents/enable-shell/).
+Code and shell execution use the configured [sandbox](/reference/sandbox/). See [code execution](/guides/agents/enable-code-execution/) and [shell](/guides/agents/enable-shell/) for setup.
 
 ## With multimodal models
 
-When the loaded model accepts images, a paperclip icon appears in the input bar. Attaching an image sends an `image_url` content part (`{"type": "image_url", "image_url": {"url": "..."}}`). Audio and video work the same on supporting models.
+Use the paperclip to attach images, audio, or video supported by the loaded model.
 
 Modality support per model is in the [supported models reference](/reference/supported-models/).
 

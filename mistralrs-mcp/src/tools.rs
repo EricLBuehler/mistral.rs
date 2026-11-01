@@ -306,6 +306,7 @@ impl Clone for ToolCallbackKind {
 pub struct ToolCallbackWithTool {
     pub callback: ToolCallbackKind,
     pub tool: Tool,
+    pub source: AgentToolSource,
 }
 
 /// Collection of callbacks keyed by tool name.

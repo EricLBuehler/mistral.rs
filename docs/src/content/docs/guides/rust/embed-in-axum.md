@@ -3,7 +3,7 @@ title: Embed mistralrs inside an Axum application
 description: Mount the HTTP API inside an existing Axum router.
 ---
 
-To add mistral.rs to an existing Axum app, mount the mistralrs router under a sub-path. The pattern uses two builders from `mistralrs-server-core`:
+Mount the HTTP API under a sub-path using two `mistralrs-server-core` builders:
 
 - `MistralRsForServerBuilder` constructs the engine state (`SharedMistralRsState = Arc<MistralRs>`, used later for custom handlers).
 - `MistralRsServerRouterBuilder` produces an Axum `Router` from that state.
@@ -72,13 +72,13 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-The `AutoDeviceMapParams` constants fill internal fallback fields required by the low-level `ModelSelected` API. With paging enabled, memory planning uses actual scheduler execution limits instead. Set `.with_memory_goal(MemoryGoal::Utilization(0.9))` on the server builder to choose an explicit engine budget; see [memory budgets](/guides/perf/paged-attention/#memory-budget).
+The example uses automatic memory planning. For an explicit budget, use the server builder's `with_memory_goal`; see [memory budgets](/guides/perf/paged-attention/#memory-budget).
 
 `POST /ai/v1/chat/completions` then behaves identically to the standalone server, as do the other routes.
 
 `with_in_situ_quant("4")` applies [ISQ (in-situ quantization)](/reference/quantization-types/) to 4-bit; omit it to run the model unquantized.
 
-`ModelSelected` names every field, so this literal will not compile when new fields are added. For the current field list, see the [docs.rs `ModelSelected` entry](https://docs.rs/mistralrs-core/latest/mistralrs_core/enum.ModelSelected.html) or the `mistralrs-server-core` crate-level docs.
+The [`ModelSelected` reference](https://docs.rs/mistralrs-core/latest/mistralrs_core/enum.ModelSelected.html) lists loader fields for other model types.
 
 ## Builder options
 

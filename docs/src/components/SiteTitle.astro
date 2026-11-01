@@ -1,0 +1,28 @@
+---
+const { siteTitleHref } = Astro.locals.starlightRoute;
+---
+
+<a href={siteTitleHref} class="site-title sl-flex" translate="no">
+  <span class="wordmark">mistral<span class="wordmark-suffix">.rs</span></span>
+</a>
+
+<style>
+  .site-title {
+    align-items: center;
+    min-width: 0;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+
+  .wordmark {
+    color: var(--sl-color-white);
+    font-family: var(--mrs-font-mono);
+    font-size: var(--sl-text-h4);
+    font-weight: 600;
+    letter-spacing: -0.03em;
+  }
+
+  .wordmark-suffix {
+    color: var(--sl-color-text-accent);
+  }
+</style>

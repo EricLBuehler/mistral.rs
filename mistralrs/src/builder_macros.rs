@@ -36,6 +36,7 @@ macro_rules! common_builder_methods {
                             strict: None,
                         },
                     },
+                    source: mistralrs_core::AgentToolSource::User,
                 },
             );
             self
@@ -55,6 +56,7 @@ macro_rules! common_builder_methods {
                 ToolCallbackWithTool {
                     callback: ToolCallbackKind::Text(callback),
                     tool,
+                    source: mistralrs_core::AgentToolSource::User,
                 },
             );
             self

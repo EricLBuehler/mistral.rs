@@ -19,9 +19,9 @@ When mistral.rs acts as an [MCP (Model Context Protocol)](/guides/agents/connect
 | Field | Type | Default | Purpose |
 |---|---|---|---|
 | `servers` | array | required | List of MCP servers. |
-| `auto_register_tools` | bool | required | Expose every tool from every connected server to the model. Has no serde default; omitting it is a parse error, so always set it (use `true`). |
-| `tool_timeout_secs` | int | 30 | Per-tool-call timeout. |
-| `max_concurrent_calls` | int | 10 | Cap on concurrent MCP calls. |
+| `auto_register_tools` | bool | required | Give the model every tool from every connected server. Set it to `true`; with `false`, the model gets none of the servers' tools. |
+| `tool_timeout_secs` | int | 30 | Seconds a single tool call can run before it times out. |
+| `max_concurrent_calls` | int | 10 | Most MCP tool calls that can run at once, across all servers. |
 
 ## Server entry
 
@@ -39,9 +39,9 @@ When mistral.rs acts as an [MCP (Model Context Protocol)](/guides/agents/connect
 
 | Field | Type | Required | Purpose |
 |---|---|---|---|
-| `name` | string | effectively yes | Server name. No validation rejects omission (it defaults to an empty string), but the entry is unusable without it. |
-| `source` | object | effectively yes | Transport configuration. Omission defaults to an empty-URL `Http` source, which will not connect. |
-| `enabled` | bool | no (default `true`) | Disable a server without removing the entry. |
+| `name` | string | yes | Server name. |
+| `source` | object | yes | How to connect to the server. See [transports](#transports-source-object). |
+| `enabled` | bool | no (default `true`) | Set to `false` to skip a server without removing the entry. |
 | `tool_prefix` | string | no (auto-generated `mcp_<uuid>`) | Prefix applied to tool names. |
 | `bearer_token` | string | no | Optional bearer token. |
 | `id` | string | no (auto UUID) | Stable identifier for the server. |

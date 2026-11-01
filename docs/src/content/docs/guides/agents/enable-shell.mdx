@@ -5,61 +5,44 @@ description: Turn on the shell tool, configure sandboxing, and use it from Respo
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-`--enable-shell` registers a shell execution tool with the model. Commands run in a persistent per-session working directory; on Linux and macOS the CLI wraps the subprocess in the [OS-level sandbox](/reference/sandbox/) by default (`--sandbox auto`).
+Shell execution lets the model run command-line programs: list and edit files, run scripts, call compilers or package managers, and use whatever tools are installed on the host. It's also what runs [Skills](/guides/agents/skills/).
+
+Start the server with `--enable-shell`, or with `--agent` to also turn on web search and Python:
 
 ```bash
 mistralrs serve --enable-shell -m <model>
 ```
 
-`--agent` also enables shell alongside search and Python code execution:
+Each request then decides whether the model can use the shell:
 
-```bash
-mistralrs serve --agent -m <model>
-```
+| API | How to turn shell on for a request |
+|---|---|
+| Responses | Add `{"type": "shell", "environment": {"type": "container_auto"}}` to `tools`. |
+| Chat Completions | Set `"enable_shell": true`. OpenAI's Chat Completions has no shell tool type, so this is a mistral.rs field. The web UI uses it. |
+| Python and Rust SDKs | Enable shell when you build the model and again on each request, as in the [examples](#examples). |
 
-Server startup makes the executor available. OpenAI-compatible clients opt into shell per request with the Responses API `shell` tool. Chat Completions does not have an OpenAI shell hosted-tool type, so use Responses for OpenAI-compatible shell calls.
+## How commands run
 
-```json
-{
-  "model": "default",
-  "input": "Use the shell to print the current directory and list its files.",
-  "tools": [{"type": "shell", "environment": {"type": "container_auto"}}],
-  "tool_choice": "required"
-}
-```
+Each shell call runs the model's commands in one new shell process (`/bin/sh -c` by default, `cmd /C` on Windows), starting in the session's working directory. Files written there stay available to later calls in the same session. Shell state such as variables and `cd` doesn't carry over, because every call starts a new process.
 
-Native SDK users enable shell on the runner or model builder, then opt in on each request. The Python SDK uses `Runner(..., shell_config=ShellConfig())` plus `ChatCompletionRequest.enable_shell=True`; the Rust SDK uses `.with_shell_execution(...)` on the model builder and request builder.
+Each call can run for up to `--shell-timeout` seconds (600 by default). The model can ask for a shorter limit on a call, but never a longer one. The model sees the first 4,096 characters of stdout and of stderr, and can ask for more on a given call.
 
 ## Configuration
 
-| Flag | Default | Purpose |
+| Flag | Default | What it does |
 |---|---|---|
-| `--enable-shell` | off | Register the shell tool. |
-| `--shell-path <path>` | `/bin/sh` on Unix, `cmd` on Windows | Shell executable. |
-| `--shell-timeout <secs>` | 600 | Per-call timeout in seconds. |
-| `--shell-workdir <path>` | per-session temp dir | Working directory for shell commands. |
-| `--skills-dir <path>` | system temp dir | Server-side storage for OpenAI-compatible Skills. |
-| `--agent-permission <mode>` | `auto` | `auto`, `ask`, or `deny`; see [permissions and approvals](/guides/agents/permissions-and-approvals/). |
-| `--sandbox <mode>` | `auto` | OS-level sandbox: `auto`, `on`, `off`; see the [sandbox reference](/reference/sandbox/). |
+| `--shell-path <path>` | `/bin/sh` on Unix, `cmd` on Windows | The shell to run commands with, for example `/bin/bash`. |
+| `--shell-timeout <secs>` | 600 | How long one call may run. |
+| `--shell-workdir <path>` | a new temp directory per session | Parent directory for session working directories. See [working directory](#working-directory). |
+| `--skills-dir <path>` | `mistralrs-skills` in the system temp directory | Where uploaded [Skills](/guides/agents/skills/) are stored. |
+| `--agent-permission <mode>` | `auto` | `auto` runs commands right away, `ask` waits for your app or user to approve, `deny` refuses. See [permissions and approvals](/guides/agents/permissions-and-approvals/). |
+| `--sandbox <mode>` | `auto` | `auto` sandboxes commands on Linux and macOS, `on` also fails at startup if part of the sandbox is unavailable, `off` gives commands full access to the host. See the [sandbox reference](/reference/sandbox/). |
 
-Permissioning is separate from sandboxing. The permission mode decides whether a model-requested command may run at all. The sandbox decides what the command can access after it starts.
+The permission mode decides whether a command may run at all. The sandbox decides what it can touch once it starts.
 
 ## Examples
 
 <Tabs>
-<TabItem label="CLI">
-
-```bash
-mistralrs serve --enable-shell -m Qwen/Qwen3-4B
-```
-
-Use `--agent` when you want search, code execution, and shell together:
-
-```bash
-mistralrs serve --agent -m Qwen/Qwen3-4B
-```
-
-</TabItem>
 <TabItem label="OpenAI Python">
 
 ```python
@@ -71,7 +54,7 @@ response = client.responses.create(
     model="default",
     input="Use the shell to count the files in the current directory.",
     tools=[{"type": "shell", "environment": {"type": "container_auto"}}],
-    max_tool_rounds=4,
+    extra_body={"max_tool_rounds": 4},
 )
 
 print(response.output_text)
@@ -129,50 +112,47 @@ println!("{}", resp.choices[0].message.content.as_ref().unwrap());
 
 ## Working directory
 
-Without `--shell-workdir`, each session gets a unique `mistralrs-shell-<random>` temp directory. Files written there remain available to later shell calls in the same session and are deleted when the session ends. With `--shell-workdir /path`, all sessions share that directory, so outputs persist and are visible across sessions.
+Without `--shell-workdir`, each session gets its own new temp directory named `mistralrs-shell-<random>`. mistral.rs deletes it when the session has been idle for an hour, or when your app drops the session. If the server is killed, for example with Ctrl+C, directories of live sessions are left behind.
+
+With `--shell-workdir /path`, each session gets a subdirectory named after its session ID, `/path/<session_id>`. Reusing a session ID picks up the same directory, even after a server restart.
+
+[Input files](/guides/agents/file-inputs/) attached to the request and any [Skills](/guides/agents/skills/) it references are copied into this directory before the commands run.
 
 ## File outputs
 
-The shell runtime surfaces only files that the model explicitly marks as outputs. The model can do this in two ways:
+After each call, mistral.rs returns every file the commands created or changed in the working directory. Hidden files and dependency or cache folders (`node_modules`, `target`, `tmp`, `cache`, and similar) are skipped. A file that didn't change isn't returned again.
 
-- Add a top-level `outputs` argument to the same shell call that creates the file.
-- Call the built-in `mistralrs_surface_outputs` tool after a previous shell call created the file.
+To return a file that the automatic pass skips, or to attach a format and name, the model can name it explicitly. Paths are relative to the working directory:
 
-Entries are paths relative to the shell working directory. `outputs` is JSON tool metadata, not shell syntax:
+- In the same call that writes the file, it adds an `outputs` list next to `commands`. This is part of the tool call's JSON, not shell syntax:
 
-```json
-{
-  "commands": ["python build_report.py --output report.html"],
-  "outputs": [{"name": "report.html", "format": "html"}]
-}
-```
+  ```json
+  {
+    "commands": ["python build_report.py --output report.html"],
+    "outputs": [{"name": "report.html", "format": "html"}]
+  }
+  ```
 
-Use `mistralrs_surface_outputs` when the model only knows the final filenames after inspecting command output:
+- In a later round, it calls the built-in `mistralrs_surface_outputs` tool with the same `outputs` list. This is for files whose names it only learns after a command finishes.
 
-```json
-{
-  "outputs": [{"name": "mistralrs_artifacts_demo.pptx", "format": "pptx"}]
-}
-```
-
-Files named in request `files` are merged into shell `outputs` automatically. Files written but not listed in `outputs`, `mistralrs_surface_outputs`, or request `files` remain internal to the shell session.
+Files your request lists in `files` are checked after every call, and a call that finds one missing reports an error entry for it.
 
 ## Streaming output
 
-When using `/v1/responses`, shell activity is represented as OpenAI Responses output items:
+Over `/v1/responses`, shell work appears as standard OpenAI output items:
 
-- `shell_call`: command, status, and call id.
-- `shell_call_output`: stdout/stderr output records, exit code, timeout flag, and status.
+- `shell_call`: the commands, status, and call ID.
+- `shell_call_output`: stdout and stderr, exit code, whether it timed out, and status.
 
-Chat Completions streaming emits the same work as mistral.rs `agentic_tool_call_progress` SSE events. The [agentic runtime guide](/guides/agents/agentic-runtime/) covers the event stream and files contract in depth.
+Over Chat Completions, the same work arrives as `agentic_tool_call_progress` events. See [streaming a run](/guides/agents/agentic-runtime/#stream-a-run-over-http).
 
 ## Isolation
 
-**The CLI sandboxes by default; the SDKs do not.** The CLI and TOML entry points default to `--sandbox auto`, which enables the OS-level sandbox on Linux and macOS. Programmatic `ShellConfig` in the Python and Rust SDKs ships with no sandbox by default; attach a `SandboxPolicy` when embedding the runtime in an app that needs isolation.
+**The CLI sandboxes commands by default; the SDKs don't.** On Linux and macOS, `--sandbox auto` limits commands to writing inside the session's working directory. In the Python and Rust SDKs, `ShellConfig` runs commands with no sandbox unless you attach a `SandboxPolicy`.
 
-When sandbox CPU limits are enforced and the configured shell timeout exceeds `max_cpu_secs`, mistral.rs raises `max_cpu_secs` to match and logs a warning. This keeps long-running Skills from being capped by a lower CPU limit.
+The sandbox caps CPU time at 600 seconds per session by default. If `--shell-timeout` is longer, the cap is raised to match so long-running Skills aren't cut off.
 
-For deployments where shell commands must leave the mistralrs host entirely, use [`--tool-dispatch-url`](/guides/agents/tool-calling-basics/#dispatch-url) and expose a custom executor instead of enabling built-in shell.
+To run commands somewhere other than the mistral.rs host, leave shell off, define your own tool, and send its calls to a service you control with [`--tool-dispatch-url`](/guides/agents/tool-calling-basics/#dispatch-url).
 
 ## See also
 

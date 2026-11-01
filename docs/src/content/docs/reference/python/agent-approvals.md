@@ -6,27 +6,27 @@ sidebar:
 ---
 ## `AgentToolMetadata`
 
-Stable metadata for the agent action being approved.
+Describes the tool behind an agent action that is waiting for approval.
 
-| Field | Type |
-| --- | --- |
-| `source` | `AgentToolSource` |
-| `kind` | `AgentToolKind` |
-| `label` | `str` |
+| Field | Type | Description |
+| --- | --- | --- |
+| `source` | `AgentToolSource` | Where the tool comes from: built in, registered by your app, an MCP server, or an external dispatch URL. |
+| `kind` | `AgentToolKind` | What the tool does, such as code execution, shell, or web search. |
+| `label` | `str` | Display name, such as `"Python code"`, `"Shell command"`, or the tool's own name. |
 
 
 ## `AgentToolApproval`
 
-Approval request passed to `ChatCompletionRequest.agent_approval_callback`.
+An agent action waiting for approval. Your `ChatCompletionRequest.agent_approval_callback` receives one.
 
-| Field | Type | Default |
-| --- | --- | --- |
-| `approval_id` | `str` | required |
-| `session_id` | `str` | required |
-| `round` | `int` | required |
-| `tool` | `AgentToolMetadata` | required |
-| `arguments_json` | `str` | required |
-| `code` | `str \| None` | `None` |
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `approval_id` | `str` | required | ID of this approval request. |
+| `session_id` | `str` | required | Agent session the action belongs to. |
+| `round` | `int` | required | Tool-call round within the request. |
+| `tool` | `AgentToolMetadata` | required | The tool the model wants to run. |
+| `arguments_json` | `str` | required | The tool call's arguments, as a JSON string. |
+| `code` | `str \| None` | `None` | The `code` argument when it is a string, as it is for Python code execution. Otherwise `None`. |
 
 ### `AgentToolApproval.arguments`
 
@@ -34,16 +34,19 @@ Approval request passed to `ChatCompletionRequest.agent_approval_callback`.
 arguments() -> Any
 ```
 
+Parse `arguments_json` and return the result as Python objects.
+
 
 ## `AgentToolApprovalDecision`
 
-Approval callback return value with HTTP/Rust parity.
+A richer answer for an approval callback than `True` or `False`. Use it to send the model a reason
+for a denial, or to approve every later action in the session.
 
-| Field | Type | Default |
-| --- | --- | --- |
-| `decision` | `AgentToolApprovalDecisionKind` | required |
-| `remember_for_session` | `bool` | `False` |
-| `message` | `str \| None` | `None` |
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `decision` | `AgentToolApprovalDecisionKind` | required | Approve or deny. |
+| `remember_for_session` | `bool` | `False` | On approve, skip approval for later actions in the same `session_id`. |
+| `message` | `str \| None` | `None` | On deny, text returned to the model as the tool result. |
 
 ### `AgentToolApprovalDecision.approve`
 
@@ -53,11 +56,15 @@ approve(
 ) -> 'AgentToolApprovalDecision'
 ```
 
+Approve the action.
+
 ### `AgentToolApprovalDecision.deny`
 
 ```text
 deny(message: str | None = None) -> 'AgentToolApprovalDecision'
 ```
+
+Deny the action, optionally with a message for the model.
 
 ---
 

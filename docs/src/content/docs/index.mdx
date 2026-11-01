@@ -4,47 +4,45 @@ description: Install mistral.rs, run a model, or build local inference into your
 template: splash
 hero:
   title: Fast, flexible LLM inference.
-  tagline: Run AI models on your own hardware.
   actions:
     - text: Get started
       link: /quickstart/
-      icon: right-arrow
     - text: View on GitHub
       link: https://github.com/EricLBuehler/mistral.rs
-      icon: external
-      variant: minimal
+      variant: secondary
 ---
 
 import { CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-## Build with mistral.rs
-
 <CardGrid>
+  <LinkCard
+    title="Run any model"
+    href="/guides/models/choose-a-model/"
+    description="Text, vision, speech, image generation, and embeddings."
+  />
   <LinkCard
     title="Serve an API"
     href="/guides/serve/openai-compatible-apis/"
-    description="Connect your apps to a local model."
+    description="OpenAI- and Anthropic-compatible endpoints for your apps."
   />
   <LinkCard
     title="Build agents"
     href="/guides/agents/"
-    description="Give models tools to work with."
+    description="Web search, Python, and shell, built in."
+  />
+  <LinkCard
+    title="Tune performance"
+    href="/guides/perf/throughput-tuning/"
+    description="Quantize, size the cache, and speed up generation."
   />
   <LinkCard
     title="Use Python"
     href="/guides/python/getting-started/"
-    description="Run models from Python without a separate server."
+    description="Run models in-process from Python."
   />
   <LinkCard
     title="Use Rust"
     href="/guides/rust/getting-started/"
-    description="Add inference to a Rust application."
+    description="Embed inference in a Rust application."
   />
 </CardGrid>
-
-## Reference
-
-- [Supported models](/reference/supported-models/)
-- [CLI reference](/reference/cli/)
-- [HTTP API](/reference/http-api/)
-- [Troubleshooting](/reference/troubleshooting/)

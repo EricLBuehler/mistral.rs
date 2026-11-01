@@ -15,15 +15,12 @@ pub struct CacheOptions {
 #[derive(Args, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PagedAttentionOptions {
-    /// PagedAttention mode
-    /// - auto: enabled on CUDA and Metal, disabled on CPU (default)
-    /// - on: force enable (fails if unsupported)
-    /// - off: force disable
+    /// Store the KV cache in PagedAttention blocks so more requests fit in memory
     #[arg(long = "paged-attn", default_value = "auto", value_enum)]
     #[serde(default)]
     pub mode: PagedAttnMode,
 
-    /// Fraction of physical GPU memory available to model weights, workspace, and KV cache
+    /// Fraction of GPU memory (e.g. 0.9) to use for weights, activations, and the KV cache
     #[arg(long, conflicts_with = "kv_cache")]
     pub gpu_memory_utilization: Option<f32>,
 
@@ -31,11 +28,11 @@ pub struct PagedAttentionOptions {
     #[arg(long, value_parser = parse_kv_cache)]
     pub kv_cache: Option<String>,
 
-    /// Tokens per block (default: 32 on CUDA and Metal)
+    /// Tokens per PagedAttention block (default: 32)
     #[arg(long = "pa-block-size")]
     pub block_size: Option<usize>,
 
-    /// KV cache quantization type
+    /// KV cache data type: `auto` or `f8e4m3` (8-bit float, about half the memory)
     #[arg(long = "pa-cache-type", default_value = "auto", value_parser = parse_cache_type)]
     #[serde(default)]
     pub cache_type: PagedCacheType,
@@ -57,12 +54,12 @@ impl Default for PagedAttentionOptions {
 #[derive(Clone, Copy, ValueEnum, Default, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PagedAttnMode {
-    /// Automatic: enabled on CUDA and Metal, disabled on CPU
+    /// On for CUDA and Metal, off for CPU
     #[default]
     Auto,
-    /// Force enable (error if device doesn't support it)
+    /// Always on; fails if the device does not support it
     On,
-    /// Force disable
+    /// Always off
     Off,
 }
 

@@ -1,6 +1,6 @@
 ---
 title: Chat templates
-description: How mistral.rs resolves a model's chat template, and how to override it when that goes wrong.
+description: Select or override the template used to format chat messages.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
@@ -15,33 +15,15 @@ mistralrs run -m <model> --chat-template my-template.jinja
 
 ## How the template is resolved
 
-Template precedence, from highest to lowest, is `--jinja-explicit`, a multimodal
-`processor_config.json` template, `--chat-template`, the model repository's template, and GGUF
-metadata.
+Templates are selected in this order:
 
-The base source (when no override flag is set) is picked in this order:
+1. `--jinja-explicit`.
+2. A multimodal `processor_config.json` template.
+3. `--chat-template`.
+4. The model repository's `chat_template.jinja`, then `tokenizer_config.json`, then `chat_template.json`.
+5. Embedded GGUF metadata.
 
-1. `chat_template.jinja` in the model repo, if present.
-2. Otherwise, the `chat_template` field of the repo's `tokenizer_config.json`.
-3. If still empty, the repo's standalone `chat_template.json` (some newer models ship the template as this separate file).
-
-Overrides apply on top of that base (the precedence summary above lists them highest-first):
-
-- `--chat-template <file>` replaces the base source. The file must end in `.json` or `.jinja`.
-- `--jinja-explicit <file.jinja>` overrides `--chat-template`. The value must be a path to a `.jinja` file.
-- For multimodal models, a `chat_template` in `processor_config.json` takes precedence unless
-  `--jinja-explicit` is set.
-
-GGUF models are a special case: the template embedded in GGUF metadata is used only when none of the sources above produced one.
-
-If nothing is found, the engine logs `No chat template source found` and only raw completion prompts are accepted, not chat messages.
-
-Symptoms of a wrong template:
-
-- Output quality below expectations.
-- Special tokens (`<|im_start|>`, `<bos>`, etc.) leaking into output.
-- Multi-turn degrading faster than single-turn.
-- System prompts ignored or treated as user input.
+Without a template, only raw completion prompts are accepted. If special tokens leak, system messages are ignored, or multi-turn quality deteriorates, check that the template matches the checkpoint.
 
 ## Overriding the template
 
@@ -99,25 +81,7 @@ mistralrs run -m <model> --chat-template chat_templates/llama3.json
 
 ## Writing a template from scratch
 
-Templates are Jinja with Hugging Face conventions, rendered by minijinja with Python-style string methods (`.strip()`, etc.) enabled. General pattern:
-
-```jinja
-{% if messages[0]['role'] == 'system' %}
-{{ bos_token }}<|system|>
-{{ messages[0]['content'] }}<|end|>
-{% endif %}
-{% for msg in messages[(1 if messages[0]['role'] == 'system' else 0):] %}
-{% if msg['role'] == 'user' %}
-<|user|>
-{{ msg['content'] }}<|end|>
-{% elif msg['role'] == 'assistant' %}
-<|assistant|>
-{{ msg['content'] }}<|end|>
-{% endif %}
-{% endfor %}
-{% if add_generation_prompt %}<|assistant|>
-{% endif %}
-```
+Use the checkpoint's template as a starting point; role markers and multimodal placeholders must match the model. Templates use Hugging Face Jinja conventions, with Python-style string methods supported.
 
 Variables available at render time:
 

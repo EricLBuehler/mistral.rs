@@ -1,35 +1,48 @@
 /* Project accent. */
 :root {
-  --sl-hue-accent: 28;
+  --sl-hue-accent: 22;
   --mrs-radius: 6px;
+  --mrs-font-mono: "SFMono-Regular", ui-monospace, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  --sl-font-mono: var(--mrs-font-mono);
   --mrs-rule: color-mix(in srgb, var(--sl-color-gray-5) 82%, var(--sl-color-accent));
   --mrs-panel: color-mix(in srgb, var(--sl-color-bg) 88%, var(--sl-color-gray-6));
 }
 
 :root[data-theme='dark'] {
-  --sl-color-black: #000;
-  --sl-color-bg: #000;
-  --sl-color-bg-nav: #000;
-  --sl-color-bg-sidebar: #000;
-  --sl-color-accent-low: #3a1800;
-  --sl-color-accent: #e8772e;
-  --sl-color-accent-high: #ffd6b8;
+  --sl-color-black: #121110;
+  --sl-color-gray-1: hsl(30, 10%, 94%);
+  --sl-color-gray-2: hsl(30, 5%, 77%);
+  --sl-color-gray-3: hsl(30, 5%, 56%);
+  --sl-color-gray-4: hsl(30, 5%, 36%);
+  --sl-color-gray-5: hsl(30, 6%, 23%);
+  --sl-color-gray-6: hsl(30, 8%, 15%);
+  --sl-color-bg: #121110;
+  --sl-color-bg-nav: #121110;
+  --sl-color-bg-sidebar: #121110;
+  --sl-color-accent-low: #3a1d0d;
+  --sl-color-accent: #f0884a;
+  --sl-color-accent-high: #ffe0cc;
   --sl-color-text-accent: var(--sl-color-accent);
-  --sl-color-text-invert: #000;
+  --sl-color-text-invert: #121110;
   --sl-color-bg-accent: var(--sl-color-accent);
-  --mrs-code-bg: #111214;
+  --mrs-code-bg: #1a1816;
+  --mrs-fill: #b8481a;
 }
 
 :root[data-theme='light'] {
-  --sl-color-accent-low: #ffdcc2;
-  --sl-color-accent: #c55a14;
+  --sl-color-white: hsl(30, 8%, 10%);
+  --sl-color-gray-1: hsl(30, 10%, 16%);
+  --sl-color-gray-2: hsl(30, 7%, 23%);
+  --sl-color-gray-3: hsl(30, 5%, 36%);
+  --sl-color-gray-4: hsl(30, 5%, 56%);
+  --sl-color-gray-5: hsl(30, 5%, 77%);
+  --sl-color-gray-6: hsl(30, 14%, 94%);
+  --sl-color-gray-7: hsl(30, 16%, 97%);
+  --sl-color-accent-low: #fde4d4;
+  --sl-color-accent: #b4461a;
   --sl-color-accent-high: #4a1c00;
   --mrs-code-bg: #f7f5f2;
-}
-
-.site-title {
-  font-weight: 720;
-  letter-spacing: 0;
+  --mrs-fill: #b4461a;
 }
 
 header.header {
@@ -52,7 +65,7 @@ header.header {
 .hero {
   border-bottom: 1px solid var(--mrs-rule);
   grid-template-columns: minmax(0, 1fr);
-  padding-block: clamp(2.75rem, 8vw, 7rem);
+  padding-block: clamp(2rem, 5vw, 4.5rem);
 }
 
 .hero .stack,
@@ -109,4 +122,31 @@ header.header {
 
 .sl-link-card:hover {
   border-color: var(--sl-color-accent);
+}
+
+.sl-link-button {
+  border-radius: var(--mrs-radius);
+  font-weight: 600;
+}
+
+.hero .sl-link-button {
+  min-height: 2.75rem;
+  padding: 0 1.125rem;
+  font-size: 0.9375rem;
+}
+
+.sl-link-button.secondary {
+  border-color: var(--sl-color-gray-5);
+}
+
+.sidebar-content a[aria-current='page'] {
+  background: transparent;
+  color: var(--sl-color-white);
+}
+
+.sl-link-button.primary,
+.sl-link-button.primary:hover {
+  background: var(--mrs-fill);
+  border-color: var(--mrs-fill);
+  color: #fff;
 }

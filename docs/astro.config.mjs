@@ -29,7 +29,7 @@ export default defineConfig({
     '/guides/serve/http-server/': '/guides/serve/openai-compatible-apis/',
     '/guides/serve/openai-responses-api/': '/reference/openai-compatibility/#responses-api',
     // Models
-    '/guides/models/': '/guides/models/run-any-model/',
+    '/guides/models/': '/guides/models/choose-a-model/',
     '/guides/models/text-model-walkthroughs/': '/guides/models/model-family-notes/',
     '/guides/models/vision-model-walkthroughs/': '/guides/models/model-family-notes/',
     '/guides/models/use-vision-input/': '/guides/models/multimodal-input/',
@@ -100,6 +100,24 @@ export default defineConfig({
           slug: 'quickstart',
         },
         {
+          label: 'Models',
+          collapsed: true,
+          items: [
+            'guides/models/choose-a-model',
+            'reference/supported-models',
+            'guides/models/run-any-model',
+            'guides/models/run-gguf',
+            'guides/models/model-family-notes',
+            'guides/models/multimodal-input',
+            'guides/models/video-setup',
+            'guides/models/use-speech-models',
+            'guides/models/use-decision-models',
+            'guides/models/use-image-generation',
+            'guides/models/use-embeddings',
+            'guides/models/use-block-diffusion',
+          ],
+        },
+        {
           label: 'User Guide',
           items: [
             {
@@ -112,21 +130,6 @@ export default defineConfig({
                 'guides/serve/with-web-ui',
                 'guides/serve/multiple-models',
                 'guides/serve/coding-agents',
-              ],
-            },
-            {
-              label: 'Models',
-              collapsed: true,
-              items: [
-                'guides/models/run-any-model',
-                'guides/models/run-gguf',
-                'guides/models/model-family-notes',
-                'guides/models/multimodal-input',
-                'guides/models/video-setup',
-                'guides/models/use-speech-models',
-                'guides/models/use-image-generation',
-                'guides/models/use-embeddings',
-                'guides/models/use-block-diffusion',
               ],
             },
             {
@@ -226,6 +229,17 @@ export default defineConfig({
         },
       ],
       customCss: ['./src/styles/custom.css'],
+      head: [
+        { tag: 'link', attrs: { rel: 'icon', href: '/favicon-32.png', type: 'image/png', sizes: '32x32' } },
+        { tag: 'link', attrs: { rel: 'apple-touch-icon', href: '/apple-touch-icon.png' } },
+      ],
+      components: {
+        SiteTitle: './src/components/SiteTitle.astro',
+      },
+      expressiveCode: {
+        themes: ['vitesse-dark', 'vitesse-light'],
+        useStarlightUiThemeColors: true,
+      },
     }),
   ],
 });

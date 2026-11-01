@@ -13,7 +13,7 @@ mistral.rs uses Cargo features to gate platform-specific and optional functional
 | `cudnn` | as above | cuDNN-accelerated kernels. |
 | `flash-attn` | as above | Flash attention v2 (Ampere+, requires `cuda`). |
 | `flash-attn-v3` | `mistralrs-cli`, `mistralrs-core`, `mistralrs-server-core` | Flash attention v3 (Hopper, requires `cuda`). Not exposed by the top-level `mistralrs` crate. |
-| `cutile` | `mistralrs-cli`, `mistralrs`, `mistralrs-core`, `mistralrs-pyo3` | cuTile acceleration for quantized linears, MoE, and routed LoRA. Enables `cuda`. Requires CUDA >= 13.2 on Ampere/Ada and Blackwell+, CUDA >= 13.3 on Hopper, and a compatible `tileiras` installation. [NVFP4](/reference/quantization-types/#nvfp4) requires Blackwell and CUDA >= 13.3. See [cuTile setup](/developer/moe-backends/). |
+| `cutile` | `mistralrs-cli`, `mistralrs`, `mistralrs-core`, `mistralrs-pyo3` | cuTile kernels for quantized linear layers, MoE, and routed LoRA. Enables `cuda`. See the [requirements](#cutile-requirements) below. |
 | `metal` | as above | Apple Silicon GPU support via Metal. |
 | `accelerate` | as above | Apple Accelerate framework for CPU math. |
 | `mkl` | as above | Intel MKL for CPU math. |
@@ -29,6 +29,13 @@ Typical combinations:
 - Intel CPU with MKL: `mkl`
 
 For Linux CUDA multi-GPU, add `nccl` when NCCL is installed. The Linux installer and CUDA wheel builder add it automatically when they detect `libnccl`.
+
+### cuTile requirements
+
+- Ampere, Ada, or Blackwell: CUDA 13.2 or newer.
+- Hopper: CUDA 13.3 or newer.
+- A compatible `tileiras` install. See [cuTile setup](/developer/moe-backends/).
+- [NVFP4](/reference/quantization-types/#nvfp4) on cuTile needs Blackwell and CUDA 13.3 or newer.
 
 ## Functional features
 
@@ -67,4 +74,4 @@ No crate enables an accelerator feature by default. Opt in to the accelerator ma
 
 ## Feature verification
 
-`mistralrs doctor` prints a `Build features:` line listing the compiled-in accelerator features (`cuda`, `metal`, `cudnn`, `flash-attn`, `flash-attn-v3`, `cutile`, `accelerate`, `mkl`). Other features such as `nccl`, `ring`, `code-execution`, and `swagger-ui` are not shown on that line.
+`mistralrs doctor` prints a `Build features:` line with the accelerator features compiled in, from `cuda`, `metal`, `cudnn`, `flash-attn`, `flash-attn-v3`, `cutile`, `accelerate`, and `mkl`.

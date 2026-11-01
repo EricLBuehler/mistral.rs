@@ -2823,6 +2823,8 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<which::EmbeddingArchitecture>()?;
     m.add_class::<MultimodalArchitecture>()?;
     m.add_class::<DiffusionArchitecture>()?;
+    m.add_class::<which::IsqOrganization>()?;
+    m.add_class::<PagedCacheType>()?;
     m.add_class::<AnyMoeConfig>()?;
     m.add_class::<AnyMoeExpertType>()?;
     m.add_class::<CodeExecutionConfig>()?;

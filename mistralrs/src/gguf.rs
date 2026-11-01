@@ -195,6 +195,7 @@ impl GgufModelBuilder {
                         strict: None,
                     },
                 },
+                source: AgentToolSource::User,
             },
         );
         self
@@ -214,6 +215,7 @@ impl GgufModelBuilder {
             ToolCallbackWithTool {
                 callback: ToolCallbackKind::Text(callback),
                 tool,
+                source: AgentToolSource::User,
             },
         );
         self

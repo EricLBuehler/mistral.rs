@@ -5,50 +5,57 @@ description: Upload and reference Skills from OpenAI-compatible Responses, Anthr
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-mistral.rs implements uploaded Skills for both the OpenAI-compatible Responses API and the Anthropic-compatible Messages API. You can upload a skill bundle to `/v1/skills`, reference it from a request, and let the model use the bundled instructions and files during the run.
+A Skill is a folder that teaches the model one task, such as building a report or following your team's release checklist. It holds a `SKILL.md` file with step-by-step instructions, plus any scripts, templates, or reference files those steps use. When a request references a Skill, mistral.rs copies the folder into the session's working directory and tells the model to read `SKILL.md` first. The model then follows the instructions with the [shell tool](/guides/agents/enable-shell/), running the bundled scripts by path.
 
-This page documents the mistral.rs compatibility surface. For the upstream API shapes and authoring model, see OpenAI's [Tools and Skills guide](https://developers.openai.com/api/docs/guides/tools-skills), Anthropic's [Agent Skills overview](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview), and Anthropic's [Skills API guide](https://platform.claude.com/docs/en/build-with-claude/skills-guide).
+mistral.rs supports Skills through the same APIs as OpenAI and Anthropic. You upload a Skill to `/v1/skills` once, then reference it from a Responses or Messages request. For how to write a good Skill, see OpenAI's [Tools and Skills guide](https://developers.openai.com/api/docs/guides/tools-skills), Anthropic's [Agent Skills overview](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview), and Anthropic's [Skills API guide](https://platform.claude.com/docs/en/build-with-claude/skills-guide).
 
-Start a server with the Skills runtime available:
+Skills need the shell tool. Start the server with `--agent` to also give the model web search and Python, which many Skills use, or with `--enable-shell` for shell alone:
 
 ```bash
 mistralrs serve --agent -m <model>
 ```
 
-`--agent` is the recommended way to run Skills because it turns on the full local agent runtime: web search, Python code execution, and shell execution. Skills require the shell executor, so the minimum server flag is `--enable-shell`; use it only when you want Skills without the other agentic tools.
+Shell settings, sandboxing, and approvals apply to Skills too; see [shell execution](/guides/agents/enable-shell/) and [permissions and approvals](/guides/agents/permissions-and-approvals/). To give a Skill your own files to work on, attach them as [input files](/guides/agents/file-inputs/).
 
-For executor flags, sandboxing, and approvals, see [shell execution](/guides/agents/enable-shell/) and [permissions and approvals](/guides/agents/permissions-and-approvals/). For request files used alongside Skills, see [OpenAI-compatible file inputs](/guides/agents/file-inputs/).
+## Packaging a Skill
 
-## Compatibility surface
+A Skill upload is either one zip archive or the files of one top-level folder sent as multipart fields. Either way, the folder must contain a `SKILL.md` that starts with YAML frontmatter:
 
-Supported today:
+```markdown
+---
+name: quarterly-report
+description: Build the quarterly sales report as HTML from a CSV export.
+---
 
-- OpenAI-compatible skill bundles uploaded to `POST /v1/skills`.
-- Anthropic-compatible `container.skills` references on `POST /v1/messages`.
-- Multipart upload with either one zip archive or one top-level skill directory split across multipart file fields.
-- `GET /v1/skills`, `POST /v1/skills/{skill_id}/versions`, and `GET /v1/skills/{skill_id}/versions`.
-- Responses `tools[].type = "shell"` with `environment.type = "container_auto"`.
-- Responses `skill_reference` entries with `"version": "latest"`, an omitted version, or a concrete version.
-- Messages `container.skills[]` entries with `type = "custom"`, `skill_id`, and `"version": "latest"`, an omitted version, or a concrete version.
-- Responses output items for `shell_call` and `shell_call_output`, so clients can inspect what ran.
-- mistral.rs agentic extensions for Skills requests: `max_tool_rounds` to bound agentic tool loops, and `files` to require specific output files and surface them as downloadable File objects.
-- Python and Rust SDK local mounts for in-process users that do not go through `/v1/skills`.
+1. Run `python scripts/build_report.py <csv> --output report.html`.
+2. ...
+```
 
-Not implemented today:
+`name` and `description` are required. The model sees both in every request that references the Skill, so write the description to say when the Skill applies. An upload can be up to 50 MiB.
 
-- Anthropic-managed built-in Skills such as `pptx`, `xlsx`, `docx`, and `pdf`.
-- Inline zipped skill payloads that create OpenAI containers inside the request.
-- OpenAI local shell environments or local skill paths in server requests.
-- Container reference environments and container lifecycle APIs.
-- Automatic `agentskills.io` registry installation or `.agents/skills` scanning.
+## What's supported
 
-mistral.rs implements the OpenAI-compatible server/runtime layer. It does not act as a separate skill registry client.
+| You can | How |
+|---|---|
+| Upload a Skill or a new version | `POST /v1/skills`, `POST /v1/skills/{skill_id}/versions` |
+| List Skills and versions | `GET /v1/skills`, `GET /v1/skills/{skill_id}/versions` |
+| Use it from Responses | A `skill_reference` in a `shell` tool's `container_auto` environment |
+| Use it from Anthropic Messages | A `container.skills` entry with `type: "custom"` |
+| Pick a version | `"version": "latest"`, a version number, or leave `version` out for the latest |
+| See what ran | Responses `shell_call` and `shell_call_output` output items |
+| Bound the run and collect outputs | The mistral.rs fields `max_tool_rounds` and `files` |
+| Use a local folder without uploading | `ShellSkillMount` in the Python SDK, `with_shell_skill` in the Rust SDK |
+
+Not supported:
+
+- Anthropic's prebuilt Skills such as `pptx`, `xlsx`, `docx`, and `pdf`. Upload your own Skill instead.
+- Zipped Skills sent inline in the request. Upload them to `/v1/skills` first.
+- Local folder paths or container references in server requests. On the server, only uploaded Skills can be referenced.
+- Installing Skills from a registry such as `agentskills.io`, or scanning a `.agents/skills` folder.
 
 ## Examples
 
-Use the OpenAI Python package. The current OpenAI package may not expose a typed `skills` resource, so the example uses the package's low-level `client.post(...)` helper.
-
-The Python and Rust SDK examples mount local skill directories in-process. That bypasses `/v1/skills`; server clients should use uploaded Skills and `skill_reference`.
+The OpenAI example uploads with the OpenAI package's generic `client.post(...)` helper, which works whether or not your package version has a typed `skills` resource. The Python and Rust SDK examples mount a local folder in-process instead of uploading.
 
 <Tabs>
 <TabItem label="OpenAI server">
@@ -101,7 +108,7 @@ print(response.output_text)
 
 [Full server example](/examples/server/skills/)
 
-To upload a new version of an existing skill, post another zip to `/skills/{skill_id}/versions` with the same `client.post(..., files=...)` pattern. Requests can reference `"version": "latest"` or a specific version.
+To upload a new version of an existing Skill, post another zip to `/skills/{skill_id}/versions` the same way.
 
 </TabItem>
 <TabItem label="Anthropic server">
@@ -144,9 +151,7 @@ with urllib.request.urlopen(request) as response:
 
 [Full server example](/examples/server/anthropic-skills/)
 
-To list uploaded custom Skills with Anthropic-shaped objects, call
-`GET /v1/skills?source=custom` with `anthropic-version: 2023-06-01` and
-`anthropic-beta: skills-2025-10-02`.
+To list uploaded Skills as Anthropic-shaped objects, call `GET /v1/skills?source=custom` with the headers `anthropic-version: 2023-06-01` and `anthropic-beta: skills-2025-10-02`.
 
 </TabItem>
 <TabItem label="Python SDK">
@@ -210,9 +215,9 @@ println!("{}", resp.choices[0].message.content.as_ref().unwrap());
 
 ## Storage and lifecycle
 
-Uploaded skills are stored under `--skills-dir`, which defaults to the system temp directory. Each upload receives a `skill_...` id and version metadata. The server stores the uploaded version once, then copies only the skills referenced by a request into that request's shell session working directory.
+Uploaded Skills are stored under `--skills-dir`, which defaults to `mistralrs-skills` in the system temp directory. Each upload gets a `skill_...` ID and a version number. The server loads everything in that directory at startup, so uploads survive a restart. The OS can clear its temp directory, so point `--skills-dir` at a permanent location to keep Skills long-term.
 
-The shell working directory is still controlled by `--shell-workdir`; without it, each session uses a per-session temp directory. Session state, tool records, and generated files follow the same lifecycle described in [persist sessions](/guides/agents/persist-sessions/).
+Each request copies only the Skills it references into its session's working directory, under `skills/<name>/`. The working directory itself follows the shell settings: a new temp directory per session, or a subdirectory of `--shell-workdir`. Session state, tool records, and generated files follow the same lifecycle described in [persist sessions](/guides/agents/persist-sessions/).
 
 ## See also
 

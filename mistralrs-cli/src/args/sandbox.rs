@@ -6,7 +6,7 @@ use serde::Deserialize;
 
 #[derive(Args, Clone, Deserialize)]
 pub struct SandboxOptions {
-    /// Sandbox mode.
+    /// Sandbox for the processes started by the code and shell tools.
     #[arg(
         id = "sandbox_mode",
         long = "sandbox",
@@ -17,7 +17,8 @@ pub struct SandboxOptions {
     #[serde(default)]
     pub mode: SandboxMode,
 
-    /// Sandbox policy profile.
+    /// Files and network the sandbox allows. Defaults to `developer` when code or shell tools are on,
+    /// otherwise `restricted`.
     #[arg(
         id = "sandbox_profile",
         long = "sandbox-profile",
@@ -47,7 +48,8 @@ pub struct SandboxOptions {
     #[arg(id = "sandbox_max_procs", long = "sb-max-procs", value_name = "PROCS")]
     pub max_procs: Option<u32>,
 
-    /// Network access permitted to the sandboxed session.
+    /// Network access inside the sandbox. Defaults to `loopback` for the restricted profile and `full`
+    /// for developer.
     #[arg(
         id = "sandbox_network",
         long = "sandbox-network",
@@ -74,28 +76,33 @@ impl Default for SandboxOptions {
 #[derive(Clone, Copy, ValueEnum, Default, PartialEq, Eq, Deserialize, Debug)]
 #[serde(rename_all = "kebab-case")]
 pub enum SandboxMode {
-    /// Enabled on Linux/macOS, no-op on Windows.
+    /// Sandbox on Linux and macOS, skipping protections the OS lacks; no sandbox on Windows.
     #[default]
     Auto,
-    /// Force enable.
+    /// Always sandbox; fail if any protection is unavailable.
     On,
-    /// Force disable.
+    /// No sandbox.
     Off,
 }
 
 #[derive(Clone, Copy, ValueEnum, Default, PartialEq, Eq, Deserialize, Debug)]
 #[serde(rename_all = "kebab-case")]
 pub enum SandboxNetworkMode {
+    /// No network access.
     None,
+    /// Localhost only.
     #[default]
     Loopback,
+    /// Unrestricted network access.
     Full,
 }
 
 #[derive(Clone, Copy, ValueEnum, PartialEq, Eq, Deserialize, Debug)]
 #[serde(rename_all = "kebab-case")]
 pub enum SandboxProfileArg {
+    /// Session directory and system files only.
     Restricted,
+    /// Also reads installed toolchains (PATH, Homebrew, nvm, conda, and similar) with full network.
     Developer,
 }
 

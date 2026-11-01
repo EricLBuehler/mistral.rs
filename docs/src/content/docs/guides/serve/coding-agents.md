@@ -66,10 +66,7 @@ If a reverse proxy enforces authentication, add `env_key = "MISTRALRS_API_KEY"`
 under `[model_providers.mistralrs]` and export that variable before launching
 Codex. The local mistral.rs server itself does not validate API keys.
 
-Codex tool calls arrive through `/v1/responses` as Responses function tools.
-mistral.rs routes them through the same tool-calling path used by Chat
-Completions. For Responses endpoint behavior, see
-[OpenAI compatibility](/reference/openai-compatibility/#responses-api).
+See [Responses compatibility](/reference/openai-compatibility/#responses-api) for supported tools and request fields.
 
 ## Claude Code
 
@@ -97,21 +94,6 @@ project-local `.claude/settings.local.json`:
 }
 ```
 
-Or set the same values for one shell session:
-
-```bash
-export ANTHROPIC_BASE_URL=http://localhost:1234
-export ANTHROPIC_API_KEY=not-used
-export ANTHROPIC_MODEL=sonnet
-export ANTHROPIC_DEFAULT_SONNET_MODEL=default
-export ANTHROPIC_DEFAULT_OPUS_MODEL=default
-export ANTHROPIC_DEFAULT_HAIKU_MODEL=default
-export ANTHROPIC_CUSTOM_MODEL_OPTION=default
-export CLAUDE_CODE_MAX_CONTEXT_TOKENS=32768
-export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
-claude
-```
-
 Map the Sonnet, Opus, and Haiku defaults to `default` so the `sonnet` setting
 and Claude Code's background and planning calls all use the single loaded
 mistral.rs model. If you serve several models, map each Claude Code default to
@@ -126,26 +108,11 @@ Every variable above is documented in the
 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` turns off auto-update checks,
 telemetry, and error reporting so the client stays local.
 
-Claude Code client tools arrive as Anthropic tool definitions and later
-`tool_result` content blocks. mistral.rs translates these to its internal tool
-format. For direct Anthropic examples, see the
-[Anthropic Messages API guide](/guides/serve/anthropic-messages-api/).
+For direct client examples, see the [Anthropic Messages guide](/guides/serve/anthropic-messages-api/).
 
 ## Server-side agent tools
 
-The coding clients already provide their own editing and shell tools. Server-side
-mistral.rs tools are separate:
-
-| Feature | How it reaches mistral.rs |
-|---|---|
-| Client-side tool use | Codex Responses function tools or Claude Code Anthropic tools |
-| Server web search | Responses `{"type":"web_search"}` tools, Chat `web_search_options`, or Anthropic `web_search_*` server tools |
-| Server code execution | OpenAI `{"type":"code_interpreter","container":{"type":"auto"}}` tools or Anthropic `code_execution_*` server tools |
-
-Server-side web search and code execution require the corresponding mistral.rs
-agentic runtime flags at server startup. Use them when you want the model server
-to perform web search or Python execution independently of the coding client's
-own terminal tools.
+Coding clients provide their own editing and shell tools. To also let the server execute web search or Python, enable those [agentic capabilities](/guides/agents/agentic-runtime/) at startup and request the corresponding hosted tools. Server-side tools run independently of the coding client's terminal.
 
 ## Examples
 

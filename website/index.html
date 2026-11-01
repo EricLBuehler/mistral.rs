@@ -3,90 +3,189 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="Fast, flexible LLM inference." />
-    <meta name="theme-color" content="#070605" />
+    <meta name="description" content="Fast, flexible LLM inference. Run open models on your Mac, NVIDIA GPUs, or CPU, from one Rust binary." />
+    <meta name="theme-color" content="#121110" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://mistralrs.dev/" />
     <meta property="og:site_name" content="mistral.rs" />
     <meta property="og:title" content="mistral.rs - Fast, flexible LLM inference" />
-    <meta property="og:description" content="Fast, flexible LLM inference." />
+    <meta property="og:description" content="Fast, flexible LLM inference. Run open models on your Mac, NVIDIA GPUs, or CPU, from one Rust binary." />
     <meta property="og:image" content="https://mistralrs.dev/og.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="mistral.rs - Fast, flexible LLM inference" />
-    <meta name="twitter:description" content="Fast, flexible LLM inference." />
+    <meta name="twitter:description" content="Fast, flexible LLM inference. Run open models on your Mac, NVIDIA GPUs, or CPU, from one Rust binary." />
     <meta name="twitter:image" content="https://mistralrs.dev/og.png" />
     <title>mistral.rs - Fast, flexible LLM inference</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="stylesheet" href="/src/styles.css" />
     <script type="module" src="/src/main.js"></script>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
 
-    <div class="site-shell">
-      <main id="main">
-        <section class="hero" aria-labelledby="hero-title">
-          <h1 id="hero-title">mistral<span>.rs</span></h1>
-          <p class="hero-tagline">Fast, flexible LLM inference</p>
+    <main id="main">
+      <section class="hero" aria-labelledby="hero-title">
+        <a class="release-pill" href="/blog/v0-9-5-qwen-flash-next.html"><span class="release-tag">v0.9.5</span><span>Beats llama.cpp and vLLM on <span class="nowrap">Qwen3.8-Flash-Next</span></span><span aria-hidden="true">&rarr;</span></a>
+        <h1 id="hero-title">mistral<span>.rs</span></h1>
+        <p class="hero-tagline">Fast, flexible LLM inference</p>
 
+        <p class="step"><span class="step-num">1</span>Install</p>
+        <div class="install-card">
+          <div class="platform-tabs" role="tablist" aria-label="Installer platform">
+            <button
+              id="install-tab-unix"
+              type="button"
+              role="tab"
+              data-platform="unix"
+              aria-selected="true"
+              aria-controls="install-command"
+              tabindex="0"
+            >macOS / Linux</button>
+            <button
+              id="install-tab-windows"
+              type="button"
+              role="tab"
+              data-platform="windows"
+              aria-selected="false"
+              aria-controls="install-command"
+              tabindex="-1"
+            >Windows</button>
+          </div>
+
+          <div
+            class="command-row"
+            id="install-command"
+            role="tabpanel"
+            aria-labelledby="install-tab-unix"
+            aria-live="polite"
+          >
+            <span class="prompt" aria-hidden="true">$</span>
+            <code><span class="nowrap">curl</span> <span class="nowrap">-fsSL</span> <span class="nowrap">https://mistralrs.dev/install.sh</span> <span class="nowrap">| sh</span></code>
+            <button
+              class="copy-button"
+              type="button"
+              aria-label="Copy macOS and Linux install command"
+            >Copy</button>
+          </div>
+        </div>
+        <p class="note">Then open a new terminal.</p>
+
+        <div class="examples">
+          <p class="step"><span class="step-num">2</span>Run</p>
           <div class="install-card">
-            <div class="platform-tabs" role="tablist" aria-label="Installer platform">
-              <button
-                id="install-tab-unix"
-                type="button"
-                role="tab"
-                data-platform="unix"
-                aria-selected="true"
-                aria-controls="install-command"
-                tabindex="0"
-              >macOS / Linux</button>
-              <button
-                id="install-tab-windows"
-                type="button"
-                role="tab"
-                data-platform="windows"
-                aria-selected="false"
-                aria-controls="install-command"
-                tabindex="-1"
-              >Windows</button>
-            </div>
-
-            <div
-              class="command-row"
-              id="install-command"
-              role="tabpanel"
-              aria-labelledby="install-tab-unix"
-              aria-live="polite"
-            >
+            <div class="command-row">
               <span class="prompt" aria-hidden="true">$</span>
-              <code>curl -fsSL https://mistralrs.dev/install.sh | sh</code>
+              <code><span class="nowrap">mistralrs serve</span> <span class="nowrap">-m Qwen/Qwen3-4B</span> <span class="nowrap">--quant 4</span></code>
               <button
                 class="copy-button"
                 type="button"
-                aria-label="Copy macOS and Linux install command"
+                data-copy="mistralrs serve -m Qwen/Qwen3-4B --quant 4"
+                aria-label="Copy the serve command"
               >Copy</button>
             </div>
           </div>
+          <p class="note">Then open <a href="http://localhost:1234/ui">localhost:1234/ui</a>.</p>
+        </div>
 
-          <p class="source-install">Follow the installer, then open a new terminal.</p>
+        <div class="hero-actions">
+          <a class="button button-primary" href="https://docs.mistralrs.dev/quickstart/">Get started</a>
+        </div>
 
-          <div class="examples">
-            <p class="examples-intro">Once installed, start a chat.</p>
-            <div class="model-command">
-              <code>mistralrs serve -m Qwen/Qwen3-4B --quant 4</code>
-            </div>
-            <p class="source-install">When ready, open <a href="http://localhost:1234/ui">localhost:1234/ui</a>. <a href="https://docs.mistralrs.dev/quickstart/">Quickstart</a></p>
+        <nav class="hero-meta" aria-label="Project links">
+          <a href="https://docs.mistralrs.dev/reference/supported-models/">60+ model architectures</a>
+          <a href="https://docs.mistralrs.dev/">Docs</a>
+          <a href="/blog/">Blog</a>
+          <a href="https://github.com/EricLBuehler/mistral.rs">GitHub</a>
+        </nav>
+      </section>
+
+      <section class="section" id="benchmarks" aria-labelledby="perf-title">
+        <h2 id="perf-title">Throughput under load</h2>
+        <p class="section-lede">Qwen3.8-27B in FP8 on one NVIDIA GH200, serving 512-token responses to 1 through 128 concurrent requests.</p>
+
+        <figure class="chart-card" data-chart="columns">
+          <div class="chart-legend" aria-hidden="true">
+            <span><i class="swatch series-1"></i>mistral.rs</span>
+            <span><i class="swatch series-2"></i>vLLM</span>
+            <span><i class="swatch series-3"></i>SGLang</span>
           </div>
+          <div class="chart-panel" data-table="vllm-throughput"></div>
+          <details class="chart-data">
+            <summary>Show the numbers</summary>
+            <table id="vllm-throughput">
+              <caption>Output throughput, tokens/s</caption>
+              <thead><tr><th scope="col">Concurrent requests</th><th scope="col">mistral.rs</th><th scope="col">vLLM</th><th scope="col">SGLang</th></tr></thead>
+              <tbody>
+                <tr><th scope="row">1</th><td>96.98</td><td>86.00</td><td>89.58</td></tr>
+                <tr><th scope="row">8</th><td>721.22</td><td>603.49</td><td>650.42</td></tr>
+                <tr><th scope="row">16</th><td>1,287.46</td><td>1,118.76</td><td>1,204.62</td></tr>
+                <tr><th scope="row">32</th><td>2,092.50</td><td>1,921.11</td><td>2,091.55</td></tr>
+                <tr><th scope="row">64</th><td>3,587.32</td><td>3,055.66</td><td>3,367.12</td></tr>
+                <tr><th scope="row">96</th><td>4,314.00</td><td>3,761.59</td><td>4,072.22</td></tr>
+                <tr><th scope="row">128</th><td>4,914.05</td><td>4,300.76</td><td>4,673.67</td></tr>
+              </tbody>
+            </table>
+          </details>
+        </figure>
+        <p class="caption">mistral.rs v0.9.3, vLLM, and SGLang, August 2026, without speculative decoding. Medians of three runs per point. <a href="/blog/v0-9-3-throughput.html">Full method and data</a></p>
+      </section>
 
-          <nav class="hero-meta" aria-label="Project links">
-            <a href="https://docs.mistralrs.dev/reference/supported-models/">50+ model architectures</a>
-            <a href="https://docs.mistralrs.dev/">Docs</a>
-            <a href="/blog/">Blog</a>
-            <a href="https://github.com/EricLBuehler/mistral.rs">GitHub</a>
-          </nav>
-        </section>
-      </main>
-    </div>
+      <section class="section" aria-labelledby="agents-title">
+        <h2 id="agents-title">Works with Claude Code and Codex</h2>
+        <p class="section-lede">mistral.rs serves the Anthropic Messages API and the OpenAI Responses API, so coding agents talk to it directly. Start a model, then point Claude Code or Codex at it.</p>
+        <div class="code-panel">
+          <pre><code><span class="prompt">$</span> mistralrs serve -m Qwen/Qwen3-Coder-Next --quant 4</code></pre>
+        </div>
+        <p class="section-link"><a href="https://docs.mistralrs.dev/guides/serve/coding-agents/">Set up Claude Code or Codex</a></p>
+      </section>
+
+      <section class="section" aria-labelledby="sdk-title">
+        <h2 id="sdk-title">Or build it into your app</h2>
+        <p class="section-lede">Load a model inside your Python or Rust program, with no server in between.</p>
+        <div class="code-pair">
+          <div class="install-card">
+            <p class="code-label">Python</p>
+            <div class="command-row">
+              <span class="prompt" aria-hidden="true">$</span>
+              <code>pip install mistralrs</code>
+              <button
+                class="copy-button"
+                type="button"
+                data-copy="pip install mistralrs"
+                aria-label="Copy the Python install command"
+              >Copy</button>
+            </div>
+          </div>
+          <div class="install-card">
+            <p class="code-label">Rust</p>
+            <div class="command-row">
+              <span class="prompt" aria-hidden="true">$</span>
+              <code>cargo add mistralrs</code>
+              <button
+                class="copy-button"
+                type="button"
+                data-copy="cargo add mistralrs"
+                aria-label="Copy the Rust install command"
+              >Copy</button>
+            </div>
+          </div>
+        </div>
+        <p class="section-link"><a href="https://docs.mistralrs.dev/guides/python/getting-started/">Python guide</a> <a href="https://docs.mistralrs.dev/guides/rust/getting-started/">Rust guide</a></p>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <a class="brand" href="/">mistral<span>.rs</span></a>
+      <nav aria-label="Footer">
+        <a href="https://docs.mistralrs.dev/">Docs</a>
+        <a href="/blog/">Blog</a>
+        <a href="https://github.com/EricLBuehler/mistral.rs">GitHub</a>
+      </nav>
+    </footer>
   </body>
 </html>

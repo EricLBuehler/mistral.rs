@@ -3,11 +3,7 @@ title: UQFF format
 description: Layout of the UQFF quantized model file format.
 ---
 
-UQFF is the native mistral.rs quantized file format. To use UQFF models, see the [UQFF guide](/guides/quantization/uqff/); knowledge of the layout is not required.
-
-:::caution
-UQFF 1.x is not compatible with files produced by earlier mistral.rs releases (pre-1.0). Old files will fail with an error; regenerate them with `mistralrs quantize`.
-:::
+UQFF is mistral.rs's own file format for quantized models. This page describes its layout. You don't need it to use UQFF files; for that, see the [UQFF guide](/guides/quantization/uqff/).
 
 ## File structure
 
@@ -17,7 +13,7 @@ A UQFF export is a directory containing:
 - `residual.safetensors` for unquantized tensors (norms, dense embeddings, etc.).
 - Model assets copied from the source repo so the directory is self-contained: `config.json`, `tokenizer.json`, `tokenizer_config.json`, `generation_config.json`, and (when present) `modules.json`, `chat_template.jinja`, `processor_config.json`, `preprocessor_config.json`.
 
-A loader is pointed at one or more shard files (`from_uqff`); the residual safetensors and the JSON assets are picked up by sibling-path lookup.
+To load an export, pass one or more shard files (`--from-uqff` on the CLI). mistral.rs finds `residual.safetensors` and the JSON assets in the same repository or directory.
 
 ## Shard layout
 
@@ -28,27 +24,32 @@ Each `.uqff` shard is a standard safetensors file with named entries. Every quan
 - Family-specific metadata next to it, e.g. `<key>.weight.dtype` and `<key>.weight.shape` for GGML types, `<key>.weight.scales`/`.bits`/`.group_size` for AFQ.
 - `<key>.bias` when the layer has one.
 
-Safetensors metadata includes informational producer fields: `uqff.producer`, `uqff.producer.mistralrs.version`, and `uqff.producer.mistralrs.git_revision`. These are recorded for provenance and are not checked by the loader.
+The safetensors metadata also records which mistral.rs build wrote the file: `uqff.producer`, `uqff.producer.mistralrs.version`, and `uqff.producer.mistralrs.git_revision`. The loader ignores these fields.
 
 `<key>` is the layer's weight path (`model.layers.0.self_attn.q_proj`). MoE (Mixture of Experts) expert layers use three canonical keys per block: `<...>.experts.gate_proj`, `.up_proj`, `.down_proj`, each holding the stacked `[num_experts, out, in]` weights.
 
-Because every layer self-describes, a single file may mix quantization types. Two cases produce a mixed file:
+Each layer records its own type, so one file can mix quantization types. That happens in three cases:
 
-- Topology-pinned layers (assigned a specific type by a [topology](/guides/perf/topology/) config) keep their pinned type.
-- Model-declared language token embeddings and output heads use the higher-precision default documented in [quantization types](/reference/quantization-types/). For example, an `afq4` shard set stores those tensors as AFQ6, while a `q4k` shard set stores them as Q6K. Each loader supplies exact paths, so similarly named auxiliary tensors are not promoted implicitly.
-- Layers whose shape cannot support the requested type fall back per-layer. For example, AFQ layers whose input dimension is not divisible by the AFQ group size are stored unquantized.
+- Layers pinned to a type in a [topology](/guides/perf/topology/) config keep that type.
+- Token embeddings and the output head are stored at higher precision, as described in [sensitive tensor precision](/reference/quantization-types/#sensitive-tensor-precision). For example, an `afq4` shard set stores them as AFQ6, and a `q4k` shard set stores them as Q6K.
+- Layers whose shape can't use the requested type fall back one layer at a time. For example, AFQ layers whose input dimension isn't divisible by the AFQ group size are stored unquantized.
 
 ## Sharding
 
-The writer splits the tensor stream into `<stem>-0.uqff`, `<stem>-1.uqff`, ... with a soft cap of 10 GiB per shard. Multiple [ISQ (in-situ quantization)](/reference/quantization-types/) types in one run produce one shard set per type (`q4k-0.uqff`, `afq4-0.uqff`, ...) sharing the residual and assets.
+The writer splits the quantized layers across `<stem>-0.uqff`, `<stem>-1.uqff`, and so on, starting a new shard at about 10 GiB. Quantizing to several [ISQ](/reference/quantization-types/) types in one run writes one shard set per type (`q4k-0.uqff`, `afq4-0.uqff`, ...), all sharing the same residual file and assets.
 
 ## Version compatibility
 
-Each shard set carries three u32 scalar entries: `uqff.version.major`, `uqff.version.minor`, `uqff.version.patch`. Readers reject a different major version and reject a minor newer than they support; older minors within the same major are accepted. Files without version entries are rejected.
+Each shard set carries three u32 scalar entries: `uqff.version.major`, `uqff.version.minor`, and `uqff.version.patch`. The current format version is 1.2.0. A file fails to load with a version error when:
 
-UQFF 1.1 adds inline unquantized linear entries (`weight.format = Unquant`) so mixed files can preserve unsupported layer shapes without moving those weights into `residual.safetensors`.
+- Its major version differs from the reader's. Regenerate it with `mistralrs quantize`.
+- Its minor version is newer than the reader supports. Upgrade mistral.rs.
+- It has no version entries. Regenerate it with `mistralrs quantize`.
 
-UQFF 1.2 stores quantized token embeddings as regular layer entries and omits their original dense weights from `residual.safetensors`. Readers still accept UQFF 1.1 files whose token embeddings remain in the residual file.
+Older minor versions within the same major version load normally. What each minor version added:
+
+- 1.1: unquantized linear layers can be stored inline (`weight.format = Unquant`), so a mixed file can keep a layer whose shape doesn't fit the requested type without moving it into `residual.safetensors`.
+- 1.2: quantized token embeddings are stored as regular layer entries, and their dense weights are left out of `residual.safetensors`. 1.1 files, which keep token embeddings in the residual file, still load.
 
 ## Tensor parallelism
 
@@ -61,4 +62,4 @@ Canonical implementations: `mistralrs-quant/src/uqff` (reader, tensor encoding) 
 ## Caveats
 
 - UQFF is inference-only; no optimizer state or training metadata.
-- The export directory is the unit of distribution. A shard alone is not loadable -- the residual safetensors and `config.json` are required.
+- The export directory is the unit of distribution. A shard alone can't load: it needs the residual safetensors and `config.json` next to it.

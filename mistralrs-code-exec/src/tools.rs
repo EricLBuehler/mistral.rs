@@ -117,7 +117,7 @@ If you already created a file in an earlier shell call and it was not surfaced, 
             "timeout_ms": {
                 "type": "integer",
                 "minimum": 1,
-                "description": "Optional timeout in milliseconds for this shell call."
+                "description": "Optional timeout in milliseconds for this shell call. It can only shorten the server's shell timeout."
             },
             "max_output_length": {
                 "type": "integer",

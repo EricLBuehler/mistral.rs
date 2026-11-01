@@ -24,7 +24,7 @@ async def stream_response(prompt: str):
         )
     )
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     while True:
         chunk = await loop.run_in_executor(None, next, stream, None)
         if chunk is None:
@@ -56,7 +56,7 @@ runner = Runner(Which.Plain(model_id="Qwen/Qwen3-4B"))
 
 @app.get("/stream")
 async def stream(prompt: str):
-    def iter():
+    def chunks():
         s = runner.send_chat_completion_request(
             ChatCompletionRequest(
                 model="default",
@@ -69,14 +69,14 @@ async def stream(prompt: str):
             if delta:
                 yield delta
 
-    return StreamingResponse(iter(), media_type="text/plain")
+    return StreamingResponse(chunks(), media_type="text/plain")
 ```
 
-For production, run mistralrs as an HTTP server and call it with the OpenAI Python client rather than loading the model in the web app process. The HTTP server's streaming is more robust under load; see the [OpenAI-compatible API guide](/guides/serve/openai-compatible-apis/).
+To share a model across application processes, run a separate [HTTP server](/guides/serve/openai-compatible-apis/) and use the OpenAI client.
 
 ## Catching errors during streaming
 
-Streaming can fail mid-response: out of memory, generation failure, validation errors. The iterator raises `ValueError` with the engine's error message as its next item. Chunks already yielded are unaffected, so partial output survives:
+Streaming can fail mid-response: out of memory, generation failure, validation errors. Iteration raises `ValueError` with the engine's error message. Chunks already yielded are unaffected, so partial output survives:
 
 ```python
 import sys
@@ -90,6 +90,6 @@ except ValueError as e:
     print(f"\n\nStream ended: {e}", file=sys.stderr)
 ```
 
-The iterator ends after the chunk whose choices all carry a `finish_reason`.
+The iterator ends once all requested choices have reported a `finish_reason`; choices can finish in different chunks.
 
 When server-side tools run during generation (web search, code execution, shell, MCP tools), the chunk iterator skips the engine's tool-progress events transparently; you only receive content chunks. To observe tool progress, use the [agentic runtime](/guides/agents/agentic-runtime/) event stream instead.

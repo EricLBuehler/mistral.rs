@@ -78,6 +78,8 @@ use crate::{
 /// produced by the agentic loop are still reachable via `GET /v1/files/{id}` but
 /// are not embedded in the response JSON to keep the body bounded.
 const MAX_FILES_PER_RESPONSE: usize = 64;
+const WEB_SEARCH_DISABLED_MESSAGE: &str =
+    "Web search is not enabled on this server. Start it with `--enable-search` or `--agent` to allow it.";
 
 pub type ChatCompletionOnChunkCallback = OnChunkCallback<ChatCompletionChunkResponse>;
 
@@ -669,6 +671,12 @@ pub async fn parse_request(
         .shell_skill_references
         .extend(oairequest.shell_skill_references);
     validate_openai_tool_choice(oairequest.tool_choice.as_ref(), &normalized_tools)?;
+    if normalized_tools.web_search_options.is_some() {
+        anyhow::ensure!(
+            state.has_search(model).map_err(anyhow::Error::msg)?,
+            WEB_SEARCH_DISABLED_MESSAGE
+        );
+    }
     let shell_options = if normalized_tools.shell_skill_references.is_empty() {
         None
     } else {
