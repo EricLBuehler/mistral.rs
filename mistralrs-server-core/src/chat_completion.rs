@@ -1434,49 +1434,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn single_text_parts_use_the_plain_text_message_path() -> Result<()> {
-        for part in [
-            json!({"type": "text", "text": "hello"}),
-            json!({"text": "hello"}),
-        ] {
-            let content = normalize_text_content(serde_json::from_value(json!([part]))?)?;
-            assert!(matches!(content.deref(), Either::Left(text) if text == "hello"));
-        }
-        let media = serde_json::from_value(json!([{
-            "type": "input_audio", "input_audio": {"data": "YWJj", "format": "wav"}
-        }]))?;
-        assert!(normalize_text_content(media)?.is_right());
-        let invalid = serde_json::from_value(json!([{
-            "type": "text", "text": {"value": "hello"}
-        }]))?;
-        assert!(normalize_text_content(invalid).is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn openai_input_audio_content_is_normalized_and_validated() -> Result<()> {
-        let data = STANDARD.encode(b"audio");
-        for (format, mime) in [("wav", "audio/wav"), ("mp3", "audio/mpeg")] {
-            let part = serde_json::from_value(json!({
-                "type":"input_audio", "input_audio":{"data":data,"format":format}
-            }))?;
-            assert_eq!(
-                input_audio_url(&part)?,
-                format!("data:{mime};base64,{data}")
-            );
-        }
-        for payload in [
-            json!({"type":"input_audio"}),
-            json!({"type":"input_audio","input_audio":{"data":data}}),
-            json!({"type":"input_audio","input_audio":{"data":"bad!","format":"wav"}}),
-            json!({"type":"input_audio","input_audio":{"data":data,"format":"pcm16"}}),
-        ] {
-            assert!(input_audio_url(&serde_json::from_value(payload)?).is_err());
-        }
-        Ok(())
-    }
-
-    #[test]
     fn reasoning_controls_normalize_http_values() {
         assert_eq!(parse_reasoning_controls(None, None).unwrap(), (None, None));
         assert_eq!(

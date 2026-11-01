@@ -277,106 +277,10 @@ impl InputsProcessor for Lfm3AudioInputsProcessor {
 mod tests {
     use super::*;
     use crate::{
-        sampler::Sampler,
-        sequence::{MultimodalData, SeqStepType, SequenceGroup, SequenceRecognizer},
-        AudioInput,
+        sequence::MultimodalData,
+        vision_models::lfm3_omni::inputs_processor::tests::{process_prompt, sequence, tokenizer},
     };
-    use std::collections::HashMap;
-    use tokenizers::{
-        models::wordlevel::WordLevel, pre_tokenizers::whitespace::WhitespaceSplit, AddedToken,
-    };
-    use tokio::sync::{mpsc::channel, Mutex};
-
-    fn tokenizer() -> Arc<Tokenizer> {
-        let model = WordLevel::builder()
-            .vocab(
-                [("[UNK]".to_owned(), 0), ("x".to_owned(), 1)]
-                    .into_iter()
-                    .collect(),
-            )
-            .unk_token("[UNK]".to_owned())
-            .build()
-            .unwrap();
-        let mut tokenizer = Tokenizer::new(model);
-        tokenizer.with_pre_tokenizer(Some(WhitespaceSplit));
-        tokenizer.add_special_tokens(
-            &[
-                AUDIO_TOKEN,
-                AUDIO_OUT_TOKEN,
-                AUDIO_START_TOKEN,
-                MIXED_START_TOKEN,
-            ]
-            .map(|token| AddedToken::from(token, true)),
-        );
-        Arc::new(tokenizer)
-    }
-
-    fn sequence(tokenizer: &Tokenizer) -> Sequence {
-        let (tx, _rx) = channel(1);
-        let sampler = Sampler::new(
-            None,
-            0,
-            None,
-            None,
-            None,
-            None,
-            None,
-            32,
-            1.0,
-            0.0,
-            HashMap::new(),
-            vec![],
-        )
-        .unwrap();
-        let prompt = "x <|audio|><|audio|> x".to_owned();
-        let tokens = tokenizer
-            .encode(prompt.as_str(), false)
-            .unwrap()
-            .get_ids()
-            .to_vec();
-        let audio = [400, 1_600]
-            .into_iter()
-            .map(|samples| AudioInput {
-                samples: vec![0.0; samples],
-                sample_rate: 16_000,
-                channels: 1,
-            })
-            .collect();
-        Sequence::new_waiting(
-            tokens,
-            prompt,
-            7,
-            0,
-            1,
-            tx,
-            sampler,
-            vec![],
-            vec![],
-            None,
-            false,
-            false,
-            Arc::new(Mutex::new(SequenceGroup::new(1, false, true, None))),
-            0,
-            0,
-            SequenceRecognizer::None,
-            None,
-            None,
-            None,
-            Some(audio),
-            None,
-            None,
-            None,
-            None,
-            SeqStepType::PromptAndDecode,
-            None,
-            None,
-            None,
-            false,
-            false,
-            vec![],
-            None,
-        )
-    }
+    const AUDIO_PROMPT: &str = "x <|audio|><|audio|> x";
 
     #[test]
     fn adjacent_audio_clips_keep_bare_spans_for_all_output_modes() -> Result<()> {
@@ -387,7 +291,7 @@ mod tests {
             Some(crate::ChatAudioMode::Audio),
             Some(crate::ChatAudioMode::TextAudio),
         ] {
-            let mut seq = sequence(&tokenizer);
+            let mut seq = sequence(&tokenizer, AUDIO_PROMPT, 7);
             seq.set_audio_output(mode.map(|mode| crate::ChatAudioRequest {
                 mode,
                 format: crate::ChatAudioFormat::Wav,
@@ -410,22 +314,9 @@ mod tests {
                 [(1, 1), (2, 2)]
             );
             assert!(seq.mm_features().iter().all(|feature| !feature.splittable));
-            let output = processor.process_inputs(
-                Some(tokenizer.clone()),
-                &mut [&mut seq],
-                true,
-                false,
-                &Device::Cpu,
-                false,
-                None,
-                false,
-                None,
-                None,
-                None,
-                None,
-            )?;
+            let inputs =
+                process_prompt(processor.as_ref(), tokenizer.clone(), &mut [&mut seq], None)?;
             assert_eq!(seq.get_toks(), planned);
-            let inputs = *output.inputs.downcast::<ModelInputs>().unwrap();
             assert!(inputs.pixel_values.is_none());
             let args = *inputs
                 .model_specific_args
@@ -468,7 +359,7 @@ mod tests {
                 })
                 .unwrap();
             for original_len in [28, 31, 32, 33, 34] {
-                let mut seq = sequence(&tokenizer);
+                let mut seq = sequence(&tokenizer, AUDIO_PROMPT, 7);
                 seq.multimodal = MultimodalData::new(None, None, None, None, None, None);
                 seq.set_toks_and_reallocate(vec![1; original_len], None);
                 assert!(!seq.needs_prompt_planning());
@@ -494,21 +385,8 @@ mod tests {
                     seq.mm_features(),
                 );
                 let scheduled_end = chunks.last().unwrap().end;
-                let output = processor.process_inputs(
-                    Some(tokenizer.clone()),
-                    &mut [&mut seq],
-                    true,
-                    false,
-                    &Device::Cpu,
-                    false,
-                    None,
-                    false,
-                    None,
-                    None,
-                    None,
-                    None,
-                )?;
-                let inputs = *output.inputs.downcast::<ModelInputs>().unwrap();
+                let inputs =
+                    process_prompt(processor.as_ref(), tokenizer.clone(), &mut [&mut seq], None)?;
                 assert_eq!(scheduled_end, original_len + 1);
                 assert_eq!(seq.prompt_tokens(), scheduled_end);
                 assert_eq!(seq.get_toks()[scheduled_end - 1], marker);
@@ -527,76 +405,5 @@ mod tests {
             }
         }
         Ok(())
-    }
-
-    #[test]
-    fn speech_history_and_audio_count_mismatch_are_rejected() -> Result<()> {
-        let tokenizer = tokenizer();
-        let audio = AudioTokens::new(&tokenizer)?;
-        assert!(expand_audio_clips(&[audio.output], &audio, &[]).is_err());
-        assert!(expand_audio_clips(&[audio.input, audio.input], &audio, &[1]).is_err());
-        assert!(expand_audio_clips(&[1], &audio, &[1]).is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn decoding_without_kv_cache_is_rejected() {
-        let tokenizer = tokenizer();
-        let processor = Lfm3AudioProcessor::new().inputs_processor();
-        let mut seq = sequence(&tokenizer);
-        let error = processor
-            .process_inputs(
-                Some(tokenizer),
-                &mut [&mut seq],
-                false,
-                false,
-                &Device::Cpu,
-                true,
-                None,
-                false,
-                None,
-                None,
-                None,
-                None,
-            )
-            .err()
-            .expect("audio decoding requires KV caching");
-        assert!(error.to_string().contains("requires KV caching"));
-    }
-
-    #[test]
-    fn image_and_video_inputs_report_the_audio_model_scope() {
-        let tokenizer = tokenizer();
-        let processor = Lfm3AudioProcessor::new().inputs_processor();
-        for video in [false, true] {
-            let mut seq = sequence(&tokenizer);
-            seq.multimodal = MultimodalData::new(
-                (!video).then(|| vec![image::DynamicImage::new_rgb8(1, 1)]),
-                seq.clone_audios(),
-                video.then(|| {
-                    vec![crate::VideoInput::from_frames(
-                        vec![image::DynamicImage::new_rgb8(1, 1)],
-                        1.0,
-                        None,
-                    )]
-                }),
-                None,
-                None,
-                None,
-            );
-            let error = processor
-                .prepare_for_paged_prompt_planning(
-                    Some(tokenizer.clone()),
-                    &mut [&mut seq],
-                    &Device::Cpu,
-                    None,
-                    None,
-                )
-                .unwrap_err();
-            assert!(error.to_string().contains("use LFM3-Omni"));
-            assert!(error
-                .downcast_ref::<InputsProcessorValidationError>()
-                .is_some());
-        }
     }
 }

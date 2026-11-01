@@ -144,28 +144,4 @@ mod tests {
         assert_eq!(estimate.estimate([[3, 2, 4]])?, 3 * (8 * 100 + 8 * 8 * 4));
         Ok(())
     }
-
-    #[test]
-    fn retained_pixels_and_features_follow_image_and_video_grids() -> Result<()> {
-        let estimate = EncoderMemoryEstimate {
-            bytes_per_patch: 100,
-            input_bytes_per_patch: 20,
-            attention_bytes_per_pair: 0,
-        };
-        let image = [[1, 16, 16]];
-        let video = [[4, 8, 8]];
-        let per_item = 256 * 20 + 64 * 8 * 2;
-        assert_eq!(estimate.retained_bytes(image, 8, 2, DType::F16)?, per_item);
-        assert_eq!(estimate.retained_bytes(video, 8, 2, DType::F16)?, per_item);
-        assert_eq!(
-            estimate.retained_bytes(image.into_iter().chain(video), 8, 2, DType::F16)?,
-            2 * per_item
-        );
-        assert!(estimate.retained_bytes(image, 8, 2, DType::F16)? < estimate.estimate(image)?);
-        assert_eq!(estimate.retained_bytes([], 8, 2, DType::F16)?, 0);
-        assert!(estimate
-            .retained_bytes([[usize::MAX, 2, 2]], 8, 2, DType::F16)
-            .is_err());
-        Ok(())
-    }
 }

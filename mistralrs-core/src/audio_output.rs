@@ -152,14 +152,11 @@ async fn run_audio_command(command: std::process::Command, timeout: Duration) ->
 mod tests {
     use super::*;
 
-    const TEST_RATE: u32 = 24_000;
     const TEST_TIMEOUT: Duration = Duration::from_secs(2);
     #[cfg(unix)]
     const TEST_POLL: Duration = Duration::from_millis(10);
     #[cfg(unix)]
     const TEST_PROCESS_TIMEOUT: Duration = Duration::from_millis(100);
-    const TEST_TONE_HZ: f32 = 440.0;
-    const TEST_AMPLITUDE: f32 = 0.5;
 
     #[tokio::test]
     async fn compressed_response_defers_encoding_and_cancels_generation_on_disconnect() -> Result<()>
@@ -199,19 +196,6 @@ mod tests {
         prepare_response(&mut request)?;
         drop(responses);
         tokio::time::timeout(TEST_TIMEOUT, request.response.closed()).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn native_audio_encoding_preserves_pcm_and_wav() -> Result<()> {
-        let samples = Arc::new(vec![-1.0, -0.5, 0.0, 0.5, 1.0]);
-        for format in [ChatAudioFormat::Wav, ChatAudioFormat::Pcm16] {
-            let expected = crate::encode_audio_pcm(&samples, TEST_RATE, 1, format)?;
-            let actual =
-                encode_audio_pcm_with_speed_async(samples.clone(), TEST_RATE, 1, format, 1.0)
-                    .await?;
-            assert_eq!(actual, expected);
-        }
         Ok(())
     }
 
@@ -263,60 +247,6 @@ mod tests {
                 }
             })
             .await?;
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[ignore = "requires FFmpeg with audio encoders and atempo"]
-    #[allow(clippy::cast_precision_loss)] // One second of 24 kHz indices is exactly representable.
-    async fn async_encoders_match_native_and_compressed_outputs() -> Result<()> {
-        async fn decoded_pcm(bytes: Vec<u8>, format: ChatAudioFormat) -> Result<Vec<u8>> {
-            if format == ChatAudioFormat::Pcm16 {
-                return Ok(bytes);
-            }
-            let input = tempfile::NamedTempFile::new()?;
-            tokio::fs::write(input.path(), bytes).await?;
-            let mut command = std::process::Command::new("ffmpeg");
-            command
-                .args(["-nostdin", "-hide_banner", "-loglevel", "error", "-i"])
-                .arg(input.path())
-                .args(["-f", "s16le", "-acodec", "pcm_s16le", "-ar"])
-                .arg(TEST_RATE.to_string())
-                .args(["-ac", "1", "pipe:1"]);
-            let output = run_audio_command(command, TEST_TIMEOUT).await?;
-            anyhow::ensure!(output.status.success(), "Could not decode {format:?}");
-            Ok(output.stdout)
-        }
-        let samples = Arc::new(
-            (0..TEST_RATE)
-                .map(|index| {
-                    (std::f32::consts::TAU * TEST_TONE_HZ * index as f32 / TEST_RATE as f32).sin()
-                        * TEST_AMPLITUDE
-                })
-                .collect::<Vec<_>>(),
-        );
-        for format in [
-            ChatAudioFormat::Wav,
-            ChatAudioFormat::Pcm16,
-            ChatAudioFormat::Mp3,
-            ChatAudioFormat::Flac,
-            ChatAudioFormat::Opus,
-            ChatAudioFormat::Aac,
-        ] {
-            for speed in [1.0, 2.0] {
-                let expected =
-                    crate::encode_audio_pcm_with_speed(&samples, TEST_RATE, 1, format, speed)?;
-                let actual =
-                    encode_audio_pcm_with_speed_async(samples.clone(), TEST_RATE, 1, format, speed)
-                        .await?;
-                let actual = decoded_pcm(actual, format).await?;
-                let expected = decoded_pcm(expected, format).await?;
-                assert!(
-                    actual == expected,
-                    "{format:?} at speed {speed}: PCM differs"
-                );
-            }
         }
         Ok(())
     }

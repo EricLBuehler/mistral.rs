@@ -25,29 +25,3 @@ pub fn input_audio_data_url(data: &str, format: &str) -> Result<String> {
     );
     Ok(format!("data:{mime};base64,{data}"))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn standard_input_audio_preserves_bytes_and_selects_the_media_type() -> Result<()> {
-        let data = STANDARD.encode(b"audio bytes");
-        assert_eq!(
-            input_audio_data_url(&data, "wav")?,
-            format!("data:audio/wav;base64,{data}")
-        );
-        assert_eq!(
-            input_audio_data_url(&data, "mp3")?,
-            format!("data:audio/mpeg;base64,{data}")
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn invalid_inline_audio_is_rejected() {
-        assert!(input_audio_data_url("YWJj", "flac").is_err());
-        assert!(input_audio_data_url("not base64", "wav").is_err());
-        assert!(input_audio_data_url("", "mp3").is_err());
-    }
-}

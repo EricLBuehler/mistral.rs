@@ -1126,50 +1126,32 @@ mod auto_device_map_quantization_tests {
     }
 
     #[test]
-    fn omni_config_embeds_codec_for_checkpoint_and_uqff() -> Result<()> {
+    fn lfm3_codec_config_and_legacy_fields_survive_uqff_roundtrip() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let config_path = dir.path().join("config.json");
         let codec_path = dir.path().join(LFM3_CODEC_CONFIG);
         std::fs::create_dir(codec_path.parent().unwrap())?;
         let codec = serde_json::json!({"model_type":"liquid_codec", "n_q":12});
-        std::fs::write(&config_path, r#"{"model_type":"lfm3_omni"}"#)?;
-        std::fs::write(&codec_path, codec.to_string())?;
-        for checkpoint_quantization in [false, true] {
-            let config = load_model_config(&config_path, checkpoint_quantization)?;
+        for model_type in ["lfm3_audio", "lfm3_omni"] {
+            let source = serde_json::json!({
+                "model_type": model_type, "lfm": {"hidden_size": 2048},
+                "codebooks": 12, "audio_vocab_size": 2017,
+            });
+            std::fs::write(&config_path, source.to_string())?;
+            std::fs::write(&codec_path, codec.to_string())?;
+            let config = load_model_config(&config_path, false)?;
+            assert_eq!(load_model_config(&config_path, true)?, config);
             let parsed: serde_json::Value = serde_json::from_str(&config)?;
             assert_eq!(parsed["codec_config"], codec);
-            std::fs::write(dir.path().join("uqff_config.json"), &config)?;
+            if model_type == "lfm3_audio" {
+                assert_eq!(parsed["text_config"]["hidden_size"], 2048);
+                assert_eq!(parsed["audio_eos_code"], 2016);
+                assert_eq!(parsed["maskgit_schedule"], serde_json::json!([4, 4, 4]));
+            }
+            std::fs::write(&config_path, &config)?;
+            std::fs::remove_file(&codec_path)?;
+            assert_eq!(load_model_config(&config_path, false)?, config);
         }
-        std::fs::remove_file(codec_path)?;
-        let config = load_model_config(&dir.path().join("uqff_config.json"), false)?;
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&config)?["codec_config"],
-            codec
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn audio_legacy_config_and_codec_survive_uqff_roundtrip() -> Result<()> {
-        let dir = tempfile::tempdir()?;
-        let config_path = dir.path().join("config.json");
-        let codec_path = dir.path().join(LFM3_CODEC_CONFIG);
-        std::fs::create_dir(codec_path.parent().unwrap())?;
-        let codec = serde_json::json!({"model_type":"liquid_codec", "n_q":12});
-        std::fs::write(
-            &config_path,
-            r#"{"model_type":"lfm3_audio","lfm":{"hidden_size":2048},"codebooks":12,"audio_vocab_size":2017}"#,
-        )?;
-        std::fs::write(&codec_path, codec.to_string())?;
-        let config = load_model_config(&config_path, false)?;
-        let parsed: serde_json::Value = serde_json::from_str(&config)?;
-        assert_eq!(parsed["codec_config"], codec);
-        assert_eq!(parsed["text_config"]["hidden_size"], 2048);
-        assert_eq!(parsed["audio_eos_code"], 2016);
-        assert_eq!(parsed["maskgit_schedule"], serde_json::json!([4, 4, 4]));
-        std::fs::write(&config_path, &config)?;
-        std::fs::remove_file(codec_path)?;
-        assert_eq!(load_model_config(&config_path, false)?, config);
         Ok(())
     }
 

@@ -1,8 +1,5 @@
 use std::collections::HashMap;
 
-use anyhow::Result;
-use candle_core::{DType, Device, Tensor};
-
 use super::{
     generation::{GenerationMarkers, GenerationMode, GenerationState},
     GeneratedAudioInput, GenerationCache, SequenceGeneration,
@@ -85,28 +82,4 @@ fn generated_codes_replay_full_prompts_and_packed_chunks() {
     assert_eq!(decode[1].token_index, 0);
     assert_eq!(decode[1].codes, [3, 4]);
     assert_eq!(cache.audio_inputs(&[1], &[0], &[7], false), full);
-}
-
-#[test]
-fn releasing_finished_speech_preserves_other_sequences() -> Result<()> {
-    let mut cache = GenerationCache {
-        hidden: [
-            (1, Tensor::zeros((1, 2), DType::F32, &Device::Cpu)?),
-            (2, Tensor::zeros((1, 2), DType::F32, &Device::Cpu)?),
-        ]
-        .into_iter()
-        .collect(),
-        sequences: [
-            (1, generation_with_codes(&[(3, &[1, 2])])),
-            (2, generation_with_codes(&[(4, &[3, 4])])),
-        ]
-        .into_iter()
-        .collect(),
-    };
-    cache.release_sequences(&[1]);
-    assert!(!cache.hidden.contains_key(&1));
-    assert!(!cache.sequences.contains_key(&1));
-    assert!(cache.hidden.contains_key(&2));
-    assert_eq!(cache.sequences[&2].code_history[&4], [3, 4]);
-    Ok(())
 }

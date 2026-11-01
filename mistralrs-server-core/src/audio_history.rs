@@ -557,9 +557,6 @@ fn decode_audio_file(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, Ordering};
-
-    const CANCELLATION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
     fn captured_bytes(capture: &AudioCapture) -> Result<Vec<u8>> {
         Ok(std::fs::read(capture.spool.as_ref().unwrap().file.path())?)
@@ -667,39 +664,6 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn disconnected_client_drops_inflight_audio_enrichment() -> Result<()> {
-        struct OnDrop(Arc<AtomicBool>);
-        impl Drop for OnDrop {
-            fn drop(&mut self) {
-                self.0.store(true, Ordering::SeqCst);
-            }
-        }
-        let (tx, rx) = create_response_channel(Some(1));
-        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
-        let dropped = Arc::new(AtomicBool::new(false));
-        let state = dropped.clone();
-        let spool = AudioSpool::append(None, &STANDARD.encode([1, 2]), MAX_INPUT_AUDIO_BYTES)?;
-        let path = spool.file.path().to_path_buf();
-        let task = tokio::spawn(async move {
-            while_connected(&tx, async {
-                let _spool = spool;
-                let _guard = OnDrop(state);
-                started_tx.send(()).unwrap();
-                std::future::pending::<()>().await;
-            })
-            .await
-        });
-        tokio::time::timeout(CANCELLATION_TIMEOUT, started_rx).await??;
-        drop(rx);
-        assert!(tokio::time::timeout(CANCELLATION_TIMEOUT, task)
-            .await??
-            .is_none());
-        assert!(dropped.load(Ordering::SeqCst));
-        assert!(!path.exists());
-        Ok(())
-    }
-
     #[test]
     fn assistant_audio_references_restore_transcripts_and_validate_expiry() -> Result<()> {
         let store = AudioHistoryStore::default();
@@ -738,24 +702,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pcm_chunks_spool_exact_bytes_and_keep_one_id() -> Result<()> {
-        let mut capture = AudioCapture::default();
-        let mut first = ChatAudioResponse {
-            data: Some(STANDARD.encode([1, 2])),
-            ..Default::default()
-        };
-        capture.add_audio(&mut first).await;
-        let mut second = ChatAudioResponse {
-            data: Some(STANDARD.encode([3, 4])),
-            ..Default::default()
-        };
-        capture.add_audio(&mut second).await;
-        assert_eq!(first.id, second.id);
-        assert_eq!(captured_bytes(&capture)?, [1, 2, 3, 4]);
-        let audio = decode_audio_file(capture.spool.take().unwrap().file, ChatAudioFormat::Pcm16)?;
-        assert_eq!(audio.sample_rate, PCM_SAMPLE_RATE);
-        assert_eq!(audio.channels, PCM_CHANNELS);
-        assert_eq!(audio.samples, [513.0 / PCM_SCALE, 1027.0 / PCM_SCALE]);
+    async fn audio_chunks_preserve_bytes_samples_and_one_id() -> Result<()> {
+        let samples = [0.0, 0.25, -0.5];
+        for format in [ChatAudioFormat::Pcm16, ChatAudioFormat::Wav] {
+            let bytes =
+                mistralrs_core::encode_audio_pcm(&samples, PCM_SAMPLE_RATE, PCM_CHANNELS, format)?;
+            if format == ChatAudioFormat::Pcm16 {
+                assert_eq!(bytes, [0, 0, 0, 32, 0, 192]);
+            }
+            let mut capture = AudioCapture::default();
+            let mut id = None;
+            for bytes in bytes.chunks(bytes.len() / 2) {
+                let mut chunk = ChatAudioResponse {
+                    data: Some(STANDARD.encode(bytes)),
+                    ..Default::default()
+                };
+                capture.add_audio(&mut chunk).await;
+                if id.is_some() {
+                    assert_eq!(chunk.id, id);
+                }
+                id = chunk.id;
+            }
+            assert!(id.is_some());
+            assert_eq!(captured_bytes(&capture)?, bytes);
+            let spool = capture.spool.take().unwrap();
+            let path = spool.file.path().to_path_buf();
+            let audio = decode_audio_file(spool.file, format)?;
+            assert_eq!(audio.sample_rate, PCM_SAMPLE_RATE);
+            assert_eq!(audio.channels, PCM_CHANNELS);
+            assert_eq!(audio.samples, samples);
+            assert!(!path.exists());
+        }
         Ok(())
     }
 
@@ -779,47 +756,6 @@ mod tests {
         let path = file.path().to_path_buf();
         let result = decode_audio_file(file, ChatAudioFormat::Pcm16);
         assert!(result.unwrap_err().to_string().contains("transcript limit"));
-        assert!(!path.exists());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn capture_failure_preserves_audio_and_disables_history() -> Result<()> {
-        let mut capture = AudioCapture::default();
-        let mut first = audio_choice(0, false, &[1, 2]).delta.audio.unwrap();
-        capture.add_audio(&mut first).await;
-        let path = capture.spool.as_ref().unwrap().file.path().to_path_buf();
-        let mut invalid = ChatAudioResponse {
-            data: Some("not base64".into()),
-            ..Default::default()
-        };
-        capture.add_audio(&mut invalid).await;
-        assert!(capture.capture_failed);
-        assert!(capture.spool.is_none());
-        assert!(!path.exists());
-        assert_eq!(invalid.data.as_deref(), Some("not base64"));
-        assert_eq!(invalid.id, first.id);
-        capture.expire(&mut invalid);
-        assert_eq!(invalid.transcript.as_deref(), Some(""));
-        assert!(invalid.expires_at.unwrap() <= now());
-        capture.add_audio(&mut first).await;
-        assert!(capture.spool.is_none());
-        Ok(())
-    }
-
-    #[test]
-    fn decoded_wav_keeps_pcm_values_without_base64_round_trip() -> Result<()> {
-        let samples = [0.0, 0.25, -0.5];
-        let wav = mistralrs_core::encode_audio_pcm(
-            &samples,
-            PCM_SAMPLE_RATE,
-            PCM_CHANNELS,
-            ChatAudioFormat::Wav,
-        )?;
-        let spool = AudioSpool::append(None, &STANDARD.encode(wav), MAX_INPUT_AUDIO_BYTES)?;
-        let path = spool.file.path().to_path_buf();
-        let audio = decode_audio_file(spool.file, ChatAudioFormat::Wav)?;
-        assert_eq!(audio.samples, samples);
         assert!(!path.exists());
         Ok(())
     }

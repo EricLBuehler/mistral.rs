@@ -462,7 +462,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::cast_precision_loss)]
-    fn inverse_stft_matches_constant_waveform() -> Result<()> {
+    fn inverse_stft_matches_constant_waveform() {
         let config = CodecConfig {
             encoder_dim: 1,
             stft_n_fft: 8,
@@ -486,10 +486,13 @@ mod tests {
                 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / config.stft_win_length as f32).cos()
             })
             .collect::<Vec<_>>();
-        let result = inverse_stft(&[vec![frame; 4]], &config, &window)?;
+        let spectrum = vec![frame; 4];
+        let mut stream = InverseStftStream::new(&config);
+        let mut result = Vec::new();
+        stream.push(&spectrum, &config, &window, &mut result);
+        stream.finish(&config, &mut result);
         assert_eq!(result.len(), 8);
         assert!(result.iter().all(|sample| (*sample - 1.0).abs() < 1e-5));
-        Ok(())
     }
 
     #[test]

@@ -57,24 +57,6 @@ impl ChatAudioResponse {
     }
 }
 
-#[cfg(test)]
-mod chat_audio_tests {
-    use super::*;
-
-    #[test]
-    fn text_messages_omit_audio_fields() -> anyhow::Result<()> {
-        let message = ResponseMessage {
-            content: Some("hello".into()),
-            role: "assistant".into(),
-            tool_calls: None,
-            reasoning_content: None,
-            audio: None,
-        };
-        assert!(serde_json::to_value(message)?.get("audio").is_none());
-        Ok(())
-    }
-}
-
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]

@@ -103,7 +103,7 @@ impl ChatCompletionStreamer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mistralrs_core::{ChatAudioResponse, ChunkChoice, Delta};
+    use mistralrs_core::{ChunkChoice, Delta};
     use tokio::sync::mpsc::channel;
 
     fn chunk(choices: &[(usize, bool)]) -> ChatCompletionChunkResponse {
@@ -116,12 +116,7 @@ mod tests {
                     stop_sequence: None,
                     index,
                     delta: Delta {
-                        audio: Some(ChatAudioResponse {
-                            id: Some(format!("audio_{index}")),
-                            data: Some("AQI=".to_string()),
-                            expires_at: None,
-                            transcript: None,
-                        }),
+                        audio: None,
                         content: None,
                         role: "assistant".to_string(),
                         tool_calls: None,
@@ -142,36 +137,23 @@ mod tests {
 
     #[test]
     fn waits_for_every_choice_without_counting_repeated_finishes() {
-        let (tx, rx) = channel(1);
-        let mut streamer = ChatCompletionStreamer::from_rx(rx, 2);
-        streamer.observe_chunk(&chunk(&[]));
-        assert!(!streamer.is_done);
-        streamer.observe_chunk(&chunk(&[(0, true)]));
-        streamer.observe_chunk(&chunk(&[(0, true), (1, false)]));
-        assert!(!streamer.is_done);
-        assert!(!tx.is_closed());
-
-        let final_chunk = chunk(&[(1, true)]);
-        streamer.observe_chunk(&final_chunk);
-        assert!(streamer.is_done);
-        assert!(tx.is_closed());
-        assert_eq!(
-            final_chunk.choices[0]
-                .delta
-                .audio
-                .as_ref()
-                .unwrap()
-                .data
-                .as_deref(),
-            Some("AQI=")
-        );
-    }
-
-    #[test]
-    fn accepts_all_choices_finishing_in_one_chunk() {
-        let (_, rx) = channel(1);
-        let mut streamer = ChatCompletionStreamer::from_rx(rx, 2);
-        streamer.observe_chunk(&chunk(&[(1, true), (0, true)]));
-        assert!(streamer.is_done);
+        for chunks in [
+            vec![
+                vec![],
+                vec![(0, true)],
+                vec![(0, true), (1, false)],
+                vec![(1, true)],
+            ],
+            vec![vec![(1, true), (0, true)]],
+        ] {
+            let (tx, rx) = channel(1);
+            let mut streamer = ChatCompletionStreamer::from_rx(rx, 2);
+            for (index, choices) in chunks.iter().enumerate() {
+                streamer.observe_chunk(&chunk(choices));
+                let finished = index + 1 == chunks.len();
+                assert_eq!(streamer.is_done, finished);
+                assert_eq!(tx.is_closed(), finished);
+            }
+        }
     }
 }

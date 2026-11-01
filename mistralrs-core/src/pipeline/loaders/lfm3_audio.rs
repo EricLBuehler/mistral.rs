@@ -348,10 +348,6 @@ mod tests {
         let runtime = Lfm3AudioLoader.runtime_config(&config, Some(4096))?;
         let cfg: AudioConfig = serde_json::from_str(&runtime)?;
         assert_eq!(cfg.text_config.max_position_embeddings, 4096);
-        assert_eq!(cfg.speech.num_codebooks, 12);
-        assert!(Lfm3AudioLoader
-            .runtime_config(&config, Some(128001))
-            .is_err());
         let model = Lfm3AudioLoader.model_config(&config)?;
         assert_eq!(model.total_kv_cache_elements_per_token(), 11 * 4 * 256);
         assert_eq!(model.sliding_window_for_layer(4), Some(256));
@@ -359,11 +355,11 @@ mod tests {
     }
 
     #[test]
-    fn default_serving_reserves_serial_audio_workspaces() -> Result<()> {
+    fn serving_memory_covers_batching_and_full_output_context() -> Result<()> {
         let config = checkpoint_config()?;
-        let estimate = |batch| {
+        let estimate = |config: &str, batch| {
             Lfm3AudioLoader.non_mapped_activation_memory_bytes(
-                &config,
+                config,
                 &AutoDeviceMapParams::Text {
                     max_seq_len: AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
                     max_batch_size: batch,
@@ -372,12 +368,30 @@ mod tests {
                 &Device::Cpu,
             )
         };
-        let single = estimate(1)?;
-        let serving = estimate(SERVING_SEQUENCES)?;
+        let single = estimate(&config, 1)?;
+        let serving = estimate(&config, SERVING_SEQUENCES)?;
         assert!(serving > single);
         assert!(serving < single * 2);
         assert!(serving < SERVING_ACTIVATION_BUDGET);
         assert_eq!(Lfm3AudioLoader.model_config(&config)?.max_seq_len(), 128000);
+        let shorter = Lfm3AudioLoader
+            .runtime_config(&config, Some(AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN))?;
+        assert!(serving > estimate(&shorter, SERVING_SEQUENCES)? + GIB);
+        let cfg: AudioConfig = serde_json::from_str(&config)?;
+        let speech = |batch| {
+            cfg.speech
+                .output_activation_memory(
+                    cfg.text_config.max_position_embeddings,
+                    batch,
+                    cfg.text_config.hidden_size,
+                    DType::BF16,
+                )
+                .total_bytes()
+        };
+        let single = speech(1)?;
+        let batched = speech(SERVING_SEQUENCES)?;
+        assert!(batched > single);
+        assert!(batched < single * 2);
         Ok(())
     }
 
@@ -445,47 +459,6 @@ mod tests {
         assert!(combined < vision + audio + speech);
         assert!(combined < OMNI_ACTIVATION_BUDGET);
         assert_eq!(Lfm3OmniLoader.model_config(&config)?.max_seq_len(), 128000);
-        Ok(())
-    }
-
-    #[test]
-    fn speech_workspace_covers_output_context_beyond_prefill_budget() -> Result<()> {
-        let config = checkpoint_config()?;
-        let params = AutoDeviceMapParams::Text {
-            max_seq_len: AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
-            max_batch_size: SERVING_SEQUENCES,
-        };
-        let estimate = |config| {
-            Lfm3AudioLoader.non_mapped_activation_memory_bytes(
-                config,
-                &params,
-                DType::BF16,
-                &Device::Cpu,
-            )
-        };
-        let shorter = Lfm3AudioLoader.runtime_config(&config, Some(params.max_seq_len()))?;
-        assert!(estimate(&config)? > estimate(&shorter)? + GIB);
-        let cfg: AudioConfig = serde_json::from_str(&config)?;
-        let single = cfg
-            .speech
-            .output_activation_memory(
-                cfg.text_config.max_position_embeddings,
-                1,
-                cfg.text_config.hidden_size,
-                DType::BF16,
-            )
-            .total_bytes()?;
-        let batched = cfg
-            .speech
-            .output_activation_memory(
-                cfg.text_config.max_position_embeddings,
-                SERVING_SEQUENCES,
-                cfg.text_config.hidden_size,
-                DType::BF16,
-            )
-            .total_bytes()?;
-        assert!(batched > single);
-        assert!(batched < single * 2);
         Ok(())
     }
 

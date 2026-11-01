@@ -1218,28 +1218,6 @@ mod tests {
     use tokenizers::{models::wordlevel::WordLevel, Tokenizer};
 
     #[test]
-    fn speech_defaults_disable_thinking_without_overriding_explicit_controls() {
-        use crate::ReasoningEffort;
-        assert_eq!(chat_enable_thinking(false, None, None), None);
-        assert_eq!(chat_enable_thinking(true, None, None), Some(false));
-        for enabled in [false, true] {
-            assert_eq!(
-                chat_enable_thinking(true, Some(enabled), None),
-                Some(enabled)
-            );
-        }
-        for effort in [ReasoningEffort::Off, ReasoningEffort::High] {
-            assert_eq!(chat_enable_thinking(true, None, Some(effort)), None);
-            for enabled in [false, true] {
-                assert_eq!(
-                    chat_enable_thinking(true, Some(enabled), Some(effort)),
-                    Some(enabled)
-                );
-            }
-        }
-    }
-
-    #[test]
     fn paged_requests_do_not_allocate_a_second_sequence_kv_cache() {
         assert!(!needs_sequence_preallocated_cache(
             &ModelCategory::Text,

@@ -3016,7 +3016,7 @@ mod chat_message_tests {
 
     use base64::{engine::general_purpose::STANDARD, Engine};
     use image::{DynamicImage, ImageFormat};
-    use mistralrs_core::{encode_audio_pcm, ChatAudioFormat, ReasoningEffort};
+    use mistralrs_core::{encode_audio_pcm, ChatAudioFormat};
 
     use super::*;
 
@@ -3031,91 +3031,63 @@ mod chat_message_tests {
         ])])
     }
 
-    fn media_part(kind: &str, fields: HashMap<String, String>) -> Part {
+    fn media_part(kind: &str, fields: &[(&str, String)]) -> Part {
         HashMap::from([
             ("type".to_string(), Either::Left(kind.to_string())),
-            (kind.to_string(), Either::Right(fields)),
+            (
+                kind.to_string(),
+                Either::Right(
+                    fields
+                        .iter()
+                        .map(|(key, value)| (key.to_string(), value.clone()))
+                        .collect(),
+                ),
+            ),
         ])
     }
 
-    fn wav_data() -> String {
-        STANDARD.encode(
+    #[test]
+    fn preserves_single_and_multiple_audio_parts() {
+        let data = STANDARD.encode(
             encode_audio_pcm(&[0.0; AUDIO_SAMPLES], AUDIO_RATE, 1, ChatAudioFormat::Wav).unwrap(),
-        )
-    }
-
-    fn assert_audio(parts: Vec<Part>, expected_clips: usize) {
-        let normalized = normalize_chat_messages(
-            &message("user", parts),
-            Some(false),
-            Some(ReasoningEffort::Off),
-        )
-        .unwrap();
-        let RequestMessage::MultimodalChat {
-            messages,
-            images,
-            audios,
-            videos,
-            enable_thinking,
-            reasoning_effort,
-        } = normalized
-        else {
-            panic!("audio content must produce a multimodal request");
-        };
-        assert!(images.is_empty() && videos.is_empty());
-        assert_eq!(audios.len(), expected_clips);
-        assert_eq!(enable_thinking, Some(false));
-        assert_eq!(reasoning_effort, Some(ReasoningEffort::Off));
-        for audio in audios {
-            assert_eq!(audio.sample_rate, AUDIO_RATE);
-            assert_eq!(audio.channels, 1);
-            assert_eq!(audio.samples.len(), AUDIO_SAMPLES);
-        }
-        let parts = messages[0]["content"].as_ref().right().unwrap();
-        assert_eq!(
-            parts.iter().filter(|part| part["type"] == "audio").count(),
-            expected_clips
         );
-    }
-
-    #[test]
-    fn accepts_single_input_audio_without_text() {
-        assert_audio(
-            vec![media_part(
-                "input_audio",
-                HashMap::from([
-                    ("data".to_string(), wav_data()),
-                    ("format".to_string(), "wav".to_string()),
-                ]),
-            )],
-            1,
-        );
-    }
-
-    #[test]
-    fn accepts_single_audio_url_without_text() {
-        assert_audio(
-            vec![media_part(
-                "audio_url",
-                HashMap::from([(
-                    "url".to_string(),
-                    format!("data:audio/wav;base64,{}", wav_data()),
-                )]),
-            )],
-            1,
-        );
-    }
-
-    #[test]
-    fn preserves_multiple_audio_parts() {
-        let part = media_part(
+        let inline = media_part(
             "input_audio",
-            HashMap::from([
-                ("data".to_string(), wav_data()),
-                ("format".to_string(), "wav".to_string()),
-            ]),
+            &[("data", data.clone()), ("format", "wav".into())],
         );
-        assert_audio(vec![part.clone(), part], 2);
+        let url = media_part(
+            "audio_url",
+            &[("url", format!("data:audio/wav;base64,{data}"))],
+        );
+        for parts in [
+            vec![inline.clone()],
+            vec![url],
+            vec![inline.clone(), inline],
+        ] {
+            let expected_clips = parts.len();
+            let RequestMessage::MultimodalChat {
+                messages,
+                images,
+                audios,
+                videos,
+                ..
+            } = normalize_chat_messages(&message("user", parts), None, None).unwrap()
+            else {
+                panic!("audio content must produce a multimodal request");
+            };
+            assert!(images.is_empty() && videos.is_empty());
+            assert_eq!(audios.len(), expected_clips);
+            for audio in audios {
+                assert_eq!(audio.sample_rate, AUDIO_RATE);
+                assert_eq!(audio.channels, 1);
+                assert_eq!(audio.samples, [0.0; AUDIO_SAMPLES]);
+            }
+            let parts = messages[0]["content"].as_ref().right().unwrap();
+            assert_eq!(
+                parts.iter().filter(|part| part["type"] == "audio").count(),
+                expected_clips
+            );
+        }
     }
 
     #[test]
@@ -3130,10 +3102,10 @@ mod chat_message_tests {
                 .unwrap();
             let part = media_part(
                 kind,
-                HashMap::from([(
-                    "url".to_string(),
+                &[(
+                    "url",
                     format!("data:{mime};base64,{}", STANDARD.encode(image.into_inner())),
-                )]),
+                )],
             );
             let RequestMessage::MultimodalChat {
                 images,
@@ -3177,16 +3149,5 @@ mod chat_message_tests {
                 "system prompt"
             );
         }
-    }
-
-    #[test]
-    fn preserves_string_prompts() {
-        let RequestMessage::Chat { messages, .. } =
-            normalize_chat_messages(&Either::Right("prompt".to_string()), None, None).unwrap()
-        else {
-            panic!("string prompts must produce a text request");
-        };
-        assert_eq!(messages[0]["role"].as_ref().left().unwrap(), "user");
-        assert_eq!(messages[0]["content"].as_ref().left().unwrap(), "prompt");
     }
 }

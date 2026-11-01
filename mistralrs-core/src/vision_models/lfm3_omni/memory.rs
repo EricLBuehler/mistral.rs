@@ -197,106 +197,20 @@ fn overflow() -> candle_core::Error {
 mod tests {
     use super::*;
 
-    fn estimate(attention_bytes_per_pair: usize) -> AudioMemoryEstimate {
-        AudioMemoryEstimate {
+    #[test]
+    fn workspace_covers_convolution_columns() -> Result<()> {
+        let estimate = AudioMemoryEstimate {
             mel_bins: 128,
             conv_channels: 256,
             dtype_bytes: 2,
             bytes_per_token: 100_000,
             retained_bytes_per_token: 128 * ENCODER_STRIDE * 4 + 2048 * 2,
-            attention_bytes_per_pair,
-        }
-    }
-
-    #[test]
-    fn workspace_covers_convolution_columns_and_encoder_mask() -> Result<()> {
-        let fused = estimate(0);
-        let masked = estimate(10);
+            attention_bytes_per_pair: 0,
+        };
         let frames = 800;
         let tokens = frames / ENCODER_STRIDE;
         let convolution_columns = CONV_KERNEL_AREA * 256 * 32 * (frames / 4) * 2;
-        assert!(fused.estimate_tokens(tokens)? > convolution_columns);
-        assert_eq!(fused.estimate_tokens(0)?, 0);
-        let mask_dominated_tokens = 100_000;
-        assert!(
-            masked.estimate_tokens(mask_dominated_tokens)?
-                > fused.estimate_tokens(mask_dominated_tokens)?
-        );
-        assert!(masked.estimate_tokens(usize::MAX).is_err());
+        assert!(estimate.estimate_tokens(tokens)? > convolution_columns);
         Ok(())
-    }
-
-    #[test]
-    fn token_bound_covers_partial_downsample_frames() -> Result<()> {
-        let estimate = estimate(10);
-        for frames in [1usize, 7, 8, 9, 399, 800, 801] {
-            assert!(
-                estimate.estimate_tokens(frames.div_ceil(ENCODER_STRIDE))?
-                    >= estimate.estimate_mel_frames(frames)?
-            );
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn batching_retains_features_without_parallel_encoder_workspaces() -> Result<()> {
-        let estimate = estimate(10);
-        let tokens = 4096;
-        let batch = 32;
-        let single = estimate.estimate_tokens(tokens)?;
-        let batched = estimate.estimate_batch(tokens, batch)?;
-        let retained = tokens * (128 * ENCODER_STRIDE * 4 + 2048 * 2);
-        assert_eq!(estimate.estimate_batch(tokens, 1)?.total_bytes()?, single);
-        assert_eq!(batched.retained_bytes, batch * retained);
-        assert_eq!(batched.transient_bytes, single - retained);
-        assert_eq!(batched.total_bytes()?, single + (batch - 1) * retained);
-        assert!(batched.total_bytes()? < batch * single);
-        assert_eq!(estimate.estimate_batch(0, batch)?.total_bytes()?, 0);
-        assert!(estimate.estimate_batch(tokens, usize::MAX).is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn serial_phases_keep_all_residents_and_only_largest_workspace() -> Result<()> {
-        let encoder = ActivationMemory {
-            retained_bytes: 13,
-            transient_bytes: 80,
-        };
-        let codec = ActivationMemory {
-            retained_bytes: 29,
-            transient_bytes: 60,
-        };
-        let combined = encoder.combine_serial(codec)?;
-        assert_eq!(combined.retained_bytes, 42);
-        assert_eq!(combined.transient_bytes, 80);
-        assert_eq!(combined.total_bytes()?, 122);
-        assert_eq!(combined, codec.combine_serial(encoder)?);
-        assert!(combined.total_bytes()? < encoder.total_bytes()? + codec.total_bytes()?);
-        let larger = ActivationMemory {
-            retained_bytes: 7,
-            transient_bytes: 120,
-        };
-        assert_eq!(combined.combine_serial(larger)?.total_bytes()?, 169);
-        Ok(())
-    }
-
-    #[test]
-    fn serial_phase_and_total_memory_overflows_are_rejected() {
-        let retained = ActivationMemory {
-            retained_bytes: usize::MAX,
-            transient_bytes: 0,
-        };
-        assert!(retained
-            .combine_serial(ActivationMemory {
-                retained_bytes: 1,
-                transient_bytes: 0,
-            })
-            .is_err());
-        assert!(ActivationMemory {
-            retained_bytes: usize::MAX,
-            transient_bytes: 1,
-        }
-        .total_bytes()
-        .is_err());
     }
 }

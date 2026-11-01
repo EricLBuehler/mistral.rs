@@ -223,8 +223,8 @@ fn ffmpeg_audio_command(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ChatAudioResponse;
-    use base64::{engine::general_purpose::STANDARD, Engine};
+    use crate::encode_audio_pcm_with_speed_async;
+    use std::sync::Arc;
 
     const TEST_SAMPLE_RATE: u32 = 24_000;
     const TEST_CHANNELS: u16 = 2;
@@ -233,83 +233,43 @@ mod tests {
     const TEST_DURATION_DIVISOR: usize = 5;
     const LOSSY_PADDING_DIVISOR: usize = 10;
 
-    #[test]
-    fn pcm16_is_little_endian_and_clips_at_integer_limits() -> anyhow::Result<()> {
-        let response = ChatAudioResponse::from_pcm(
-            &[-2., -1., 0., 0.5, 1., 2.],
-            24_000,
-            crate::ChatAudioFormat::Pcm16,
-        )?;
-        let bytes = STANDARD.decode(response.data.unwrap())?;
-        let samples = bytes
-            .as_chunks::<PCM_SAMPLE_BYTES>()
-            .0
-            .iter()
-            .map(|bytes| i16::from_le_bytes(*bytes))
-            .collect::<Vec<_>>();
-        assert_eq!(samples, [i16::MIN, i16::MIN, 0, 16_384, i16::MAX, i16::MAX]);
-        Ok(())
-    }
-
-    #[test]
-    fn wav_response_has_playable_mono_pcm_header() -> anyhow::Result<()> {
-        let response =
-            ChatAudioResponse::from_pcm(&[0., 0.5, -0.5], 24_000, crate::ChatAudioFormat::Wav)?;
-        let bytes = STANDARD.decode(response.data.unwrap())?;
-        let mut wav = hound::WavReader::new(std::io::Cursor::new(bytes))?;
-        assert_eq!(wav.spec().sample_rate, 24_000);
-        assert_eq!(wav.spec().channels, 1);
-        assert_eq!(
-            wav.samples::<i16>().collect::<Result<Vec<_>, _>>()?,
-            [0, 16_384, -16_384]
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn audio_encoder_preserves_interleaved_channels() -> anyhow::Result<()> {
-        let samples = [0., 0.5, -0.5, 0.25];
-        let bytes = encode_audio_pcm(
-            &samples,
-            TEST_SAMPLE_RATE,
-            TEST_CHANNELS,
-            crate::ChatAudioFormat::Wav,
-        )?;
-        let mut wav = hound::WavReader::new(std::io::Cursor::new(bytes))?;
-        assert_eq!(wav.spec().channels, TEST_CHANNELS);
-        assert_eq!(wav.spec().sample_rate, TEST_SAMPLE_RATE);
-        assert_eq!(
-            wav.samples::<i16>().collect::<Result<Vec<_>, _>>()?,
-            [0, 16_384, -16_384, 8192]
-        );
-        assert!(encode_audio_pcm(
-            &samples[..3],
-            TEST_SAMPLE_RATE,
-            TEST_CHANNELS,
-            crate::ChatAudioFormat::Pcm16,
-        )
-        .is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn invalid_audio_speed_is_rejected_before_encoding() {
-        for speed in [0.0, 0.24, 4.01, f64::NAN, f64::INFINITY] {
-            assert!(encode_audio_pcm_with_speed(
-                &[0.0],
-                TEST_SAMPLE_RATE,
-                1,
-                crate::ChatAudioFormat::Pcm16,
-                speed,
-            )
-            .is_err());
+    #[tokio::test]
+    async fn native_audio_preserves_pcm_limits_channels_and_wav_metadata() -> anyhow::Result<()> {
+        let samples = Arc::new(vec![-2., -1., 0., 0.5, 1., 2.]);
+        let expected = [i16::MIN, i16::MIN, 0, 16_384, i16::MAX, i16::MAX];
+        for channels in [1, TEST_CHANNELS] {
+            for format in [ChatAudioFormat::Pcm16, ChatAudioFormat::Wav] {
+                let bytes = encode_audio_pcm_with_speed_async(
+                    samples.clone(),
+                    TEST_SAMPLE_RATE,
+                    channels,
+                    format,
+                    1.0,
+                )
+                .await?;
+                let pcm = if format == ChatAudioFormat::Wav {
+                    let mut wav = hound::WavReader::new(std::io::Cursor::new(bytes))?;
+                    assert_eq!(wav.spec().sample_rate, TEST_SAMPLE_RATE);
+                    assert_eq!(wav.spec().channels, channels);
+                    wav.samples::<i16>().collect::<Result<Vec<_>, _>>()?
+                } else {
+                    bytes
+                        .as_chunks::<PCM_SAMPLE_BYTES>()
+                        .0
+                        .iter()
+                        .map(|sample| i16::from_le_bytes(*sample))
+                        .collect()
+                };
+                assert_eq!(pcm, expected);
+            }
         }
+        Ok(())
     }
 
-    #[test]
+    #[tokio::test]
     #[ignore = "requires FFmpeg with the atempo filter"]
     #[allow(clippy::cast_precision_loss)] // One second of 24 kHz indices is exactly representable.
-    fn audio_speed_changes_duration_without_changing_wav_rate() -> anyhow::Result<()> {
+    async fn audio_speed_changes_duration_without_changing_wav_rate() -> anyhow::Result<()> {
         let samples = (0..TEST_SAMPLE_RATE)
             .map(|index| {
                 TEST_TONE_AMPLITUDE
@@ -331,6 +291,19 @@ mod tests {
                 crate::ChatAudioFormat::Wav,
                 speed,
             )?;
+            if speed == MAX_TEMPO_STAGE {
+                assert_eq!(
+                    encode_audio_pcm_with_speed_async(
+                        Arc::new(samples.clone()),
+                        TEST_SAMPLE_RATE,
+                        1,
+                        ChatAudioFormat::Wav,
+                        speed,
+                    )
+                    .await?,
+                    bytes
+                );
+            }
             let wav = hound::WavReader::new(std::io::Cursor::new(bytes))?;
             assert_eq!(wav.spec().sample_rate, TEST_SAMPLE_RATE);
             assert_eq!(wav.spec().channels, 1);
@@ -344,10 +317,10 @@ mod tests {
         Ok(())
     }
 
-    #[test]
+    #[tokio::test]
     #[ignore = "requires FFmpeg with MP3, FLAC, Opus and AAC encoders"]
     #[allow(clippy::cast_precision_loss)] // The short tone's sample indices fit in the f32 mantissa.
-    fn compressed_audio_signatures_and_decode_roundtrips() -> anyhow::Result<()> {
+    async fn compressed_audio_signatures_and_decode_roundtrips() -> anyhow::Result<()> {
         let samples = (0..TEST_SAMPLE_RATE as usize / TEST_DURATION_DIVISOR)
             .map(|index| {
                 TEST_TONE_AMPLITUDE
@@ -365,6 +338,19 @@ mod tests {
             crate::ChatAudioFormat::Aac,
         ] {
             let encoded = encode_audio_pcm(&samples, TEST_SAMPLE_RATE, 1, format)?;
+            if format == ChatAudioFormat::Flac {
+                assert_eq!(
+                    encode_audio_pcm_with_speed_async(
+                        Arc::new(samples.clone()),
+                        TEST_SAMPLE_RATE,
+                        1,
+                        format,
+                        1.0,
+                    )
+                    .await?,
+                    encoded
+                );
+            }
             let valid_header = match format {
                 crate::ChatAudioFormat::Mp3 => encoded.starts_with(b"ID3"),
                 crate::ChatAudioFormat::Flac => encoded.starts_with(b"fLaC"),

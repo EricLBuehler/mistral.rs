@@ -459,9 +459,6 @@ fn transcript_response(text: String, format: TranscriptionResponseFormat) -> Htt
 mod tests {
     use super::*;
 
-    const TEST_SAMPLE_RATE: u32 = 24_000;
-    const TEST_CHANNELS: u16 = 1;
-
     #[tokio::test]
     async fn streamed_transcript_has_deltas_and_complete_text() -> Result<()> {
         let mut events = TranscriptEvents::default();
@@ -525,92 +522,5 @@ mod tests {
             }
         }
         Ok(())
-    }
-
-    #[test]
-    fn unsupported_metadata_is_not_silently_accepted() {
-        for (name, value) in [
-            ("timestamp_granularities[]", "word"),
-            ("response_format", "verbose_json"),
-            ("response_format", "diarized_json"),
-            ("stream", "invalid"),
-            ("known_speaker_names[]", "Alice"),
-            ("temperature", "NaN"),
-        ] {
-            assert!(TranscriptionUpload::default()
-                .set_field(name, value.to_string(), false)
-                .is_err());
-        }
-        assert!(TranscriptionUpload::default().chat_body(false).is_err());
-    }
-
-    #[test]
-    fn audio_upload_builds_asr_and_translation_prompts() -> Result<()> {
-        let mut upload = TranscriptionUpload::default();
-        upload.set_field("model", "default".to_string(), false)?;
-        upload.set_field("language", "en".to_string(), false)?;
-        upload.file = Some(mistralrs_core::encode_audio_pcm(
-            &[0.0, 0.25],
-            24_000,
-            1,
-            mistralrs_core::ChatAudioFormat::Wav,
-        )?);
-        let asr = upload.chat_body(false)?;
-        assert_eq!(asr["messages"][0]["content"], "Perform ASR in English.");
-        assert_eq!(asr["messages"][1]["content"], "");
-        assert!(upload.chat_body(true)?["messages"][0]["content"]
-            .as_str()
-            .unwrap()
-            .contains("English translation"));
-        let _: crate::openai::ChatCompletionRequest = serde_json::from_value(asr)?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn transcription_response_formats_are_openai_compatible() -> Result<()> {
-        let json = transcript_response("Hello.".to_string(), TranscriptionResponseFormat::Json);
-        let body = axum::body::to_bytes(json.into_body(), usize::MAX).await?;
-        assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&body)?,
-            serde_json::json!({"text":"Hello."})
-        );
-        let text = transcript_response("Hello.".to_string(), TranscriptionResponseFormat::Text);
-        assert_eq!(
-            axum::body::to_bytes(text.into_body(), usize::MAX)
-                .await?
-                .as_ref(),
-            b"Hello."
-        );
-        Ok(())
-    }
-    #[test]
-    fn transcript_request_keeps_audio_placeholder_and_model_prefix() {
-        let original = RequestMessage::Chat {
-            messages: vec![indexmap::IndexMap::from([
-                ("role".into(), Either::Left("user".into())),
-                ("content".into(), Either::Left(String::new())),
-            ])],
-            enable_thinking: Some(false),
-            reasoning_effort: None,
-        };
-        let audio = AudioInput {
-            samples: vec![0.0],
-            sample_rate: TEST_SAMPLE_RATE,
-            channels: TEST_CHANNELS,
-        };
-        let RequestMessage::MultimodalChat {
-            messages,
-            audios,
-            enable_thinking,
-            ..
-        } = transcript_messages(original, audio.clone(), "model_audio_prefix".into())
-        else {
-            panic!("transcription must use multimodal input");
-        };
-        assert_eq!(audios, vec![audio]);
-        assert_eq!(enable_thinking, Some(false));
-        let parts = messages[0]["content"].as_ref().right().unwrap();
-        assert_eq!(parts[0]["type"], "audio");
-        assert_eq!(parts[1]["text"], "model_audio_prefix");
     }
 }

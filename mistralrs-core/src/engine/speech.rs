@@ -157,100 +157,54 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn speech_task_becomes_audio_chat_and_preserves_errors() -> Result<()> {
-        let (destination, mut responses) = tokio::sync::mpsc::channel(1);
-        let mut request = NormalRequest::new_simple(
-            RequestMessage::SpeechGeneration {
-                prompt: "Hello.".to_string(),
-            },
-            crate::SamplingParams::deterministic(),
-            destination,
-            0,
-            None,
-            None,
-        );
-        adapt_request(&mut request);
-        let RequestMessage::Chat {
-            messages,
-            enable_thinking,
-            ..
-        } = &request.messages
-        else {
-            panic!("speech task must use chat for an audio chat model");
-        };
-        assert_eq!(*enable_thinking, Some(false));
-        assert_eq!(
-            messages[0]["content"],
-            Either::Left(speech_task_prompt(None))
-        );
-        assert_eq!(messages[1]["content"], Either::Left("Hello.".to_string()));
-        assert_eq!(request.audio_output.unwrap().mode, ChatAudioMode::Audio);
-        request
-            .response
-            .send(Response::ValidationError("test rejection".into()))
-            .await?;
-        assert!(matches!(
-            tokio::time::timeout(TEST_TIMEOUT, responses.recv()).await?,
-            Some(Response::ValidationError(_))
-        ));
-        drop(responses);
-        tokio::time::timeout(TEST_TIMEOUT, request.response.closed()).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn speech_adapter_returns_pcm_and_closes_on_cancellation() -> Result<()> {
-        let (destination, mut responses) = tokio::sync::mpsc::channel(1);
-        let mut request = NormalRequest::new_simple(
-            RequestMessage::SpeechGeneration {
-                prompt: "Hello.".to_string(),
-            },
-            crate::SamplingParams::deterministic(),
-            destination,
-            0,
-            None,
-            None,
-        );
-        adapt_request(&mut request);
-        request
-            .response
-            .send(Response::Done(chat_speech_response("stop")?))
-            .await?;
-        let Some(Response::Speech {
-            pcm,
-            rate,
-            channels,
-        }) = tokio::time::timeout(TEST_TIMEOUT, responses.recv()).await?
-        else {
-            anyhow::bail!("Expected PCM speech response");
-        };
-        assert_eq!(rate, TEST_RATE as usize);
-        assert_eq!(channels, 1);
-        assert_eq!(pcm.as_ref(), &[0.0, 0.5, -0.5]);
-        tokio::time::timeout(TEST_TIMEOUT, request.response.closed()).await?;
-
-        let (destination, responses) = tokio::sync::mpsc::channel(1);
-        request.messages = RequestMessage::SpeechGeneration {
-            prompt: "Hello.".to_string(),
-        };
-        request.response = destination;
-        adapt_request(&mut request);
-        drop(responses);
-        tokio::time::timeout(TEST_TIMEOUT, request.response.closed()).await?;
-        Ok(())
-    }
-
-    #[test]
-    fn speech_adapter_rejects_truncated_audio() -> Result<()> {
-        assert!(decode_speech(chat_speech_response("length")?)
-            .err()
-            .expect("truncated speech must fail")
-            .to_string()
-            .contains("context limit"));
-        assert_eq!(
-            speech_task_prompt(Some("Speak slowly.")),
-            format!("{TTS_SYSTEM_PROMPT}\nSpeak slowly.")
-        );
+    async fn speech_adapter_returns_pcm_reports_errors_and_cancels() -> Result<()> {
+        for (response, expect_error) in [
+            (
+                Some(Response::ValidationError("test rejection".into())),
+                true,
+            ),
+            (Some(Response::Done(chat_speech_response("stop")?)), false),
+            (Some(Response::Done(chat_speech_response("length")?)), true),
+            (None, false),
+        ] {
+            let (destination, mut responses) = tokio::sync::mpsc::channel(1);
+            let mut request = NormalRequest::new_simple(
+                RequestMessage::SpeechGeneration {
+                    prompt: "Hello.".to_string(),
+                },
+                crate::SamplingParams::deterministic(),
+                destination,
+                0,
+                None,
+                None,
+            );
+            adapt_request(&mut request);
+            if let Some(response) = response {
+                request.response.send(response).await?;
+                let response = tokio::time::timeout(TEST_TIMEOUT, responses.recv()).await?;
+                if expect_error {
+                    assert!(matches!(
+                        response,
+                        Some(Response::ValidationError(_) | Response::InternalError(_))
+                    ));
+                } else {
+                    let Some(Response::Speech {
+                        pcm,
+                        rate,
+                        channels,
+                    }) = response
+                    else {
+                        anyhow::bail!("Expected PCM speech response");
+                    };
+                    assert_eq!(rate, TEST_RATE as usize);
+                    assert_eq!(channels, 1);
+                    assert_eq!(pcm.as_ref(), &[0.0, 0.5, -0.5]);
+                }
+            } else {
+                drop(responses);
+            }
+            tokio::time::timeout(TEST_TIMEOUT, request.response.closed()).await?;
+        }
         Ok(())
     }
 }

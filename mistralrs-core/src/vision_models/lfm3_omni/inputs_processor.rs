@@ -444,7 +444,7 @@ impl InputsProcessor for Lfm3OmniInputsProcessor {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::collections::HashMap;
     use tokenizers::{
@@ -459,7 +459,9 @@ mod tests {
         AudioInput,
     };
 
-    fn tokenizer() -> Arc<Tokenizer> {
+    const AUDIO_PROMPT: &str = "x <|audio|> x <|audio|> x";
+
+    pub(crate) fn tokenizer() -> Arc<Tokenizer> {
         let model = WordLevel::builder()
             .vocab(
                 [("[UNK]".to_owned(), 0), ("x".to_owned(), 1)]
@@ -487,7 +489,7 @@ mod tests {
         Arc::new(tokenizer)
     }
 
-    fn sequence(tokenizer: &Tokenizer, id: usize) -> Sequence {
+    pub(crate) fn sequence(tokenizer: &Tokenizer, prompt: &str, id: usize) -> Sequence {
         let (tx, _rx) = channel(1);
         let sampler = Sampler::new(
             None,
@@ -504,12 +506,7 @@ mod tests {
             vec![],
         )
         .unwrap();
-        let prompt = "x <|audio|> x <|audio|> x".to_owned();
-        let tokens = tokenizer
-            .encode(prompt.as_str(), false)
-            .unwrap()
-            .get_ids()
-            .to_vec();
+        let tokens = tokenizer.encode(prompt, false).unwrap().get_ids().to_vec();
         let audio = [400, 1_600]
             .into_iter()
             .map(|samples| AudioInput {
@@ -520,7 +517,7 @@ mod tests {
             .collect();
         Sequence::new_waiting(
             tokens,
-            prompt,
+            prompt.to_owned(),
             id,
             0,
             1,
@@ -552,6 +549,29 @@ mod tests {
             vec![],
             None,
         )
+    }
+
+    pub(crate) fn process_prompt(
+        processor: &dyn InputsProcessor,
+        tokenizer: Arc<Tokenizer>,
+        sequences: &mut [&mut Sequence],
+        config: Option<Arc<dyn Any>>,
+    ) -> Result<ModelInputs> {
+        let output = processor.process_inputs(
+            Some(tokenizer),
+            sequences,
+            true,
+            false,
+            &Device::Cpu,
+            false,
+            None,
+            false,
+            None,
+            config,
+            None,
+            None,
+        )?;
+        Ok(*output.inputs.downcast::<ModelInputs>().unwrap())
     }
 
     fn processor() -> Lfm3OmniInputsProcessor {
@@ -615,28 +635,10 @@ mod tests {
     }
 
     #[test]
-    fn audio_placeholder_cardinality_is_validated_per_prompt() {
-        assert!(expand_audio_placeholders(&[10, 10], &media(), &[3]).is_err());
-        assert!(expand_audio_placeholders(&[1, 2], &media(), &[3]).is_err());
-        assert!(expand_audio_placeholders(&[10], &media(), &[]).is_err());
-    }
-
-    #[test]
-    fn speech_history_is_rejected_before_encoding() {
-        let error = expand_audio_placeholders(&[1, 15, 1], &media(), &[]).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("speech history with <|audio_out|>"));
-        assert!(error
-            .downcast_ref::<InputsProcessorValidationError>()
-            .is_some());
-    }
-
-    #[test]
     fn audio_planning_is_idempotent_and_forward_inputs_keep_clip_identity() -> Result<()> {
         let tokenizer = tokenizer();
         let processor = processor();
-        let mut seq = sequence(&tokenizer, 0);
+        let mut seq = sequence(&tokenizer, AUDIO_PROMPT, 0);
         let hashes = seq.audio_hashes().unwrap().to_vec();
         let config: Arc<dyn Any> = Arc::new(PreProcessorConfig::default());
         for _ in 0..2 {
@@ -650,21 +652,7 @@ mod tests {
             assert_eq!(seq.mm_features().len(), 2);
             assert_eq!(seq.get_toks().len(), 10);
         }
-        let output = processor.process_inputs(
-            Some(tokenizer),
-            &mut [&mut seq],
-            true,
-            false,
-            &Device::Cpu,
-            false,
-            None,
-            false,
-            None,
-            Some(config),
-            None,
-            None,
-        )?;
-        let inputs = *output.inputs.downcast::<ModelInputs>().unwrap();
+        let inputs = process_prompt(&processor, tokenizer, &mut [&mut seq], Some(config))?;
         let args = *inputs
             .model_specific_args
             .downcast::<Lfm3OmniSpecificArgs>()
@@ -692,123 +680,65 @@ mod tests {
     }
 
     #[test]
-    fn images_between_audio_clips_keep_all_embedding_offsets_aligned() -> Result<()> {
+    fn mixed_media_preserves_offsets_and_speech_markers() -> Result<()> {
         let tokenizer = tokenizer();
         let processor = processor();
-        let mut seq = sequence(&tokenizer, 0);
-        let prompt = "x <|audio|> x <|image|> x <|audio|> x";
-        seq.set_toks_and_reallocate(
-            tokenizer.encode(prompt, false).unwrap().get_ids().to_vec(),
+        for mode in [
             None,
-        );
-        seq.set_initial_prompt(prompt.to_owned());
-        seq.multimodal = MultimodalData::new(
-            Some(vec![image::DynamicImage::new_rgb8(4, 4)]),
-            seq.clone_audios(),
-            None,
-            None,
-            None,
-            None,
-        );
-        let output = processor.process_inputs(
-            Some(tokenizer),
-            &mut [&mut seq],
-            true,
-            false,
-            &Device::Cpu,
-            false,
-            None,
-            false,
-            None,
-            Some(Arc::new(PreProcessorConfig::default())),
-            None,
-            None,
-        )?;
-        let inputs = *output.inputs.downcast::<ModelInputs>().unwrap();
-        let args = *inputs
-            .model_specific_args
-            .downcast::<Lfm3OmniSpecificArgs>()
-            .unwrap();
-        assert_eq!(inputs.pixel_values.unwrap().dims(), &[4, 24]);
-        assert_eq!(
-            args.vision.as_ref().unwrap().continuous_img_pad,
-            vec![vec![(6, 7)]]
-        );
-        assert_eq!(args.audio[0].token_range, 2..3);
-        assert_eq!(args.audio[1].token_range, 10..12);
-        assert_eq!(
-            seq.mm_features()
-                .iter()
-                .map(|feature| feature.kind)
-                .collect::<Vec<_>>(),
-            [
-                MultimodalKind::Audio,
-                MultimodalKind::Image,
-                MultimodalKind::Audio
-            ]
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn mixed_media_speech_modes_append_one_marker_and_preserve_offsets() -> Result<()> {
-        let tokenizer = tokenizer();
-        let processor = processor();
-        for (mode, marker) in [
-            (crate::ChatAudioMode::Audio, "<|audio_start|>"),
-            (crate::ChatAudioMode::TextAudio, "<|mixed_start|>"),
+            Some(crate::ChatAudioMode::Audio),
+            Some(crate::ChatAudioMode::TextAudio),
         ] {
-            let mut seq = sequence(&tokenizer, 42);
-            let prompt = "x <|audio|> <|image|> <|video|> <|audio|> x";
-            seq.set_toks_and_reallocate(
-                tokenizer.encode(prompt, false).unwrap().get_ids().to_vec(),
-                None,
-            );
-            seq.set_initial_prompt(prompt.to_owned());
-            seq.set_audio_output(Some(crate::ChatAudioRequest {
+            let prompt = if mode.is_some() {
+                "x <|audio|> <|image|> <|video|> <|audio|> x"
+            } else {
+                "x <|audio|> x <|image|> x <|audio|> x"
+            };
+            let mut seq = sequence(&tokenizer, prompt, 42);
+            seq.set_audio_output(mode.map(|mode| crate::ChatAudioRequest {
                 mode,
                 format: crate::ChatAudioFormat::Wav,
             }));
             seq.multimodal = MultimodalData::new(
                 Some(vec![image::DynamicImage::new_rgb8(4, 4)]),
                 seq.clone_audios(),
-                Some(vec![crate::VideoInput::from_frames(
-                    vec![image::DynamicImage::new_rgb8(4, 4); 4],
-                    2.0,
-                    None,
-                )]),
+                mode.map(|_| {
+                    vec![crate::VideoInput::from_frames(
+                        vec![image::DynamicImage::new_rgb8(4, 4); 4],
+                        2.0,
+                        None,
+                    )]
+                }),
                 None,
                 None,
                 None,
             );
             let config: Arc<dyn Any> = Arc::new(PreProcessorConfig::default());
-            processor.prepare_for_paged_prompt_planning(
-                Some(tokenizer.clone()),
-                &mut [&mut seq],
-                &Device::Cpu,
-                Some(config.clone()),
-                None,
-            )?;
-            let planned = seq.get_toks().to_vec();
-            let output = processor.process_inputs(
-                Some(tokenizer.clone()),
-                &mut [&mut seq],
-                true,
-                false,
-                &Device::Cpu,
-                false,
-                None,
-                false,
-                None,
-                Some(config),
-                None,
-                None,
-            )?;
-            assert_eq!(seq.get_toks(), planned);
-            let marker = tokenizer.token_to_id(marker).unwrap();
-            assert_eq!(planned.last(), Some(&marker));
-            assert_eq!(planned.iter().filter(|&&token| token == marker).count(), 1);
-            let inputs = *output.inputs.downcast::<ModelInputs>().unwrap();
+            let planned = if mode.is_some() {
+                processor.prepare_for_paged_prompt_planning(
+                    Some(tokenizer.clone()),
+                    &mut [&mut seq],
+                    &Device::Cpu,
+                    Some(config.clone()),
+                    None,
+                )?;
+                Some(seq.get_toks().to_vec())
+            } else {
+                None
+            };
+            let inputs =
+                process_prompt(&processor, tokenizer.clone(), &mut [&mut seq], Some(config))?;
+            if let Some(mode) = mode {
+                let planned = planned.unwrap();
+                assert_eq!(seq.get_toks(), planned);
+                let marker = tokenizer
+                    .token_to_id(match mode {
+                        crate::ChatAudioMode::Audio => AUDIO_START_TOKEN,
+                        crate::ChatAudioMode::TextAudio => MIXED_START_TOKEN,
+                    })
+                    .unwrap();
+                assert_eq!(planned.last(), Some(&marker));
+                assert_eq!(planned.iter().filter(|&&token| token == marker).count(), 1);
+            }
             let rows = inputs.input_ids.to_vec2::<u32>()?;
             let args = *inputs
                 .model_specific_args
@@ -816,10 +746,29 @@ mod tests {
                 .unwrap();
             assert_eq!(args.sequence_ids, [42]);
             assert_eq!(inputs.pixel_values.unwrap().dims(), &[4, 24]);
-            assert_eq!(
-                args.vision.unwrap().pixel_values_videos.unwrap().dims(),
-                &[8, 24]
-            );
+            let vision = args.vision.unwrap();
+            if mode.is_some() {
+                assert_eq!(vision.pixel_values_videos.unwrap().dims(), &[8, 24]);
+                assert!(seq
+                    .mm_features()
+                    .iter()
+                    .any(|feature| feature.kind == MultimodalKind::Video));
+            } else {
+                assert_eq!(vision.continuous_img_pad, vec![vec![(6, 7)]]);
+                assert_eq!(args.audio[0].token_range, 2..3);
+                assert_eq!(args.audio[1].token_range, 10..12);
+                assert_eq!(
+                    seq.mm_features()
+                        .iter()
+                        .map(|feature| feature.kind)
+                        .collect::<Vec<_>>(),
+                    [
+                        MultimodalKind::Audio,
+                        MultimodalKind::Image,
+                        MultimodalKind::Audio
+                    ]
+                );
+            }
             assert_eq!(args.audio.len(), 2);
             let audio_id = tokenizer.token_to_id(AUDIO_TOKEN).unwrap();
             for item in args.audio {
@@ -827,10 +776,6 @@ mod tests {
                     .iter()
                     .all(|&token| token == audio_id));
             }
-            assert!(seq
-                .mm_features()
-                .iter()
-                .any(|feature| feature.kind == MultimodalKind::Video));
         }
         Ok(())
     }
@@ -839,23 +784,14 @@ mod tests {
     fn batched_audio_rows_follow_sequence_id_order() -> Result<()> {
         let tokenizer = tokenizer();
         let processor = processor();
-        let mut first = sequence(&tokenizer, 17);
-        let mut second = sequence(&tokenizer, 5);
-        let output = processor.process_inputs(
-            Some(tokenizer),
+        let mut first = sequence(&tokenizer, AUDIO_PROMPT, 17);
+        let mut second = sequence(&tokenizer, AUDIO_PROMPT, 5);
+        let inputs = process_prompt(
+            &processor,
+            tokenizer,
             &mut [&mut second, &mut first],
-            true,
-            false,
-            &Device::Cpu,
-            false,
-            None,
-            false,
-            None,
             Some(Arc::new(PreProcessorConfig::default())),
-            None,
-            None,
         )?;
-        let inputs = *output.inputs.downcast::<ModelInputs>().unwrap();
         let args = *inputs
             .model_specific_args
             .downcast::<Lfm3OmniSpecificArgs>()

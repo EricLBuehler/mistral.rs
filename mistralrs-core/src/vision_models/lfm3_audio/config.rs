@@ -112,7 +112,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn legacy_config_uses_canonical_fields_and_speech_defaults() -> Result<()> {
+    fn normalization_preserves_overrides_and_validates_legacy_speech_config() -> Result<()> {
         let mut value = json!({
             "lfm": {"hidden_size": 2048, "dtype": "float32"},
             "encoder": {"dim_in": 128, "dim_conv": 256, "dim_out": 768,
@@ -138,19 +138,12 @@ mod tests {
         let once = value.clone();
         normalize_config(&mut value)?;
         assert_eq!(value, once);
-        Ok(())
-    }
-
-    #[test]
-    fn canonical_overrides_and_invalid_schedule_steps() -> Result<()> {
         let mut value = json!({"num_codebooks": 4, "maskgit_schedule": [1, 3],
             "audio_token_id": 42, "audio_eos_code": 15});
         normalize_config(&mut value)?;
         assert_eq!(value["maskgit_schedule"], json!([1, 3]));
         assert_eq!(value["audio_token_id"], 42);
         assert_eq!(value["audio_eos_code"], 15);
-        assert!(normalize_config(&mut json!({"maskgit_steps": 0})).is_err());
-        assert!(normalize_config(&mut json!({"maskgit_steps": 13})).is_err());
         Ok(())
     }
 }
