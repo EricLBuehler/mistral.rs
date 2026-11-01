@@ -9,13 +9,17 @@ User-facing environment variables read by `mistralrs`, its build scripts, or its
 
 | Variable | Purpose |
 |---|---|
-| `HF_HOME` | Root of the Hugging Face cache. Default `~/.cache/huggingface`. |
-| `HF_HUB_CACHE` | Hugging Face hub cache location. |
-| `HF_TOKEN` | Auth token. Overrides any token saved by `mistralrs login` at `$HF_HOME/token`. |
-| `HF_HUB_TOKEN` | Auth token fallback when `HF_TOKEN` is not set. |
+| `HF_HOME` | Hugging Face home directory. Defaults to `$XDG_CACHE_HOME/huggingface` if `XDG_CACHE_HOME` is set, otherwise `~/.cache/huggingface`. |
+| `HF_HUB_CACHE` | Hub model cache location. Defaults to the `hub` directory under `HF_HOME`; `--hf-cache <dir>` overrides it. |
+| `HF_TOKEN` | Auth token for the default `cache` token source. Overrides any token saved by `hf auth login`. |
+| `HF_HUB_TOKEN` | Auth token fallback when `HF_TOKEN` is unset or blank. |
+| `HF_TOKEN_PATH` | Saved token file. Defaults to the `token` file under `HF_HOME`. Used when neither `HF_TOKEN` nor `HF_HUB_TOKEN` supplies a token. |
+| `HF_HUB_DISABLE_IMPLICIT_TOKEN` | Set to `1`, `true`, `yes`, or `on` to disable automatic credential lookup for the default `cache` token source. Explicit `literal:`, `env:`, and `path:` token sources still apply. |
 | `HF_HUB_OFFLINE` | Set to `1`, `true`, `yes`, or `on` to stop all Hugging Face Hub network calls. Files then come only from the local cache (`$HF_HUB_CACHE` or `$HF_HOME/hub`), and a missing file is an error. `mistralrs doctor` also skips its connectivity check. |
+| `HF_XET_CACHE` | Xet cache location. Defaults to the `xet` directory under `HF_HOME`. Separate from the Hub model cache. |
+| `HF_XET_HIGH_PERFORMANCE` | Set to `1` to enable Xet's high-performance transfer settings, allowing more concurrent work and larger buffers. Off by default; Xet downloads work without it. |
 
-If `--token-source env:NAME` is used, mistral.rs reads the environment variable named by `NAME` as the token source.
+If `--token-source env:NAME` is used, mistral.rs reads the environment variable named by `NAME` as the token source. `--token-source none` sends no Hugging Face account token, even when credentials are saved or set in the environment.
 
 For the offline workflow (pre-downloading models, local paths), see [run models](/guides/models/run-any-model/).
 
@@ -60,7 +64,7 @@ See [CPU threads and affinity](/guides/perf/throughput-tuning/#cpu-threads-and-a
 | `KEEP_ALIVE_INTERVAL` | SSE (Server-Sent Events) keep-alive interval in milliseconds. Falls back to the default if missing or invalid. |
 | `MISTRALRS_ALLOW_RUNTIME_LORA_UPDATING` | Set to `1`, `true`, `yes`, or `on` to allow loading and unloading LoRA adapters over HTTP. Off by default, and the model must be started with dynamic LoRA. See [LoRA adapters](/guides/customize/lora-adapters/#enable-http-mutation). |
 | `MISTRALRS_LORA_ADAPTER_ROOT` | Only adapter directories inside this path can be loaded at runtime, and relative paths resolve inside it. Set it whenever runtime LoRA updating is on in production. |
-| `XDG_CACHE_HOME` | Base cache directory for web UI state. The UI uses `$XDG_CACHE_HOME/mistralrs`. |
+| `XDG_CACHE_HOME` | Base cache directory. The UI uses `$XDG_CACHE_HOME/mistralrs`; Hugging Face uses `$XDG_CACHE_HOME/huggingface` when `HF_HOME` is unset. |
 | `HOME` | Fallback for web UI cache path when `XDG_CACHE_HOME` is not set. |
 
 ## CUDA acceleration

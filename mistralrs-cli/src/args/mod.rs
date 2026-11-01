@@ -200,6 +200,9 @@ pub enum Command {
     },
 
     /// Download the files needed to run a model without loading it
+    #[command(
+        long_about = "Download the files needed to run a model without loading it or initializing a GPU.\n\nUse an explicit --quant level; --quant auto is not supported. In-situ quantization happens when the model is loaded."
+    )]
     Download {
         #[command(subcommand)]
         model_type: Option<ModelType>,

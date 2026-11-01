@@ -82,18 +82,28 @@ If a model's chat template is missing or produces garbled turns, supply your own
 
 Fixes for common models are bundled in the repository's `chat_templates/` directory, for example `-c chat_templates/vicuna.json`. See [chat templates](/guides/customize/chat-templates/) for how to tell when a template is wrong and how to write one.
 
+## Hugging Face authentication
+
+Public, ungated models download without logging in. For private or gated models, run `hf auth login` or set `HF_TOKEN`. mistral.rs reads the shared Hugging Face credentials, so existing saved tokens continue to work. Gated models also require accepting their license on the model's Hugging Face page.
+
+Use `--token-source none` to force anonymous access, even when a token is saved or set in the environment. Account management stays in the [HF CLI](https://huggingface.co/docs/huggingface_hub/en/guides/cli#hf-auth-login).
+
 ## Running offline
+
+`mistralrs download` fetches the files needed to run a model without loading it or initializing a GPU. Downloads automatically use native Xet for Xet-backed files and HTTP for other Hub files; no Python package is needed.
 
 Set `HF_HUB_OFFLINE=1` to stop mistral.rs from contacting Hugging Face. It then loads only from the local cache, and fails right away if a file is missing.
 
 ```bash
-# With network access: run once to fill the cache
-mistralrs run -m Qwen/Qwen3-4B
+# With network access: download the model files
+mistralrs download -m Qwen/Qwen3-4B
 
 # Later, or on an air-gapped machine with the cache copied over
 HF_HUB_OFFLINE=1 mistralrs serve -m Qwen/Qwen3-4B
 ```
 
-You can also fill the cache with `huggingface-cli download <repo>`. `mistralrs cache list` shows what's cached. The cache lives in `$HF_HUB_CACHE` if set, otherwise `$HF_HOME/hub`, otherwise `~/.cache/huggingface/hub`; `--hf-cache <dir>` overrides all of them.
+Pass the same model and artifact options to `download` and `run` or `serve`, such as `--quant 4` or `-f model.gguf`. `download` rejects `--quant auto` because it probes inference hardware; choose a level yourself or use `mistralrs tune` first. When a selection uses ISQ, downloading fetches the source weights and quantization happens when loading the model. See the [download reference](/reference/cli/download/) for all options.
+
+For a whole repository, use `hf download <repo>`. `mistralrs cache list` shows what's cached. The cache lives in `$HF_HUB_CACHE` if set, otherwise `$HF_HOME/hub`, otherwise `$XDG_CACHE_HOME/huggingface/hub`, otherwise `~/.cache/huggingface/hub`; `--hf-cache <dir>` overrides all of them.
 
 A local multimodal GGUF may need config or processor files that aren't stored beside it. Cache those too, or point `--tok-model-id` at a local directory that has them. See [running GGUF offline](/guides/models/run-gguf/#run-offline).

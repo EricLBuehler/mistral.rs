@@ -162,7 +162,13 @@ fn visible_subcommands(cmd: &Command) -> impl Iterator<Item = &Command> {
         .filter(|s| !s.is_hide_set() && s.get_name() != "help")
 }
 
-fn write_command_section(md: &mut String, cmd: &Command, path: &str, depth: usize) {
+fn write_command_section(
+    md: &mut String,
+    cmd: &Command,
+    parent: &Command,
+    path: &str,
+    depth: usize,
+) {
     if depth > 0 {
         writeln!(md, "{} {}\n", "#".repeat((depth + 1).min(6)), path).unwrap();
     }
@@ -175,13 +181,27 @@ fn write_command_section(md: &mut String, cmd: &Command, path: &str, depth: usiz
         writeln!(md, "{about}\n").unwrap();
     }
     writeln!(md, "```\n{}\n```\n", usage_block(cmd, path)).unwrap();
-    write_table(md, cmd.get_arguments().filter(|a| !a.is_global_set()));
+    write_table(
+        md,
+        cmd.get_arguments().filter(|a| {
+            !a.is_global_set()
+                || !parent
+                    .get_arguments()
+                    .any(|p| p.is_global_set() && p.get_id() == a.get_id())
+        }),
+    );
     for sub in visible_subcommands(cmd) {
-        write_command_section(md, sub, &format!("{path} {}", sub.get_name()), depth + 1);
+        write_command_section(
+            md,
+            sub,
+            cmd,
+            &format!("{path} {}", sub.get_name()),
+            depth + 1,
+        );
     }
 }
 
-fn render_page(cmd: &Command, path: &str, order: usize) -> String {
+fn render_page(cmd: &Command, parent: &Command, path: &str, order: usize) -> String {
     let mut md = String::new();
     writeln!(
         md,
@@ -190,7 +210,7 @@ fn render_page(cmd: &Command, path: &str, order: usize) -> String {
     )
     .unwrap();
     md.push_str(GENERATED_NOTICE);
-    write_command_section(&mut md, cmd, path, 0);
+    write_command_section(&mut md, cmd, parent, path, 0);
     md
 }
 
@@ -221,7 +241,7 @@ fn rendered_pages() -> Vec<(String, String)> {
         let path = format!("mistralrs {}", sub.get_name());
         pages.push((
             format!("{}.md", sub.get_name()),
-            render_page(sub, &path, i + 2),
+            render_page(sub, &root, &path, i + 2),
         ));
     }
     pages

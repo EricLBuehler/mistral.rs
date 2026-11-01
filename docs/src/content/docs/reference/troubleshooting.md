@@ -30,15 +30,11 @@ Flash attention requires compute capability 8.0+ (see [hardware support](/refere
 - `cuda nccl cudnn` on Linux with NCCL installed.
 - `cuda cudnn` otherwise.
 
-### `mistralrs login` rejects the token
-
-Hugging Face tokens start with `hf_`, and `mistralrs login` rejects anything else. Copy the whole token from your [token settings](https://huggingface.co/settings/tokens).
-
 ## Model loading
 
 ### Gated repository (Gemma, LLaMA, FLUX.1-dev, etc.)
 
-Accept the license on the model's Hugging Face page, create a [read-only token](https://huggingface.co/settings/tokens), and save it with `mistralrs login`. The token is stored at `~/.cache/huggingface/token` (or `$HF_HOME/token`).
+Accept the license on the model's Hugging Face page, then run `hf auth login` or set `HF_TOKEN` to a [read-only token](https://huggingface.co/settings/tokens) with access to that repository. mistral.rs reads the shared Hugging Face credentials. Check that you haven't passed `--token-source none`, which ignores saved and environment tokens. See [Hugging Face authentication](/guides/models/run-any-model/#hugging-face-authentication).
 
 ### `Out of memory` on load
 

@@ -215,7 +215,7 @@ The GGUF on its own answers `noul`, single-selection `choice`, and `score` quest
 
 ## Gemma
 
-Gemma repositories are gated. Accept the license on the model's Hugging Face page, then run `mistralrs login` so mistral.rs can download it.
+Gemma repositories are gated. Accept the license on the model's Hugging Face page, then run `hf auth login` or set `HF_TOKEN` so mistral.rs can download it.
 
 Gemma 4 accepts image, audio, and video parts in one message. By default it uses constrained decoding to keep tool calls in its native format; see [tool calling](/guides/agents/tool-calling-basics/).
 

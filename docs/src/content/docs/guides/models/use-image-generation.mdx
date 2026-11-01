@@ -18,7 +18,7 @@ There are two checkpoints:
 | Model | Denoising steps | Prompt length | Access |
 | --- | --- | --- | --- |
 | `black-forest-labs/FLUX.1-schnell` | 4, so it's fast | Up to 256 tokens. Longer prompts return an error. | Open |
-| `black-forest-labs/FLUX.1-dev` | 50, with guidance scale 4.0 | Not limited to 256 tokens | Gated: accept the license on its Hugging Face page, then run `mistralrs login` |
+| `black-forest-labs/FLUX.1-dev` | 50, with guidance scale 4.0 | Not limited to 256 tokens | Gated: accept the license on its Hugging Face page, then run `hf auth login` or set `HF_TOKEN` |
 
 The step count is fixed per checkpoint; request fields like `steps` and `guidance_scale` are ignored.
 
