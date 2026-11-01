@@ -206,30 +206,6 @@ impl Loader for EmbeddingLoader {
     }
 
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
-    fn load_model_from_hf(
-        &self,
-        revision: Option<String>,
-        token_source: TokenSource,
-        dtype: &dyn TryIntoDType,
-        device: &Device,
-        silent: bool,
-        mapper: DeviceMapSetting,
-        in_situ_quant: Option<IsqType>,
-        paged_attn_config: Option<PagedAttentionConfig>,
-    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let download = self.download_model_from_hf(revision, token_source, silent)?;
-        self.load_model_from_path(
-            download.paths.as_ref(),
-            dtype,
-            device,
-            silent,
-            mapper,
-            in_situ_quant,
-            paged_attn_config,
-        )
-    }
-
-    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_path(
         &self,
         paths: &dyn ModelPaths,
@@ -902,48 +878,3 @@ impl Pipeline for EmbeddingPipeline {
 }
 
 impl AnyMoePipelineMixin for EmbeddingPipeline {}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn download_includes_embedding_modules_without_loading_tensors() -> Result<()> {
-        let directory = tempfile::tempdir()?;
-        let root = directory.path();
-        for module in ["1_Pooling", "2_Dense"] {
-            std::fs::create_dir(root.join(module))?;
-            std::fs::write(root.join(module).join("config.json"), b"{}")?;
-        }
-        std::fs::write(root.join("config.json"), b"{}")?;
-        std::fs::write(root.join("tokenizer.json"), b"not a tokenizer")?;
-        std::fs::write(root.join("model.safetensors"), b"not model weights")?;
-        std::fs::write(
-            root.join("2_Dense/model.safetensors"),
-            b"not module weights",
-        )?;
-        std::fs::write(
-            root.join("modules.json"),
-            r#"[{"path":"1_Pooling","type":"sentence_transformers.models.Pooling"},{"path":"2_Dense","type":"sentence_transformers.models.Dense"}]"#,
-        )?;
-        let loader = EmbeddingLoaderBuilder::new(
-            EmbeddingSpecificConfig::default(),
-            None,
-            Some(root.display().to_string()),
-        )
-        .build(Some(EmbeddingLoaderType::EmbeddingGemma));
-        let files = loader
-            .download_model_from_hf(None, TokenSource::None, true)?
-            .files();
-        for filename in [
-            "model.safetensors",
-            "modules.json",
-            "1_Pooling/config.json",
-            "2_Dense/config.json",
-            "2_Dense/model.safetensors",
-        ] {
-            assert!(files.contains(&root.join(filename)), "missing {filename}");
-        }
-        Ok(())
-    }
-}

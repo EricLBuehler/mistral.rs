@@ -61,8 +61,7 @@ pub use embedding_loaders::{
 };
 
 pub use diffusion_loaders::{
-    DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, DiffusionModelPaths,
-    DiffusionModelPathsInner, FluxLoader,
+    DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, FluxLoader,
 };
 
 use crate::{
@@ -1331,7 +1330,18 @@ pub trait Loader: Send + Sync {
         mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
-    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>>;
+    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let download = self.download_model_from_hf(revision, token_source, silent)?;
+        self.load_model_from_path(
+            download.paths.as_ref(),
+            dtype,
+            device,
+            silent,
+            mapper,
+            in_situ_quant,
+            paged_attn_config,
+        )
+    }
 
     /// Load a model from the specified paths.
     /// Also initializes `DEBUG`.

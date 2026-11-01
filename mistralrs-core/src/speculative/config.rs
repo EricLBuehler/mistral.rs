@@ -246,7 +246,7 @@ fn resolve_hf_mtp_path(id: &str) -> candle_core::Result<PathBuf> {
         get_file(&api, model_id, &file, revision).map_err(candle_core::Error::msg)?;
     }
 
-    try_get_file(&api, model_id, "generation_config.json", revision)
+    try_get_file(&api, model_id, "generation_config.json")
         .map_err(|err| candle_core::Error::Msg(err.to_string()))?;
 
     config_path.parent().map(Path::to_path_buf).ok_or_else(|| {

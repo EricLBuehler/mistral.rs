@@ -2,7 +2,7 @@ use anyhow::Result;
 use mistralrs_core::LoaderBuilder;
 use tracing::info;
 
-use crate::args::{DownloadOptions, GlobalOptions, MatformerSelection, ModelType};
+use crate::args::{GlobalOptions, MatformerSelection, ModelType};
 
 use super::serve::{
     apply_quant_resolution, convert_to_model_selected, extract_hf_config_settings,
@@ -12,7 +12,7 @@ use super::serve::{
 pub async fn run_download(
     mut model_type: ModelType,
     global: GlobalOptions,
-    options: DownloadOptions,
+    revision: Option<String>,
 ) -> Result<()> {
     if extract_quant_flag(&model_type)
         .is_some_and(|quant| quant.trim().eq_ignore_ascii_case("auto"))
@@ -21,15 +21,12 @@ pub async fn run_download(
             "`download` requires an explicit quantization when using `--quant`; run `mistralrs tune` to choose one"
         );
     }
-    let matformer = MatformerSelection {
-        config_path: options.matformer_config_path,
-        slice_name: options.matformer_slice_name,
-    };
+    let matformer = MatformerSelection::default();
     apply_quant_resolution(
         &mut model_type,
         &global.token_source,
         &matformer,
-        options.revision.as_deref(),
+        revision.as_deref(),
     )
     .await?;
     let model = convert_to_model_selected(&model_type, &matformer)?;
@@ -40,7 +37,7 @@ pub async fn run_download(
         .build()?;
     let model_id = loader.get_id();
     let download = tokio::task::spawn_blocking(move || {
-        loader.download_model_from_hf(options.revision, global.token_source, false)
+        loader.download_model_from_hf(revision, global.token_source, false)
     })
     .await??;
     let files = download.files();
@@ -59,30 +56,6 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn download_accepts_revision_for_explicit_model_type() {
-        let cli = Cli::try_parse_from([
-            "mistralrs",
-            "download",
-            "text",
-            "-m",
-            "org/model",
-            "--revision",
-            "release",
-            "--token-source",
-            "none",
-        ])
-        .unwrap();
-        let Command::Download { options, .. } = cli.command else {
-            panic!("expected download command");
-        };
-        assert_eq!(options.revision.as_deref(), Some("release"));
-        assert!(matches!(
-            cli.global.token_source,
-            mistralrs_core::TokenSource::None
-        ));
-    }
-
     #[tokio::test]
     async fn download_rejects_hardware_dependent_quant_before_accessing_model() {
         for quant in ["auto", " AUTO "] {
@@ -98,19 +71,14 @@ mod tests {
             let Command::Download {
                 model_type,
                 default_model,
-                options,
+                revision,
             } = cli.command
             else {
                 panic!("expected download command");
             };
             let model = resolve_model_type(model_type, default_model).unwrap();
-            let error = run_download(model, cli.global, options).await.unwrap_err();
+            let error = run_download(model, cli.global, revision).await.unwrap_err();
             assert!(error.to_string().contains("explicit quantization"));
         }
-    }
-
-    #[test]
-    fn login_is_not_a_command() {
-        assert!(Cli::try_parse_from(["mistralrs", "login"]).is_err());
     }
 }

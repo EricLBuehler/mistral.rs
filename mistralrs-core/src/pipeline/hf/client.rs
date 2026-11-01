@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use hf_hub::{
-    progress::{DownloadEvent, ProgressEvent, ProgressHandler},
+    progress::{DownloadEvent, Progress, ProgressEvent, ProgressHandler},
     HFClient, HFClientBuilder, HFClientSync, HFError, HFRepository, HFRepositorySync,
     RepoTypeModel,
 };
@@ -29,17 +29,9 @@ pub struct HubRepo {
     cache: PathBuf,
 }
 
-pub(crate) struct AsyncHubClient {
-    inner: HFClient,
-    progress: bool,
-    cache: PathBuf,
-}
-
 pub(crate) struct AsyncHubRepo {
     inner: HFRepository<RepoTypeModel>,
     revision: String,
-    progress: bool,
-    cache: PathBuf,
 }
 
 pub(crate) fn env_flag(name: &str) -> bool {
@@ -51,14 +43,9 @@ pub(crate) fn env_flag(name: &str) -> bool {
     })
 }
 
-fn client_builder(
-    token_source: &TokenSource,
-    cache: Option<PathBuf>,
-) -> anyhow::Result<HFClientBuilder> {
+fn client_builder(token_source: &TokenSource, cache: PathBuf) -> anyhow::Result<HFClientBuilder> {
     let endpoint = std::env::var("HF_ENDPOINT").unwrap_or_else(|_| DEFAULT_ENDPOINT.to_string());
-    let mut builder = HFClient::builder()
-        .endpoint(endpoint)
-        .cache_dir(resolve_hf_cache(cache));
+    let mut builder = HFClient::builder().endpoint(endpoint).cache_dir(cache);
     if let Some(token) = get_token(token_source)? {
         builder = builder.token(token);
     }
@@ -73,7 +60,7 @@ impl HubClient {
     ) -> anyhow::Result<Self> {
         let cache = resolve_hf_cache(cache);
         Ok(Self {
-            inner: client_builder(token_source, Some(cache.clone()))?.build_sync()?,
+            inner: client_builder(token_source, cache.clone())?.build_sync()?,
             progress,
             cache,
         })
@@ -100,23 +87,23 @@ impl HubRepo {
             .revision(&self.revision)
             .local_files_only(true)
             .send();
-        if is_hf_hub_offline() || cached.is_ok() {
-            return cached;
-        }
         match cached {
-            Err(HFError::LocalEntryNotFound { .. } | HFError::EntryNotFound { .. }) => {}
-            Err(error) => return Err(error),
-            Ok(_) => unreachable!(),
+            Err(HFError::LocalEntryNotFound { .. } | HFError::EntryNotFound { .. })
+                if !is_hf_hub_offline() => {}
+            cached => return cached,
         }
         self.inner
             .download_file()
             .filename(file)
             .revision(&self.revision)
-            .progress(DownloadProgress::new(file, self.progress))
+            .maybe_progress(
+                self.progress
+                    .then(|| Progress::from(DownloadProgress::new(file))),
+            )
             .send()
     }
 
-    pub(super) fn cached_files(&self) -> Result<Vec<String>, HFError> {
+    fn cached_files(&self) -> Result<Vec<String>, HFError> {
         Ok(super::offline_snapshot_files_at(
             std::path::Path::new(&self.inner.repo_path()),
             &self.revision,
@@ -138,37 +125,22 @@ impl HubRepo {
     }
 }
 
-impl AsyncHubClient {
+impl AsyncHubRepo {
     pub(super) fn new(
         token_source: &TokenSource,
-        progress: bool,
         cache: Option<PathBuf>,
+        model_id: &str,
+        revision: &str,
     ) -> anyhow::Result<Self> {
-        let cache = resolve_hf_cache(cache);
+        let (owner, name) = hf_hub::split_id(model_id);
         Ok(Self {
-            inner: client_builder(token_source, Some(cache.clone()))?.build()?,
-            progress,
-            cache,
+            inner: client_builder(token_source, resolve_hf_cache(cache))?
+                .build()?
+                .model(owner, name),
+            revision: revision.to_owned(),
         })
     }
 
-    pub(super) fn repo(
-        &self,
-        model_id: impl Into<String>,
-        revision: impl Into<String>,
-    ) -> AsyncHubRepo {
-        let model_id = model_id.into();
-        let (owner, name) = hf_hub::split_id(&model_id);
-        AsyncHubRepo {
-            inner: self.inner.model(owner, name),
-            revision: revision.into(),
-            progress: self.progress,
-            cache: self.cache.clone(),
-        }
-    }
-}
-
-impl AsyncHubRepo {
     pub(super) async fn get(&self, file: &str) -> Result<PathBuf, HFError> {
         let cached = self
             .inner
@@ -178,28 +150,24 @@ impl AsyncHubRepo {
             .local_files_only(true)
             .send()
             .await;
-        if is_hf_hub_offline() || cached.is_ok() {
-            return cached;
-        }
         match cached {
-            Err(HFError::LocalEntryNotFound { .. } | HFError::EntryNotFound { .. }) => {}
-            Err(error) => return Err(error),
-            Ok(_) => unreachable!(),
+            Err(HFError::LocalEntryNotFound { .. } | HFError::EntryNotFound { .. })
+                if !is_hf_hub_offline() => {}
+            cached => return cached,
         }
         self.inner
             .download_file()
             .filename(file)
             .revision(&self.revision)
-            .progress(DownloadProgress::new(file, self.progress))
             .send()
             .await
     }
 
-    pub(super) fn cached_files(&self) -> Result<Vec<String>, HFError> {
+    fn cached_files(&self) -> Result<Vec<String>, HFError> {
         Ok(super::offline_snapshot_files_at(
             std::path::Path::new(&self.inner.repo_path()),
             &self.revision,
-            &self.cache,
+            self.inner.client().cache_dir(),
         )?)
     }
 
@@ -222,12 +190,8 @@ struct DownloadProgress {
 }
 
 impl DownloadProgress {
-    fn new(file: &str, enabled: bool) -> Self {
-        let bar = if enabled {
-            ProgressBar::new(0)
-        } else {
-            ProgressBar::hidden()
-        };
+    fn new(file: &str) -> Self {
+        let bar = ProgressBar::new(0);
         bar.set_style(ProgressStyle::with_template(DOWNLOAD_PROGRESS_TEMPLATE).unwrap());
         bar.set_message(file.to_owned());
         Self { bar }

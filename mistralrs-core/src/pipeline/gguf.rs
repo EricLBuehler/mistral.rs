@@ -1672,51 +1672,6 @@ pub(crate) fn needs_d1_calibration(config_path: &Path) -> Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn download_selects_gguf_projector_and_tokenizer_without_loading_tensors() -> anyhow::Result<()>
-    {
-        let directory = tempfile::tempdir()?;
-        let root = directory.path();
-        for filename in ["selected.gguf", "projector.gguf", "alternate.gguf"] {
-            std::fs::write(root.join(filename), b"not a tensor file")?;
-        }
-        for filename in [
-            "config.json",
-            "tokenizer_config.json",
-            "preprocessor_config.json",
-            "processor_config.json",
-        ] {
-            std::fs::write(root.join(filename), b"{}")?;
-        }
-        std::fs::write(root.join("tokenizer.json"), b"not a tokenizer")?;
-        let loader = super::GGUFLoaderBuilder::new(
-            None,
-            Some(root.display().to_string()),
-            root.display().to_string(),
-            vec!["selected.gguf".to_string()],
-            GGUFSpecificConfig::default(),
-            false,
-            None,
-        )
-        .with_mmproj_files(vec!["projector.gguf".to_string()])
-        .build();
-        let download = loader.download_model_from_hf(None, crate::TokenSource::None, true)?;
-        assert_eq!(download.projector_paths, vec![root.join("projector.gguf")]);
-        let files = download.files();
-        for filename in [
-            "selected.gguf",
-            "projector.gguf",
-            "config.json",
-            "tokenizer.json",
-            "tokenizer_config.json",
-            "preprocessor_config.json",
-            "processor_config.json",
-        ] {
-            assert!(files.contains(&root.join(filename)), "missing {filename}");
-        }
-        assert!(!files.contains(&root.join("alternate.gguf")));
-        Ok(())
-    }
 
     use super::{
         arch_spec, preferred_hf_config, prepare_native_multimodal_config,

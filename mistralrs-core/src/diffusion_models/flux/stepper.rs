@@ -1,6 +1,5 @@
 use std::{cmp::Ordering, fs::File, sync::Arc};
 
-use crate::pipeline::hf::HubClient;
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::Module;
 use mistralrs_quant::ShardedVarBuilder;
@@ -20,9 +19,6 @@ use crate::{
 };
 
 use super::{autoencoder::AutoEncoder, model::Flux};
-
-const T5_XXL_SAFETENSOR_FILES: &[&str] =
-    &["t5_xxl-shard-0.safetensors", "t5_xxl-shard-1.safetensors"];
 
 #[derive(Clone, Copy, Debug)]
 pub struct FluxStepperShift {
@@ -105,23 +101,6 @@ pub struct FluxStepperLoadContext<'a> {
     pub silent: bool,
     pub offloaded: bool,
     pub paths: &'a FluxAuxiliaryPaths,
-}
-
-pub(crate) fn download_auxiliary_files(api: &HubClient) -> anyhow::Result<FluxAuxiliaryPaths> {
-    let tokenizer = api.repo("EricB/t5_tokenizer", "main");
-    let t5 = api.repo("EricB/t5-v1_1-xxl-enc-only", "main");
-    let clip = api.repo("openai/clip-vit-large-patch14", "main");
-    Ok(FluxAuxiliaryPaths {
-        t5_tokenizer: tokenizer.get("t5-v1_1-xxl.tokenizer.json")?,
-        t5_config: t5.get("config.json")?,
-        t5_weights: T5_XXL_SAFETENSOR_FILES
-            .iter()
-            .map(|file| t5.get(file))
-            .collect::<std::result::Result<_, _>>()?,
-        clip_tokenizer: clip.get("tokenizer.json")?,
-        clip_config: clip.get("config.json")?,
-        clip_weights: clip.get("model.safetensors")?,
-    })
 }
 
 fn get_t5_tokenizer(paths: &FluxAuxiliaryPaths) -> anyhow::Result<Tokenizer> {

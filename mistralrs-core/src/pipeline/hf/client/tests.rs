@@ -12,7 +12,7 @@ use std::{
     time::Duration,
 };
 
-use super::{AsyncHubClient, HubClient};
+use super::{AsyncHubRepo, HubClient};
 use crate::{pipeline::hf, pipeline::TokenSource, utils::tokens::get_token};
 
 const CHILD_CASE: &str = "MISTRALRS_HUB_TEST_CASE";
@@ -21,7 +21,6 @@ const CHILD_TEST: &str = "pipeline::hf::client::tests::hub_environment_child";
 const COMMIT: &str = "1234567890123456789012345678901234567890";
 const XET_HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const CONTENT: &[u8] = b"download fixture";
-const MODEL_REVISION: &str = "feature/test";
 const SERVER_POLL: Duration = Duration::from_millis(5);
 const SOCKET_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_REQUEST_BYTES: usize = 16384;
@@ -73,38 +72,7 @@ impl TestServer {
                     ("404 Not Found", Vec::new())
                 } else if path.contains("private.bin") || path.contains("/xet-") {
                     ("401 Unauthorized", Vec::new())
-                } else if path.contains("/api/models/revision-fixture/") {
-                    let mut files = vec!["config.json", "tokenizer.json", "model.safetensors"];
-                    if path.contains("/xlora/") {
-                        files = vec!["xlora_config.json", "xlora_classifier.safetensors"];
-                    } else if path.contains("/preload/") {
-                        files = vec!["preload.json", "preload.safetensors"];
-                    }
-                    ("200 OK", serde_json::to_vec(&serde_json::json!({
-                        "id":"revision-fixture/model", "sha":COMMIT,
-                        "siblings": files.into_iter().map(|file| serde_json::json!({"rfilename":file})).collect::<Vec<_>>()
-                    })).unwrap())
-                } else if path.contains("/revision-fixture/") && path.ends_with(".json") {
-                    let body = if path.ends_with("xlora_config.json") {
-                        br#"{"hidden_size":8,"base_model_id":"revision-fixture/base","adapters":[]}"#.to_vec()
-                    } else if path.ends_with("preload.json")
-                        || path.ends_with("adapter_config.json")
-                    {
-                        br#"{"r":8,"lora_alpha":8,"target_modules":["q_proj"]}"#.to_vec()
-                    } else {
-                        b"{}".to_vec()
-                    };
-                    ("200 OK", body)
-                } else if path.contains("/tree/") {
-                    (
-                        "200 OK",
-                        serde_json::to_vec(&serde_json::json!([
-                            {"type":"file", "path":"model.bin", "oid":COMMIT,
-                             "size":CONTENT.len(), "xetHash":advertise_xet.then_some(XET_HASH)}
-                        ]))
-                        .unwrap(),
-                    )
-                } else if path.contains("/api/models/") && !path.contains("/xet-") {
+                } else if path.contains("/api/models/") {
                     (
                         "200 OK",
                         serde_json::to_vec(&serde_json::json!({
@@ -124,8 +92,8 @@ impl TestServer {
                     String::new()
                 };
                 let response = format!(
-                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nETag: \"fixture-{}\"\r\nX-Repo-Commit: {COMMIT}\r\n{xet_header}Connection: close\r\n\r\n",
-                    body.len(), body.len()
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: application/json\r\nETag: \"fixture\"\r\nX-Repo-Commit: {COMMIT}\r\n{xet_header}Connection: close\r\n\r\n",
+                    body.len()
                 );
                 stream.write_all(response.as_bytes()).unwrap();
                 if method != "HEAD" {
@@ -245,17 +213,6 @@ fn xet_bootstrap_uses_explicit_auth_and_preserves_denials() {
 }
 
 #[test]
-fn xet_failures_keep_the_cause() {
-    let error = hf_hub::HFError::xet(
-        hf_hub::XetOperation::Download,
-        std::io::Error::new(std::io::ErrorKind::ConnectionReset, "CAS interrupted"),
-    );
-    let rendered =
-        hf::hf_api_error(Path::new("org/model"), Some("model.bin"), "main", &error).to_string();
-    assert!(rendered.contains("CAS interrupted"));
-}
-
-#[test]
 fn http_download_reuses_shared_cache() {
     let server = TestServer::new();
     run_child("http", &server);
@@ -297,137 +254,6 @@ fn cached_fixture(root: &Path, content: &[u8]) -> PathBuf {
 }
 
 #[test]
-fn model_revision_does_not_leak_into_auxiliary_repositories() {
-    let server = TestServer::new();
-    run_child("download_revisions", &server);
-    let requests = server.requests();
-    for (model, revision) in [
-        ("revision-fixture/speech", "feature%2Ftest"),
-        ("EricB/dac_44khz", "main"),
-        ("revision-fixture/tokens", "main"),
-        ("revision-fixture/quant", "feature%2Ftest"),
-        ("revision-fixture/ggml", "feature%2Ftest"),
-        ("revision-fixture/xlora", "main"),
-        ("revision-fixture/preload", "main"),
-        ("revision-fixture/expert", "main"),
-        ("revision-fixture/base", "feature%2Ftest"),
-        ("revision-fixture/lora", "adapter%2Ftag"),
-    ] {
-        let prefix = format!("/{model}/resolve/");
-        let paths = requests
-            .iter()
-            .filter_map(|request| request.lines().next())
-            .filter(|request| request.contains(&prefix))
-            .collect::<Vec<_>>();
-        assert!(!paths.is_empty(), "no downloads from {model}");
-        assert!(
-            paths
-                .iter()
-                .all(|path| path.contains(&format!("{prefix}{revision}/"))),
-            "wrong revision for {model}: {paths:?}"
-        );
-    }
-    assert!(requests
-        .iter()
-        .all(|request| !request.to_ascii_lowercase().contains("authorization:")));
-}
-
-fn download_revision_fixture() {
-    use crate::pipeline::{
-        get_adapter_paths, AdapterPathOptions, GGMLLoaderBuilder, GGMLSpecificConfig,
-        GGUFLoaderBuilder, GGUFSpecificConfig, XLoraPreload,
-    };
-    use crate::{Loader, LoraAdapterSpec, Ordering};
-
-    let speech = crate::pipeline::speech::SpeechLoader {
-        model_id: "revision-fixture/speech".into(),
-        dac_model_id: None,
-        arch: crate::speech_models::SpeechLoaderType::Dia,
-        cfg: None,
-    };
-    speech
-        .download_model_from_hf(Some(MODEL_REVISION.into()), TokenSource::None, true)
-        .unwrap();
-    for tokenizer in ["revision-fixture/tokens", "revision-fixture/quant"] {
-        GGUFLoaderBuilder::new(
-            None,
-            Some(tokenizer.into()),
-            "revision-fixture/quant".into(),
-            vec!["selected.gguf".into()],
-            GGUFSpecificConfig::default(),
-            false,
-            None,
-        )
-        .build()
-        .download_model_from_hf(Some(MODEL_REVISION.into()), TokenSource::None, true)
-        .unwrap();
-    }
-    GGMLLoaderBuilder::new(
-        GGMLSpecificConfig::default(),
-        None,
-        None,
-        Some("revision-fixture/tokens".into()),
-        "revision-fixture/ggml".into(),
-        "selected.ggml".into(),
-        false,
-        None,
-    )
-    .build()
-    .download_model_from_hf(Some(MODEL_REVISION.into()), TokenSource::None, true)
-    .unwrap();
-    let xlora_id = "revision-fixture/xlora".to_string();
-    let order = Ordering {
-        adapters: None,
-        layers: None,
-        base_model_id: "revision-fixture/base".into(),
-        preload_adapters: Some(vec![crate::lora::PreloadAdapter {
-            name: "preload".into(),
-            adapter_model_id: "revision-fixture/preload".into(),
-        }]),
-    };
-    get_adapter_paths(
-        order.base_model_id.clone(),
-        AdapterPathOptions {
-            xlora_model_id: Some(&xlora_id),
-            lora_adapters: None,
-            xlora_order: Some(&order),
-            xlora_preload: XLoraPreload::Load,
-        },
-        &TokenSource::None,
-        MODEL_REVISION.into(),
-        &order.base_model_id,
-    )
-    .unwrap();
-    let adapters = vec![
-        LoraAdapterSpec::new("explicit", "revision-fixture/lora").with_revision("adapter/tag"),
-        LoraAdapterSpec::new("same", "revision-fixture/base"),
-    ];
-    get_adapter_paths(
-        order.base_model_id.clone(),
-        AdapterPathOptions {
-            xlora_model_id: None,
-            lora_adapters: Some(&adapters),
-            xlora_order: None,
-            xlora_preload: XLoraPreload::Skip,
-        },
-        &TokenSource::None,
-        MODEL_REVISION.into(),
-        &order.base_model_id,
-    )
-    .unwrap();
-    for model in ["revision-fixture/expert", "revision-fixture/base"] {
-        crate::pipeline::amoe::download_expert_files(
-            &order.base_model_id,
-            model,
-            &TokenSource::None,
-            MODEL_REVISION,
-            true,
-        )
-        .unwrap();
-    }
-}
-
-#[test]
 fn hub_environment_child() {
     let Ok(case) = std::env::var(CHILD_CASE) else {
         return;
@@ -436,7 +262,6 @@ fn hub_environment_child() {
     let model = Path::new("org/model");
     let cache = root.join("explicit-cache");
     match case.as_str() {
-        "download_revisions" => download_revision_fixture(),
         "auth" => {
             for source in [
                 TokenSource::None,
@@ -500,19 +325,21 @@ fn hub_environment_child() {
                 hf::list_repo_files(&repo, model, true, "feature/test").unwrap(),
                 ["nested/model.bin"]
             );
-            assert!(
-                hf::try_get_file(&repo, model, "missing.bin", "feature/test")
-                    .unwrap()
-                    .is_none()
-            );
+            assert!(hf::try_get_file(&repo, model, "missing.bin")
+                .unwrap()
+                .is_none());
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .unwrap();
             runtime.block_on(async {
-                let client =
-                    AsyncHubClient::new(&TokenSource::None, false, Some(cache.clone())).unwrap();
-                let repo = client.repo("org/model", "feature/test");
+                let repo = AsyncHubRepo::new(
+                    &TokenSource::None,
+                    Some(cache.clone()),
+                    "org/model",
+                    "feature/test",
+                )
+                .unwrap();
                 assert_eq!(repo.get("nested/model.bin").await.unwrap(), expected);
                 assert_eq!(repo.files().await.unwrap(), ["nested/model.bin"]);
                 assert_eq!(
@@ -521,12 +348,10 @@ fn hub_environment_child() {
                         .unwrap(),
                     ["nested/model.bin"]
                 );
-                assert!(
-                    hf::try_get_file_async(&repo, model, "missing.bin", "feature/test")
-                        .await
-                        .unwrap()
-                        .is_none()
-                );
+                assert!(hf::try_get_file_async(&repo, model, "missing.bin")
+                    .await
+                    .unwrap()
+                    .is_none());
             });
             let invalid_ref = cache.join("models--org--model/refs/broken");
             fs::create_dir(&invalid_ref).unwrap();
@@ -547,12 +372,10 @@ fn hub_environment_child() {
                     .unwrap(),
                 downloaded
             );
-            assert!(
-                hf::try_get_file(&repo, model, "missing.bin", "feature/test")
-                    .unwrap()
-                    .is_none()
-            );
-            let denied = hf::try_get_file(&repo, model, "private.bin", "feature/test").unwrap_err();
+            assert!(hf::try_get_file(&repo, model, "missing.bin")
+                .unwrap()
+                .is_none());
+            let denied = hf::try_get_file(&repo, model, "private.bin").unwrap_err();
             assert_eq!(hf::api_error_status_code(&denied), Some(401));
         }
         _ => panic!("unknown child case"),

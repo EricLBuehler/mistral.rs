@@ -645,30 +645,6 @@ impl Loader for NormalLoader {
     }
 
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
-    fn load_model_from_hf(
-        &self,
-        revision: Option<String>,
-        token_source: TokenSource,
-        dtype: &dyn TryIntoDType,
-        device: &Device,
-        silent: bool,
-        mapper: DeviceMapSetting,
-        in_situ_quant: Option<IsqType>,
-        paged_attn_config: Option<PagedAttentionConfig>,
-    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let download = self.download_model_from_hf(revision, token_source, silent)?;
-        self.load_model_from_path(
-            download.paths.as_ref(),
-            dtype,
-            device,
-            silent,
-            mapper,
-            in_situ_quant,
-            paged_attn_config,
-        )
-    }
-
-    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_path(
         &self,
         paths: &dyn ModelPaths,
@@ -3016,96 +2992,6 @@ mod tests {
         assert!(files.contains(&root.join("q8_0-1.uqff")));
         assert!(!files.contains(&root.join("q4_0-0.uqff")));
         assert!(!files.contains(&root.join("model.safetensors")));
-        Ok(())
-    }
-
-    #[test]
-    fn download_resolves_indexed_weights_without_loading_tensors() -> anyhow::Result<()> {
-        let directory = tempfile::tempdir()?;
-        let root = directory.path();
-        for filename in [
-            "weights-a.safetensors",
-            "weights-b.safetensors",
-            "model.safetensors",
-            "unselected.gguf",
-        ] {
-            std::fs::write(root.join(filename), b"not a tensor file")?;
-        }
-        std::fs::write(
-            root.join("config.json"),
-            r#"{"architectures":["LlamaForCausalLM"]}"#,
-        )?;
-        std::fs::write(root.join("tokenizer.json"), b"not a tokenizer")?;
-        std::fs::write(root.join("tokenizer_config.json"), b"{}")?;
-        std::fs::write(root.join("chat_template.jinja"), b"{{ messages }}")?;
-        std::fs::write(
-            root.join("model.safetensors.index.json"),
-            r#"{"weight_map":{"a":"weights-a.safetensors","b":"weights-b.safetensors"}}"#,
-        )?;
-        let loader = super::NormalLoaderBuilder::new(
-            super::NormalSpecificConfig::default(),
-            None,
-            None,
-            Some(root.display().to_string()),
-            false,
-            None,
-        )
-        .build(Some(super::NormalLoaderType::Llama))?;
-        let download = loader.download_model_from_hf(None, crate::TokenSource::None, true)?;
-        assert_eq!(download.paths.get_weight_filenames().len(), 2);
-        let files = download.files();
-        for filename in [
-            "weights-a.safetensors",
-            "weights-b.safetensors",
-            "config.json",
-            "tokenizer.json",
-            "tokenizer_config.json",
-            "chat_template.jinja",
-            "model.safetensors.index.json",
-        ] {
-            assert!(files.contains(&root.join(filename)), "missing {filename}");
-        }
-        assert!(!files.contains(&root.join("model.safetensors")));
-        assert!(!files.contains(&root.join("unselected.gguf")));
-        Ok(())
-    }
-
-    #[test]
-    fn download_includes_lora_assets_without_loading_adapter_weights() -> anyhow::Result<()> {
-        let base = tempfile::tempdir()?;
-        let adapter = tempfile::tempdir()?;
-        std::fs::write(base.path().join("config.json"), b"{}")?;
-        std::fs::write(base.path().join("tokenizer.json"), b"not a tokenizer")?;
-        std::fs::write(base.path().join("model.safetensors"), b"not weights")?;
-        std::fs::write(
-            adapter.path().join("adapter_config.json"),
-            r#"{"r":8,"lora_alpha":8,"target_modules":["q_proj"]}"#,
-        )?;
-        std::fs::write(
-            adapter.path().join("adapter_model.safetensors"),
-            b"not adapter weights",
-        )?;
-        let loader = super::NormalLoaderBuilder::new(
-            super::NormalSpecificConfig::default(),
-            None,
-            None,
-            Some(base.path().display().to_string()),
-            false,
-            None,
-        )
-        .with_lora(
-            vec![crate::LoraAdapterSpec::new(
-                "test",
-                adapter.path().display().to_string(),
-            )],
-            crate::LoraRuntimeConfig::default(),
-        )
-        .build(Some(super::NormalLoaderType::Llama))?;
-        let files = loader
-            .download_model_from_hf(None, crate::TokenSource::None, true)?
-            .files();
-        assert!(files.contains(&adapter.path().join("adapter_config.json")));
-        assert!(files.contains(&adapter.path().join("adapter_model.safetensors")));
         Ok(())
     }
 

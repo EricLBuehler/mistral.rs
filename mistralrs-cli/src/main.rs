@@ -137,10 +137,10 @@ async fn main() -> Result<()> {
         Command::Download {
             model_type,
             default_model,
-            options,
+            revision,
         } => {
             let model_type = resolve_model_type(model_type, default_model)?;
-            run_download(model_type, cli.global, options).await?;
+            run_download(model_type, cli.global, revision).await?;
         }
 
         Command::Cache { cmd } => match cmd {

@@ -2,13 +2,13 @@ use std::{
     fmt::Debug,
     path::{Path, PathBuf},
     str::FromStr,
+    sync::Arc,
 };
 
 use anyhow::{Context, Result};
-use candle_core::{Device, Tensor};
+use candle_core::{DType, Device, Tensor};
 
-use crate::pipeline::hf::HubRepo;
-use mistralrs_quant::ShardedVarBuilder;
+use crate::pipeline::hf::HubClient;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
 
@@ -27,7 +27,11 @@ use crate::{
     },
     paged_attention::AttentionImplementation,
     pipeline::{paths::AdapterPaths, EmbeddingModulePaths},
+    utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTensor},
 };
+
+const T5_XXL_SAFETENSOR_FILES: &[&str] =
+    &["t5_xxl-shard-0.safetensors", "t5_xxl-shard-1.safetensors"];
 
 pub trait DiffusionModel {
     /// This returns a tensor of shape (bs, c, h, w), with values in [0, 255].
@@ -41,30 +45,19 @@ pub trait DiffusionModel {
 }
 
 pub trait DiffusionModelLoader: Send + Sync {
-    /// If the model is being loaded with `load_model_from_hf` (so manual paths not provided), this will be called.
-    fn get_model_paths(
+    fn download_model_paths(
         &self,
-        api: &HubRepo,
-        model_id: &Path,
+        api: &HubClient,
+        model_id: &str,
         revision: &str,
-    ) -> Result<Vec<PathBuf>>;
-    /// If the model is being loaded with `load_model_from_hf` (so manual paths not provided), this will be called.
-    fn get_config_filenames(
-        &self,
-        api: &HubRepo,
-        model_id: &Path,
-        revision: &str,
-    ) -> Result<Vec<PathBuf>>;
-    fn force_cpu_vb(&self) -> Vec<bool>;
-    // `configs` and `vbs` should be corresponding. It is up to the implementer to maintain this invaraint.
+    ) -> Result<Box<dyn ModelPaths>>;
     fn load(
         &self,
-        configs: Vec<String>,
-        vbs: Vec<ShardedVarBuilder>,
+        paths: &dyn ModelPaths,
+        dtype: DType,
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
         silent: bool,
-        auxiliary_paths: &FluxAuxiliaryPaths,
     ) -> Result<Box<dyn DiffusionModel + Send + Sync>>;
 }
 
@@ -119,20 +112,23 @@ impl DiffusionLoaderType {
 }
 
 #[derive(Clone, Debug)]
-pub struct DiffusionModelPathsInner {
-    pub config_filenames: Vec<PathBuf>,
-    pub filenames: Vec<PathBuf>,
-    pub auxiliary_paths: FluxAuxiliaryPaths,
+struct FluxModelPaths {
+    flux_config: PathBuf,
+    vae_config: PathBuf,
+    flux_weights: PathBuf,
+    vae_weights: PathBuf,
+    auxiliary_paths: FluxAuxiliaryPaths,
 }
 
-#[derive(Clone, Debug)]
-pub struct DiffusionModelPaths(pub DiffusionModelPathsInner);
-
-impl ModelPaths for DiffusionModelPaths {
+impl ModelPaths for FluxModelPaths {
     fn files(&self) -> Vec<PathBuf> {
-        let mut files = self.0.filenames.clone();
-        files.extend(self.0.config_filenames.iter().cloned());
-        files.extend(self.0.auxiliary_paths.files());
+        let mut files = vec![
+            self.flux_config.clone(),
+            self.vae_config.clone(),
+            self.flux_weights.clone(),
+            self.vae_weights.clone(),
+        ];
+        files.extend(self.auxiliary_paths.files());
         files
     }
 
@@ -177,51 +173,83 @@ pub struct FluxLoader {
     pub(crate) offload: bool,
 }
 
+impl FluxLoader {
+    fn download_auxiliary_files(api: &HubClient) -> Result<FluxAuxiliaryPaths> {
+        let tokenizer = api.repo("EricB/t5_tokenizer", "main");
+        let t5 = api.repo("EricB/t5-v1_1-xxl-enc-only", "main");
+        let clip = api.repo("openai/clip-vit-large-patch14", "main");
+        Ok(FluxAuxiliaryPaths {
+            t5_tokenizer: tokenizer.get("t5-v1_1-xxl.tokenizer.json")?,
+            t5_config: t5.get("config.json")?,
+            t5_weights: T5_XXL_SAFETENSOR_FILES
+                .iter()
+                .map(|file| t5.get(file))
+                .collect::<std::result::Result<_, _>>()?,
+            clip_tokenizer: clip.get("tokenizer.json")?,
+            clip_config: clip.get("config.json")?,
+            clip_weights: clip.get("model.safetensors")?,
+        })
+    }
+}
+
 impl DiffusionModelLoader for FluxLoader {
-    fn get_model_paths(
+    fn download_model_paths(
         &self,
-        api: &HubRepo,
-        model_id: &Path,
+        api: &HubClient,
+        model_id: &str,
         revision: &str,
-    ) -> Result<Vec<PathBuf>> {
+    ) -> Result<Box<dyn ModelPaths>> {
+        let repo = api.repo(model_id, revision);
+        let model_id = Path::new(model_id);
         let regex = Regex::new(r"^flux\d+-(schnell|dev)\.safetensors$")?;
-        let flux_name = api_dir_list!(api, model_id, true, revision)
-            .filter(|x| regex.is_match(x))
-            .nth(0)
+        let flux_name = api_dir_list!(repo, model_id, true, revision)
+            .find(|name| regex.is_match(name))
             .with_context(|| "Expected at least 1 .safetensors file matching the FLUX regex, please raise an issue.")?;
-        let flux_file = api_get_file!(api, &flux_name, model_id, revision);
-        let ae_file = api_get_file!(api, "ae.safetensors", model_id, revision);
+        let flux_weights = api_get_file!(repo, &flux_name, model_id, revision);
+        let vae_weights = api_get_file!(repo, "ae.safetensors", model_id, revision);
+        let flux_config = api_get_file!(repo, "transformer/config.json", model_id, revision);
+        let vae_config = api_get_file!(repo, "vae/config.json", model_id, revision);
+        let auxiliary_paths = Self::download_auxiliary_files(api)?;
+        Ok(Box::new(FluxModelPaths {
+            flux_config,
+            vae_config,
+            flux_weights,
+            vae_weights,
+            auxiliary_paths,
+        }))
+    }
 
-        // NOTE(EricLBuehler): disgusting way of doing this but the 0th path is the flux, 1 is ae
-        Ok(vec![flux_file, ae_file])
-    }
-    fn get_config_filenames(
-        &self,
-        api: &HubRepo,
-        model_id: &Path,
-        revision: &str,
-    ) -> Result<Vec<PathBuf>> {
-        let flux_file = api_get_file!(api, "transformer/config.json", model_id, revision);
-        let ae_file = api_get_file!(api, "vae/config.json", model_id, revision);
-
-        // NOTE(EricLBuehler): disgusting way of doing this but the 0th path is the flux, 1 is ae
-        Ok(vec![flux_file, ae_file])
-    }
-    fn force_cpu_vb(&self) -> Vec<bool> {
-        vec![self.offload, false]
-    }
     fn load(
         &self,
-        mut configs: Vec<String>,
-        mut vbs: Vec<ShardedVarBuilder>,
+        paths: &dyn ModelPaths,
+        dtype: DType,
         normal_loading_metadata: NormalLoadingMetadata,
         _attention_mechanism: AttentionImplementation,
         silent: bool,
-        auxiliary_paths: &FluxAuxiliaryPaths,
     ) -> Result<Box<dyn DiffusionModel + Send + Sync>> {
-        let (vae_cfg, vae_vb) = (configs.remove(1), vbs.remove(1));
-        let (flux_cfg, flux_vb) = (configs.remove(0), vbs.remove(0));
-
+        let paths = paths
+            .as_any()
+            .downcast_ref::<FluxModelPaths>()
+            .expect("Flux path downcast failed.");
+        let flux_cfg = std::fs::read_to_string(&paths.flux_config)?;
+        let vae_cfg = std::fs::read_to_string(&paths.vae_config)?;
+        let device = &normal_loading_metadata.real_device;
+        let load_weights = |path: &PathBuf, force_cpu| {
+            let device = if force_cpu { &Device::Cpu } else { device };
+            from_mmaped_safetensors(
+                vec![path.clone()],
+                Vec::new(),
+                Some(dtype),
+                device,
+                vec![None],
+                silent,
+                None,
+                |_| true,
+                Arc::new(|_| DeviceForLoadTensor::Base),
+            )
+        };
+        let flux_vb = load_weights(&paths.flux_weights, self.offload)?;
+        let vae_vb = load_weights(&paths.vae_weights, false)?;
         let vae_cfg: flux::autoencoder::Config = serde_json::from_str(&vae_cfg)?;
         let flux_cfg: flux::model::Config = serde_json::from_str(&flux_cfg)?;
 
@@ -239,10 +267,10 @@ impl DiffusionModelLoader for FluxLoader {
             (vae_vb, &vae_cfg),
             FluxStepperLoadContext {
                 dtype: flux_dtype,
-                device: &normal_loading_metadata.real_device,
+                device,
                 silent,
                 offloaded: self.offload,
-                paths: auxiliary_paths,
+                paths: &paths.auxiliary_paths,
             },
         )?))
     }

@@ -17,7 +17,6 @@ use crate::{
 };
 use anyhow::Result;
 use candle_core::Device;
-use hf_hub::HFError;
 use serde::Deserialize;
 use std::io;
 use std::path::Path;
@@ -247,15 +246,6 @@ fn supports_dynamic_lora(detected: &Detected) -> bool {
 }
 
 impl AutoLoader {
-    fn try_get_file(
-        api: &HubRepo,
-        model_id: &Path,
-        file: &str,
-        revision: &str,
-    ) -> std::result::Result<Option<PathBuf>, HFError> {
-        crate::pipeline::hf::try_get_file(api, model_id, file, revision)
-    }
-
     fn list_local_repo_files(model_root: &Path) -> Vec<String> {
         fn collect_files(root: &Path, dir: &Path, out: &mut Vec<String>) -> io::Result<()> {
             for entry in std::fs::read_dir(dir)? {
@@ -323,7 +313,7 @@ impl AutoLoader {
         let api = api.repo(self.model_id.clone(), revision.clone());
         let model_id = Path::new(&self.model_id);
         let mut remote_access_issue = None;
-        let contents = match Self::try_get_file(&api, model_id, "config.json", &revision) {
+        let contents = match crate::pipeline::hf::try_get_file(&api, model_id, "config.json") {
             Ok(Some(path)) => Some(std::fs::read_to_string(&path)?),
             Ok(None) => None,
             Err(err) => {
@@ -342,7 +332,7 @@ impl AutoLoader {
             .transpose()?;
         let sentence_transformers_present =
             model_id.join("config_sentence_transformers.json").exists()
-                || Self::fetch_sentence_transformers_config(&api, model_id, &revision);
+                || Self::fetch_sentence_transformers_config(&api, model_id);
         let repo_files = if model_id.exists() {
             Self::list_local_repo_files(model_id)
         } else {
@@ -370,13 +360,9 @@ impl AutoLoader {
         }
     }
 
-    fn fetch_sentence_transformers_config(api: &HubRepo, model_id: &Path, revision: &str) -> bool {
-        match crate::pipeline::hf::try_get_file(
-            api,
-            model_id,
-            "config_sentence_transformers.json",
-            revision,
-        ) {
+    fn fetch_sentence_transformers_config(api: &HubRepo, model_id: &Path) -> bool {
+        match crate::pipeline::hf::try_get_file(api, model_id, "config_sentence_transformers.json")
+        {
             Ok(Some(_)) => true,
             Ok(None) => false,
             Err(err) => {

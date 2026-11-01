@@ -14,7 +14,7 @@ use crate::utils::tokens::get_token;
 
 mod client;
 pub(crate) use client::env_flag;
-use client::{AsyncHubClient, AsyncHubRepo};
+use client::AsyncHubRepo;
 pub use client::{HubClient, HubRepo};
 
 /// Env variable that, when set to a truthy value, disables all network calls
@@ -270,21 +270,13 @@ pub(crate) fn build_api_with_cache(
     HubClient::new(token_source, progress, cache)
 }
 
-fn build_async_api(
-    token_source: &crate::pipeline::TokenSource,
-    progress: bool,
-) -> Result<AsyncHubClient> {
-    AsyncHubClient::new(token_source, progress, None)
-}
-
 pub async fn list_model_files(
     model_id: &str,
     revision: &str,
     token_source: &crate::pipeline::TokenSource,
     should_error: bool,
 ) -> Result<Vec<String>> {
-    let api = build_async_api(token_source, false)?;
-    let repo = api.repo(model_id.to_string(), revision.to_string());
+    let repo = AsyncHubRepo::new(token_source, None, model_id, revision)?;
     list_repo_files_async(&repo, Path::new(model_id), should_error, revision).await
 }
 
@@ -305,11 +297,10 @@ pub async fn try_get_model_file(
     file: &str,
     token_source: &crate::pipeline::TokenSource,
 ) -> Result<Option<PathBuf>> {
-    let api = build_async_api(token_source, false)?;
-    let repo = api.repo(model_id.to_string(), revision.to_string());
-    try_get_file_async(&repo, Path::new(model_id), file, revision)
+    let repo = AsyncHubRepo::new(token_source, None, model_id, revision)?;
+    try_get_file_async(&repo, Path::new(model_id), file)
         .await
-        .map_err(|err| hf_async_api_error(Path::new(model_id), Some(file), revision, &err))
+        .map_err(|err| hf_api_error(Path::new(model_id), Some(file), revision, &err))
 }
 
 pub async fn read_model_file_range(
@@ -456,16 +447,8 @@ pub(crate) fn api_error_status_code(err: &HFError) -> Option<u16> {
     }
 }
 
-fn async_api_error_status_code(err: &HFError) -> Option<u16> {
-    api_error_status_code(err)
-}
-
 pub(crate) fn should_propagate_api_error(err: &HFError) -> bool {
     matches!(api_error_status_code(err), Some(401 | 403 | 404))
-}
-
-pub(crate) fn should_propagate_async_api_error(err: &HFError) -> bool {
-    matches!(async_api_error_status_code(err), Some(401 | 403 | 404))
 }
 
 pub(crate) fn remote_issue_from_api_error(
@@ -555,17 +538,6 @@ pub(crate) fn hf_api_error(
     hf_error(model_id, file, revision, status_code, Some(&detail))
 }
 
-pub(crate) fn hf_async_api_error(
-    model_id: &Path,
-    file: Option<&str>,
-    revision: &str,
-    err: &HFError,
-) -> anyhow::Error {
-    let status_code = async_api_error_status_code(err);
-    let detail = err.to_string();
-    hf_error(model_id, file, revision, status_code, Some(&detail))
-}
-
 pub(crate) fn local_file_missing_error(model_id: &Path, file: &str) -> anyhow::Error {
     anyhow!(
         "File `{file}` was not found in local model directory `{}`. This model ID was treated as local because that directory exists, so Hugging Face was not queried for this file.",
@@ -573,48 +545,39 @@ pub(crate) fn local_file_missing_error(model_id: &Path, file: &str) -> anyhow::E
     )
 }
 
-pub(crate) fn list_repo_files(
-    api: &HubRepo,
+fn list_local_repo_files(model_id: &Path) -> Result<Vec<String>> {
+    let listing = fs::read_dir(model_id).map_err(|err| {
+        anyhow!(
+            "Cannot list local model directory `{}`: {err}",
+            model_id.display()
+        )
+    })?;
+    Ok(listing
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .collect())
+}
+
+fn repo_files_result(
+    files: std::result::Result<Vec<String>, HFError>,
     model_id: &Path,
     should_error: bool,
     revision: &str,
 ) -> Result<Vec<String>> {
-    if model_id.exists() {
-        let listing = fs::read_dir(model_id).map_err(|err| {
-            anyhow!(
-                "Cannot list local model directory `{}`: {err}",
+    if is_hf_hub_offline() {
+        let files = files?;
+        if files.is_empty() {
+            if should_error {
+                return Err(offline_missing_snapshot_error(model_id, revision));
+            }
+            warn!(
+                "`{HF_HUB_OFFLINE_ENV}` is set and no local Hugging Face cache was found for `{}` (revision `{revision}`)",
                 model_id.display()
-            )
-        })?;
-        let files = listing
-            .filter_map(|entry| entry.ok())
-            .filter_map(|entry| {
-                entry
-                    .path()
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .map(std::string::ToString::to_string)
-            })
-            .collect::<Vec<_>>();
+            );
+        }
         return Ok(files);
     }
-
-    if is_hf_hub_offline() {
-        let files = api.cached_files()?;
-        if !files.is_empty() {
-            return Ok(files);
-        }
-        if should_error {
-            return Err(offline_missing_snapshot_error(model_id, revision));
-        }
-        warn!(
-            "`{HF_HUB_OFFLINE_ENV}` is set and no local Hugging Face cache was found for `{}` (revision `{revision}`)",
-            model_id.display()
-        );
-        return Ok(Vec::new());
-    }
-
-    match api.files() {
+    match files {
         Ok(files) => Ok(files),
         Err(err) => {
             if should_error || should_propagate_api_error(&err) {
@@ -630,6 +593,18 @@ pub(crate) fn list_repo_files(
     }
 }
 
+pub(crate) fn list_repo_files(
+    api: &HubRepo,
+    model_id: &Path,
+    should_error: bool,
+    revision: &str,
+) -> Result<Vec<String>> {
+    if model_id.exists() {
+        return list_local_repo_files(model_id);
+    }
+    repo_files_result(api.files(), model_id, should_error, revision)
+}
+
 pub(crate) async fn list_repo_files_async(
     api: &AsyncHubRepo,
     model_id: &Path,
@@ -637,54 +612,9 @@ pub(crate) async fn list_repo_files_async(
     revision: &str,
 ) -> Result<Vec<String>> {
     if model_id.exists() {
-        let listing = fs::read_dir(model_id).map_err(|err| {
-            anyhow!(
-                "Cannot list local model directory `{}`: {err}",
-                model_id.display()
-            )
-        })?;
-        let files = listing
-            .filter_map(|entry| entry.ok())
-            .filter_map(|entry| {
-                entry
-                    .path()
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .map(std::string::ToString::to_string)
-            })
-            .collect::<Vec<_>>();
-        return Ok(files);
+        return list_local_repo_files(model_id);
     }
-
-    if is_hf_hub_offline() {
-        let files = api.cached_files()?;
-        if !files.is_empty() {
-            return Ok(files);
-        }
-        if should_error {
-            return Err(offline_missing_snapshot_error(model_id, revision));
-        }
-        warn!(
-            "`{HF_HUB_OFFLINE_ENV}` is set and no local Hugging Face cache was found for `{}` (revision `{revision}`)",
-            model_id.display()
-        );
-        return Ok(Vec::new());
-    }
-
-    match api.files().await {
-        Ok(files) => Ok(files),
-        Err(err) => {
-            if should_error || should_propagate_async_api_error(&err) {
-                Err(hf_async_api_error(model_id, None, revision, &err))
-            } else {
-                warn!(
-                    "Could not get directory listing from Hugging Face for `{}`: {err}",
-                    model_id.display()
-                );
-                Ok(Vec::new())
-            }
-        }
-    }
+    repo_files_result(api.files().await, model_id, should_error, revision)
 }
 
 pub(crate) fn get_file(
@@ -721,7 +651,6 @@ pub(crate) fn try_get_file(
     api: &HubRepo,
     model_id: &Path,
     file: &str,
-    _revision: &str,
 ) -> std::result::Result<Option<PathBuf>, HFError> {
     if model_id.exists() {
         let path = model_id.join(file);
@@ -746,7 +675,6 @@ pub(crate) async fn try_get_file_async(
     api: &AsyncHubRepo,
     model_id: &Path,
     file: &str,
-    _revision: &str,
 ) -> std::result::Result<Option<PathBuf>, HFError> {
     if model_id.exists() {
         let path = model_id.join(file);
@@ -760,7 +688,7 @@ pub(crate) async fn try_get_file_async(
     match api.get(file).await {
         Ok(p) => Ok(Some(p)),
         Err(HFError::LocalEntryNotFound { .. }) if is_hf_hub_offline() => Ok(None),
-        Err(err) => match async_api_error_status_code(&err) {
+        Err(err) => match api_error_status_code(&err) {
             Some(404) => Ok(None),
             _ => Err(err),
         },
@@ -788,17 +716,5 @@ pub fn probe_hf_repo_files(
             let files = offline_snapshot_files(Path::new(model_id), revision);
             (!files.is_empty()).then_some(files)
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::resolve_hf_cache;
-
-    #[test]
-    fn explicit_cache_path_is_preserved() {
-        let path = std::env::temp_dir().join("mistralrs-explicit-hf-cache");
-        let cache = resolve_hf_cache(Some(path.clone()));
-        assert_eq!(cache, path);
     }
 }

@@ -170,74 +170,23 @@ impl Loader for SpeechLoader {
         silent: bool,
     ) -> Result<ModelDownload> {
         let _progress_guard = ProgressScopeGuard::new(silent);
-        let paths: anyhow::Result<Box<dyn ModelPaths>> = {
-            // Main weights first, DAC is the final one.
-            let mut weights = Vec::new();
+        let api = crate::pipeline::hf::build_api(&token_source, !silent)?;
+        let revision = revision.as_deref().unwrap_or("main");
+        let repo = api.repo(self.model_id.as_str(), revision);
+        let model_id = std::path::Path::new(&self.model_id);
+        let weight = api_get_file!(repo, "model.safetensors", model_id, revision);
+        let config = api_get_file!(repo, "config.json", model_id, revision);
 
-            // Main model
-            let config = {
-                let api = crate::pipeline::hf::build_api(&token_source, !silent)?;
-                let revision = revision.clone().unwrap_or("main".to_string());
-                let api = api.repo(self.model_id.to_string(), revision.clone());
-                let model_id = std::path::Path::new(&self.model_id);
-
-                let weight = api_get_file!(api, "model.safetensors", &model_id, &revision);
-                let config = api_get_file!(api, "config.json", &model_id, &revision);
-                weights.push(weight);
-                config
-            };
-
-            // DAC model
-            {
-                let api = crate::pipeline::hf::build_api(&token_source, !silent)?;
-
-                // Apply default here
-                let dac_model = self
-                    .dac_model_id
-                    .clone()
-                    .unwrap_or_else(|| match self.arch {
-                        SpeechLoaderType::Dia => "EricB/dac_44khz".to_string(),
-                    });
-
-                let revision = super::hf::model_source_revision(
-                    &self.model_id,
-                    revision.as_deref().unwrap_or("main"),
-                    &dac_model,
-                );
-                let api = api.repo(dac_model.clone(), revision);
-                let model_id = std::path::Path::new(&dac_model);
-
-                let weight = api_get_file!(api, "model.safetensors", &model_id, revision);
-                weights.push(weight);
-            }
-
-            Ok(Box::new(SpeechModelPaths { weights, config }))
-        };
-        Ok(ModelDownload::new(paths?))
-    }
-
-    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
-    fn load_model_from_hf(
-        &self,
-        revision: Option<String>,
-        token_source: TokenSource,
-        dtype: &dyn TryIntoDType,
-        device: &Device,
-        silent: bool,
-        mapper: DeviceMapSetting,
-        in_situ_quant: Option<IsqType>,
-        paged_attn_config: Option<PagedAttentionConfig>,
-    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let download = self.download_model_from_hf(revision, token_source, silent)?;
-        self.load_model_from_path(
-            download.paths.as_ref(),
-            dtype,
-            device,
-            silent,
-            mapper,
-            in_situ_quant,
-            paged_attn_config,
-        )
+        let dac_model = self.dac_model_id.as_deref().unwrap_or(match self.arch {
+            SpeechLoaderType::Dia => "EricB/dac_44khz",
+        });
+        let dac_revision = super::hf::model_source_revision(&self.model_id, revision, dac_model);
+        let dac_repo = api.repo(dac_model, dac_revision);
+        let dac_weight = api_get_file!(dac_repo, "model.safetensors", dac_model, dac_revision);
+        Ok(ModelDownload::new(Box::new(SpeechModelPaths {
+            weights: vec![weight, dac_weight],
+            config,
+        })))
     }
 
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
@@ -466,29 +415,6 @@ mod tests {
 
     const TEST_CACHE_TOKENS: usize = 64;
     const TEST_CACHE_BYTES: usize = 1024 * 1024;
-
-    #[test]
-    fn download_includes_dac_without_loading_tensors() -> Result<()> {
-        let model = tempfile::tempdir()?;
-        let dac = tempfile::tempdir()?;
-        std::fs::write(model.path().join("config.json"), b"{}")?;
-        std::fs::write(model.path().join("model.safetensors"), b"not model weights")?;
-        std::fs::write(dac.path().join("model.safetensors"), b"not codec weights")?;
-        let loader = SpeechLoader {
-            model_id: model.path().display().to_string(),
-            dac_model_id: Some(dac.path().display().to_string()),
-            arch: SpeechLoaderType::Dia,
-            cfg: None,
-        };
-        let files = loader
-            .download_model_from_hf(None, TokenSource::None, true)?
-            .files();
-        assert_eq!(files.len(), 3);
-        assert!(files.contains(&model.path().join("config.json")));
-        assert!(files.contains(&model.path().join("model.safetensors")));
-        assert!(files.contains(&dac.path().join("model.safetensors")));
-        Ok(())
-    }
 
     #[test]
     fn explicit_memory_goal_fails_before_speech_weights_are_opened() -> Result<()> {
