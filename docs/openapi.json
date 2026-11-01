@@ -1841,10 +1841,10 @@
           "source": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/AnthropicImageSource"
               },
               {
-                "$ref": "#/components/schemas/AnthropicImageSource"
+                "type": "null"
               }
             ]
           },
@@ -2062,10 +2062,10 @@
           "container": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/AnthropicContainer"
               },
               {
-                "$ref": "#/components/schemas/AnthropicContainer"
+                "type": "null"
               }
             ]
           },
@@ -2126,10 +2126,10 @@
           "grammar": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/Grammar"
               },
               {
-                "$ref": "#/components/schemas/Grammar"
+                "type": "null"
               }
             ]
           },
@@ -2190,10 +2190,10 @@
           "output_config": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/AnthropicOutputConfig"
               },
               {
-                "$ref": "#/components/schemas/AnthropicOutputConfig"
+                "type": "null"
               }
             ]
           },
@@ -2207,11 +2207,11 @@
           "reasoning_effort": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ReasoningEffort",
                 "description": "mistral.rs extension for local reasoning effort. \"none\" aliases \"off\"; \"max\" aliases \"xhigh\"."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -2225,10 +2225,10 @@
           "response_format": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/ResponseFormat"
               },
               {
-                "$ref": "#/components/schemas/ResponseFormat"
+                "type": "null"
               }
             ]
           },
@@ -2256,10 +2256,10 @@
           "system": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/AnthropicSystem"
               },
               {
-                "$ref": "#/components/schemas/AnthropicSystem"
+                "type": "null"
               }
             ]
           },
@@ -2273,20 +2273,20 @@
           "thinking": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/AnthropicThinking"
               },
               {
-                "$ref": "#/components/schemas/AnthropicThinking"
+                "type": "null"
               }
             ]
           },
           "tool_choice": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/AnthropicToolChoice"
               },
               {
-                "$ref": "#/components/schemas/AnthropicToolChoice"
+                "type": "null"
               }
             ]
           },
@@ -2329,10 +2329,10 @@
           "web_search_options": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/WebSearchOptions"
               },
               {
-                "$ref": "#/components/schemas/WebSearchOptions"
+                "type": "null"
               }
             ]
           }
@@ -2350,10 +2350,10 @@
           "format": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/AnthropicJsonOutputFormat"
               },
               {
-                "$ref": "#/components/schemas/AnthropicJsonOutputFormat"
+                "type": "null"
               }
             ]
           }
@@ -2636,10 +2636,10 @@
           "user_location": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/AnthropicWebSearchUserLocation"
               },
               {
-                "$ref": "#/components/schemas/AnthropicWebSearchUserLocation"
+                "type": "null"
               }
             ]
           }
@@ -2836,10 +2836,10 @@
           "response_format": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/TranscriptionResponseFormat"
               },
               {
-                "$ref": "#/components/schemas/TranscriptionResponseFormat"
+                "type": "null"
               }
             ]
           },
@@ -2892,10 +2892,10 @@
           "response_format": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/TranscriptionResponseFormat"
               },
               {
-                "$ref": "#/components/schemas/TranscriptionResponseFormat"
+                "type": "null"
               }
             ]
           },
@@ -3079,10 +3079,10 @@
           "audio": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/ChatAudioResponse"
               },
               {
-                "$ref": "#/components/schemas/ChatAudioResponse"
+                "type": "null"
               }
             ]
           },
@@ -3158,10 +3158,10 @@
           "usage": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/CompletionUsageResponse"
               },
               {
-                "$ref": "#/components/schemas/CompletionUsageResponse"
+                "type": "null"
               }
             ]
           }
@@ -3177,11 +3177,11 @@
           "adapter": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/AdapterSelection",
                 "description": "Adapter alias or exact generation to activate for this request."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -3196,11 +3196,11 @@
           "audio": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ChatAudioConfig",
                 "description": "Audio format and optional default voice for speech output."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -3295,11 +3295,11 @@
           "grammar": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/Grammar",
                 "description": "Constrain output with a regex, JSON schema, Lark, or LLGuidance grammar."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -3403,11 +3403,11 @@
           "reasoning_effort": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ReasoningEffort",
                 "description": "Reasoning effort level for models and templates that support it.\nValid values are \"off\", \"low\", \"medium\", \"high\", and \"xhigh\".\n\"none\" is accepted as an alias for \"off\"."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -3423,11 +3423,11 @@
           "response_format": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ResponseFormat",
                 "description": "Force plain text or JSON-schema constrained output."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -3451,11 +3451,11 @@
           "stop": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/StopTokens",
                 "description": "Sequences where generation stops."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -3479,11 +3479,11 @@
           "tool_choice": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ToolChoice",
                 "description": "Controls which (if any) tool the model must call."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -3536,11 +3536,11 @@
           "web_search_options": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/WebSearchOptions",
                 "description": "Enable the built-in web search tool."
+              },
+              {
+                "type": "null"
               }
             ]
           }
@@ -3642,10 +3642,10 @@
           "audio": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/ChatAudioResponse"
               },
               {
-                "$ref": "#/components/schemas/ChatAudioResponse"
+                "type": "null"
               }
             ]
           },
@@ -3747,11 +3747,11 @@
           "adapter": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/AdapterSelection",
                 "description": "Adapter alias or exact generation to activate for this request."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -3818,11 +3818,11 @@
           "grammar": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/Grammar",
                 "description": "Constrain output with a regex, JSON schema, Lark, or LLGuidance grammar."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -3921,11 +3921,11 @@
           "stop": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/StopTokens",
                 "description": "Sequences where generation stops."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -3956,11 +3956,11 @@
           "tool_choice": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ToolChoice",
                 "description": "Controls which (if any) tool the model must call."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -4113,10 +4113,10 @@
           "prompt_tokens_details": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/PromptTokensDetailsResponse"
               },
               {
-                "$ref": "#/components/schemas/PromptTokensDetailsResponse"
+                "type": "null"
               }
             ]
           },
@@ -4466,10 +4466,10 @@
               "box": {
                 "oneOf": [
                   {
-                    "type": "null"
+                    "$ref": "#/components/schemas/DecisionBox"
                   },
                   {
-                    "$ref": "#/components/schemas/DecisionBox"
+                    "type": "null"
                   }
                 ]
               },
@@ -4844,11 +4844,11 @@
           "encoding_format": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/EmbeddingEncodingFormat",
                 "description": "Return embeddings as float arrays or base64-encoded strings."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -5545,21 +5545,21 @@
           "audio": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/ChatAudioReference"
               },
               {
-                "$ref": "#/components/schemas/ChatAudioReference"
+                "type": "null"
               }
             ]
           },
           "content": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/MessageContent",
                 "description": "The message content"
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -6086,30 +6086,30 @@
           "filters": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/WebSearchFilters"
               },
               {
-                "$ref": "#/components/schemas/WebSearchFilters"
+                "type": "null"
               }
             ]
           },
           "image_settings": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/WebSearchImageSettings"
               },
               {
-                "$ref": "#/components/schemas/WebSearchImageSettings"
+                "type": "null"
               }
             ]
           },
           "return_token_budget": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/WebSearchReturnTokenBudget"
               },
               {
-                "$ref": "#/components/schemas/WebSearchReturnTokenBudget"
+                "type": "null"
               }
             ]
           },
@@ -6125,10 +6125,10 @@
           "search_context_size": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/SearchContextSize"
               },
               {
-                "$ref": "#/components/schemas/SearchContextSize"
+                "type": "null"
               }
             ]
           },
@@ -6138,10 +6138,10 @@
           "user_location": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/OpenAiWebSearchUserLocation"
               },
               {
-                "$ref": "#/components/schemas/OpenAiWebSearchUserLocation"
+                "type": "null"
               }
             ]
           }
@@ -6206,11 +6206,11 @@
           "adapter": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/AdapterSelection",
                 "description": "Adapter alias or exact generation to activate for this request."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -6274,11 +6274,11 @@
           "grammar": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/Grammar",
                 "description": "Grammar for constrained generation (mistral.rs extension)"
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -6396,11 +6396,11 @@
           "reasoning": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ReasoningConfig",
                 "description": "Configuration for reasoning/thinking behavior"
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -6415,11 +6415,11 @@
           "response_format": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ResponseFormat",
                 "description": "Response format (legacy, prefer `text` field)"
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -6435,11 +6435,11 @@
           "stop": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/StopTokens",
                 "description": "Stop sequences to end generation"
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -6460,11 +6460,11 @@
           "stream_options": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/StreamOptions",
                 "description": "Stream options for controlling streaming behavior"
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -6479,22 +6479,22 @@
           "text": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/TextConfig",
                 "description": "Text output configuration"
+              },
+              {
+                "type": "null"
               }
             ]
           },
           "tool_choice": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ToolChoice",
                 "description": "Controls how the model uses tools"
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -6535,11 +6535,11 @@
           "truncation": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/TruncationStrategy",
                 "description": "Truncation strategy when input exceeds context window"
+              },
+              {
+                "type": "null"
               }
             ]
           }
@@ -7808,22 +7808,22 @@
           "effort": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ReasoningEffort",
                 "description": "Effort level for reasoning (off, low, medium, high, xhigh). \"none\" aliases \"off\"."
+              },
+              {
+                "type": "null"
               }
             ]
           },
           "summary": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ReasoningSummary",
                 "description": "Accepted for compatibility; currently does not change the response."
+              },
+              {
+                "type": "null"
               }
             ]
           }
@@ -7967,11 +7967,11 @@
           "error": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ResponseError",
                 "description": "Error information (if status is failed)"
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -7990,11 +7990,11 @@
           "incomplete_details": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/IncompleteDetails",
                 "description": "Details about why response is incomplete"
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -8097,22 +8097,22 @@
           "text": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/TextConfig",
                 "description": "Text configuration from the request"
+              },
+              {
+                "type": "null"
               }
             ]
           },
           "tool_choice": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ToolChoice",
                 "description": "Tool choice configuration from the request"
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -8145,22 +8145,22 @@
           "truncation": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/TruncationStrategy",
                 "description": "Truncation strategy used"
+              },
+              {
+                "type": "null"
               }
             ]
           },
           "usage": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ResponseUsage",
                 "description": "Token usage information"
+              },
+              {
+                "type": "null"
               }
             ]
           }
@@ -8195,11 +8195,11 @@
           "input_tokens_details": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/InputTokensDetails",
                 "description": "Detailed input token breakdown"
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -8211,11 +8211,11 @@
           "output_tokens_details": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/OutputTokensDetails",
                 "description": "Detailed output token breakdown"
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -8273,10 +8273,10 @@
           "delta": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/ResponsesDelta"
               },
               {
-                "$ref": "#/components/schemas/ResponsesDelta"
+                "type": "null"
               }
             ]
           },
@@ -8293,10 +8293,10 @@
           "usage": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/ResponsesUsage"
               },
               {
-                "$ref": "#/components/schemas/ResponsesUsage"
+                "type": "null"
               }
             ]
           }
@@ -8339,11 +8339,11 @@
           "adapter": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/AdapterSelection",
                 "description": "Adapter alias or exact generation to activate for this request."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -8405,11 +8405,11 @@
           "grammar": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/Grammar",
                 "description": "Constrain output with a regex, JSON schema, Lark, or LLGuidance grammar."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -8583,11 +8583,11 @@
           "response_format": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ResponseFormat",
                 "description": "Force plain text or JSON-schema constrained output."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -8604,11 +8604,11 @@
           "stop": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/StopTokens",
                 "description": "Sequences where generation stops."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -8640,11 +8640,11 @@
           "tool_choice": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ToolChoice",
                 "description": "Controls which (if any) tool the model must call."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -8866,10 +8866,10 @@
           "error": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/ResponsesError"
               },
               {
-                "$ref": "#/components/schemas/ResponsesError"
+                "type": "null"
               }
             ]
           },
@@ -8879,10 +8879,10 @@
           "incomplete_details": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/ResponsesIncompleteDetails"
               },
               {
-                "$ref": "#/components/schemas/ResponsesIncompleteDetails"
+                "type": "null"
               }
             ]
           },
@@ -8917,10 +8917,10 @@
           "usage": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/ResponsesUsage"
               },
               {
-                "$ref": "#/components/schemas/ResponsesUsage"
+                "type": "null"
               }
             ]
           }
@@ -9002,10 +9002,10 @@
           "input_tokens_details": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/ResponsesInputTokensDetails"
               },
               {
-                "$ref": "#/components/schemas/ResponsesInputTokensDetails"
+                "type": "null"
               }
             ]
           },
@@ -9016,10 +9016,10 @@
           "output_tokens_details": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/ResponsesOutputTokensDetails"
               },
               {
-                "$ref": "#/components/schemas/ResponsesOutputTokensDetails"
+                "type": "null"
               }
             ]
           },
@@ -9663,11 +9663,11 @@
           "format": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/TextFormat",
                 "description": "Format for text output"
+              },
+              {
+                "type": "null"
               }
             ]
           }
@@ -9928,11 +9928,11 @@
           "profile": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/TuneProfileRequest",
                 "description": "Optional tuning profile"
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -10082,30 +10082,30 @@
           "filters": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/WebSearchFilters"
               },
               {
-                "$ref": "#/components/schemas/WebSearchFilters"
+                "type": "null"
               }
             ]
           },
           "image_settings": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/WebSearchImageSettings"
               },
               {
-                "$ref": "#/components/schemas/WebSearchImageSettings"
+                "type": "null"
               }
             ]
           },
           "return_token_budget": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/WebSearchReturnTokenBudget"
               },
               {
-                "$ref": "#/components/schemas/WebSearchReturnTokenBudget"
+                "type": "null"
               }
             ]
           },
@@ -10121,10 +10121,10 @@
           "search_context_size": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/SearchContextSize"
               },
               {
-                "$ref": "#/components/schemas/SearchContextSize"
+                "type": "null"
               }
             ]
           },
@@ -10138,10 +10138,10 @@
           "user_location": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/WebSearchUserLocation"
               },
               {
-                "$ref": "#/components/schemas/WebSearchUserLocation"
+                "type": "null"
               }
             ]
           }

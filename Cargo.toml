@@ -39,10 +39,10 @@ rust-version = "1.94"
 # candle-nn = { path = "../candle/candle-nn", version = "0.11.0" }
 # candle-flash-attn-v3 = { path = "../candle/candle-flash-attn-v3", version = "0.11.0" }
 # candle-metal-kernels = { path = "../candle/candle-metal-kernels", version = "0.11.0" }
-candle-core = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "66a8cf184a5a519671454066b1b9efd446ec9f5c" }
-candle-nn = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "66a8cf184a5a519671454066b1b9efd446ec9f5c" }
-candle-flash-attn-v3 = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "66a8cf184a5a519671454066b1b9efd446ec9f5c" }
-candle-metal-kernels = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "66a8cf184a5a519671454066b1b9efd446ec9f5c" }
+candle-core = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "9515d410e3af803fd45efebfef8137f47d85a63d" }
+candle-nn = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "9515d410e3af803fd45efebfef8137f47d85a63d" }
+candle-flash-attn-v3 = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "9515d410e3af803fd45efebfef8137f47d85a63d" }
+candle-metal-kernels = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "9515d410e3af803fd45efebfef8137f47d85a63d" }
 
 axum = "0.8.8"
 http-body-util = "0.1.3"
@@ -91,7 +91,7 @@ tempfile = "3"
 half = "2.7.1"
 rayon = "1.11.0"
 url = "2.5.8"
-utoipa = { version = "5.4.0", features = ["indexmap"] }
+utoipa = { version = "6.0.0", features = ["indexmap"] }
 walkdir = "2.5.0"
 data-url = "0.3.2"
 float8 = "0.7.0"
@@ -151,7 +151,7 @@ interprocess = "2.2.3"
 urlencoding = "2.1.3"
 scraper = "0.25.0"
 html2text = "0.16.6"
-zip = { version = "2.4.2", default-features = false, features = ["deflate"] }
+zip = { version = "9.1.3", default-features = false, features = ["deflate"] }
 ordered-float = "5.1.0"
 hashbrown = "0.16.1"
 parking_lot = "0.12.5"
@@ -171,7 +171,7 @@ directories = "6.0.0"
 # Need to keep rustyline at 15.0.0 as 16.0.0 has a breaking change that conficts with `ctrlc`'s handling
 rustyline = { version = "15.0.0", default-features = false, features = ["with-file-history"] }
 tower-http = "0.6.8"
-utoipa-swagger-ui = { version = "9.0.2", features = ["axum", "vendored"] }
+utoipa-swagger-ui = { version = "10.0.2", features = ["axum", "vendored"] }
 futures-util = "0.3.31"
 axum_static = "1.8.6"
 mime_guess = "2.0.5"

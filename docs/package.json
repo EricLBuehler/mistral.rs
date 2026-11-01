@@ -19,7 +19,7 @@
   "dependencies": {
     "@astrojs/starlight": "^0.42.3",
     "astro": "^7.3.4",
-    "sharp": "^0.35.4",
+    "sharp": "^0.35.5",
     "starlight-openapi": "^0.26.2"
   },
   "overrides": {
