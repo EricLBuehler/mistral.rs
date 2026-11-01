@@ -216,7 +216,128 @@
         },
         "responses": {
           "200": {
-            "description": "Speech generation"
+            "description": "Encoded audio or speech events",
+            "content": {
+              "audio/mpeg": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpeechAudioFile"
+                }
+              },
+              "audio/ogg": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpeechAudioFile"
+                }
+              },
+              "audio/aac": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpeechAudioFile"
+                }
+              },
+              "audio/flac": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpeechAudioFile"
+                }
+              },
+              "audio/wav": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpeechAudioFile"
+                }
+              },
+              "audio/pcm": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpeechAudioFile"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpeechStreamEvent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid speech parameters or unsupported model capability"
+          }
+        }
+      }
+    },
+    "/v1/audio/transcriptions": {
+      "post": {
+        "tags": [
+          "Mistral.rs"
+        ],
+        "operationId": "audio_transcriptions",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/AudioTranscriptionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Transcript as JSON, text, or streaming events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudioTranscriptionResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/TranscriptionStreamEvent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid audio or unsupported parameters"
+          }
+        }
+      }
+    },
+    "/v1/audio/translations": {
+      "post": {
+        "tags": [
+          "Mistral.rs"
+        ],
+        "operationId": "audio_translations",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/AudioTranslationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "English translation as JSON or text",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudioTranscriptionResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid audio or unsupported parameters"
           }
         }
       }
@@ -2653,6 +2774,107 @@
           "pcm"
         ]
       },
+      "AudioTranscriptionRequest": {
+        "type": "object",
+        "required": [
+          "file",
+          "model"
+        ],
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary"
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "response_format": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TranscriptionResponseFormat"
+              }
+            ]
+          },
+          "stream": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "temperature": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        }
+      },
+      "AudioTranscriptionResponse": {
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "AudioTranslationRequest": {
+        "type": "object",
+        "required": [
+          "file",
+          "model"
+        ],
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary"
+          },
+          "model": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "response_format": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TranscriptionResponseFormat"
+              }
+            ]
+          },
+          "temperature": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        }
+      },
       "BuiltinToolChoice": {
         "type": "object",
         "required": [
@@ -2721,6 +2943,77 @@
           }
         }
       },
+      "ChatAudioConfig": {
+        "type": "object",
+        "required": [
+          "format"
+        ],
+        "properties": {
+          "format": {
+            "$ref": "#/components/schemas/ChatAudioFormat"
+          },
+          "voice": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ChatAudioFormat": {
+        "type": "string",
+        "enum": [
+          "wav",
+          "pcm16",
+          "mp3",
+          "flac",
+          "opus",
+          "aac"
+        ]
+      },
+      "ChatAudioReference": {
+        "type": "object",
+        "description": "Represents a single message in a conversation\n\n### Examples\n\n```ignore\nuse either::Either;\nuse mistralrs_server_core::openai::{Message, MessageContent};\n\n// User message\nlet user_msg = Message {\n    audio: None,\n    content: Some(MessageContent(Either::Left(\"What's 2+2?\".to_string()))),\n    role: \"user\".to_string(),\n    name: None,\n    tool_calls: None,\n    tool_call_id: None,\n    reasoning_content: None,\n};\n\n// System message\nlet system_msg = Message {\n    audio: None,\n    content: Some(MessageContent(Either::Left(\"You are a helpful assistant.\".to_string()))),\n    role: \"system\".to_string(),\n    name: None,\n    tool_calls: None,\n    tool_call_id: None,\n    reasoning_content: None,\n};\n```",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        }
+      },
+      "ChatAudioResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expires_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "transcript": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "ChatCompletionChunkChoice": {
         "type": "object",
         "required": [
@@ -2750,6 +3043,16 @@
           "role"
         ],
         "properties": {
+          "audio": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ChatAudioResponse"
+              }
+            ]
+          },
           "content": {
             "type": [
               "string",
@@ -2856,6 +3159,17 @@
             ],
             "description": "Permission policy for agentic tools.",
             "example": null
+          },
+          "audio": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ChatAudioConfig",
+                "description": "Audio format and optional default voice for speech output."
+              }
+            ]
           },
           "chat_template_kwargs": {
             "type": [
@@ -3022,6 +3336,16 @@
             "format": "double",
             "description": "Drop tokens below this fraction of the top token's probability.",
             "example": null
+          },
+          "modalities": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Output modalities: text (default), audio, or both."
           },
           "model": {
             "type": "string",
@@ -3282,6 +3606,16 @@
           "role"
         ],
         "properties": {
+          "audio": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ChatAudioResponse"
+              }
+            ]
+          },
           "content": {
             "type": [
               "string",
@@ -4592,11 +4926,20 @@
       },
       "Message": {
         "type": "object",
-        "description": "Represents a single message in a conversation\n\n### Examples\n\n```ignore\nuse either::Either;\nuse mistralrs_server_core::openai::{Message, MessageContent};\n\n// User message\nlet user_msg = Message {\n    content: Some(MessageContent(Either::Left(\"What's 2+2?\".to_string()))),\n    role: \"user\".to_string(),\n    name: None,\n    tool_calls: None,\n    tool_call_id: None,\n    reasoning_content: None,\n};\n\n// System message\nlet system_msg = Message {\n    content: Some(MessageContent(Either::Left(\"You are a helpful assistant.\".to_string()))),\n    role: \"system\".to_string(),\n    name: None,\n    tool_calls: None,\n    tool_call_id: None,\n    reasoning_content: None,\n};\n```",
         "required": [
           "role"
         ],
         "properties": {
+          "audio": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ChatAudioReference"
+              }
+            ]
+          },
           "content": {
             "oneOf": [
               {
@@ -8281,18 +8624,28 @@
           }
         }
       },
+      "SpeechAudioFile": {
+        "type": "string",
+        "format": "binary"
+      },
       "SpeechGenerationRequest": {
         "type": "object",
         "description": "Speech generation request",
         "required": [
-          "input",
-          "response_format"
+          "input"
         ],
         "properties": {
           "input": {
             "type": "string",
             "description": "The text content to convert to speech.",
             "example": "[S1] Dia is an open weights text to dialogue model. [S2] You get full control over scripts and voices. [S1] Wow. Amazing. (laughs) [S2] Try it now on Git hub or Hugging Face."
+          },
+          "instructions": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Additional directions for how to speak the input."
           },
           "model": {
             "type": "string",
@@ -8302,6 +8655,90 @@
           "response_format": {
             "$ref": "#/components/schemas/AudioResponseFormat",
             "description": "The desired audio format for the generated speech."
+          },
+          "speed": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Playback speed between 0.25 and 4.0, default 1.0."
+          },
+          "stream_format": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Raw audio (`audio`, default) or server-sent audio events (`sse`)."
+          },
+          "voice": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "This model's voice, currently only `default`."
+          }
+        }
+      },
+      "SpeechStreamEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "audio",
+              "type"
+            ],
+            "properties": {
+              "audio": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "speech.audio.delta"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "usage",
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "speech.audio.done"
+                ]
+              },
+              "usage": {
+                "$ref": "#/components/schemas/SpeechTokenUsage"
+              }
+            }
+          }
+        ]
+      },
+      "SpeechTokenUsage": {
+        "type": "object",
+        "required": [
+          "input_tokens",
+          "output_tokens",
+          "total_tokens"
+        ],
+        "properties": {
+          "input_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "output_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total_tokens": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },
@@ -8499,6 +8936,53 @@
         "description": "Type of tool",
         "enum": [
           "function"
+        ]
+      },
+      "TranscriptionResponseFormat": {
+        "type": "string",
+        "enum": [
+          "json",
+          "text"
+        ]
+      },
+      "TranscriptionStreamEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "delta",
+              "type"
+            ],
+            "properties": {
+              "delta": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "transcript.text.delta"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "text",
+              "type"
+            ],
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "transcript.text.done"
+                ]
+              }
+            }
+          }
         ]
       },
       "TruncationStrategy": {

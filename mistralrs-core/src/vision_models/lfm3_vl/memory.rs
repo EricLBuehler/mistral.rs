@@ -7,6 +7,7 @@ const VISION_INTERMEDIATE_BUFFERS: usize = 3;
 
 pub(crate) struct EncoderMemoryEstimate {
     bytes_per_patch: usize,
+    input_bytes_per_patch: usize,
     attention_bytes_per_pair: usize,
 }
 
@@ -25,12 +26,43 @@ impl EncoderMemoryEstimate {
                 && matches!(dtype, DType::F16 | DType::BF16);
         Self {
             bytes_per_patch: activations + input,
+            input_bytes_per_patch: input,
             attention_bytes_per_pair: if fused || device.is_cpu() {
                 0
             } else {
                 config.num_attention_heads * DType::F32.size_in_bytes()
             },
         }
+    }
+
+    pub(crate) fn retained_bytes(
+        &self,
+        grids: impl IntoIterator<Item = [usize; 3]>,
+        language_hidden_size: usize,
+        downsample_factor: usize,
+        dtype: DType,
+    ) -> Result<usize> {
+        let overflow = || candle_core::Error::msg("LFM3-VL retained feature size overflow");
+        let merge_area = downsample_factor.checked_pow(2).ok_or_else(overflow)?;
+        let output_bytes_per_token = language_hidden_size
+            .checked_mul(dtype.size_in_bytes())
+            .ok_or_else(overflow)?;
+        grids.into_iter().try_fold(0usize, |total, grid| {
+            let patches = grid.into_iter().try_fold(1usize, |patches, dim| {
+                patches.checked_mul(dim).ok_or_else(overflow)
+            })?;
+            let pixels = patches
+                .checked_mul(self.input_bytes_per_patch)
+                .ok_or_else(overflow)?;
+            // Sequences retain pixels and the encoder cache retains projected features.
+            let features = (patches / merge_area)
+                .checked_mul(output_bytes_per_token)
+                .ok_or_else(overflow)?;
+            total
+                .checked_add(pixels)
+                .and_then(|total| total.checked_add(features))
+                .ok_or_else(overflow)
+        })
     }
 
     pub(crate) fn estimate(&self, grids: impl IntoIterator<Item = [usize; 3]>) -> Result<usize> {
@@ -92,6 +124,7 @@ mod tests {
     fn workspace_follows_actual_image_and_video_grids() -> Result<()> {
         let estimate = EncoderMemoryEstimate {
             bytes_per_patch: 100,
+            input_bytes_per_patch: 20,
             attention_bytes_per_pair: 0,
         };
         assert_eq!(estimate.estimate([[1, 16, 16]])?, 25_600);
@@ -105,6 +138,7 @@ mod tests {
     fn eager_attention_counts_independent_frames() -> Result<()> {
         let estimate = EncoderMemoryEstimate {
             bytes_per_patch: 100,
+            input_bytes_per_patch: 20,
             attention_bytes_per_pair: 4,
         };
         assert_eq!(estimate.estimate([[3, 2, 4]])?, 3 * (8 * 100 + 8 * 8 * 4));

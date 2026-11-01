@@ -290,6 +290,7 @@ impl Model {
         let messages = request.take_messages();
         validate_reasoning_controls(&messages)?;
         let request = Request::Normal(Box::new(NormalRequest {
+            audio_output: request.audio_output(),
             messages,
             sampling_params: request.take_sampling_params(),
             seed: None,
@@ -359,6 +360,7 @@ impl Model {
         let messages = request.take_messages();
         validate_reasoning_controls(&messages)?;
         let request = Request::Normal(Box::new(NormalRequest {
+            audio_output: request.audio_output(),
             messages,
             sampling_params: request.take_sampling_params(),
             seed: None,
@@ -446,6 +448,7 @@ impl Model {
         let messages = request.take_messages();
         validate_reasoning_controls(&messages)?;
         let request = Request::Normal(Box::new(NormalRequest {
+            audio_output: request.audio_output(),
             messages,
             sampling_params: request.take_sampling_params(),
             seed: None,
@@ -618,6 +621,7 @@ impl Model {
         let (tx, mut rx) = channel(1);
 
         let request = Request::Normal(Box::new(NormalRequest {
+            audio_output: None,
             id: 0,
             queued_at: None,
             messages: RequestMessage::ImageGeneration {
@@ -698,6 +702,7 @@ impl Model {
         let (tx, mut rx) = channel(1);
 
         let request = Request::Normal(Box::new(NormalRequest {
+            audio_output: None,
             id: 0,
             queued_at: None,
             messages: RequestMessage::SpeechGeneration {
@@ -790,6 +795,7 @@ impl Model {
                 let (tx, mut rx) = channel(1);
 
                 let request = Request::Normal(Box::new(NormalRequest {
+                    audio_output: None,
                     id: 0,
                     queued_at: None,
                     messages: message,

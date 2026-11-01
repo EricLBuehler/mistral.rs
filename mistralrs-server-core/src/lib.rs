@@ -250,6 +250,8 @@ pub mod lora_adapters;
 pub mod mcp_server;
 mod media_source;
 pub use media_source::configure_ui_upload_dir;
+pub mod audio_history;
+pub mod audio_transcription;
 pub mod metrics;
 pub mod mistralrs_for_server_builder;
 pub mod mistralrs_server_router_builder;

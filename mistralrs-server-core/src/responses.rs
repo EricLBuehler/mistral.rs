@@ -188,17 +188,6 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
                                 }
                                 NormalizedInputContent::Audio { data, format } => {
                                     has_non_text_content = true;
-                                    // Convert audio to data URL format
-                                    let mime_type = match format.as_str() {
-                                        "wav" => "audio/wav",
-                                        "mp3" => "audio/mpeg",
-                                        "flac" => "audio/flac",
-                                        "ogg" => "audio/ogg",
-                                        _ => "audio/wav", // Default to wav
-                                    };
-                                    let audio_url = format!("data:{};base64,{}", mime_type, data);
-                                    // Audio is represented as a special content part
-                                    // Note: Not all models support audio input
                                     let mut audio_part = std::collections::HashMap::new();
                                     audio_part.insert(
                                         "type".to_string(),
@@ -216,11 +205,6 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
                                         )),
                                     );
                                     content_parts.push(audio_part);
-                                    // Also add as text reference for models that don't support audio
-                                    content_parts.push(MessageContent::text_part(format!(
-                                        "[Audio content: {}]",
-                                        audio_url
-                                    )));
                                 }
                                 NormalizedInputContent::File {
                                     file_id,
@@ -256,6 +240,7 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
                 };
 
                 messages.push(Message {
+                    audio: None,
                     content,
                     role: msg_param.role,
                     name: msg_param.name,
@@ -280,6 +265,7 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
                     None => name,
                 };
                 messages.push(Message {
+                    audio: None,
                     content: None,
                     role: "assistant".to_string(),
                     name: None,
@@ -296,6 +282,7 @@ fn convert_input_items_to_messages(items: Vec<InputItem>) -> Vec<Message> {
             TaggedInputItem::FunctionCallOutput { call_id, output } => {
                 // Convert to tool message
                 messages.push(Message {
+                    audio: None,
                     content: Some(MessageContent::from_text(output)),
                     role: "tool".to_string(),
                     name: None,
@@ -1193,6 +1180,7 @@ impl futures::Stream for OpenResponsesStreamer {
                         // Add assistant's response
                         if !self.accumulated_text.is_empty() {
                             history.push(Message {
+                                audio: None,
                                 content: Some(MessageContent::from_text(
                                     self.accumulated_text.clone(),
                                 )),
@@ -1915,6 +1903,7 @@ async fn parse_openresponses_request(
         Either::Left(msgs) => final_messages.extend(msgs),
         Either::Right(prompt) => {
             final_messages.push(Message {
+                audio: None,
                 content: Some(MessageContent::from_text(prompt)),
                 role: "user".to_string(),
                 name: None,
@@ -1929,6 +1918,7 @@ async fn parse_openresponses_request(
         final_messages.insert(
             0,
             Message {
+                audio: None,
                 content: Some(MessageContent::from_text(instructions)),
                 role: SYSTEM_ROLE.to_string(),
                 name: None,
@@ -1974,6 +1964,8 @@ async fn parse_openresponses_request(
 
     // Convert to ChatCompletionRequest
     let chat_request = ChatCompletionRequest {
+        modalities: None,
+        audio: None,
         messages: Either::Left(final_messages.clone()),
         model: oairequest.model,
         adapter: oairequest.adapter,
@@ -2184,6 +2176,7 @@ pub async fn create_response(
                             for choice in &chat_resp.choices {
                                 if let Some(content) = &choice.message.content {
                                     history.push(Message {
+                                        audio: None,
                                         content: Some(MessageContent::from_text(content.clone())),
                                         role: choice.message.role.clone(),
                                         name: None,
@@ -2302,6 +2295,7 @@ pub async fn create_response(
                         for choice in &chat_resp.choices {
                             if let Some(content) = &choice.message.content {
                                 history.push(Message {
+                                    audio: None,
                                     content: Some(MessageContent::from_text(content.clone())),
                                     role: choice.message.role.clone(),
                                     name: None,

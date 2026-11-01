@@ -49,15 +49,22 @@ pub const REQUEST_QUEUE_DURATION_METRIC: &str = "mistralrs_request_queue_duratio
 
 mod adapter;
 mod agent_approval;
+mod audio_output;
+pub use audio_output::{
+    decode_generated_wav, encode_audio_pcm, encode_audio_pcm_with_speed,
+    encode_audio_pcm_with_speed_async,
+};
 mod cuda;
 mod device_map;
 mod engine;
 mod lora;
 mod metal;
 pub use metal::warmup_metal_kernels;
+mod input_audio;
 mod model_loader;
 mod moe;
 mod ops;
+pub use input_audio::{input_audio_data_url, MAX_INPUT_AUDIO_BYTES};
 mod video_input;
 pub use model_loader::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, LoaderBuilder,
@@ -139,6 +146,7 @@ pub use amoe::{AnyMoeConfig, AnyMoeExpertType};
 pub use device_map::{
     DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, LayerDeviceMapper,
 };
+pub use engine::speech::speech_task_prompt;
 pub use files::{
     format_from_name, is_text_mime, mime_for_format, File, FileContent, FileSource, FileStore,
     RequestedFile, FILE_PURPOSE_AGENT_OUTPUT, FILE_PURPOSE_USER_DATA, MODEL_INLINE_BYTES,
@@ -188,12 +196,12 @@ pub use pipeline::{
 };
 pub use request::{
     resolve_reasoning_controls, ApproximateUserLocation, CalibrationAction, CalibrationRequest,
-    Constraint, DetokenizationRequest, ImageGenerationResponseFormat, LlguidanceGrammar,
-    MessageContent, NormalRequest, ReasoningControlError, ReasoningEffort,
-    ReasoningEffortParseError, Request, RequestMessage, ResolvedReasoningControls,
-    SearchContextSize, TokenizationRequest, WebSearchContentType, WebSearchFilters,
-    WebSearchImageSettings, WebSearchOptions, WebSearchReturnTokenBudget, WebSearchUserLocation,
-    DEFAULT_ENABLE_THINKING,
+    ChatAudioConfig, ChatAudioFormat, ChatAudioMode, ChatAudioRequest, Constraint,
+    DetokenizationRequest, ImageGenerationResponseFormat, LlguidanceGrammar, MessageContent,
+    NormalRequest, ReasoningControlError, ReasoningEffort, ReasoningEffortParseError, Request,
+    RequestMessage, ResolvedReasoningControls, SearchContextSize, TokenizationRequest,
+    WebSearchContentType, WebSearchFilters, WebSearchImageSettings, WebSearchOptions,
+    WebSearchReturnTokenBudget, WebSearchUserLocation, DEFAULT_ENABLE_THINKING,
 };
 pub use resource_plan::{
     plan_paged_kv, PagedKvModelRequest, PagedKvPlan, PagedKvPolicy, RuntimeResourcePlanOptions,
@@ -1640,6 +1648,7 @@ impl MistralRs {
             tokio::task::block_in_place(|| {
                 let (tx, mut rx) = channel(1);
                 let req = Request::Normal(Box::new(NormalRequest {
+                    audio_output: None,
                     id: 0,
                     queued_at: None,
                     messages: RequestMessage::Completion {

@@ -59,6 +59,8 @@ Members and their wire/config names where relevant. The members are fieldless Py
 | `MultimodalArchitecture.LLaVA` | `'llava'` |
 | `MultimodalArchitecture.Lfm2Vl` | `'lfm2vl'` |
 | `MultimodalArchitecture.Lfm3Vl` | `'lfm3vl'` |
+| `MultimodalArchitecture.Lfm3Audio` | `'lfm3audio'` |
+| `MultimodalArchitecture.Lfm3Omni` | `'lfm3omni'` |
 | `MultimodalArchitecture.VLlama` | `'vllama'` |
 | `MultimodalArchitecture.Qwen2VL` | `'qwen2vl'` |
 | `MultimodalArchitecture.Idefics3` | `'idefics3'` |

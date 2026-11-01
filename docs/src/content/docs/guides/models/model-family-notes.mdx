@@ -228,6 +228,56 @@ mistralrs serve -p 1234 -m LiquidAI/LFM3-VL-2B --isq q4k
 
 Python SDK examples: [text](/examples/python/lfm3/), [images](/examples/python/lfm3-vl/), and [video](/examples/python/lfm3-vl-video/). HTTP examples: [text](/examples/server/lfm3/), [images](/examples/server/lfm3-vl/), and [video](/examples/server/lfm3-vl-video/).
 
+## LFM3-Audio
+
+`LiquidAI/LFM3-Audio-2B` accepts text and audio and returns text, speech, or both. It loads automatically as `Lfm3AudioForConditionalGeneration`, including its bundled Liquid audio codec. Use LFM3-Omni for image and video input.
+
+```bash
+mistralrs serve -p 1234 -m LiquidAI/LFM3-Audio-2B --isq q8_0
+```
+
+Audio inputs are downmixed to mono and resampled to 16 kHz. Paged attention, chunked prefill, and audio embedding caching are supported. The examples use `q8_0`; unquantized weights are also supported. Native LFM3-Audio GGUF loading is not supported.
+
+The [Python SDK example](/examples/python/lfm3-audio/) and [HTTP API example](/examples/server/lfm3-audio/) select the checkpoint's task prompt and output mode:
+
+```bash
+python examples/server/lfm3_audio.py --task asr --audio speech.wav
+python examples/server/lfm3_audio.py --task tts --prompt "Hello." --speech-out hello.wav
+python examples/server/lfm3_audio.py --task chat --audio question.wav --speech-out answer.wav
+```
+
+The system prompts are `Perform ASR in English.`, `Perform TTS in American English using a female voice.`, and `Respond with interleaved text and audio.`, respectively. See [shared speech behavior](#lfm3-speech-input-and-output) below for output modes, sampling, SDK helpers, and dedicated HTTP endpoints.
+
+## LFM3-Omni
+
+`LiquidAI/LFM3-Omni-2B` accepts text, images, video, and audio together and can return text, speech, or both. Its safetensors checkpoint loads automatically as `Lfm3OmniForConditionalGeneration` on CPU, Metal, and CUDA.
+
+```bash
+mistralrs run -m LiquidAI/LFM3-Omni-2B --isq q4k --audio question.wav --image photo.jpg -i "Answer the spoken question about this picture."
+mistralrs run -m LiquidAI/LFM3-Omni-2B --isq q4k --video clip.mp4 --audio soundtrack.wav -i "Describe what you see and hear."
+mistralrs serve -p 1234 -m LiquidAI/LFM3-Omni-2B --isq q8_0
+```
+
+Audio is downmixed to mono and resampled to 16 kHz. Video uses 2 FPS sampling, with 4 to 384 frames, and requires [FFmpeg](/guides/models/video-setup/) except for animated GIFs. Submit video soundtracks separately as audio; they are not extracted automatically.
+
+Paged attention, chunked prefill, and caching of image, video, and audio embeddings are supported. `--isq q8_0` quantizes the language model and vision projector; the vision encoder, audio encoder, audio projector, speech depth decoder, and audio codec remain unquantized. Unquantized checkpoints are also supported. `d1-Omni-2B` and native LFM3-Omni GGUF loading remain unsupported.
+
+See the [Python SDK example](/examples/python/lfm3-omni/) and [HTTP API example](/examples/server/lfm3-omni/) for optional audio, image, and video inputs and a `--speech-out answer.wav` option.
+
+### LFM3 speech input and output
+
+Both models accept standard WAV/MP3 `input_audio` content parts and the `audio_url` extension for other decodable formats; see [audio input](/guides/models/multimodal-input/#audio). Text output is the default. For chat speech output, request `modalities: ["audio"]` or `["text", "audio"]` with `audio: {"format": "wav", "voice": "default"}`. Read base64 output from `choices[0].message.audio.data`. The checkpoint provides one voice and mono output at 24 kHz.
+
+Chat streaming requires `audio.format: "pcm16"`. Concatenate decoded `choices[0].delta.audio.data` bytes in arrival order; regular chunks contain about 0.96 seconds of signed 16-bit little-endian PCM, followed by the remaining tail. See [HTTP audio semantics](/reference/http-api/#audio-requests-and-history) for compressed formats, FFmpeg requirements, and transcript history. Native SDKs do not resolve HTTP audio IDs; direct `<|audio_out|>` speech history is unsupported.
+
+Text sampling controls such as `temperature`, `top_k`, and repetition penalties apply to generated text tokens. Speech codes use separate defaults: Omni uses temperature `0.4` and repetition penalty `1.2` over 64 frames; Audio uses temperature `1.0`, top-k `128`, and repetition penalty `1.1` over 4,096 frames. These speech settings are not request options, so text temperature `0` does not make speech deterministic. A chat `max_tokens` budget counts text tokens, speech frames, and control tokens; increase the examples' `--max-tokens` for longer output.
+
+Speech requests disable thinking by default; explicit `enable_thinking` or `reasoning_effort` controls are preserved. Audio output does not support tool calls, constrained decoding, custom logits processors, or logprobs.
+
+For simple synthesis, use Rust's `Model::generate_speech` or Python's `Runner.generate_audio`. The [Rust example](/examples/rust/models/lfm3-audio/) saves PCM as WAV and accepts either model ID. For chat modes and streaming, use Rust's [audio request builder](/reference/rust-sdk/#chat-speech-output) or Python's `modalities` and `audio` options.
+
+The dedicated `/v1/audio/speech`, `/v1/audio/transcriptions`, and `/v1/audio/translations` endpoints work with both models. See the [endpoint example](/examples/server/lfm3-audio-endpoints/) and [compatibility reference](/reference/openai-compatibility/#audio) for formats, speed, instructions, streaming, and unsupported timestamp/diarization controls. OpenAI's named voices and Realtime API are not implemented.
+
 ## Gemma
 
 Gemma repos are gated: accept the license on the Hugging Face model page, then authenticate with `mistralrs login`.

@@ -74,6 +74,271 @@ use which::{
 
 static DEVICE: OnceLock<Result<Device>> = OnceLock::new();
 
+fn normalize_chat_messages(
+    messages: &requests::PythonChatMessages,
+    enable_thinking: Option<bool>,
+    reasoning_effort: Option<mistralrs_core::ReasoningEffort>,
+) -> PyApiResult<RequestMessage> {
+    Ok(match messages {
+        Either::Left(messages) => {
+            let mut messages_vec = Vec::new();
+            let mut image_urls = Vec::new();
+            let mut audio_urls = Vec::new();
+            let mut video_urls = Vec::new();
+            for message in messages {
+                let role = message
+                    .get("role")
+                    .context("Input message must have a `role` field.")?
+                    .as_ref()
+                    .left()
+                    .context("Input message `role` must be a string.")?
+                    .clone();
+                match message
+                    .get("content")
+                    .context("Input message must have a `content` field.")?
+                {
+                    Either::Left(content) => {
+                        let mut message_map: IndexMap<
+                            String,
+                            Either<String, Vec<IndexMap<String, Value>>>,
+                        > = IndexMap::new();
+                        message_map.insert("role".to_string(), Either::Left(role));
+                        message_map
+                            .insert("content".to_string(), Either::Left(content.to_string()));
+                        messages_vec.push(message_map);
+                    }
+                    Either::Right(image_messages) => {
+                        if image_messages.len() == 1
+                            && image_messages[0].get("type").is_none_or(
+                                |kind| matches!(kind, Either::Left(kind) if kind == "text"),
+                            )
+                        {
+                            let content = image_messages[0]
+                                .get("text")
+                                .context("Expected `text` key in input message.")?
+                                .as_ref()
+                                .left()
+                                .context("Input message `text` must be a string.")?
+                                .clone();
+                            let mut message_map: IndexMap<
+                                String,
+                                Either<String, Vec<IndexMap<String, Value>>>,
+                            > = IndexMap::new();
+                            message_map.insert("role".to_string(), Either::Left(role));
+                            message_map.insert("content".to_string(), Either::Left(content));
+                            messages_vec.push(message_map);
+                            continue;
+                        }
+                        if role != "user" {
+                            return Err(PyApiErr::from(format!(
+                                "Role for a media message must be `user`, but it is {role}"
+                            )));
+                        }
+
+                        enum ContentPart {
+                            Text { text: String },
+                            Image { image_url: String },
+                            Audio { audio_url: String },
+                            Video { video_url: String },
+                        }
+
+                        let mut items = Vec::new();
+                        for image_message in image_messages {
+                            match image_message.get("type") {
+                                Some(Either::Left(x)) if x == "text" => {
+                                    items.push(ContentPart::Text {
+                                        text: image_message
+                                            .get("text").as_ref()
+                                            .context("Text sub-content must have `text` key.")?.as_ref()
+                                            .left().context("Text sub-content `text` key must be a string.")?.clone(),
+                                    });
+                                }
+                                Some(Either::Left(x)) if x == "image_url" => {
+                                    items.push(ContentPart::Image {
+                                        image_url: image_message
+                                            .get("image_url")
+                                            .as_ref()
+                                            .context("Image sub-content must have `image_url` key.")?
+                                            .as_ref()
+                                            .right()
+                                            .context("Image sub-content `image_url` key must be an object.")?
+                                            .get("url")
+                                            .context("Image sub-content `image_url` object must have a `url` key.")?
+                                            .clone(),
+                                    });
+                                }
+                                Some(Either::Left(x)) if x == "input_audio" => {
+                                    let audio = image_message
+                                        .get("input_audio")
+                                        .context("Audio sub-content must have `input_audio` key.")?
+                                        .as_ref()
+                                        .right()
+                                        .context("Audio sub-content `input_audio` must be an object.")?;
+                                    let data = audio.get("data")
+                                        .context("input_audio must have a base64 `data` field.")?;
+                                    let format = audio.get("format")
+                                        .context("input_audio must have a `format` field.")?;
+                                    items.push(ContentPart::Audio {
+                                        audio_url: mistralrs_core::input_audio_data_url(data, format)?,
+                                    });
+                                }
+                                Some(Either::Left(x)) if x == "audio_url" => {
+                                    items.push(ContentPart::Audio {
+                                        audio_url: image_message
+                                            .get("audio_url")
+                                            .as_ref()
+                                            .context("Audio sub-content must have `audio_url` key.")?
+                                            .as_ref()
+                                            .right()
+                                            .context("Audio sub-content `audio_url` key must be an object.")?
+                                            .get("url")
+                                            .context("Audio sub-content `audio_url` object must have a `url` key.")?
+                                            .clone(),
+                                    });
+                                }
+                                Some(Either::Left(x)) if x == "video_url" => {
+                                    items.push(ContentPart::Video {
+                                        video_url: image_message
+                                            .get("video_url")
+                                            .as_ref()
+                                            .context("Video sub-content must have `video_url` key.")?
+                                            .as_ref()
+                                            .right()
+                                            .context("Video sub-content `video_url` key must be an object.")?
+                                            .get("url")
+                                            .context("Video sub-content `video_url` object must have a `url` key.")?
+                                            .clone(),
+                                    });
+                                }
+                                _ => return Err(PyApiErr::from("Expected array content sub-content to be of format {{`type`: `text`, `text`: ...}} and {{`type`: `url`, `image_url`: {{`url`: ...}}}}"))
+                            }
+                        }
+
+                        let text_content = items
+                            .iter()
+                            .filter_map(|item| match item {
+                                ContentPart::Text { text } => Some(text),
+                                _ => None,
+                            })
+                            .join(" ");
+                        let image_urls_iter = items
+                            .iter()
+                            .filter_map(|item| match item {
+                                ContentPart::Image { image_url } => Some(image_url.clone()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>();
+
+                        let audio_urls_iter = items
+                            .iter()
+                            .filter_map(|item| match item {
+                                ContentPart::Audio { audio_url } => Some(audio_url.clone()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>();
+
+                        let video_urls_iter = items
+                            .iter()
+                            .filter_map(|item| match item {
+                                ContentPart::Video { video_url } => Some(video_url.clone()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>();
+
+                        let mut message_map: IndexMap<
+                            String,
+                            Either<String, Vec<IndexMap<String, Value>>>,
+                        > = IndexMap::new();
+                        message_map.insert("role".to_string(), Either::Left(role));
+
+                        let mut content_map: Vec<IndexMap<String, Value>> = Vec::new();
+                        for _ in &image_urls_iter {
+                            let mut content_image_map = IndexMap::new();
+                            content_image_map
+                                .insert("type".to_string(), Value::String("image".to_string()));
+                            content_map.push(content_image_map);
+                        }
+                        for _ in &audio_urls_iter {
+                            let mut content_audio_map = IndexMap::new();
+                            content_audio_map
+                                .insert("type".to_string(), Value::String("audio".to_string()));
+                            content_map.push(content_audio_map);
+                        }
+                        for _ in &video_urls_iter {
+                            let mut content_video_map = IndexMap::new();
+                            content_video_map
+                                .insert("type".to_string(), Value::String("video".to_string()));
+                            content_map.push(content_video_map);
+                        }
+                        {
+                            let mut content_text_map = IndexMap::new();
+                            content_text_map
+                                .insert("type".to_string(), Value::String("text".to_string()));
+                            content_text_map
+                                .insert("text".to_string(), Value::String(text_content));
+                            content_map.push(content_text_map);
+                        }
+
+                        message_map.insert("content".to_string(), Either::Right(content_map));
+                        messages_vec.push(message_map);
+                        image_urls.extend(image_urls_iter);
+                        audio_urls.extend(audio_urls_iter);
+                        video_urls.extend(video_urls_iter);
+                    }
+                }
+            }
+            if !image_urls.is_empty() || !audio_urls.is_empty() || !video_urls.is_empty() {
+                let mut images = Vec::new();
+                for url in image_urls {
+                    let url_unparsed = url.trim();
+
+                    let image = util::parse_image_url(url_unparsed)?;
+                    images.push(image);
+                }
+                let mut audios = Vec::new();
+                for url in audio_urls {
+                    let url_unparsed = url.trim();
+                    let audio = util::parse_audio_url(url_unparsed)?;
+                    audios.push(audio);
+                }
+                let mut videos = Vec::new();
+                for url in video_urls {
+                    let url_unparsed = url.trim();
+                    let video = util::parse_video_url(url_unparsed)?;
+                    videos.push(video);
+                }
+                RequestMessage::MultimodalChat {
+                    messages: messages_vec,
+                    images,
+                    audios,
+                    videos,
+                    enable_thinking,
+                    reasoning_effort,
+                }
+            } else {
+                RequestMessage::Chat {
+                    messages: messages_vec,
+                    enable_thinking,
+                    reasoning_effort,
+                }
+            }
+        }
+        Either::Right(prompt) => {
+            let mut messages = Vec::new();
+            let mut message_map: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
+                IndexMap::new();
+            message_map.insert("role".to_string(), Either::Left("user".to_string()));
+            message_map.insert("content".to_string(), Either::Left(prompt.to_string()));
+            messages.push(message_map);
+            RequestMessage::Chat {
+                messages,
+                enable_thinking,
+                reasoning_effort,
+            }
+        }
+    })
+}
+
 fn parse_memory_goal(value: Option<&Bound<'_, PyAny>>) -> PyApiResult<MemoryGoal> {
     let goal = match value {
         None => MemoryGoal::Auto,
@@ -1311,255 +1576,11 @@ impl Runner {
                 None
             };
 
-            let messages = match request.messages {
-                Either::Left(ref messages) => {
-                    let mut messages_vec = Vec::new();
-                    let mut image_urls = Vec::new();
-                    let mut audio_urls = Vec::new();
-                    let mut video_urls = Vec::new();
-                    for message in messages {
-                        let role = message["role"].as_ref().left().unwrap().clone();
-                        match &message["content"] {
-                            Either::Left(content) => {
-                                let mut message_map: IndexMap<
-                                    String,
-                                    Either<String, Vec<IndexMap<String, Value>>>,
-                                > = IndexMap::new();
-                                message_map.insert("role".to_string(), Either::Left(role));
-                                message_map.insert(
-                                    "content".to_string(),
-                                    Either::Left(content.to_string()),
-                                );
-                                messages_vec.push(message_map);
-                            }
-                            Either::Right(image_messages) => {
-                                // If there is only one message, it is possible a text message
-                                // found when rig is used as client. In this case, we need to check if
-                                // the message is a text message or an image message.
-                                if image_messages.len() == 1 {
-                                    if !image_messages[0].contains_key("text") {
-                                        return Err(PyApiErr::from(
-                                            "Expected `text` key in input message.",
-                                        ));
-                                    }
-                                    let content = match &image_messages[0]["text"] {
-                                        Either::Left(left) => left.to_string(),
-                                        Either::Right(right) => format!("{right:?}"),
-                                    };
-                                    let mut message_map: IndexMap<
-                                        String,
-                                        Either<String, Vec<IndexMap<String, Value>>>,
-                                    > = IndexMap::new();
-                                    message_map.insert("role".to_string(), Either::Left(role));
-                                    message_map
-                                        .insert("content".to_string(), Either::Left(content));
-                                    messages_vec.push(message_map);
-                                    continue;
-                                }
-                                if role != "user" {
-                                    return Err(PyApiErr::from(
-                                        "Role for an image message must be `user`, but it is {role}",
-                                    ));
-                                }
-
-                                enum ContentPart {
-                                    Text { text: String },
-                                    Image { image_url: String },
-                                    Audio { audio_url: String },
-                                    Video { video_url: String },
-                                }
-
-                                let mut items = Vec::new();
-                                for image_message in image_messages {
-                                    match image_message.get("type") {
-                                        Some(Either::Left(x)) if x == "text" => {
-                                            items.push(ContentPart::Text {
-                                                text: image_message
-                                                    .get("text").as_ref()
-                                                    .context("Text sub-content must have `text` key.")?.as_ref()
-                                                    .left().context("Text sub-content `text` key must be a string.")?.clone(),
-                                            });
-                                        }
-                                        Some(Either::Left(x)) if x == "image_url" => {
-                                            items.push(ContentPart::Image {
-                                                image_url: image_message
-                                                    .get("image_url")
-                                                    .as_ref()
-                                                    .context("Image sub-content must have `image_url` key.")?
-                                                    .as_ref()
-                                                    .right()
-                                                    .context("Image sub-content `image_url` key must be an object.")?
-                                                    .get("url")
-                                                    .context("Image sub-content `image_url` object must have a `url` key.")?
-                                                    .clone(),
-                                            });
-                                        }
-                                        Some(Either::Left(x)) if x == "audio_url" => {
-                                            items.push(ContentPart::Audio {
-                                                audio_url: image_message
-                                                    .get("audio_url")
-                                                    .as_ref()
-                                                    .context("Audio sub-content must have `audio_url` key.")?
-                                                    .as_ref()
-                                                    .right()
-                                                    .context("Audio sub-content `audio_url` key must be an object.")?
-                                                    .get("url")
-                                                    .context("Audio sub-content `audio_url` object must have a `url` key.")?
-                                                    .clone(),
-                                            });
-                                        }
-                                        Some(Either::Left(x)) if x == "video_url" => {
-                                            items.push(ContentPart::Video {
-                                                video_url: image_message
-                                                    .get("video_url")
-                                                    .as_ref()
-                                                    .context("Video sub-content must have `video_url` key.")?
-                                                    .as_ref()
-                                                    .right()
-                                                    .context("Video sub-content `video_url` key must be an object.")?
-                                                    .get("url")
-                                                    .context("Video sub-content `video_url` object must have a `url` key.")?
-                                                    .clone(),
-                                            });
-                                        }
-                                        _ => return Err(PyApiErr::from("Expected array content sub-content to be of format {{`type`: `text`, `text`: ...}} and {{`type`: `url`, `image_url`: {{`url`: ...}}}}"))
-                                    }
-                                }
-
-                                let text_content = items
-                                    .iter()
-                                    .filter_map(|item| match item {
-                                        ContentPart::Text { text } => Some(text),
-                                        _ => None,
-                                    })
-                                    .join(" ");
-                                let image_urls_iter = items
-                                    .iter()
-                                    .filter_map(|item| match item {
-                                        ContentPart::Image { image_url } => Some(image_url.clone()),
-                                        _ => None,
-                                    })
-                                    .collect::<Vec<_>>();
-
-                                let audio_urls_iter = items
-                                    .iter()
-                                    .filter_map(|item| match item {
-                                        ContentPart::Audio { audio_url } => Some(audio_url.clone()),
-                                        _ => None,
-                                    })
-                                    .collect::<Vec<_>>();
-
-                                let video_urls_iter = items
-                                    .iter()
-                                    .filter_map(|item| match item {
-                                        ContentPart::Video { video_url } => Some(video_url.clone()),
-                                        _ => None,
-                                    })
-                                    .collect::<Vec<_>>();
-
-                                let mut message_map: IndexMap<
-                                    String,
-                                    Either<String, Vec<IndexMap<String, Value>>>,
-                                > = IndexMap::new();
-                                message_map.insert("role".to_string(), Either::Left(role));
-
-                                let mut content_map: Vec<IndexMap<String, Value>> = Vec::new();
-                                for _ in &image_urls_iter {
-                                    let mut content_image_map = IndexMap::new();
-                                    content_image_map.insert(
-                                        "type".to_string(),
-                                        Value::String("image".to_string()),
-                                    );
-                                    content_map.push(content_image_map);
-                                }
-                                for _ in &audio_urls_iter {
-                                    let mut content_audio_map = IndexMap::new();
-                                    content_audio_map.insert(
-                                        "type".to_string(),
-                                        Value::String("audio".to_string()),
-                                    );
-                                    content_map.push(content_audio_map);
-                                }
-                                for _ in &video_urls_iter {
-                                    let mut content_video_map = IndexMap::new();
-                                    content_video_map.insert(
-                                        "type".to_string(),
-                                        Value::String("video".to_string()),
-                                    );
-                                    content_map.push(content_video_map);
-                                }
-                                {
-                                    let mut content_text_map = IndexMap::new();
-                                    content_text_map.insert(
-                                        "type".to_string(),
-                                        Value::String("text".to_string()),
-                                    );
-                                    content_text_map
-                                        .insert("text".to_string(), Value::String(text_content));
-                                    content_map.push(content_text_map);
-                                }
-
-                                message_map
-                                    .insert("content".to_string(), Either::Right(content_map));
-                                messages_vec.push(message_map);
-                                image_urls.extend(image_urls_iter);
-                                audio_urls.extend(audio_urls_iter);
-                                video_urls.extend(video_urls_iter);
-                            }
-                        }
-                    }
-                    if !image_urls.is_empty() || !audio_urls.is_empty() || !video_urls.is_empty() {
-                        let mut images = Vec::new();
-                        for url in image_urls {
-                            let url_unparsed = url.trim();
-
-                            let image = util::parse_image_url(url_unparsed)?;
-                            images.push(image);
-                        }
-                        let mut audios = Vec::new();
-                        for url in audio_urls {
-                            let url_unparsed = url.trim();
-                            let audio = util::parse_audio_url(url_unparsed)?;
-                            audios.push(audio);
-                        }
-                        let mut videos = Vec::new();
-                        for url in video_urls {
-                            let url_unparsed = url.trim();
-                            let video = util::parse_video_url(url_unparsed)?;
-                            videos.push(video);
-                        }
-                        RequestMessage::MultimodalChat {
-                            messages: messages_vec,
-                            images,
-                            audios,
-                            videos,
-                            enable_thinking: request.enable_thinking,
-                            reasoning_effort: request.reasoning_effort,
-                        }
-                    } else {
-                        RequestMessage::Chat {
-                            messages: messages_vec,
-                            enable_thinking: request.enable_thinking,
-                            reasoning_effort: request.reasoning_effort,
-                        }
-                    }
-                }
-                Either::Right(ref prompt) => {
-                    let mut messages = Vec::new();
-                    let mut message_map: IndexMap<
-                        String,
-                        Either<String, Vec<IndexMap<String, Value>>>,
-                    > = IndexMap::new();
-                    message_map.insert("role".to_string(), Either::Left("user".to_string()));
-                    message_map.insert("content".to_string(), Either::Left(prompt.to_string()));
-                    messages.push(message_map);
-                    RequestMessage::Chat {
-                        messages,
-                        enable_thinking: request.enable_thinking,
-                        reasoning_effort: request.reasoning_effort,
-                    }
-                }
-            };
+            let messages = normalize_chat_messages(
+                &request.messages,
+                request.enable_thinking,
+                request.reasoning_effort,
+            )?;
 
             let tool_choice = request.tool_choice.as_ref().map(|x| match x {
                 ToolChoice::Auto => mistralrs_core::ToolChoice::Auto,
@@ -1584,6 +1605,7 @@ impl Runner {
             );
 
             let model_request = _Request::Normal(Box::new(NormalRequest {
+                audio_output: request.audio_output,
                 id: next_request_id(),
                 queued_at: None,
                 messages,
@@ -1637,6 +1659,7 @@ impl Runner {
             }));
 
             let is_streaming = request.stream;
+            let n_choices = request.n_choices;
             let debug_repr = format!("{request:?}");
             drop(request);
 
@@ -1655,7 +1678,9 @@ impl Runner {
                 .map_err(PyApiErr::from)?;
 
             match send_recv_result {
-                either::Either::Right(rx) => Ok(Either::Right(ChatCompletionStreamer::from_rx(rx))),
+                either::Either::Right(rx) => Ok(Either::Right(ChatCompletionStreamer::from_rx(
+                    rx, n_choices,
+                ))),
                 either::Either::Left(response) => parse_chat_response(response).map(Either::Left),
             }
         })
@@ -1698,6 +1723,7 @@ impl Runner {
                     let request_id = next_request_id();
 
                     let model_request = _Request::Normal(Box::new(NormalRequest {
+                        audio_output: None,
                         id: request_id,
                         queued_at: None,
                         messages: message,
@@ -1811,6 +1837,7 @@ impl Runner {
             };
 
             let model_request = _Request::Normal(Box::new(NormalRequest {
+                audio_output: None,
                 id: next_request_id(),
                 queued_at: None,
                 messages: RequestMessage::Completion {
@@ -1899,6 +1926,7 @@ impl Runner {
         let (tx, mut rx) = channel(1);
 
         let request = _Request::Normal(Box::new(NormalRequest {
+            audio_output: None,
             id: 0,
             queued_at: None,
             messages: RequestMessage::ImageGeneration {
@@ -1970,6 +1998,7 @@ impl Runner {
         let (tx, mut rx) = channel(1);
 
         let request = _Request::Normal(Box::new(NormalRequest {
+            audio_output: None,
             id: 0,
             queued_at: None,
             messages: RequestMessage::SpeechGeneration { prompt },
@@ -2251,375 +2280,7 @@ impl Runner {
         request: Py<ChatCompletionRequest>,
         model_id: String,
     ) -> PyApiResult<Either<ChatCompletionResponse, ChatCompletionStreamer>> {
-        let (tx, rx) = channel(10_000);
-        Python::with_gil(|py| {
-            let request = request.bind(py).borrow();
-            let stop_toks = request
-                .stop_seqs
-                .as_ref()
-                .map(|x| StopTokens::Seqs(x.to_vec()));
-            let constraint =
-                build_constraint(request.grammar.as_deref(), request.grammar_type.as_deref())?;
-
-            let dry_params = if let Some(dry_multiplier) = request.dry_multiplier {
-                Some(DrySamplingParams::new_with_defaults(
-                    dry_multiplier,
-                    request.dry_sequence_breakers.clone(),
-                    request.dry_base,
-                    request.dry_allowed_length,
-                )?)
-            } else {
-                None
-            };
-
-            let messages = match request.messages {
-                Either::Left(ref messages) => {
-                    let mut messages_vec = Vec::new();
-                    let mut image_urls = Vec::new();
-                    let mut audio_urls = Vec::new();
-                    let mut video_urls = Vec::new();
-                    for message in messages {
-                        let role = message["role"].as_ref().left().unwrap().clone();
-                        match &message["content"] {
-                            Either::Left(content) => {
-                                let mut message_map: IndexMap<
-                                    String,
-                                    Either<String, Vec<IndexMap<String, Value>>>,
-                                > = IndexMap::new();
-                                message_map.insert("role".to_string(), Either::Left(role));
-                                message_map.insert(
-                                    "content".to_string(),
-                                    Either::Left(content.to_string()),
-                                );
-                                messages_vec.push(message_map);
-                            }
-                            Either::Right(image_messages) => {
-                                // If there is only one message, it is possible a text message
-                                // found when rig is used as client. In this case, we need to check if
-                                // the message is a text message or an image message.
-                                if image_messages.len() == 1 {
-                                    if !image_messages[0].contains_key("text") {
-                                        return Err(PyApiErr::from(
-                                            "Expected `text` key in input message.",
-                                        ));
-                                    }
-                                    let content = match &image_messages[0]["text"] {
-                                        Either::Left(left) => left.to_string(),
-                                        Either::Right(right) => format!("{right:?}"),
-                                    };
-                                    let mut message_map: IndexMap<
-                                        String,
-                                        Either<String, Vec<IndexMap<String, Value>>>,
-                                    > = IndexMap::new();
-                                    message_map.insert("role".to_string(), Either::Left(role));
-                                    message_map
-                                        .insert("content".to_string(), Either::Left(content));
-                                    messages_vec.push(message_map);
-                                    continue;
-                                }
-                                if role != "user" {
-                                    return Err(PyApiErr::from(
-                                        "Role for an image message must be `user`, but it is {role}",
-                                    ));
-                                }
-
-                                enum ContentPart {
-                                    Text { text: String },
-                                    Image { image_url: String },
-                                    Audio { audio_url: String },
-                                    Video { video_url: String },
-                                }
-
-                                let mut items = Vec::new();
-                                for image_message in image_messages {
-                                    match image_message.get("type") {
-                                        Some(Either::Left(x)) if x == "text" => {
-                                            items.push(ContentPart::Text {
-                                                text: image_message
-                                                    .get("text").as_ref()
-                                                    .context("Text sub-content must have `text` key.")?.as_ref()
-                                                    .left().context("Text sub-content `text` key must be a string.")?.clone(),
-                                            });
-                                        }
-                                        Some(Either::Left(x)) if x == "image_url" => {
-                                            items.push(ContentPart::Image {
-                                                image_url: image_message
-                                                    .get("image_url")
-                                                    .as_ref()
-                                                    .context("Image sub-content must have `image_url` key.")?
-                                                    .as_ref()
-                                                    .right()
-                                                    .context("Image sub-content `image_url` key must be an object.")?
-                                                    .get("url")
-                                                    .context("Image sub-content `image_url` object must have a `url` key.")?
-                                                    .clone(),
-                                            });
-                                        }
-                                        Some(Either::Left(x)) if x == "audio_url" => {
-                                            items.push(ContentPart::Audio {
-                                                audio_url: image_message
-                                                    .get("audio_url")
-                                                    .as_ref()
-                                                    .context("Audio sub-content must have `audio_url` key.")?
-                                                    .as_ref()
-                                                    .right()
-                                                    .context("Audio sub-content `audio_url` key must be an object.")?
-                                                    .get("url")
-                                                    .context("Audio sub-content `audio_url` object must have a `url` key.")?
-                                                    .clone(),
-                                            });
-                                        }
-                                        Some(Either::Left(x)) if x == "video_url" => {
-                                            items.push(ContentPart::Video {
-                                                video_url: image_message
-                                                    .get("video_url")
-                                                    .as_ref()
-                                                    .context("Video sub-content must have `video_url` key.")?
-                                                    .as_ref()
-                                                    .right()
-                                                    .context("Video sub-content `video_url` key must be an object.")?
-                                                    .get("url")
-                                                    .context("Video sub-content `video_url` object must have a `url` key.")?
-                                                    .clone(),
-                                            });
-                                        }
-                                        _ => return Err(PyApiErr::from("Expected array content sub-content to be of format {{`type`: `text`, `text`: ...}} and {{`type`: `url`, `image_url`: {{`url`: ...}}}}"))
-                                    }
-                                }
-
-                                let text_content = items
-                                    .iter()
-                                    .filter_map(|item| match item {
-                                        ContentPart::Text { text } => Some(text),
-                                        _ => None,
-                                    })
-                                    .join(" ");
-                                let image_urls_iter = items
-                                    .iter()
-                                    .filter_map(|item| match item {
-                                        ContentPart::Image { image_url } => Some(image_url.clone()),
-                                        _ => None,
-                                    })
-                                    .collect::<Vec<_>>();
-
-                                let audio_urls_iter = items
-                                    .iter()
-                                    .filter_map(|item| match item {
-                                        ContentPart::Audio { audio_url } => Some(audio_url.clone()),
-                                        _ => None,
-                                    })
-                                    .collect::<Vec<_>>();
-
-                                let video_urls_iter = items
-                                    .iter()
-                                    .filter_map(|item| match item {
-                                        ContentPart::Video { video_url } => Some(video_url.clone()),
-                                        _ => None,
-                                    })
-                                    .collect::<Vec<_>>();
-
-                                let mut message_map: IndexMap<
-                                    String,
-                                    Either<String, Vec<IndexMap<String, Value>>>,
-                                > = IndexMap::new();
-                                message_map.insert("role".to_string(), Either::Left(role));
-
-                                let mut content_map: Vec<IndexMap<String, Value>> = Vec::new();
-                                for _ in &image_urls_iter {
-                                    let mut content_image_map = IndexMap::new();
-                                    content_image_map.insert(
-                                        "type".to_string(),
-                                        Value::String("image".to_string()),
-                                    );
-                                    content_map.push(content_image_map);
-                                }
-                                for _ in &audio_urls_iter {
-                                    let mut content_audio_map = IndexMap::new();
-                                    content_audio_map.insert(
-                                        "type".to_string(),
-                                        Value::String("audio".to_string()),
-                                    );
-                                    content_map.push(content_audio_map);
-                                }
-                                for _ in &video_urls_iter {
-                                    let mut content_video_map = IndexMap::new();
-                                    content_video_map.insert(
-                                        "type".to_string(),
-                                        Value::String("video".to_string()),
-                                    );
-                                    content_map.push(content_video_map);
-                                }
-                                {
-                                    let mut content_text_map = IndexMap::new();
-                                    content_text_map.insert(
-                                        "type".to_string(),
-                                        Value::String("text".to_string()),
-                                    );
-                                    content_text_map
-                                        .insert("text".to_string(), Value::String(text_content));
-                                    content_map.push(content_text_map);
-                                }
-
-                                message_map
-                                    .insert("content".to_string(), Either::Right(content_map));
-                                messages_vec.push(message_map);
-                                image_urls.extend(image_urls_iter);
-                                audio_urls.extend(audio_urls_iter);
-                                video_urls.extend(video_urls_iter);
-                            }
-                        }
-                    }
-                    if !image_urls.is_empty() || !audio_urls.is_empty() || !video_urls.is_empty() {
-                        let mut images = Vec::new();
-                        for url in image_urls {
-                            let url_unparsed = url.trim();
-
-                            let image = util::parse_image_url(url_unparsed)?;
-                            images.push(image);
-                        }
-                        let mut audios = Vec::new();
-                        for url in audio_urls {
-                            let url_unparsed = url.trim();
-                            let audio = util::parse_audio_url(url_unparsed)?;
-                            audios.push(audio);
-                        }
-                        let mut videos = Vec::new();
-                        for url in video_urls {
-                            let url_unparsed = url.trim();
-                            let video = util::parse_video_url(url_unparsed)?;
-                            videos.push(video);
-                        }
-                        RequestMessage::MultimodalChat {
-                            messages: messages_vec,
-                            images,
-                            audios,
-                            videos,
-                            enable_thinking: request.enable_thinking,
-                            reasoning_effort: request.reasoning_effort,
-                        }
-                    } else {
-                        RequestMessage::Chat {
-                            messages: messages_vec,
-                            enable_thinking: request.enable_thinking,
-                            reasoning_effort: request.reasoning_effort,
-                        }
-                    }
-                }
-                Either::Right(ref prompt) => {
-                    let mut messages = Vec::new();
-                    let mut message_map: IndexMap<
-                        String,
-                        Either<String, Vec<IndexMap<String, Value>>>,
-                    > = IndexMap::new();
-                    message_map.insert("role".to_string(), Either::Left("user".to_string()));
-                    message_map.insert("content".to_string(), Either::Left(prompt.to_string()));
-                    messages.push(message_map);
-                    RequestMessage::Chat {
-                        messages,
-                        enable_thinking: request.enable_thinking,
-                        reasoning_effort: request.reasoning_effort,
-                    }
-                }
-            };
-
-            let tool_choice = request.tool_choice.as_ref().map(|x| match x {
-                ToolChoice::Auto => mistralrs_core::ToolChoice::Auto,
-                ToolChoice::NoTools => mistralrs_core::ToolChoice::None,
-            });
-
-            let tools = if let Some(tools) = &request.tool_schemas {
-                let mut new_tools = Vec::new();
-                for schema in tools {
-                    new_tools.push(serde_json::from_str::<Tool>(schema)?);
-                }
-                Some(new_tools)
-            } else {
-                None
-            };
-
-            let agent_approval_callback = build_agent_approval_callback(
-                request
-                    .agent_approval_callback
-                    .as_ref()
-                    .map(|callback| callback.clone_ref(py)),
-            );
-
-            let model_request = _Request::Normal(Box::new(NormalRequest {
-                id: next_request_id(),
-                queued_at: None,
-                messages,
-                sampling_params: SamplingParams {
-                    temperature: request.temperature,
-                    top_k: request.top_k,
-                    top_p: request.top_p,
-                    top_n_logprobs: request.top_logprobs.unwrap_or(1),
-                    frequency_penalty: request.frequency_penalty,
-                    presence_penalty: request.presence_penalty,
-                    repetition_penalty: request.repetition_penalty,
-                    max_len: request.max_tokens,
-                    stop_toks,
-                    ignore_eos: request.ignore_eos,
-                    logits_bias: request.logit_bias.clone(),
-                    n_choices: request.n_choices,
-                    min_p: request.min_p,
-                    dry_params,
-                },
-                seed: None,
-                response: tx,
-                return_logprobs: request.logprobs,
-                is_streaming: request.stream,
-                constraint,
-                suffix: None,
-                tool_choice,
-                tools,
-                logits_processors: None,
-                return_raw_logits: false,
-                web_search_options: request.web_search_options.clone(),
-                enable_code_execution: request.enable_code_execution,
-                enable_shell: request.enable_shell,
-                shell_options: request.shell_options(),
-                code_execution_permission: request.code_execution_permission,
-                code_execution_approval_notifier: None,
-                agent_permission: request.agent_permission,
-                agent_approval_handler: agent_approval_callback
-                    .map(AgentToolApprovalHandler::from_sync),
-                agent_approval_notifier: None,
-                max_tool_rounds: request.max_tool_rounds,
-                tool_dispatch_url: request.tool_dispatch_url.clone(),
-                model_id: Some(model_id.clone()),
-                adapter: request.adapter.clone(),
-                truncate_sequence: request.truncate_sequence,
-                session_id: request.session_id.clone(),
-                files: request
-                    .files
-                    .clone()
-                    .map(|fs| fs.into_iter().map(Into::into).collect()),
-                input_files: request.input_files(),
-            }));
-
-            let is_streaming = request.stream;
-            let debug_repr = format!("{request:?}");
-            drop(request);
-
-            let runner = self.runner.clone();
-            let send_recv_result = py
-                .allow_threads(move || -> std::result::Result<either::Either<Response, Receiver<Response>>, String> {
-                    send_request_with_optional_stream(
-                        runner,
-                        Some(model_id),
-                        model_request,
-                        rx,
-                        debug_repr,
-                        is_streaming,
-                    )
-                })
-                .map_err(PyApiErr::from)?;
-
-            match send_recv_result {
-                either::Either::Right(rx) => Ok(Either::Right(ChatCompletionStreamer::from_rx(rx))),
-                either::Either::Left(response) => parse_chat_response(response).map(Either::Left),
-            }
-        })
+        self.send_chat_completion_request(request, Some(model_id))
     }
 
     /// Send an OpenAI API compatible completion request to a specific model, returning the result.
@@ -2665,6 +2326,7 @@ impl Runner {
             };
 
             let model_request = _Request::Normal(Box::new(NormalRequest {
+                audio_output: None,
                 id: next_request_id(),
                 queued_at: None,
                 messages: RequestMessage::Completion {
@@ -3147,6 +2809,7 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SpeechLoaderType>()?;
 
     m.add_class::<mistralrs_core::ResponseMessage>()?;
+    m.add_class::<mistralrs_core::ChatAudioResponse>()?;
     m.add_class::<mistralrs_core::Delta>()?;
     m.add_class::<mistralrs_core::ResponseLogprob>()?;
     m.add_class::<mistralrs_core::Logprobs>()?;
@@ -3344,5 +3007,147 @@ mod lora_adapter_error_tests {
             validate_encoder_cache_runner_options(&which),
             Err("encoder_cache_memory_bytes must be nonzero")
         );
+    }
+}
+
+#[cfg(test)]
+mod chat_message_tests {
+    use std::{collections::HashMap, io::Cursor};
+
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use image::{DynamicImage, ImageFormat};
+    use mistralrs_core::{encode_audio_pcm, ChatAudioFormat};
+
+    use super::*;
+
+    const AUDIO_RATE: u32 = 16_000;
+    const AUDIO_SAMPLES: usize = 16;
+    type Part = HashMap<String, Either<String, HashMap<String, String>>>;
+
+    fn message(role: &str, parts: Vec<Part>) -> requests::PythonChatMessages {
+        Either::Left(vec![HashMap::from([
+            ("role".to_string(), Either::Left(role.to_string())),
+            ("content".to_string(), Either::Right(parts)),
+        ])])
+    }
+
+    fn media_part(kind: &str, fields: &[(&str, String)]) -> Part {
+        HashMap::from([
+            ("type".to_string(), Either::Left(kind.to_string())),
+            (
+                kind.to_string(),
+                Either::Right(
+                    fields
+                        .iter()
+                        .map(|(key, value)| (key.to_string(), value.clone()))
+                        .collect(),
+                ),
+            ),
+        ])
+    }
+
+    #[test]
+    fn preserves_single_and_multiple_audio_parts() {
+        let data = STANDARD.encode(
+            encode_audio_pcm(&[0.0; AUDIO_SAMPLES], AUDIO_RATE, 1, ChatAudioFormat::Wav).unwrap(),
+        );
+        let inline = media_part(
+            "input_audio",
+            &[("data", data.clone()), ("format", "wav".into())],
+        );
+        let url = media_part(
+            "audio_url",
+            &[("url", format!("data:audio/wav;base64,{data}"))],
+        );
+        for parts in [
+            vec![inline.clone()],
+            vec![url],
+            vec![inline.clone(), inline],
+        ] {
+            let expected_clips = parts.len();
+            let RequestMessage::MultimodalChat {
+                messages,
+                images,
+                audios,
+                videos,
+                ..
+            } = normalize_chat_messages(&message("user", parts), None, None).unwrap()
+            else {
+                panic!("audio content must produce a multimodal request");
+            };
+            assert!(images.is_empty() && videos.is_empty());
+            assert_eq!(audios.len(), expected_clips);
+            for audio in audios {
+                assert_eq!(audio.sample_rate, AUDIO_RATE);
+                assert_eq!(audio.channels, 1);
+                assert_eq!(audio.samples, [0.0; AUDIO_SAMPLES]);
+            }
+            let parts = messages[0]["content"].as_ref().right().unwrap();
+            assert_eq!(
+                parts.iter().filter(|part| part["type"] == "audio").count(),
+                expected_clips
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_single_image_and_video_without_text() {
+        for (kind, format, mime) in [
+            ("image_url", ImageFormat::Png, "image/png"),
+            ("video_url", ImageFormat::Gif, "image/gif"),
+        ] {
+            let mut image = Cursor::new(Vec::new());
+            DynamicImage::new_rgba8(1, 1)
+                .write_to(&mut image, format)
+                .unwrap();
+            let part = media_part(
+                kind,
+                &[(
+                    "url",
+                    format!("data:{mime};base64,{}", STANDARD.encode(image.into_inner())),
+                )],
+            );
+            let RequestMessage::MultimodalChat {
+                images,
+                audios,
+                videos,
+                ..
+            } = normalize_chat_messages(&message("user", vec![part]), None, None).unwrap()
+            else {
+                panic!("media content must produce a multimodal request");
+            };
+            assert!(audios.is_empty());
+            if kind == "image_url" {
+                assert_eq!(images.len(), 1);
+                assert!(videos.is_empty());
+            } else {
+                assert!(images.is_empty());
+                assert_eq!(videos.len(), 1);
+                assert_eq!(videos[0].frames.len(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn preserves_legacy_and_typed_system_text() {
+        for typed in [false, true] {
+            let mut part = HashMap::from([(
+                "text".to_string(),
+                Either::Left("system prompt".to_string()),
+            )]);
+            if typed {
+                part.insert("type".to_string(), Either::Left("text".to_string()));
+            }
+            let RequestMessage::Chat { messages, .. } =
+                normalize_chat_messages(&message("system", vec![part]), None, None).unwrap()
+            else {
+                panic!("text content must produce a text request");
+            };
+            assert_eq!(messages[0]["role"].as_ref().left().unwrap(), "system");
+            assert_eq!(
+                messages[0]["content"].as_ref().left().unwrap(),
+                "system prompt"
+            );
+        }
     }
 }

@@ -29,6 +29,8 @@ pub(crate) mod gemma3n;
 pub(crate) mod gemma4;
 pub(crate) mod grid_processor;
 pub(crate) mod lfm2_vl;
+pub(crate) mod lfm3_audio;
+pub(crate) mod lfm3_omni;
 pub(crate) mod lfm3_vl;
 pub(crate) mod llama4;
 pub(crate) mod mistral3;

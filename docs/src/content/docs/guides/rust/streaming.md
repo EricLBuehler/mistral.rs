@@ -44,6 +44,7 @@ while let Some(item) = stream.next().await {
 `Response` variants seen on a chat stream:
 
 - `Response::Chunk`: the common case. Carries incremental text in `choices[0].delta.content`.
+- Chat speech output also uses `Response::Chunk`, with base64 PCM in `choices[].delta.audio.data`. Select `ChatAudioFormat::Pcm16`, decode each chunk, and append bytes in arrival order, including any final tail. See [chat speech output](/reference/rust-sdk/#chat-speech-output).
 - `Response::Done`: end of stream, with the final `ChatCompletionResponse` and usage stats.
 - `Response::InternalError`: engine-level failure. The stream produces no further values.
 - `Response::ModelError`: model-level failure, accompanied by the partial response built so far.

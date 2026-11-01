@@ -34,8 +34,19 @@ for the shared CLI, HTTP, Python, and Rust behavior.
 
 `reasoning_effort` accepts `off`, `low`, `medium`, `high`, and `xhigh`; `none`
 aliases `off`. Values are trimmed and case-insensitive. If both reasoning controls
-are omitted, thinking is enabled with no selected effort. Contradictory
+are omitted, thinking is enabled for text output and disabled for speech output,
+with no selected effort. Contradictory
 `enable_thinking` and `reasoning_effort` values raise `ValueError`.
+
+Audio input content parts accept `{"type": "input_audio", "input_audio":
+{"data": "<base64>", "format": "wav"}}` for WAV or MP3 clips. Other decodable
+formats can use the `audio_url` extension. For models with speech output,
+`modalities` selects audio or text plus audio, and `audio` accepts `format`
+(`wav`, `pcm16`, `mp3`, `flac`, `opus`, or `aac`) and optional `voice="default"`.
+Compressed output requires FFmpeg. Streaming requires PCM16 and returns
+incremental `delta.audio.data` chunks. HTTP `audio.id` history replay is not
+available through the native SDK.
+Text sampling controls do not configure LFM3's separate speech-code sampler.
 
 | Field | Type | Default |
 | --- | --- | --- |
@@ -80,6 +91,8 @@ are omitted, thinking is enabled with no selected effort. Contradictory
 | `input_files` | `list[InputFile] \| None` | `None` |
 | `ignore_eos` | `bool` | `False` |
 | `adapter` | `str \| LoraAdapterGeneration \| None` | `None (keyword-only)` |
+| `modalities` | `list[Literal['text', 'audio']] \| None` | `None (keyword-only)` |
+| `audio` | `dict[str, str] \| None` | `None (keyword-only)` |
 
 
 ## `CompletionRequest`

@@ -37,6 +37,43 @@ const VIDEO_SAMPLING: crate::VideoFrameSampling = crate::VideoFrameSampling::Fps
 pub struct Lfm3VlLoader;
 struct Lfm3VlPrefixer;
 
+impl Lfm3VlLoader {
+    pub(crate) fn encoder_activation_memory_bytes(
+        config: &str,
+        params: &AutoDeviceMapParams,
+        dtype: DType,
+        device: &Device,
+    ) -> Result<(usize, usize)> {
+        let cfg: Config = serde_json::from_str(config)?;
+        let vc = &cfg.vision_config;
+        let AutoDeviceMapParams::Multimodal {
+            max_batch_size,
+            max_image_shape,
+            max_num_images,
+            ..
+        } = params
+        else {
+            anyhow::bail!("Expected multimodal device map parameters");
+        };
+        let factor = vc.patch_size * vc.spatial_merge_size;
+        let grids = [[
+            max_batch_size * max_num_images,
+            max_image_shape.0.div_ceil(factor) * vc.spatial_merge_size,
+            max_image_shape.1.div_ceil(factor) * vc.spatial_merge_size,
+        ]];
+        let estimate = EncoderMemoryEstimate::new(vc, dtype, device);
+        Ok((
+            estimate.estimate(grids)?,
+            estimate.retained_bytes(
+                grids,
+                cfg.text_config.hidden_size,
+                cfg.downsample_factor,
+                dtype,
+            )?,
+        ))
+    }
+}
+
 impl MultimodalPromptPrefixer for Lfm3VlPrefixer {
     fn prefix_image(&self, _image_indexes: Vec<usize>, prompt: &str) -> String {
         prompt.to_owned()
@@ -208,24 +245,7 @@ impl DeviceMappedModelLoader for Lfm3VlLoader {
         dtype: DType,
         device: &Device,
     ) -> Result<usize> {
-        let cfg: Config = serde_json::from_str(config)?;
-        let vc = &cfg.vision_config;
-        let AutoDeviceMapParams::Multimodal {
-            max_batch_size,
-            max_image_shape,
-            max_num_images,
-            ..
-        } = params
-        else {
-            anyhow::bail!("Expected multimodal device map parameters");
-        };
-        let factor = vc.patch_size * vc.spatial_merge_size;
-        let items = max_batch_size * max_num_images;
-        Ok(EncoderMemoryEstimate::new(vc, dtype, device).estimate([[
-            items,
-            max_image_shape.0.div_ceil(factor) * vc.spatial_merge_size,
-            max_image_shape.1.div_ceil(factor) * vc.spatial_merge_size,
-        ]])?)
+        Ok(Self::encoder_activation_memory_bytes(config, params, dtype, device)?.0)
     }
     fn non_mapped_size_in_bytes(
         &self,

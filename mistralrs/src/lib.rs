@@ -295,7 +295,8 @@ pub use mistralrs_core::{
 
 // ========== Request Types ==========
 pub use mistralrs_core::{
-    Constraint, LlguidanceGrammar, MessageContent, NormalRequest, ReasoningEffort, Request,
+    ChatAudioFormat, ChatAudioMode, ChatAudioRequest, ChatAudioResponse, Constraint,
+    LlguidanceGrammar, MessageContent, NormalRequest, ReasoningEffort, Request,
 };
 
 // ========== Sampling ==========

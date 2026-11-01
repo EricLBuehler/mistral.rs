@@ -44,8 +44,8 @@ use crate::{
     openai::{
         normalize_chat_completion_tools, normalize_responses_tools, validate_openai_tool_choice,
         ChatCompletionChunkResponseBody, ChatCompletionRequest, ChatCompletionResponseBody,
-        Grammar, JsonSchemaResponseFormat, Message, MessageInnerContent, OpenAiToolSurface,
-        ResponseFormat,
+        Grammar, JsonSchemaResponseFormat, Message, MessageContent as OpenAiMessageContent,
+        MessageInnerContent, OpenAiToolSurface, ResponseFormat,
     },
     skills::SkillStore,
     streaming::{
@@ -549,6 +549,42 @@ fn insert_reasoning_content(output: &mut IndexMap<String, MessageContent>, messa
     }
 }
 
+fn normalize_text_content(content: OpenAiMessageContent) -> Result<OpenAiMessageContent> {
+    let Either::Right(parts) = content.deref() else {
+        return Ok(content);
+    };
+    if parts.len() != 1
+        || !parts[0]
+            .get("type")
+            .is_none_or(|kind| matches!(kind.deref(), Either::Left(kind) if kind == "text"))
+    {
+        return Ok(content);
+    }
+    let text = parts[0]
+        .get("text")
+        .context("Expected `text` key in input message.")?
+        .as_ref()
+        .left()
+        .context("Input message `text` must be a string.")?
+        .clone();
+    Ok(OpenAiMessageContent::from_text(text))
+}
+
+fn input_audio_url(part: &HashMap<String, MessageInnerContent>) -> Result<String> {
+    let audio = part
+        .get("input_audio")
+        .context("Audio content must have an input_audio object")?
+        .as_ref()
+        .right()
+        .context("input_audio must be an object")?;
+    mistralrs_core::input_audio_data_url(
+        audio.get("data").context("input_audio.data is required")?,
+        audio
+            .get("format")
+            .context("input_audio.format is required")?,
+    )
+}
+
 pub struct ChatCompletionParseContext {
     pub state: SharedMistralRsState,
     pub tx: Sender<Response>,
@@ -582,6 +618,26 @@ pub async fn parse_request(
 
     // Validate that the requested model matches the loaded model
     validate_model_name(&oairequest.model, state.clone())?;
+    let model = (oairequest.model != "default").then_some(oairequest.model.as_str());
+
+    let audio_output = mistralrs_core::ChatAudioRequest::from_modalities(
+        oairequest.modalities.as_deref(),
+        oairequest.audio.as_ref(),
+        oairequest.stream.unwrap_or(false),
+    )?;
+    if audio_output.is_some() {
+        let config = state.config(model).map_err(anyhow::Error::msg)?;
+        anyhow::ensure!(
+            matches!(
+                config.category,
+                ModelCategory::Text | ModelCategory::Multimodal { .. }
+            ) && config
+                .modalities
+                .output
+                .contains(&mistralrs_core::SupportedModality::Audio),
+            "The requested model does not support audio output"
+        );
+    }
 
     let mut enable_thinking = oairequest.enable_thinking;
     let mut reasoning_effort = oairequest.reasoning_effort.clone();
@@ -632,18 +688,22 @@ pub async fn parse_request(
             let mut audio_urls = Vec::new();
             let mut video_urls = Vec::new();
             for message in req_messages {
-                let content = match message.content.as_deref() {
-                    Some(content) => content.clone(),
+                anyhow::ensure!(
+                    message.audio.is_none(),
+                    "audio.id requires the server audio history store; resend the assistant transcript as content"
+                );
+                let content = match &message.content {
+                    Some(content) => normalize_text_content(content.clone())?,
                     None => {
                         // Templates render tool_calls themselves; HF treats a missing content as empty text
                         message.tool_calls.as_ref().context(
                             "No content was provided, expected tool calls to be provided.",
                         )?;
-                        Either::Left(String::new())
+                        OpenAiMessageContent::from_text(String::new())
                     }
                 };
 
-                match &content {
+                match content.deref() {
                     Either::Left(content) => {
                         let mut message_map: IndexMap<
                             String,
@@ -704,31 +764,9 @@ pub async fn parse_request(
                         messages.push(message_map);
                     }
                     Either::Right(image_messages) => {
-                        // If there is only one message, it is possible a text message
-                        // found when rig is used as client. In this case, we need to check if
-                        // the message is a text message or an image message.
-                        if image_messages.len() == 1 && !image_messages[0].contains_key("type") {
-                            if !image_messages[0].contains_key("text") {
-                                anyhow::bail!("Expected `text` key in input message.");
-                            }
-                            let content = match image_messages[0]["text"].deref() {
-                                Either::Left(left) => left.to_string(),
-                                Either::Right(right) => format!("{right:?}"),
-                            };
-                            let mut message_map: IndexMap<
-                                String,
-                                Either<String, Vec<IndexMap<String, Value>>>,
-                            > = IndexMap::new();
-                            message_map
-                                .insert("role".to_string(), Either::Left(message.role.clone()));
-                            message_map.insert("content".to_string(), Either::Left(content));
-                            insert_reasoning_content(&mut message_map, &message);
-                            messages.push(message_map);
-                            continue;
-                        }
                         if message.role != "user" {
                             anyhow::bail!(
-                                "Role for an image message must be `user`, but it is {}",
+                                "Role for a media message must be `user`, but it is {}",
                                 message.role
                             );
                         }
@@ -780,6 +818,11 @@ pub async fn parse_request(
                                             .clone(),
                                     });
                                 }
+                                Some(MessageInnerContent(Either::Left(x))) if x == "input_audio" => {
+                                    items.push(ContentPart::Audio {
+                                        audio_url: input_audio_url(image_message)?,
+                                    });
+                                }
                                 Some(MessageInnerContent(Either::Left(x))) if x == "video_url" => {
                                     items.push(ContentPart::Video {
                                         video_url: image_message
@@ -817,7 +860,7 @@ pub async fn parse_request(
                                     }
                                     items.push(ContentPart::File { spec });
                                 }
-                                _ => anyhow::bail!("Expected array content sub-content to be one of `text`, `image_url`, `audio_url`, `video_url`, or `file`.")
+                                _ => anyhow::bail!("Expected array content sub-content to be one of `text`, `image_url`, `input_audio`, `audio_url`, `video_url`, or `file`.")
                             }
                         }
 
@@ -872,7 +915,7 @@ pub async fn parse_request(
                             || !video_urls_iter.is_empty()
                         {
                             if let Ok(ModelCategory::Multimodal { prefixer, .. }) =
-                                state.get_model_category(None)
+                                state.get_model_category(model)
                             {
                                 let mut prefixed = text_content;
 
@@ -970,7 +1013,7 @@ pub async fn parse_request(
                 }
 
                 // Parse videos
-                let video_sampling = match state.get_model_category(None) {
+                let video_sampling = match state.get_model_category(model) {
                     Ok(ModelCategory::Multimodal { video_sampling, .. }) => Some(video_sampling),
                     _ => None,
                 };
@@ -1047,6 +1090,7 @@ pub async fn parse_request(
 
     Ok((
         Request::Normal(Box::new(NormalRequest {
+            audio_output,
             id: state.next_request_id(),
             queued_at: None,
             messages,
@@ -1121,6 +1165,7 @@ pub async fn chatcompletions(
     State(state): ExtractedMistralRsState,
     Extension(agentic_defaults): Extension<AgenticDefaults>,
     Extension(skill_store): Extension<Arc<SkillStore>>,
+    history: Option<Extension<Arc<crate::audio_history::AudioHistoryStore>>>,
     stream_outcome: Option<Extension<StreamOutcomeHandle>>,
     payload: Result<Json<ChatCompletionRequest>, JsonRejection>,
 ) -> ChatCompletionResponder {
@@ -1141,6 +1186,21 @@ pub async fn chatcompletions(
         return ChatCompletionResponder::ValidationError(Box::new(error));
     }
     let model_override = request_model_override(requested_model, &oairequest.model);
+
+    let history = history.map(|Extension(store)| store);
+    if let Some(store) = &history {
+        if let Err(error) = store.resolve_messages(&mut oairequest.messages) {
+            return handle_completion_validation_error(state, error.into());
+        }
+    }
+    let audio_options =
+        oairequest
+            .audio
+            .as_ref()
+            .map(|audio| crate::audio_history::AudioResponseOptions {
+                format: audio.format,
+                choices: oairequest.n_choices,
+            });
 
     // Apply server-level default for max_tool_rounds (per-request value takes priority)
     oairequest.max_tool_rounds = oairequest
@@ -1203,6 +1263,10 @@ pub async fn chatcompletions(
 
     if let Err(e) = send_request_with_model(&state, request, model_id.as_deref()).await {
         return handle_error(state, e.into());
+    }
+
+    if let (Some(store), Some(options)) = (history, audio_options) {
+        rx = crate::audio_history::decorate_responses(rx, state.clone(), model_id, options, store);
     }
 
     if is_streaming {

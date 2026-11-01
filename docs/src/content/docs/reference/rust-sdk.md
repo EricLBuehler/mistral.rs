@@ -29,9 +29,26 @@ async fn send_raw_chat_request<R: RequestLike>(&self, request: R) -> Result<(Vec
 ```
 Returns raw logits of the first generated token plus the prompt tokens. Example: [perplexity](/examples/rust/advanced/perplexity/).
 
+### Chat speech output
+
+For LFM3-Audio or LFM3-Omni, convert text or multimodal messages into a `RequestBuilder` and select the output mode:
+
+```rust
+use mistralrs::{ChatAudioFormat, ChatAudioMode, RequestBuilder};
+
+let request = RequestBuilder::from(messages)
+    .with_audio_output(ChatAudioMode::TextAudio, ChatAudioFormat::Wav);
+let response = model.send_chat_request(request).await?;
+let audio = response.choices[0].message.audio.as_ref();
+```
+
+`ChatAudioMode::Audio` requests speech alone; `TextAudio` requests text and speech. `message.audio.data` contains base64 file bytes. Formats are `Wav`, `Pcm16`, `Mp3`, `Flac`, `Opus`, and `Aac`; compressed formats require FFmpeg. For `stream_chat_request`, choose `Pcm16` and concatenate decoded `choices[].delta.audio.data` bytes, including the final tail. LFM3 PCM is mono, signed 16-bit little-endian at 24 kHz.
+
+The native SDK does not provide the HTTP server's transcript cache or `audio.id` history lookup. Preserve assistant text explicitly for later turns. See [speech sampling and limits](/guides/models/model-family-notes/#lfm3-speech-input-and-output) for model defaults and incompatible request options.
+
 ## Reasoning
 
-`ReasoningEffort::{Off, Low, Medium, High, XHigh}` is accepted by `TextMessages::with_reasoning_effort`, `MultimodalMessages::with_reasoning_effort`, `RequestBuilder::with_reasoning_effort`, and `AgentBuilder::with_reasoning_effort`. The existing `enable_thinking(bool)` or `with_enable_thinking(bool)` methods remain available. Omission leaves effort unspecified with thinking enabled; contradictory explicit controls return a request-validation error.
+`ReasoningEffort::{Off, Low, Medium, High, XHigh}` is accepted by `TextMessages::with_reasoning_effort`, `MultimodalMessages::with_reasoning_effort`, `RequestBuilder::with_reasoning_effort`, and `AgentBuilder::with_reasoning_effort`. The existing `enable_thinking(bool)` or `with_enable_thinking(bool)` methods remain available. Omission leaves effort unspecified with thinking enabled for text output. Chat requests with speech output default to thinking disabled. Explicit controls take precedence; contradictory explicit controls return a request-validation error.
 
 ```rust
 let messages = TextMessages::new()
@@ -91,7 +108,9 @@ Diffusion image generation. Example: [diffusion](/examples/rust/models/diffusion
 ```rust
 async fn generate_speech(&self, prompt: impl ToString) -> Result<(Arc<Vec<f32>>, usize, usize)>
 ```
-Text to speech; returns `(pcm, sample_rate, channels)`. Example: [speech](/examples/rust/models/speech/).
+Text to speech; returns `(pcm, sample_rate, channels)`. This works with dedicated speech models such as Dia and chat speech models such as LFM3-Audio and LFM3-Omni. For LFM3 it requests audio-only synthesis with the checkpoint's TTS system prompt, thinking disabled, and its default voice. Examples: [LFM3 speech](/examples/rust/models/lfm3-audio/) and [Dia speech](/examples/rust/models/speech/).
+
+Use `send_chat_request` with `RequestBuilder::with_audio_output` when you need a custom system prompt, multimodal input, text with speech, an encoded output format, or generation controls. Use `stream_chat_request` for incremental PCM. Native helpers do not provide the HTTP server's transcript history cache or its `instructions`/`speed` request fields; chat instructions belong in messages.
 
 ## Quantization
 

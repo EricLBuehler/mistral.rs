@@ -242,6 +242,16 @@ impl MultimodalLoaderType {
                 modalities: &[Text, Vision, Video],
                 examples: &[ex!("LiquidAI/LFM3-VL-2B")],
             },
+            Self::Lfm3Audio => ArchMetadata {
+                families: &["LFM3-Audio"],
+                modalities: &[Text, Audio],
+                examples: &[ex!("LiquidAI/LFM3-Audio-2B")],
+            },
+            Self::Lfm3Omni => ArchMetadata {
+                families: &["LFM3-Omni"],
+                modalities: &[Text, Vision, Video, Audio],
+                examples: &[ex!("LiquidAI/LFM3-Omni-2B")],
+            },
             Self::VLlama => ArchMetadata {
                 families: &["Llama 3.2 Vision"],
                 modalities: &[Text, Vision],
@@ -444,6 +454,8 @@ impl MultimodalLoaderType {
             Self::LLaVA => "LlavaForConditionalGeneration",
             Self::Lfm2Vl => "Lfm2VlForConditionalGeneration",
             Self::Lfm3Vl => "Lfm3VlForConditionalGeneration",
+            Self::Lfm3Audio => "Lfm3AudioForConditionalGeneration",
+            Self::Lfm3Omni => "Lfm3OmniForConditionalGeneration",
             Self::VLlama => "MllamaForConditionalGeneration",
             Self::Qwen2VL => "Qwen2VLForConditionalGeneration",
             Self::Idefics3 => "Idefics3ForConditionalGeneration",

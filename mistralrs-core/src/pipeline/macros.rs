@@ -73,6 +73,12 @@ macro_rules! get_paths {
             tracing::trace!("Loading `hf_quant_config.json` at `{}`", $this.model_id);
             let _ = $crate::api_get_file!(api, "hf_quant_config.json", model_id, &revision);
         }
+        const CODEC_CONFIG: &str = "audio_tokenizer/config.json";
+        if dir_list.iter().any(|file| file == CODEC_CONFIG)
+            || model_id.join(CODEC_CONFIG).is_file()
+        {
+            let _ = $crate::api_get_file!(api, CODEC_CONFIG, model_id, &revision);
+        }
         let filenames = get_model_paths(
             revision.clone(),
             &$token_source,

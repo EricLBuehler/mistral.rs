@@ -387,6 +387,7 @@ async fn run_single_bench(
     let tokens = bench_tokens(prompt_tokens, token_start);
 
     let req = Request::Normal(Box::new(NormalRequest {
+        audio_output: None,
         id: mistralrs.next_request_id(),
         queued_at: None,
         messages: RequestMessage::CompletionTokens(tokens),

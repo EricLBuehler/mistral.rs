@@ -1,18 +1,33 @@
 ---
 title: Speech models
-description: Voxtral Realtime for speech transcription, Dia for text-to-speech.
+description: LFM3 speech conversations, Voxtral Realtime transcription, and Dia text-to-speech.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-mistral.rs supports two speech-related model families:
+mistral.rs supports these speech-related model families:
 
+- **LFM3-Audio and LFM3-Omni**: audio understanding, transcription, and speech generation through chat completions and dedicated audio endpoints.
 - **Voxtral Realtime**: multimodal model accepting audio input for speech transcription through
-  `/v1/chat/completions`.
+  `/v1/chat/completions` or `/v1/audio/transcriptions`.
 - **Dia**: dedicated text-to-speech model served via `/v1/audio/speech`.
 
 Voxtral Realtime is classified as a multimodal model because audio is an input modality. Dia is a
 dedicated speech model.
+
+## LFM3: speech input and output
+
+```bash
+mistralrs serve -p 1234 -m LiquidAI/LFM3-Audio-2B --isq q8_0
+```
+
+LFM3-Audio accepts text and audio and produces text, speech, or both. LFM3-Omni additionally accepts images and video. Both support standard WAV/MP3 `input_audio` chat content parts, multipart transcription and translation endpoints, and `/v1/audio/speech` synthesis. Chat PCM16 streaming emits audio during generation. The checkpoint has one default voice; OpenAI's named voices and Realtime API are not implemented.
+
+See the [LFM3 model notes](/guides/models/model-family-notes/#lfm3-audio), [audio compatibility details](/reference/openai-compatibility/#audio), and [OpenAI SDK endpoint example](/examples/server/lfm3-audio-endpoints/).
+
+Native Rust's `Model::generate_speech(prompt)` and Python's `Runner.generate_audio(prompt)` also support LFM3-Audio and LFM3-Omni, returning PCM samples with their sample rate and channel count. The [Rust example](/examples/rust/models/lfm3-audio/) saves those samples as WAV. Use chat requests with an audio output mode for mixed text and speech, media input, custom conversation prompts, or incremental PCM streaming. The native SDKs do not resolve HTTP `audio.id` history references.
+
+Load LFM3 through Rust's `ModelBuilder` or Python's `Which.MultimodalPlain`. Dia uses `SpeechModelBuilder` or `Which.Speech`, as shown below. Both use the same synthesis helper after loading.
 
 ## Voxtral Realtime: audio in, text out
 
@@ -107,7 +122,7 @@ println!("{}", response.choices[0].message.content.as_ref().unwrap());
 
 ## Dia: text-to-speech
 
-`/v1/audio/speech` matches OpenAI:
+Dia uses the OpenAI-compatible `/v1/audio/speech` request shape:
 
 ```bash
 mistralrs serve -m nari-labs/Dia-1.6B
@@ -130,8 +145,11 @@ curl http://localhost:1234/v1/audio/speech \
 ```
 
 - Output: raw audio bytes.
-- `response_format`: only `wav` and `pcm` are read; `mp3`/`opus`/`aac`/`flac` return a validation error.
-- Extra OpenAI fields such as `voice`, `speed`, and `instructions` are silently ignored (the request reads only `model`, `input`, and `response_format`).
+- `response_format`: `mp3` (default), `opus`, `aac`, `flac`, `wav`, or `pcm`. Compressed formats require FFmpeg.
+- `voice`: `default` or omitted; other values are rejected. Dia's speaker tags belong in `input`.
+- `speed`: `0.25` to `4.0`, default `1.0`; adjustment requires FFmpeg.
+- Nonempty `instructions` are rejected for Dia. Put synthesis directions in `input` when supported by the checkpoint.
+- `stream_format="audio"` returns a completed file. Dia does not support speech SSE events.
 
 </TabItem>
 <TabItem label="Python">

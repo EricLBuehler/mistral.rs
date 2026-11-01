@@ -79,6 +79,8 @@ cargo test -p mistralrs-core -p mistralrs-quant -p mistralrs-vision
 
 In the quantization crate, some tests run only with a specific backend feature enabled.
 
+The optional [LFM3 native SDK check](https://github.com/EricLBuehler/mistral.rs/tree/master/scripts/lfm3) exercises speech generation, audio input, and streaming against the current Python binding. It loads a model locally and runs separately from the ordinary unit-test suite.
+
 ## Python wheels
 
 Building the Python SDK from source requires `maturin`:

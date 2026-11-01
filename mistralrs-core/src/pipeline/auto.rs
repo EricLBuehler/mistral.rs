@@ -660,8 +660,19 @@ mod tests {
     #[test]
     fn lfm3_auto_detection_selects_native_loaders() {
         for (architecture, multimodal) in [
-            ("Lfm3ForCausalLM", false),
-            ("Lfm3VlForConditionalGeneration", true),
+            ("Lfm3ForCausalLM", None),
+            (
+                "Lfm3VlForConditionalGeneration",
+                Some(MultimodalLoaderType::Lfm3Vl),
+            ),
+            (
+                "Lfm3AudioForConditionalGeneration",
+                Some(MultimodalLoaderType::Lfm3Audio),
+            ),
+            (
+                "Lfm3OmniForConditionalGeneration",
+                Some(MultimodalLoaderType::Lfm3Omni),
+            ),
         ] {
             let mut loader = detector();
             loader.dynamic_lora_enabled = false;
@@ -675,11 +686,8 @@ mod tests {
                     remote_access_issue: None,
                 })
                 .unwrap();
-            if multimodal {
-                assert!(matches!(
-                    detected,
-                    Detected::Multimodal(MultimodalLoaderType::Lfm3Vl)
-                ));
+            if let Some(expected) = multimodal {
+                assert!(matches!(detected, Detected::Multimodal(actual) if actual == expected));
             } else {
                 assert!(matches!(detected, Detected::Normal(NormalLoaderType::Lfm3)));
             }

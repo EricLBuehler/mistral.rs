@@ -13,8 +13,8 @@ use super::{
 };
 use super::{
     DiffusionGemmaLoader, Gemma3nLoader, Gemma4Loader, Idefics2Loader, Idefics3Loader, LLaVALoader,
-    LLaVANextLoader, Lfm2VlLoader, Lfm3VlLoader, Mistral3Loader, MultimodalLoaderType,
-    MuseGlimmerLoader, Phi3VLoader, Qwen2_5VLLoader, VoxtralLoader,
+    LLaVANextLoader, Lfm2VlLoader, Lfm3AudioLoader, Lfm3OmniLoader, Lfm3VlLoader, Mistral3Loader,
+    MultimodalLoaderType, MuseGlimmerLoader, Phi3VLoader, Qwen2_5VLLoader, VoxtralLoader,
 };
 use crate::attention::ATTENTION_CHUNK_SIZE;
 #[cfg(feature = "cuda")]
@@ -379,6 +379,8 @@ impl MultimodalLoaderBuilder {
             Some(MultimodalLoaderType::LLaVA) => Box::new(LLaVALoader),
             Some(MultimodalLoaderType::Lfm2Vl) => Box::new(Lfm2VlLoader),
             Some(MultimodalLoaderType::Lfm3Vl) => Box::new(Lfm3VlLoader),
+            Some(MultimodalLoaderType::Lfm3Audio) => Box::new(Lfm3AudioLoader),
+            Some(MultimodalLoaderType::Lfm3Omni) => Box::new(Lfm3OmniLoader),
             Some(MultimodalLoaderType::VLlama) => Box::new(VLlamaLoader),
             Some(MultimodalLoaderType::Qwen2VL) => Box::new(Qwen2VLLoader),
             Some(MultimodalLoaderType::Idefics3) => Box::new(Idefics3Loader),
@@ -3137,7 +3139,7 @@ impl Pipeline for MultimodalPipeline {
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<bool, candle_core::Error> {
-        if self.model.has_speculative_proposer() {
+        if self.model.has_speculative_proposer() || self.model.has_custom_sampling() {
             return Ok(false);
         }
         crate::speculative::driver::clear_staged_speculative_tokens(seqs);
@@ -3161,7 +3163,79 @@ impl Pipeline for MultimodalPipeline {
         disable_eos_stop: bool,
         rng: Arc<std::sync::Mutex<Isaac64Rng>>,
     ) -> Result<(), candle_core::Error> {
-        sample_and_add_toks(self, seqs, logits, prefix_cacher, disable_eos_stop, rng).await
+        if !self.model.has_custom_sampling() {
+            return sample_and_add_toks(self, seqs, logits, prefix_cacher, disable_eos_stop, rng)
+                .await;
+        }
+        for (seq, logits) in seqs.iter_mut().zip(logits) {
+            let sampling_rng = seq.sampling_rng(&rng);
+            let (logits, forced) = self.model.prepare_sampling(
+                seq,
+                logits,
+                &mut sampling_rng.lock().expect("sampling RNG poisoned"),
+            )?;
+            let metadata = self.get_metadata();
+            let eos = self.model.sampling_eos_tokens(
+                seq,
+                seq.effective_eos_tokens(&metadata.eos_tok, disable_eos_stop),
+            );
+            let next = if let Some(token) = forced {
+                crate::sampler::Logprobs {
+                    token,
+                    logprob: 0.0,
+                    bytes: None,
+                    top_logprobs: None,
+                }
+            } else {
+                let return_logprobs = seq.return_logprobs();
+                let sampled = super::sampling::sample_sequence(
+                    logits.to_device(&Device::Cpu)?,
+                    seq,
+                    return_logprobs,
+                    eos.as_deref(),
+                    metadata.llg_factory.clone(),
+                    metadata.max_seq_len,
+                    rng.clone(),
+                    false,
+                    false,
+                    false,
+                )
+                .await;
+                crate::handle_seq_error_stateaware_ok!(sampled, seq)
+            };
+            self.model.accept_sample(seq, next.token)?;
+            let eos = self.model.sampling_eos_tokens(
+                seq,
+                seq.effective_eos_tokens(&metadata.eos_tok, disable_eos_stop),
+            );
+            let cache_prefix = seq.audio_output().is_none();
+            super::sampling::finish_or_add_toks_to_seq(
+                self,
+                prefix_cacher,
+                seq,
+                next,
+                eos.as_deref(),
+                cache_prefix,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    fn finalize_response(&self, seq: &mut crate::sequence::Sequence) -> candle_core::Result<()> {
+        self.model.finalize_response(seq)
+    }
+    fn prepare_streaming_response(
+        &self,
+        seq: &mut crate::sequence::Sequence,
+    ) -> candle_core::Result<()> {
+        self.model.prepare_streaming_response(seq)
+    }
+    fn release_generation_sequences(&self, sequence_ids: &[usize]) {
+        self.model.release_generation_sequences(sequence_ids);
+    }
+    fn response_token_is_hidden(&self, token: u32) -> bool {
+        self.model.response_token_is_hidden(token)
     }
 
     async fn sample_block_gen(

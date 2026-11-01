@@ -3907,6 +3907,7 @@ dependencies = [
  "data-url",
  "either",
  "futures",
+ "hound",
  "http-body",
  "http-body-util",
  "image",

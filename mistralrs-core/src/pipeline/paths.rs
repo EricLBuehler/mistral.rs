@@ -28,6 +28,9 @@ const SAFETENSOR_MATCH: &str = r"model-\d+-of-\d+\.safetensors\b";
 const QUANT_SAFETENSOR_MATCH: &str = r"model\.safetensors\b";
 const CONSOLIDATED_SAFETENSOR_MATCH: &str = r"consolidated\.safetensors\b";
 const SAFETENSOR_INDEX: &str = "model.safetensors.index.json";
+const AUDIO_TOKENIZER_DIRECTORY: &str = "audio_tokenizer";
+const AUDIO_TOKENIZER_WEIGHTS: &str = "audio_tokenizer/model.safetensors";
+const AUDIO_TOKENIZER_INDEX: &str = "audio_tokenizer/model.safetensors.index.json";
 const PICKLE_MATCH: &str = r"pytorch_model-\d{5}-of-\d{5}.((pth)|(pt)|(bin))\b";
 
 #[derive(Clone, Debug)]
@@ -414,6 +417,7 @@ pub fn get_model_paths(
             } else {
                 repo_files
                     .iter()
+                    .filter(|file| file.split('/').next() != Some(AUDIO_TOKENIZER_DIRECTORY))
                     .filter(|file| {
                         safetensor_match.is_match(file)
                             || quant_safetensor_match.is_match(file)
@@ -433,7 +437,7 @@ pub fn get_model_paths(
                 .filter(|file| file.as_str() == UQFF_RESIDUAL_SAFETENSORS)
                 .cloned()
                 .collect::<Vec<_>>();
-            let files = if !safetensors.is_empty() {
+            let mut files = if !safetensors.is_empty() {
                 // Always prefer safetensors
                 safetensors
             } else if !pickles.is_empty() {
@@ -444,6 +448,23 @@ pub fn get_model_paths(
             } else {
                 anyhow::bail!("Expected file with extension one of .safetensors, .pth, .pt, .bin.");
             };
+            if !files.iter().any(|file| file == UQFF_RESIDUAL_SAFETENSORS) {
+                let available = |name: &str| {
+                    repo_files.iter().any(|file| file == name) || model_id.join(name).is_file()
+                };
+                let codec_files = if available(AUDIO_TOKENIZER_INDEX) {
+                    let index_path = api_get_file!(api, AUDIO_TOKENIZER_INDEX, model_id, &revision);
+                    parse_safetensor_index(&fs::read_to_string(index_path)?)?
+                        .into_iter()
+                        .map(|file| format!("{AUDIO_TOKENIZER_DIRECTORY}/{file}"))
+                        .collect()
+                } else if available(AUDIO_TOKENIZER_WEIGHTS) {
+                    vec![AUDIO_TOKENIZER_WEIGHTS.to_string()]
+                } else {
+                    Vec::new()
+                };
+                append_unique_paths(&mut files, codec_files);
+            }
             trace!(
                 "Found model weight filenames {:?}",
                 files
@@ -455,6 +476,14 @@ pub fn get_model_paths(
                 filenames.push(api_get_file!(api, &rfilename, model_id, &revision));
             }
             Ok(filenames)
+        }
+    }
+}
+
+fn append_unique_paths(files: &mut Vec<String>, auxiliary_files: Vec<String>) {
+    for file in auxiliary_files {
+        if !files.contains(&file) {
+            files.push(file);
         }
     }
 }
@@ -723,6 +752,51 @@ mod tests {
     use crate::pipeline::loaders::LocalModelPaths;
 
     use super::{get_chat_template, parse_safetensor_index, AdapterPaths};
+
+    #[test]
+    fn local_sharded_model_includes_nested_audio_codec() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        std::fs::create_dir(dir.path().join(super::AUDIO_TOKENIZER_DIRECTORY))?;
+        std::fs::write(dir.path().join("text-shard.safetensors"), [])?;
+        std::fs::write(dir.path().join(super::AUDIO_TOKENIZER_WEIGHTS), [])?;
+        std::fs::write(
+            dir.path().join(super::SAFETENSOR_INDEX),
+            r#"{"weight_map":{"model.weight":"text-shard.safetensors"}}"#,
+        )?;
+        let api = super::build_api(&crate::TokenSource::None, false)?
+            .repo(hf_hub::Repo::model("local/test".to_string()));
+        let paths = super::get_model_paths(
+            "main".to_string(),
+            &crate::TokenSource::None,
+            None,
+            None,
+            &api,
+            dir.path(),
+            false,
+        )?;
+        assert_eq!(
+            paths,
+            [
+                dir.path().join("text-shard.safetensors"),
+                dir.path().join(super::AUDIO_TOKENIZER_WEIGHTS)
+            ]
+        );
+
+        std::fs::remove_file(dir.path().join(super::SAFETENSOR_INDEX))?;
+        std::fs::remove_file(dir.path().join("text-shard.safetensors"))?;
+        std::fs::write(dir.path().join(super::UQFF_RESIDUAL_SAFETENSORS), [])?;
+        let paths = super::get_model_paths(
+            "main".to_string(),
+            &crate::TokenSource::None,
+            None,
+            None,
+            &api,
+            dir.path(),
+            true,
+        )?;
+        assert_eq!(paths, [dir.path().join(super::UQFF_RESIDUAL_SAFETENSORS)]);
+        Ok(())
+    }
 
     #[test]
     fn explicit_jinja_overrides_processor_template() {

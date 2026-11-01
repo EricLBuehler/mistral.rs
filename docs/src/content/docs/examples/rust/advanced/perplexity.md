@@ -52,6 +52,7 @@ async fn process_chunk(runner: &MistralRs, chunk: Vec<u32>) -> anyhow::Result<(T
     let (tx, mut rx) = channel(1);
 
     let request = Request::Normal(Box::new(NormalRequest {
+        audio_output: None,
         messages: mistralrs::RequestMessage::CompletionTokens(chunk),
         sampling_params: SamplingParams {
             max_len: Some(0),

@@ -162,7 +162,13 @@ generate_audio(
 ) -> SpeechGenerationResponse
 ```
 
-Generate audio given a (model specific) prompt. PCM and sampling rate as well as the number of channels is returned.
+Generate speech with a dedicated speech model such as Dia or a chat speech
+model such as LFM3-Audio or LFM3-Omni. Returns PCM samples, sample rate, and
+channel count. LFM3 uses audio-only synthesis with its default voice.
+
+Use send_chat_completion_request with modalities and audio for custom chat
+prompts, mixed text/speech output, encoded formats, or PCM16 streaming.
+HTTP instructions, speed, and audio.id history are not options on this helper.
 
 **Parameters**
 

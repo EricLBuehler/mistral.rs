@@ -69,6 +69,7 @@ use super::{paths::AdapterPaths, Pipeline};
 
 pub(crate) const QK_ROPE_LAYOUT_CONFIG_KEY: &str = "_mistralrs_qk_rope_layout";
 const LEGACY_MODEL_OPT_CONFIG: &str = "hf_quant_config.json";
+const LFM3_CODEC_CONFIG: &str = "audio_tokenizer/config.json";
 /// Set on the model config JSON when the checkpoint's built-in MTP head should be loaded.
 pub const MTP_CONFIG_KEY: &str = "_mistralrs_mtp";
 
@@ -77,6 +78,7 @@ pub(crate) fn load_model_config(
     use_checkpoint_quantization: bool,
 ) -> Result<String> {
     let config = std::fs::read_to_string(config_path)?;
+    let config = inject_auxiliary_model_configs(&config, config_path)?;
     if !use_checkpoint_quantization {
         return Ok(config);
     }
@@ -90,6 +92,36 @@ pub(crate) fn load_model_config(
     }
     let model_opt = std::fs::read_to_string(model_opt_path)?;
     inject_legacy_model_opt_config(&config, &model_opt)
+}
+
+fn inject_auxiliary_model_configs(config: &str, config_path: &std::path::Path) -> Result<String> {
+    let mut value: serde_json::Value = serde_json::from_str(config)?;
+    match value.get("model_type").and_then(serde_json::Value::as_str) {
+        Some("lfm3_audio") => {
+            crate::vision_models::lfm3_audio::config::normalize_config(&mut value)?;
+        }
+        Some("lfm3_omni") => {}
+        _ => return Ok(config.to_string()),
+    }
+    if value
+        .get("codec_config")
+        .is_some_and(|config| !config.is_null())
+    {
+        return Ok(serde_json::to_string(&value)?);
+    }
+    let codec_path = config_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join(LFM3_CODEC_CONFIG);
+    let codec: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&codec_path).map_err(|error| {
+            anyhow::anyhow!(
+                "Cannot load LFM3 codec config {}: {error}",
+                codec_path.display()
+            )
+        })?)?;
+    value["codec_config"] = codec;
+    Ok(serde_json::to_string(&value)?)
 }
 
 fn normalize_compression_config(config: &str) -> Result<String> {
@@ -1094,6 +1126,36 @@ mod auto_device_map_quantization_tests {
     }
 
     #[test]
+    fn lfm3_codec_config_and_legacy_fields_survive_uqff_roundtrip() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let config_path = dir.path().join("config.json");
+        let codec_path = dir.path().join(LFM3_CODEC_CONFIG);
+        std::fs::create_dir(codec_path.parent().unwrap())?;
+        let codec = serde_json::json!({"model_type":"liquid_codec", "n_q":12});
+        for model_type in ["lfm3_audio", "lfm3_omni"] {
+            let source = serde_json::json!({
+                "model_type": model_type, "lfm": {"hidden_size": 2048},
+                "codebooks": 12, "audio_vocab_size": 2017,
+            });
+            std::fs::write(&config_path, source.to_string())?;
+            std::fs::write(&codec_path, codec.to_string())?;
+            let config = load_model_config(&config_path, false)?;
+            assert_eq!(load_model_config(&config_path, true)?, config);
+            let parsed: serde_json::Value = serde_json::from_str(&config)?;
+            assert_eq!(parsed["codec_config"], codec);
+            if model_type == "lfm3_audio" {
+                assert_eq!(parsed["text_config"]["hidden_size"], 2048);
+                assert_eq!(parsed["audio_eos_code"], 2016);
+                assert_eq!(parsed["maskgit_schedule"], serde_json::json!([4, 4, 4]));
+            }
+            std::fs::write(&config_path, &config)?;
+            std::fs::remove_file(&codec_path)?;
+            assert_eq!(load_model_config(&config_path, false)?, config);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn embedded_quantization_config_wins_over_legacy_model_opt() -> Result<()> {
         let config = r#"{"quantization_config":{"quant_method":"fp8"}}"#;
         let legacy = r#"{"quantization":{"quant_algo":"FP8"}}"#;
@@ -1357,6 +1419,10 @@ mod auto_device_map_quantization_tests {
 }
 
 mod lfm3;
+mod lfm3_audio;
+mod lfm3_omni;
 mod lfm3_vl;
 pub use lfm3::Lfm3Loader;
+pub use lfm3_audio::Lfm3AudioLoader;
+pub use lfm3_omni::Lfm3OmniLoader;
 pub use lfm3_vl::Lfm3VlLoader;

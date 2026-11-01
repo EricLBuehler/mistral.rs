@@ -71,6 +71,7 @@ GROUPS = [
             "ChunkChoice",
             "Delta",
             "ResponseMessage",
+            "ChatAudioResponse",
             "CompletionResponse",
             "CompletionChoice",
             "Usage",

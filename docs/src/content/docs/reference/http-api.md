@@ -33,15 +33,19 @@ Set `MISTRALRS_LORA_ADAPTER_ROOT` to restrict load paths. Keep that root, its an
 
 ## Streaming
 
-Three endpoints stream, each in its own event dialect:
+These endpoints stream, each in its own event dialect:
 
 - `POST /v1/chat/completions`: OpenAI chat-completion chunks plus mistral.rs agentic events.
 - `POST /v1/responses`: OpenAI named Responses events.
 - `POST /v1/messages`: Anthropic named message events.
+- `POST /v1/audio/speech`: audio events from chat models with speech output.
+- `POST /v1/audio/transcriptions`: transcript text events for an uploaded audio file.
 
 ### Streaming: Chat Completions
 
 `stream: true` on `POST /v1/chat/completions` returns [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events) (SSE). Unnamed `data:` lines carry chat completion chunks in OpenAI format; the stream terminates with `data: [DONE]`. SSE keep-alive comments (lines starting with `:`) are sent every 10 seconds by default (`KEEP_ALIVE_INTERVAL` env var, milliseconds).
+
+Models with chat speech output emit `delta.audio.data` during synthesis when `modalities` includes `"audio"` and `audio.format` is `"pcm16"`. For LFM3-Audio and LFM3-Omni, regular chunks contain about 0.96 seconds of mono, signed 16-bit little-endian PCM at 24 kHz; the final chunk contains the remaining tail. Decode each base64 chunk and append its bytes in arrival order. The chunks share an audio ID; completed metadata supplies `transcript` and `expires_at`. The audio-only transcript requires a final ASR pass, which can delay the terminal metadata after the last speech chunk. See [LFM3 speech behavior](/guides/models/model-family-notes/#lfm3-speech-input-and-output) for model defaults and limits.
 
 Named events carry the agentic timeline:
 
@@ -68,6 +72,16 @@ Terminal events (exactly one ends the stream):
 
 Errors also stream as a named `error` event. The mistral.rs `agentic_tool_call_progress` and `file_produced` events are also emitted on this endpoint. Shell tool calls are represented as Responses `shell_call` and `shell_call_output` output items.
 
+### Streaming: Speech
+
+Set `stream_format="sse"` on `/v1/audio/speech` with a chat speech model such as LFM3-Audio or LFM3-Omni. SSE `data:` payloads contain `{"type":"speech.audio.delta","audio":"<base64>"}`, then `{"type":"speech.audio.done","usage":{"input_tokens":14,"output_tokens":101,"total_tokens":115}}`. Usage counts are the loaded model's actual prompt and completion tokens.
+
+With `response_format="pcm"` and speed `1.0`, audio arrives during synthesis. Decode and append each chunk to obtain mono, 24 kHz, signed 16-bit little-endian PCM. WAV, compressed formats, and non-default speed wait for synthesis and encoding to finish before sending a complete encoded file in one audio delta. The default `stream_format="audio"` returns a completed binary file. Dedicated speech models such as Dia reject SSE.
+
+### Streaming: Transcriptions
+
+Set multipart `stream=true` and use `response_format=json` (the default). SSE `data:` payloads contain `{"type":"transcript.text.delta","delta":"..."}` while text is generated, then `{"type":"transcript.text.done","text":"..."}` with the complete transcript. This streams recognition results for an uploaded file; it is not a live audio-input connection. The translations endpoint does not accept `stream`.
+
 ### Streaming: Anthropic Messages
 
 `stream: true` on `POST /v1/messages` uses Anthropic's named events: `message_start`, `content_block_start`, `content_block_delta`, `content_block_stop`, `message_delta`, `message_stop`, with idle `ping` events. Deltas are `text_delta`, `thinking_delta` (when the model exposes separate reasoning), and `input_json_delta` (tool-call arguments). mistral.rs named events (`agentic_tool_call_progress`, `agentic_tool_approval_required`, `file_produced`) may be interleaved. See the [Anthropic Messages guide](/guides/serve/anthropic-messages-api/).
@@ -82,6 +96,24 @@ Non-streaming chat responses carry four mistral.rs fields beyond the OpenAI shap
 - `adapter_generation` (string): exact immutable LoRA generation used for the response; omitted for base-model requests.
 
 The `usage` object is a superset of OpenAI's, adding timing fields such as `avg_tok_per_sec`, `avg_prompt_tok_per_sec`, `avg_compl_tok_per_sec`, and total prompt/completion times.
+
+## Audio requests and history
+
+Chat audio inputs use standard content parts: `{"type":"input_audio","input_audio":{"data":"<base64>","format":"wav"}}`. WAV and MP3 are supported; `data` contains encoded file bytes without a data-URL prefix. Each file is limited to 64 MiB after base64 decoding. The HTTP server also applies a 50 MiB request-body limit by default, including base64 expansion and other fields; multipart uploads share that request-body limit. Embedded servers can configure it with `with_max_body_limit`. The `audio_url` extension accepts other supported audio formats through the existing media loader.
+
+For non-streaming chat output, `audio.format` accepts `wav`, `pcm16`, `mp3`, `flac`, `opus`, or `aac`. The compressed formats require FFmpeg on PATH. LFM3 speech uses one checkpoint voice: specify `audio.voice: "default"` or omit the field. Generated audio is base64 in `message.audio.data`.
+
+Compressed output and speed conversion run in bounded background workers, with up to 32 outstanding conversion jobs, including at most two active workers. A full conversion queue returns an error; retry after earlier requests finish. Output FFmpeg conversions have a 120-second timeout. WAV and PCM at the default speed use native encoding.
+
+Completed HTTP chat responses include `audio.id`, `audio.transcript`, and `audio.expires_at`. A later request can send `{"role":"assistant","audio":{"id":"..."}}`; the server inserts the cached transcript into the conversation. It reuses text context, not the original audio tokens. Mixed output uses the generated text as the transcript; audio-only output is transcribed through the loaded model. The per-router cache holds up to 1,024 entries and 16 MiB of transcripts, with a one-hour lifetime. Eviction, expiry, or restart invalidates IDs; resend the assistant transcript as `content` when an ID is unavailable. This server history cache is not part of the native SDK.
+
+If the transcript pass fails, the audio response is still returned with an empty transcript and an immediately expired ID. When an assistant history message supplies both `content` and an audio ID, its explicit text content takes precedence, but the ID must still be valid.
+
+Audio-only transcript enrichment spools audio to temporary files instead of retaining the waveform in memory. Capture and decoded PCM each have a 64 MiB limit, and each server router runs at most two transcript enrichment jobs at a time. Compressed-audio decoding uses FFmpeg with a 60-second timeout. Exceeding these limits or a decoding/transcription failure leaves the generated audio intact but makes its history ID unavailable. Temporary files are removed on completion or cancellation. Mixed text/audio uses its generated text and discards any unnecessary audio capture.
+
+`POST /v1/audio/speech` accepts text and defaults to MP3. It supports `response_format` values `mp3`, `opus`, `aac`, `flac`, `wav`, and `pcm`; `voice="default"`; synthesis `instructions` for chat speech models; and `speed` from `0.25` to `4.0`. FFmpeg is required for compressed formats and non-default speed. `stream_format="audio"` returns a completed binary file; chat speech models also support the SSE mode described above.
+
+`POST /v1/audio/transcriptions` and `/v1/audio/translations` accept multipart file uploads. `response_format="json"` returns a `text` field; `"text"` returns plain text. Transcriptions also support the SSE mode described above. Translations request English output and do not stream. Timestamp, diarization, subtitle, and logprob controls are rejected. See [OpenAI compatibility](/reference/openai-compatibility/#audio) for supported fields and the [SDK example](/examples/server/lfm3-audio-endpoints/). These routes do not implement the OpenAI Realtime API.
 
 ## Agent approval flow
 
