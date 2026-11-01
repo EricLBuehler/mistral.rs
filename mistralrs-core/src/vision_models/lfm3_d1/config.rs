@@ -9,7 +9,7 @@ use crate::{
     vision_models::{lfm3_omni::audio::AudioEncoderConfig, lfm3_vl},
 };
 
-const CALIBRATION_FILENAME: &str = "calibration.json";
+pub(crate) const CALIBRATION_FILENAME: &str = "calibration.json";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct Config {
@@ -32,6 +32,8 @@ pub(super) struct DecisionConfig {
     #[serde(default = "default_edges")]
     pub d1_box_edges: String,
     pub d1_calibration: DecisionCalibration,
+    #[serde(default = "default_calibration_complete")]
+    pub d1_calibration_complete: bool,
 }
 
 fn default_prompt() -> usize {
@@ -40,6 +42,10 @@ fn default_prompt() -> usize {
 
 fn default_edges() -> String {
     "median".to_owned()
+}
+
+fn default_calibration_complete() -> bool {
+    true
 }
 
 pub(crate) fn inject_calibration(config: &mut serde_json::Value, config_path: &Path) -> Result<()> {

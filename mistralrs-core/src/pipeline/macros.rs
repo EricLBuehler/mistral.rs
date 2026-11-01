@@ -597,6 +597,17 @@ macro_rules! get_paths_gguf {
             PathBuf::from_str("")?
         };
 
+        if dir_list.iter().any(|file| file == $crate::vision_models::lfm3_d1::config::CALIBRATION_FILENAME)
+            && $crate::pipeline::gguf::needs_d1_calibration(&config_filename)?
+        {
+            let _ = $crate::api_get_file!(
+                api,
+                $crate::vision_models::lfm3_d1::config::CALIBRATION_FILENAME,
+                model_id,
+                &revision
+            );
+        }
+
         let chat_template_json_filename = if dir_list.contains(&"chat_template.json".to_string()) {
             tracing::trace!("Loading `chat_template.json` at `{}`", this_model_id);
             Some($crate::api_get_file!(

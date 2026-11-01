@@ -17,6 +17,7 @@ use crate::gguf::{
     base_model::infer_hf_base_model_id,
     convert_gguf_metadata_to_hf_tokenizer, generation_config_from_metadata, get_gguf_chat_template,
     get_gguf_chat_template_from_metadata,
+    lfm3_d1_config::decision_model_type,
     multimodal_vision_registry::NativeMultimodalGguf,
     normal_bindings::build_normal_bindings,
     normal_config::{
@@ -584,6 +585,9 @@ impl GGUFLoader {
             }
             None => bail!("GGUF metadata is missing `general.architecture`"),
         };
+        if decision_model_type(archive.metadata())?.is_some() {
+            bail!("d1 GGUF requires its companion projector; pass `--mmproj <file>`");
+        }
         match arch_spec(architecture).text {
             GgufTextRoute::NormalRegistry => {}
             GgufTextRoute::ProjectorRequired => bail!(
@@ -748,7 +752,7 @@ impl GGUFLoader {
             in_situ_quant,
             paged_attn_config,
         } = args;
-        let external_config = read_external_config(paths)?;
+        let external_config = read_external_config(paths, self.model_id.is_some())?;
         let processor_config_path = paths.get_processor_config().clone();
         let preprocessor_config_path = paths.get_preprocessor_config().clone();
         let internal_dtype = dtype.try_into_dtype(&[device])?;
@@ -1623,12 +1627,46 @@ impl Pipeline for GGUFPipeline {
 
 impl AnyMoePipelineMixin for GGUFPipeline {}
 
-fn read_external_config(paths: &dyn ModelPaths) -> Result<Option<String>> {
+fn read_external_config(
+    paths: &dyn ModelPaths,
+    require_calibration: bool,
+) -> Result<Option<String>> {
     if paths.get_config_filename().as_os_str().is_empty() {
         Ok(None)
     } else {
-        Ok(Some(fs::read_to_string(paths.get_config_filename())?))
+        let config = fs::read_to_string(paths.get_config_filename())?;
+        let mut value: serde_json::Value = serde_json::from_str(&config)?;
+        if is_d1_config(&value) {
+            if !require_calibration && needs_d1_calibration(paths.get_config_filename())? {
+                return Ok(None);
+            }
+            crate::vision_models::lfm3_d1::config::inject_calibration(
+                &mut value,
+                paths.get_config_filename(),
+            )?;
+            Ok(Some(serde_json::to_string(&value)?))
+        } else {
+            Ok(Some(config))
+        }
     }
+}
+
+fn is_d1_config(config: &serde_json::Value) -> bool {
+    config["architectures"]
+        .as_array()
+        .is_some_and(|architectures| architectures.iter().any(|name| name == "D1Model"))
+}
+
+pub(crate) fn needs_d1_calibration(config_path: &Path) -> Result<bool> {
+    if config_path.as_os_str().is_empty() {
+        return Ok(false);
+    }
+    let config: serde_json::Value = serde_json::from_str(&fs::read_to_string(config_path)?)?;
+    Ok(is_d1_config(&config)
+        && config.get("d1_calibration").is_none()
+        && !config_path
+            .with_file_name(crate::vision_models::lfm3_d1::config::CALIBRATION_FILENAME)
+            .is_file())
 }
 
 #[cfg(test)]

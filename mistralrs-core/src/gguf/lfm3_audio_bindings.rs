@@ -38,18 +38,13 @@ pub(crate) fn build_lfm3_omni_bindings(
     bind_audio(archive, build_lfm3_vl_bindings(archive, dtype)?, dtype)
 }
 
-fn bind_audio(
+pub(super) fn build_lfm3_audio_input_bindings(
     archive: &GgufArchive,
     mut base: GgufBindingMap,
     dtype: DType,
 ) -> Result<GgufBindingMap> {
-    for (key, expected) in [
-        ("clip.audio.projector_type", "lfm3a"),
-        ("clip.gen.audio.projector_type", "lfm3a_gen"),
-    ] {
-        if metadata_string(archive, key)? != Some(expected) {
-            bail!("{FAMILY} GGUF requires `{key}` to be `{expected}`");
-        }
+    if metadata_string(archive, "clip.audio.projector_type")? != Some("lfm3a") {
+        bail!("{FAMILY} GGUF requires `clip.audio.projector_type` to be `lfm3a`");
     }
     let inventory = TensorInventory::from_archive(archive);
     let mut bindings = GgufBindingMap::new();
@@ -103,6 +98,31 @@ fn bind_audio(
         ("model.audio_projector.layer_norm", "mm.a.mlp.0"),
         ("model.audio_projector.linear_1", "mm.a.mlp.1"),
         ("model.audio_projector.linear_2", "mm.a.mlp.3"),
+    ] {
+        bind_required_linear(&inventory, &mut bindings, target, source)?;
+    }
+    bind_stack(
+        &inventory,
+        &mut bindings,
+        "model.audio_encoder.lfm",
+        "a",
+        Stack::Encoder,
+    )?;
+    // Audio modules load dense tensors even when their GGUF sources are quantized.
+    for (native, binding) in bindings.iter() {
+        base.insert(native, binding.clone().cast(dtype));
+    }
+    Ok(base)
+}
+
+fn bind_audio(archive: &GgufArchive, base: GgufBindingMap, dtype: DType) -> Result<GgufBindingMap> {
+    let mut base = build_lfm3_audio_input_bindings(archive, base, dtype)?;
+    if metadata_string(archive, "clip.gen.audio.projector_type")? != Some("lfm3a_gen") {
+        bail!("{FAMILY} GGUF requires `clip.gen.audio.projector_type` to be `lfm3a_gen`");
+    }
+    let inventory = TensorInventory::from_archive(archive);
+    let mut bindings = GgufBindingMap::new();
+    for (target, source) in [
         ("model.depth_decoder.depth_linear", "a.gen.code.proj_in"),
         ("model.codebook_embedding", "a.gen.code.out_embd"),
         (
@@ -144,7 +164,6 @@ fn bind_audio(
         );
     }
     for (native, source, kind) in [
-        ("model.audio_encoder.lfm", "a", Stack::Encoder),
         ("model.depth_decoder.model", "a.gen.code", Stack::Depth),
         ("decoder.lfm", "a.gen.wav.tfm", Stack::Codec),
     ] {

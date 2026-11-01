@@ -66,6 +66,7 @@ files when the repository and GGUF metadata identify them unambiguously. The dir
 | Llama 4 | `llama4` |
 | LFM2-VL and LFM2.5-VL | `lfm2` |
 | LFM3-VL | `lfm3` |
+| d1 and d1-Omni (decision models) | `lfm3` |
 | Muse Glimmer | `muse-glimmer` |
 | Qwen2-VL and Qwen2.5-VL | `qwen2vl` |
 | Qwen3-VL | `qwen3vl` |
@@ -85,6 +86,13 @@ LFM3-VL supports image and video input with its companion `lfm3vl` projector. It
 and media preprocessing are reconstructed from the GGUF files; no original model assets are required.
 See the [LFM3 model notes](/guides/models/model-family-notes/#lfm3-and-lfm3-vl) for commands.
 
+d1 and d1-Omni GGUFs support `noul`, single-selection `choice`, and `score` questions using
+embedded metadata, without original model assets. They require a companion projector, which the
+CLI selects automatically from the published repositories. To enable the full
+[decision API](/reference/decisions/), including extraction, multiple choice, estimates, and boxes,
+optionally supply the matching original `config.json` and `calibration.json` with `--tok-model-id`.
+See the [d1 model notes](/guides/models/model-family-notes/#d1-and-d1-omni) for loading commands.
+
 Muse Glimmer GGUFs require a companion `muse-glimmer` projector. Current published GGUF
 repositories also require `--tok-model-id meta-models/Muse-Glimmer-30B` because they do not carry
 enough base-model configuration metadata for standalone loading. Image input is supported. Video
@@ -93,7 +101,8 @@ weights in the projector.
 
 The `gemma3n`, `gemma4`, `llama4`, `qwen2vl`, `qwen3vl`, and `qwen3vlmoe` architectures always need a
 projector. Architectures that appear in both tables above, including `gemma3`, `llama`, `mistral3`,
-`lfm2`, `lfm3`, `qwen35`, and `qwen35moe`, load as text models when no projector is supplied.
+`lfm2`, `lfm3`, `qwen35`, and `qwen35moe`, load as text models when no projector is supplied,
+except d1 decision models, which always require their companion projector.
 
 ## Storage formats
 
@@ -134,5 +143,5 @@ adjacent rotary order: `llama`, `mistral3`, `deepseek2`, `glm4`, `smollm3`, `gra
 routed through those architectures, including Idefics3, Mistral 3/Pixtral, Llama 4, and Muse
 Glimmer. Base-model loading is unaffected.
 
-GGUF support covers text generation and the multimodal families listed above. GGUF is not a
-loading format for embedding, speech, diffusion, or image-generation pipelines.
+GGUF support covers text generation, decision inference, and the multimodal families listed above.
+GGUF is not a loading format for embedding, speech, diffusion, or image-generation pipelines.
