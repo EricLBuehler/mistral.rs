@@ -134,7 +134,7 @@ An interpreter that's been idle for an hour is shut down. The next call in that 
 
 ## Working directory
 
-Without `--code-exec-workdir`, each session gets its own new temp directory named `mistralrs-code-<random>`. mistral.rs doesn't delete it when the session ends.
+Without `--code-exec-workdir`, each session gets its own new temp directory named `mistralrs-code-<random>`. mistral.rs deletes it when the session has been idle for an hour, or when your app drops the session. If the server is killed, for example with Ctrl+C, directories of live sessions are left behind.
 
 With `--code-exec-workdir /path` (or `.` for the current directory), every session runs in that same directory. Files persist across sessions, and each session can see and overwrite what earlier ones wrote.
 

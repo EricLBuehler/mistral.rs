@@ -25,7 +25,7 @@ Each request then decides whether the model can use the shell:
 
 Each shell call runs the model's commands in one new shell process (`/bin/sh -c` by default, `cmd /C` on Windows), starting in the session's working directory. Files written there stay available to later calls in the same session. Shell state such as variables and `cd` doesn't carry over, because every call starts a new process.
 
-Each call can run for up to `--shell-timeout` seconds (600 by default). The model sees the first 4,096 characters of stdout and of stderr, and can ask for more on a given call.
+Each call can run for up to `--shell-timeout` seconds (600 by default). The model can ask for a shorter limit on a call, but never a longer one. The model sees the first 4,096 characters of stdout and of stderr, and can ask for more on a given call.
 
 ## Configuration
 
@@ -112,7 +112,7 @@ println!("{}", resp.choices[0].message.content.as_ref().unwrap());
 
 ## Working directory
 
-Without `--shell-workdir`, each session gets its own new temp directory named `mistralrs-shell-<random>`. mistral.rs doesn't delete it when the session ends.
+Without `--shell-workdir`, each session gets its own new temp directory named `mistralrs-shell-<random>`. mistral.rs deletes it when the session has been idle for an hour, or when your app drops the session. If the server is killed, for example with Ctrl+C, directories of live sessions are left behind.
 
 With `--shell-workdir /path`, each session gets a subdirectory named after its session ID, `/path/<session_id>`. Reusing a session ID picks up the same directory, even after a server restart.
 

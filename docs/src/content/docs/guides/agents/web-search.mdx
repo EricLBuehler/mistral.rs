@@ -11,7 +11,7 @@ Searches go to DuckDuckGo and return up to 10 results per query. Each page is cl
 
 ## Turning it on
 
-Start the server with `--enable-search` (or `--agent`), then turn search on for each request that should use it.
+Start the server with `--enable-search` (or `--agent`), then turn search on for each request that should use it. A server started without it rejects search requests with a 400 error, so clients can't make it fetch from the web unless you allow it.
 
 <Tabs>
 <TabItem label="CLI">

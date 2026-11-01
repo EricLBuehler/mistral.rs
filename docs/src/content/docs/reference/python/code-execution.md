@@ -19,14 +19,14 @@ one, those processes run with no sandbox. The sandbox controls:
 macOS applies the file and network rules but not the resource limits. The
 [sandbox reference](/reference/sandbox/) explains how each rule is enforced.
 
-The defaults match the CLI's `restricted` profile, except `max_cpu_secs`: 300 here, 600 in the CLI.
+The defaults match the CLI's `restricted` profile.
 
 ### `SandboxPolicy.__init__`
 
 ```text
 __init__(
     max_memory_mb: int = 2048,
-    max_cpu_secs: int = 300,
+    max_cpu_secs: int = 600,
     max_procs: int = 64,
     max_open_fds: int = 1024,
     max_file_sz_mb: int = 256,
@@ -43,7 +43,7 @@ __init__(
 | Name | Type | Default | Description |
 | --- | --- | --- | --- |
 | `max_memory_mb` | `int` | `2048` | Memory (address space) limit, in MB. |
-| `max_cpu_secs` | `int` | `300` | CPU time limit, in seconds. On Linux, a limit shorter than the tool's timeout is raised to match it. |
+| `max_cpu_secs` | `int` | `600` | CPU time limit, in seconds. On Linux, a limit shorter than the tool's timeout is raised to match it. |
 | `max_procs` | `int` | `64` | Limit on processes and threads. |
 | `max_open_fds` | `int` | `1024` | Limit on open file descriptors. |
 | `max_file_sz_mb` | `int` | `256` | Largest file a process can write, in MB. |

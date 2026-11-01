@@ -10,7 +10,7 @@ Describes the tool behind an agent action that is waiting for approval.
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `source` | `AgentToolSource` | Where the tool comes from, such as built in or registered by your app. |
+| `source` | `AgentToolSource` | Where the tool comes from: built in, registered by your app, an MCP server, or an external dispatch URL. |
 | `kind` | `AgentToolKind` | What the tool does, such as code execution, shell, or web search. |
 | `label` | `str` | Display name, such as `"Python code"`, `"Shell command"`, or the tool's own name. |
 

@@ -16,10 +16,12 @@ use crate::{
     get_mut_arcmutex,
     pipeline::SupportedModality,
     response::{AgenticToolCallData, AgenticToolCallPhase},
-    search, AgentPermission, AgentToolApproval, AgentToolApprovalCallback,
-    AgentToolApprovalDecision, AgentToolApprovalHandler, AgentToolKind, AgentToolMetadata,
-    AgentToolSource, MessageContent, NormalRequest, RequestMessage, Response, ToolCallResponse,
-    ToolChoice, Usage, WebSearchOptions,
+    search,
+    tools::ToolCallbacksWithTools,
+    AgentPermission, AgentToolApproval, AgentToolApprovalCallback, AgentToolApprovalDecision,
+    AgentToolApprovalHandler, AgentToolKind, AgentToolMetadata, AgentToolSource,
+    ChatCompletionChunkResponse, MessageContent, NormalRequest, RequestMessage, Response,
+    ToolCallResponse, ToolChoice, Usage, WebSearchOptions,
 };
 
 use super::file_tools::{do_list_files, do_read_file};
@@ -176,6 +178,14 @@ pub(super) fn inject_input_files_message(request: &mut NormalRequest) {
     message.insert("role".to_string(), Either::Left("system".to_string()));
     message.insert("content".to_string(), Either::Left(content));
     messages.insert(0, message);
+}
+
+/// Count of prepended system messages, kept out of the saved session so the next turn's splice still matches.
+fn inject_context_messages(request: &mut NormalRequest) -> usize {
+    let client_messages = get_messages(request).len();
+    inject_shell_skills_message(request);
+    inject_input_files_message(request);
+    get_messages(request).len() - client_messages
 }
 
 /// Structured `tool_calls` field for the assistant message. Required by templates (Gemma 4 etc.) that render from `message.tool_calls`.
@@ -417,14 +427,26 @@ fn tps(tokens: usize, seconds: f32) -> f32 {
     }
 }
 
-/// Persist the conversation as-is. Refreshes file TTLs.
-fn save_session(engine: &Arc<Engine>, session_id: &str, visible_req: &NormalRequest) {
-    let messages = get_messages(visible_req).clone();
+fn session_entry(
+    visible_req: &NormalRequest,
+    injected_messages: usize,
+) -> super::agentic_session::AgenticSessionEntry {
+    let messages = get_messages(visible_req)[injected_messages..].to_vec();
     let (images, videos) = match &visible_req.messages {
         RequestMessage::MultimodalChat { images, videos, .. } => (images.clone(), videos.clone()),
         _ => (Vec::new(), Vec::new()),
     };
-    let entry = super::agentic_session::AgenticSessionEntry::new(messages, images, videos);
+    super::agentic_session::AgenticSessionEntry::new(messages, images, videos)
+}
+
+/// Refreshes file TTLs.
+fn save_session(
+    engine: &Arc<Engine>,
+    session_id: &str,
+    visible_req: &NormalRequest,
+    injected_messages: usize,
+) {
+    let entry = session_entry(visible_req, injected_messages);
     engine
         .session_store
         .lock()
@@ -596,9 +618,9 @@ fn tool_metadata_for(ctx: &DispatchCtx<'_>, tc: &ToolCallResponse) -> AgentToolM
             kind: AgentToolKind::Shell,
             label: "Shell command".to_string(),
         }
-    } else if ctx.engine.tool_callbacks.contains_key(name) {
+    } else if let Some(callback) = ctx.engine.tool_callbacks.get(name) {
         AgentToolMetadata {
-            source: AgentToolSource::User,
+            source: callback.source.clone(),
             kind: AgentToolKind::Custom,
             label: name.clone(),
         }
@@ -1069,40 +1091,79 @@ fn do_http_tool(
     (request, data, Vec::new())
 }
 
-/// `None` when no dispatcher is configured for `tc.function.name`. Caller short-circuits the loop.
+enum ToolRoute<'a> {
+    ReadFile,
+    ListFiles,
+    Search(&'a WebSearchOptions),
+    Extraction(&'a WebSearchOptions),
+    Callback,
+    Http(&'a str),
+}
+
+/// `None` when nothing on the server runs `name`, so the call goes back to the client unapproved.
+fn tool_route<'a>(
+    name: &str,
+    tool_callbacks: &ToolCallbacksWithTools,
+    web_search_options: Option<&'a WebSearchOptions>,
+    dispatch_url: Option<&'a str>,
+) -> Option<ToolRoute<'a>> {
+    if is_read_file_tool(name) {
+        return Some(ToolRoute::ReadFile);
+    }
+    if is_list_files_tool(name) {
+        return Some(ToolRoute::ListFiles);
+    }
+    if search::search_tool_called(name) {
+        let opts = web_search_options?;
+        return Some(if name == search::SEARCH_TOOL_NAME {
+            ToolRoute::Search(opts)
+        } else {
+            ToolRoute::Extraction(opts)
+        });
+    }
+    if tool_callbacks.contains_key(name) {
+        return Some(ToolRoute::Callback);
+    }
+    dispatch_url.map(ToolRoute::Http)
+}
+
+impl<'a> DispatchCtx<'a> {
+    fn route(&self, name: &str) -> Option<ToolRoute<'a>> {
+        tool_route(
+            name,
+            &self.engine.tool_callbacks,
+            self.web_search_options,
+            self.dispatch_url,
+        )
+    }
+}
+
 async fn dispatch_tool(
     ctx: &DispatchCtx<'_>,
     visible_req: NormalRequest,
     tc: &ToolCallResponse,
     round: usize,
-) -> Option<(NormalRequest, AgenticToolCallData, Vec<File>)> {
-    let name = &tc.function.name;
-    if is_read_file_tool(name) {
-        return Some(do_read_file(visible_req, tc, &ctx.engine.file_store));
+    route: ToolRoute<'_>,
+) -> (NormalRequest, AgenticToolCallData, Vec<File>) {
+    let approval = approve_agent_tool(ctx, tc, round).await;
+    if !approval.approve {
+        let message = approval
+            .message
+            .unwrap_or_else(|| "Agent action was denied.".to_string());
+        return denied_tool_result(visible_req, tc, message);
     }
-    if is_list_files_tool(name) {
-        return Some(do_list_files(
-            visible_req,
-            tc,
-            &ctx.engine.file_store,
-            ctx.session_id,
-        ));
-    }
-    if search::search_tool_called(name) {
-        let opts = ctx.web_search_options?;
-        return Some(if name == search::SEARCH_TOOL_NAME {
-            do_search(ctx.engine.clone(), visible_req, tc, opts).await
-        } else {
+    match route {
+        ToolRoute::ReadFile => do_read_file(visible_req, tc, &ctx.engine.file_store),
+        ToolRoute::ListFiles => {
+            do_list_files(visible_req, tc, &ctx.engine.file_store, ctx.session_id)
+        }
+        ToolRoute::Search(opts) => do_search(ctx.engine.clone(), visible_req, tc, opts).await,
+        ToolRoute::Extraction(opts) => {
             do_extraction(ctx.engine.clone(), visible_req, tc, opts).await
-        });
+        }
+        ToolRoute::Callback => do_custom_tool(ctx, visible_req, tc, round).await,
+        ToolRoute::Http(url) => do_http_tool(visible_req, tc, url),
     }
-    if ctx.engine.tool_callbacks.contains_key(name) {
-        return Some(do_custom_tool(ctx, visible_req, tc, round).await);
-    }
-    if let Some(url) = ctx.dispatch_url {
-        return Some(do_http_tool(visible_req, tc, url));
-    }
-    None
 }
 
 /// Store full file bodies and emit wire-elided clones on the user channel. Truncated bodies stay fetchable via the store.
@@ -1117,6 +1178,66 @@ async fn emit_files(
         engine.file_store.insert(f, Some(session_id.to_string()));
         let _ = sender.send(Response::File(wire)).await;
     }
+}
+
+struct StreamRound {
+    final_chunk: Option<ChatCompletionChunkResponse>,
+    reasoning_content: String,
+}
+
+/// Holds back the finish-reason chunk so a tool round doesn't end the client's stream. `None` means the request is over.
+async fn relay_stream_round(
+    receiver: &mut tokio::sync::mpsc::Receiver<Response>,
+    user_sender: &tokio::sync::mpsc::Sender<Response>,
+    usage_accumulator: &mut AgenticUsageAccumulator,
+) -> Option<StreamRound> {
+    let mut reasoning_content = String::new();
+    loop {
+        let resp = match recv_or_client_disconnect(receiver, user_sender).await {
+            Ok(Some(resp)) => resp,
+            Ok(None) => {
+                return Some(StreamRound {
+                    final_chunk: None,
+                    reasoning_content,
+                })
+            }
+            Err(ClientDisconnected) => return None,
+        };
+        let chunk = match forward_passthrough(resp, user_sender).await? {
+            Response::Chunk(chunk) => chunk,
+            other => {
+                let _ = user_sender.send(other).await;
+                return None;
+            }
+        };
+        let first_choice = &chunk.choices[0];
+        if let Some(delta) = &first_choice.delta.reasoning_content {
+            reasoning_content.push_str(delta);
+        }
+        if first_choice.finish_reason.is_some() {
+            if let Some(usage) = &chunk.usage {
+                usage_accumulator.add(usage);
+            }
+            return Some(StreamRound {
+                final_chunk: Some(chunk),
+                reasoning_content,
+            });
+        }
+        let _ = user_sender.send(Response::Chunk(chunk)).await;
+    }
+}
+
+async fn send_final_chunk(
+    mut final_chunk: ChatCompletionChunkResponse,
+    usage_accumulator: &AgenticUsageAccumulator,
+    session_id: &str,
+    user_sender: &tokio::sync::mpsc::Sender<Response>,
+) {
+    if let Some(usage) = usage_accumulator.aggregate() {
+        final_chunk.usage = Some(usage);
+    }
+    final_chunk.session_id = Some(session_id.to_string());
+    let _ = user_sender.send(Response::Chunk(final_chunk)).await;
 }
 
 /// Drive tool-use rounds (search, code exec, custom tools) without recursion. Forwards every reply except the first probe.
@@ -1160,8 +1281,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
     this.file_store.touch_session(&session_id);
 
     let turn = count_user_messages(&request);
-    inject_shell_skills_message(&mut request);
-    inject_input_files_message(&mut request);
+    let injected_messages = inject_context_messages(&mut request);
 
     let modalities = {
         let pipeline = get_mut_arcmutex!(this.pipeline);
@@ -1341,8 +1461,11 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                     _ => None,
                 };
 
-                if tc_opt.is_none() || round >= max_rounds {
-                    save_session(&this_clone, &session_id, &visible_req);
+                let routed = tc_opt
+                    .filter(|_| round < max_rounds)
+                    .and_then(|tc| Some((tc, dispatch_ctx.route(&tc.function.name)?)));
+                let Some((tc, route)) = routed else {
+                    save_session(&this_clone, &session_id, &visible_req, injected_messages);
                     let mut final_resp = done.clone();
                     if let Some(usage) = usage_accumulator.aggregate() {
                         final_resp.usage = usage;
@@ -1350,9 +1473,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                     final_resp.session_id = Some(session_id.clone());
                     let _ = user_sender.send(Response::Done(final_resp)).await;
                     return;
-                }
-
-                let tc = tc_opt.unwrap();
+                };
 
                 let _ = user_sender
                     .send(Response::AgenticToolCallProgress {
@@ -1363,28 +1484,8 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                     .await;
                 tokio::task::yield_now().await;
 
-                let approval = approve_agent_tool(&dispatch_ctx, tc, round).await;
-                let outcome = if approval.approve {
-                    dispatch_tool(&dispatch_ctx, visible_req.clone(), tc, round).await
-                } else {
-                    Some(denied_tool_result(
-                        visible_req.clone(),
-                        tc,
-                        approval
-                            .message
-                            .unwrap_or_else(|| "Agent action was denied.".to_string()),
-                    ))
-                };
-                let Some((mut next_visible, complete_data, files)) = outcome else {
-                    save_session(&this_clone, &session_id, &visible_req);
-                    let mut final_resp = done.clone();
-                    if let Some(usage) = usage_accumulator.aggregate() {
-                        final_resp.usage = usage;
-                    }
-                    final_resp.session_id = Some(session_id.clone());
-                    let _ = user_sender.send(Response::Done(final_resp)).await;
-                    return;
-                };
+                let (mut next_visible, complete_data, files) =
+                    dispatch_tool(&dispatch_ctx, visible_req.clone(), tc, round, route).await;
                 attach_reasoning_to_latest_assistant_tool_call(
                     get_messages_mut(&mut next_visible),
                     done.choices[0].message.reasoning_content.as_deref(),
@@ -1406,60 +1507,19 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                 visible_req.response = user_sender.clone();
                 current = visible_req.clone();
             } else {
-                // Hold the finish-reason chunk so we can stamp the session ID on it if this is the final round.
-                let mut last_choice = None;
-                let mut held_final_chunk: Option<crate::ChatCompletionChunkResponse> = None;
-                let mut round_reasoning_content = String::new();
+                let Some(stream_round) =
+                    relay_stream_round(&mut receiver, &user_sender, &mut usage_accumulator).await
+                else {
+                    return;
+                };
 
-                loop {
-                    let resp = match recv_or_client_disconnect(&mut receiver, &user_sender).await {
-                        Ok(Some(resp)) => resp,
-                        Ok(None) => break,
-                        Err(_) => return,
-                    };
-                    let Some(resp) = forward_passthrough(resp, &user_sender).await else {
-                        return;
-                    };
-                    match resp {
-                        Response::Chunk(chunk) => {
-                            // Suppress tool-call chunks. Forwarding them would surface a premature finish_reason before the tool loop continues.
-                            let first_choice = &chunk.choices[0];
-                            if let Some(reasoning_content) = &first_choice.delta.reasoning_content {
-                                round_reasoning_content.push_str(reasoning_content);
-                            }
-                            let is_final = first_choice.finish_reason.is_some();
-                            if is_final {
-                                if let Some(usage) = &chunk.usage {
-                                    usage_accumulator.add(usage);
-                                }
-                            }
-                            if first_choice.delta.tool_calls.is_none() {
-                                if is_final {
-                                    held_final_chunk = Some(chunk.clone());
-                                } else {
-                                    let _ = user_sender.send(Response::Chunk(chunk.clone())).await;
-                                }
-                            }
-                            last_choice = Some(first_choice.clone());
-
-                            if is_final {
-                                break;
-                            }
-                        }
-                        other => {
-                            let _ = user_sender.send(other).await;
-                            return;
-                        }
-                    }
-                }
-
-                let Some(choice) = last_choice else {
-                    tracing::warn!("Engine closed without sending any chunks.");
-                    save_session(&this_clone, &session_id, &visible_req);
+                let Some(final_chunk) = stream_round.final_chunk else {
+                    tracing::warn!("Engine closed without sending a final chunk.");
+                    save_session(&this_clone, &session_id, &visible_req, injected_messages);
                     break;
                 };
 
-                let tc_opt = match &choice.delta.tool_calls {
+                let tc_opt = match &final_chunk.choices[0].delta.tool_calls {
                     Some(calls) if !calls.is_empty() => {
                         if calls.len() > 1 {
                             tracing::warn!(
@@ -1472,19 +1532,15 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                     _ => None,
                 };
 
-                if tc_opt.is_none() || round >= max_rounds {
-                    save_session(&this_clone, &session_id, &visible_req);
-                    if let Some(mut final_chunk) = held_final_chunk {
-                        if let Some(usage) = usage_accumulator.aggregate() {
-                            final_chunk.usage = Some(usage);
-                        }
-                        final_chunk.session_id = Some(session_id.clone());
-                        let _ = user_sender.send(Response::Chunk(final_chunk)).await;
-                    }
+                let routed = tc_opt
+                    .filter(|_| round < max_rounds)
+                    .and_then(|tc| Some((tc, dispatch_ctx.route(&tc.function.name)?)));
+                let Some((tc, route)) = routed else {
+                    save_session(&this_clone, &session_id, &visible_req, injected_messages);
+                    send_final_chunk(final_chunk, &usage_accumulator, &session_id, &user_sender)
+                        .await;
                     break;
-                }
-
-                let tc = tc_opt.unwrap();
+                };
 
                 let _ = user_sender
                     .send(Response::AgenticToolCallProgress {
@@ -1495,25 +1551,11 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
                     .await;
                 tokio::task::yield_now().await;
 
-                let approval = approve_agent_tool(&dispatch_ctx, tc, round).await;
-                let outcome = if approval.approve {
-                    dispatch_tool(&dispatch_ctx, visible_req.clone(), tc, round).await
-                } else {
-                    Some(denied_tool_result(
-                        visible_req.clone(),
-                        tc,
-                        approval
-                            .message
-                            .unwrap_or_else(|| "Agent action was denied.".to_string()),
-                    ))
-                };
-                let Some((mut next_visible, complete_data, files)) = outcome else {
-                    save_session(&this_clone, &session_id, &visible_req);
-                    break;
-                };
+                let (mut next_visible, complete_data, files) =
+                    dispatch_tool(&dispatch_ctx, visible_req.clone(), tc, round, route).await;
                 attach_reasoning_to_latest_assistant_tool_call(
                     get_messages_mut(&mut next_visible),
-                    Some(&round_reasoning_content),
+                    Some(&stream_round.reasoning_content),
                 );
 
                 emit_files(&this_clone, &session_id, files, &user_sender).await;
@@ -1541,7 +1583,183 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{tools::ToolCallType, CalledFunction};
+    use crate::{
+        engine::agentic_session::{splice_session_into_request, AgenticSessionStore},
+        files::{FileSource, FILE_PURPOSE_USER_DATA},
+        tools::ToolCallType,
+        CalledFunction, ChunkChoice, Delta, SamplingParams,
+    };
+
+    fn weather_call() -> ToolCallResponse {
+        ToolCallResponse {
+            index: 0,
+            id: "call-1".to_string(),
+            tp: ToolCallType::Function,
+            function: CalledFunction {
+                name: "get_weather".to_string(),
+                arguments: r#"{"city":"Paris"}"#.to_string(),
+            },
+        }
+    }
+
+    fn text_message(role: &str, content: &str) -> IndexMap<String, MessageContent> {
+        IndexMap::from([
+            ("role".to_string(), Either::Left(role.to_string())),
+            ("content".to_string(), Either::Left(content.to_string())),
+        ])
+    }
+
+    fn role(message: &IndexMap<String, MessageContent>) -> &str {
+        match message.get("role") {
+            Some(Either::Left(role)) => role,
+            _ => "",
+        }
+    }
+
+    fn chunk(
+        content: Option<&str>,
+        tool_calls: Option<Vec<ToolCallResponse>>,
+        finish_reason: Option<&str>,
+    ) -> ChatCompletionChunkResponse {
+        ChatCompletionChunkResponse {
+            id: "chunk".to_string(),
+            choices: vec![ChunkChoice {
+                finish_reason: finish_reason.map(str::to_string),
+                stop_sequence: None,
+                index: 0,
+                delta: Delta {
+                    audio: None,
+                    content: content.map(str::to_string),
+                    role: "assistant".to_string(),
+                    tool_calls,
+                    reasoning_content: None,
+                },
+                logprobs: None,
+            }],
+            created: 0,
+            model: "test".to_string(),
+            system_fingerprint: String::new(),
+            object: "chat.completion.chunk".to_string(),
+            usage: None,
+            adapter_generation: None,
+            session_id: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn streaming_tool_call_chunk_reaches_client_when_loop_stops() {
+        let (engine_sender, mut engine_receiver) = tokio::sync::mpsc::channel(2);
+        let (user_sender, mut user_receiver) = tokio::sync::mpsc::channel(2);
+        engine_sender
+            .send(Response::Chunk(chunk(Some("Checking."), None, None)))
+            .await
+            .unwrap();
+        engine_sender
+            .send(Response::Chunk(chunk(
+                None,
+                Some(vec![weather_call()]),
+                Some("tool_calls"),
+            )))
+            .await
+            .unwrap();
+
+        let mut usage = AgenticUsageAccumulator::default();
+        let round = relay_stream_round(&mut engine_receiver, &user_sender, &mut usage)
+            .await
+            .unwrap();
+        let Ok(Response::Chunk(text)) = user_receiver.try_recv() else {
+            panic!("text chunk was not forwarded");
+        };
+        assert_eq!(text.choices[0].delta.content.as_deref(), Some("Checking."));
+        assert!(user_receiver.try_recv().is_err());
+
+        send_final_chunk(
+            round.final_chunk.unwrap(),
+            &usage,
+            "session-1",
+            &user_sender,
+        )
+        .await;
+        let Ok(Response::Chunk(last)) = user_receiver.try_recv() else {
+            panic!("final chunk was not sent");
+        };
+        assert_eq!(last.choices[0].finish_reason.as_deref(), Some("tool_calls"));
+        assert_eq!(
+            last.choices[0].delta.tool_calls.as_ref().unwrap()[0]
+                .function
+                .name,
+            "get_weather"
+        );
+        assert_eq!(last.session_id.as_deref(), Some("session-1"));
+    }
+
+    #[test]
+    fn client_only_tool_has_no_server_route() {
+        const DISPATCH_URL: &str = "http://localhost:9000/tools";
+        let callbacks = ToolCallbacksWithTools::new();
+        assert!(tool_route("lookup_order", &callbacks, None, None).is_none());
+        assert!(matches!(
+            tool_route("lookup_order", &callbacks, None, Some(DISPATCH_URL)),
+            Some(ToolRoute::Http(DISPATCH_URL))
+        ));
+    }
+
+    #[test]
+    fn session_with_input_files_restores_tool_history() {
+        let (sender, _receiver) = tokio::sync::mpsc::channel(1);
+        let request = |messages| {
+            NormalRequest::new_simple(
+                RequestMessage::Chat {
+                    messages,
+                    enable_thinking: None,
+                    reasoning_effort: None,
+                },
+                SamplingParams::deterministic(),
+                sender.clone(),
+                0,
+                None,
+                None,
+            )
+        };
+        let question = text_message("user", "What's the weather in notes.txt's city?");
+
+        let mut first = request(vec![question.clone()]);
+        first.input_files = vec![File::from_bytes(
+            File::make_upload_id(),
+            "notes.txt".to_string(),
+            None,
+            FILE_PURPOSE_USER_DATA.to_string(),
+            FileSource {
+                tool: "upload".to_string(),
+                round: 0,
+                turn: 0,
+            },
+            b"Paris".to_vec(),
+        )];
+        let injected = inject_context_messages(&mut first);
+        assert_eq!(injected, 1);
+        let messages = get_messages_mut(&mut first);
+        append_assistant_tool_call(messages, &weather_call());
+        append_tool_response(messages, "get_weather", "sunny".to_string());
+
+        let mut store = AgenticSessionStore::new();
+        store.save("session-1".to_string(), session_entry(&first, injected));
+
+        let mut next = request(vec![
+            question,
+            text_message("assistant", "It's sunny in Paris."),
+            text_message("user", "Thanks!"),
+        ]);
+        let (_, entry) = store
+            .find_by_messages(get_messages(&next))
+            .expect("session should match the client's messages");
+        splice_session_into_request(&mut next, &entry);
+
+        let messages = get_messages(&next);
+        let roles: Vec<&str> = messages.iter().map(role).collect();
+        assert_eq!(roles, ["user", "assistant", "tool", "assistant", "user"]);
+        assert!(messages[1].contains_key("tool_calls"));
+    }
 
     #[tokio::test]
     async fn client_disconnect_drops_the_internal_response_bridge() {
@@ -1562,16 +1780,7 @@ mod tests {
     #[test]
     fn assistant_tool_call_history_preserves_reasoning() {
         let mut messages = Vec::new();
-        let tool_call = ToolCallResponse {
-            index: 0,
-            id: "call-1".to_string(),
-            tp: ToolCallType::Function,
-            function: CalledFunction {
-                name: "get_weather".to_string(),
-                arguments: r#"{"city":"Paris"}"#.to_string(),
-            },
-        };
-        append_assistant_tool_call(&mut messages, &tool_call);
+        append_assistant_tool_call(&mut messages, &weather_call());
 
         attach_reasoning_to_latest_assistant_tool_call(&mut messages, Some("Need weather"));
 

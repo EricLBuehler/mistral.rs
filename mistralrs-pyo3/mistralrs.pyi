@@ -86,7 +86,7 @@ class AgentToolMetadata:
     """
 
     source: AgentToolSource
-    """Where the tool comes from, such as built in or registered by your app."""
+    """Where the tool comes from: built in, registered by your app, an MCP server, or an external dispatch URL."""
     kind: AgentToolKind
     """What the tool does, such as code execution, shell, or web search."""
     label: str
@@ -544,13 +544,13 @@ class SandboxPolicy:
     macOS applies the file and network rules but not the resource limits. The
     [sandbox reference](/reference/sandbox/) explains how each rule is enforced.
 
-    The defaults match the CLI's `restricted` profile, except `max_cpu_secs`: 300 here, 600 in the CLI.
+    The defaults match the CLI's `restricted` profile.
     """
 
     def __init__(
         self,
         max_memory_mb: int = 2048,
-        max_cpu_secs: int = 300,
+        max_cpu_secs: int = 600,
         max_procs: int = 64,
         max_open_fds: int = 1024,
         max_file_sz_mb: int = 256,

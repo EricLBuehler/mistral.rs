@@ -7,11 +7,11 @@ use pyo3::{
     Bound, Py, PyAny, PyRef, PyResult, Python,
 };
 
-const DEFAULT_SANDBOX_MAX_MEMORY_MB: u64 = 2048;
-const DEFAULT_SANDBOX_MAX_CPU_SECS: u64 = 300;
-const DEFAULT_SANDBOX_MAX_PROCS: u32 = 64;
-const DEFAULT_SANDBOX_MAX_OPEN_FDS: u32 = 1024;
-const DEFAULT_SANDBOX_MAX_FILE_SZ_MB: u64 = 256;
+const DEFAULT_SANDBOX_MAX_MEMORY_MB: u64 = mistralrs_core::DEFAULT_MAX_MEMORY_MB;
+const DEFAULT_SANDBOX_MAX_CPU_SECS: u64 = mistralrs_core::DEFAULT_MAX_CPU_SECS;
+const DEFAULT_SANDBOX_MAX_PROCS: u32 = mistralrs_core::DEFAULT_MAX_PROCS;
+const DEFAULT_SANDBOX_MAX_OPEN_FDS: u32 = mistralrs_core::DEFAULT_MAX_OPEN_FDS;
+const DEFAULT_SANDBOX_MAX_FILE_SZ_MB: u64 = mistralrs_core::DEFAULT_MAX_FILE_SZ_MB;
 
 const PERMISSION_AUTO: &str = "auto";
 const PERMISSION_ASK: &str = "ask";

@@ -23,7 +23,7 @@ Each round, the model asks for one tool, mistral.rs runs it, and the model gener
 Two things to know:
 
 - **One tool per round.** If the model asks for several tools in the same reply, only the first one runs. The model sees that result and can ask for the next tool in the following round.
-- **Tools mistral.rs can't run go back to you.** If the model calls a function you defined in `tools` and nothing on the server handles it (no MCP server, callback, or dispatch URL), the loop stops. A non-streaming response returns that call in `tool_calls` so your app can run it, as in the standard [client-side flow](/guides/agents/tool-calling-basics/).
+- **Tools mistral.rs can't run go back to you.** If the model calls a function you defined in `tools` and nothing on the server handles it (no MCP server, callback, or dispatch URL), the loop stops and returns that call in `tool_calls` so your app can run it, as in the standard [client-side flow](/guides/agents/tool-calling-basics/). When streaming, the call arrives in the final chunk's `delta.tool_calls`, with `finish_reason` set to `"tool_calls"`. The same happens if the loop hits `max_tool_rounds` while a call is pending.
 
 ## Stream a run over HTTP
 
