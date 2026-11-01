@@ -5,7 +5,7 @@ description: Constrain generation to a JSON schema with response_format, pydanti
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-mistral.rs constrains generation server-side with [llguidance](https://github.com/guidance-ai/llguidance), so the output is guaranteed to match your schema -- no retry loops or post-hoc validation. The common case is a JSON schema; regex, Lark, and raw llguidance grammars cover everything else.
+Use a JSON Schema to constrain generated output with [llguidance](https://github.com/guidance-ai/llguidance). Regex, Lark, and llguidance grammars also constrain text. Check for errors or a token-limit finish before parsing: interrupted output may be incomplete.
 
 <Tabs>
 <TabItem label="HTTP">
@@ -114,7 +114,7 @@ struct Address {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let model = ModelBuilder::new("Qwen/Qwen3-4B")
-        .with_auto_isq(IsqBits::Four) // optional: 4-bit ISQ, see /reference/quantization-types/
+        .with_auto_isq(IsqBits::Four)
         .build()
         .await?;
 

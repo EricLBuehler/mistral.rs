@@ -53,7 +53,7 @@ You can also pass `MtpConfig::new("google/gemma-4-E4B-it-assistant", Some(6))` t
 </TabItem>
 </Tabs>
 
-`--mtp-n-predict N` fixes the number of draft tokens per step. Without it, the engine tunes depth using draft acceptance, step time, and batch size, periodically trying other depths as the workload changes. Built-in Qwen heads choose among 2, 3, 4, and 6 drafts. Gemma 4 uses the same candidates, capped by `num_assistant_tokens` in the assistant's `generation_config.json` (6 if absent). DFlash uses the policy described below.
+`--mtp-n-predict N` fixes draft depth. Leave it unset to let the engine adapt to acceptance, memory, and serving load. Benchmark with representative prompts; extra drafting work is useful only when the target accepts enough tokens.
 
 ## Supported models
 
@@ -72,7 +72,7 @@ Qwen3.5 and Qwen3.8 checkpoints ship a multi-token prediction head (`mtp.*` weig
 mistralrs serve -m Qwen/Qwen3.8-27B --quant 4 --mtp
 ```
 
-The head adds one attention layer's paged KV cache. Safetensors and UQFF checkpoints must contain the `mtp.*` weights; GGUF loading does not support built-in MTP.
+Safetensors and UQFF checkpoints must contain the `mtp.*` weights; GGUF loading does not support built-in MTP.
 
 Multi-token verification can use different quantized matrix and recurrent kernels from ordinary decoding. Log probabilities and greedy token choices can differ, so token-for-token equivalence is not guaranteed.
 
@@ -88,12 +88,7 @@ Flash-Next supports only its built-in head. External assistants and DFlash are u
 
 ## DFlash and DFlash 2 (Qwen3.5 / Qwen3.8)
 
-[DFlash](https://arxiv.org/abs/2602.06036) drafters are small block-diffusion models that propose a
-whole block of tokens in one pass, conditioned on hidden states tapped from the target's
-intermediate layers. They reach much higher acceptance than the built-in single-token MTP head.
-Pass a DFlash checkpoint (a HF id or local path) as `--mtp-model`; mistral.rs detects DFlash vs
-DFlash 2 from the checkpoint's `architectures` and loads the path selector and dynamic convolutions
-when present:
+Pass a compatible DFlash or DFlash 2 checkpoint to `--mtp-model`; the format is detected automatically:
 
 ```bash
 mistralrs serve -m Qwen/Qwen3.8-27B --quant 4 \
@@ -105,34 +100,13 @@ its CUDA candidate selector is supported, while DFlash 1 and unsupported devices
 drafting. Pass `--mtp-draft-sampling greedy` to force greedy drafting. Passing `probabilistic`
 requires a supported DFlash 2 selector and fails during loading when that path is unavailable.
 
-The maximum automatic draft depth is `min(block_size - 1, 7)`. During serving, mistral.rs may use a
-shallower depth so the recurrent checkpoint layout fits the configured sequence capacity while
-preserving memory for the requested paged KV cache. Pass `--mtp-n-predict` to request a fixed depth
-instead. Automatic CUDA serving also adapts the active depth to live load: up to 8 live DFlash
-contexts use the full reserved depth, while larger loads use up to 3 drafts. Set
-`MISTRALRS_DFLASH_ADAPTIVE=0` (or `false`) to tune depth from measured throughput instead.
-That tuner also runs when adaptation by live context count is unavailable. It chooses among
-3, 5, and 7 drafts, capped by the reserved depth. The drafter's projection
-weights are requantized to the target's in-situ quantization type at load (override with the
-`MISTRALRS_DFLASH_ISQ` environment variable, e.g. `q6k` or `none` for bf16).
+Leave draft depth automatic initially. Use `--mtp-n-predict` for a fixed depth when comparing workloads. The draft model follows the target's in-situ quantization; `MISTRALRS_DFLASH_ISQ` overrides it (for example `q6k` or `none`).
 
-Acceptance is strongly content-dependent: [incoai/Qwen3.8-27B-DFlash2](https://huggingface.co/incoai/Qwen3.8-27B-DFlash2)
-accepts ~7 of 7 drafts on math/code and much less on thinking-mode reasoning traces, which are out
-of its training distribution.
+Acceptance varies with content, so compare total throughput and latency on your own math, code, or conversational prompts.
 
 ## Gemma 4
 
-Gemma 4 assistant checkpoints are MTP drafters for Gemma 4 target models. See the [`google/gemma-4-E4B-it-assistant`](https://huggingface.co/google/gemma-4-E4B-it-assistant) model card for the upstream checkpoint. A downloaded checkout works too:
-
-```bash
-mistralrs run -m google/gemma-4-E4B-it --quant 8 \
-  --mtp-model ./gemma-4-E4B-it-assistant \
-  --mtp-n-predict 6
-```
-
-Non-paged KV-cache MTP is intentionally disabled for now, which is why paged attention is required (see the note at the top).
-
-The target and assistant configs must match where the implementation requires it, including vocabulary size and target hidden size. Mismatches fail at load, before generation starts.
+Use the assistant checkpoint matching the target model, as in the examples above. `--mtp-model` also accepts a local checkout. Incompatible vocabulary or hidden sizes fail at load.
 
 ## Notes
 

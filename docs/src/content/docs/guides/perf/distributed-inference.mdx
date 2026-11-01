@@ -5,32 +5,21 @@ description: NCCL tensor parallelism, layer/P2P mapping, multi-node NCCL, and th
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-mistral.rs has four ways to spread one model beyond a single GPU. They solve different problems and use different communication paths.
+Choose a distribution mode based on your hardware:
 
-| Mode | Scope | Transport | Use when |
-|---|---|---|---|
-| NCCL tensor parallelism | One machine, multiple CUDA GPUs | NCCL collectives | You have similar local GPUs and want the default high-throughput CUDA path. |
-| Layer mapping with CUDA P2P | One machine, multiple devices | CUDA peer access when available, CPU staging otherwise | NCCL is unavailable, disabled, or the model/layout needs contiguous layer placement. |
-| Multi-node NCCL | Multiple machines, each with local CUDA GPUs | NCCL across all ranks, with mistral.rs coordinating node startup | You want tensor parallelism across machines and each node contributes one or more local CUDA ranks. |
-| Ring backend | Multiple machines | mistral.rs ring transport from `RING_CONFIG` | You explicitly want the ring backend instead of NCCL. |
-
-**Tensor parallelism** splits each layer across all GPUs: each GPU holds a portion of every layer's weights and computes a portion of every matrix multiply, with an all-reduce per layer combining partial results. **Layer mapping** places different contiguous layer ranges on different devices; activations move only at layer-boundary device changes.
+| Mode | Use when |
+|---|---|
+| NCCL tensor parallelism | Similar CUDA GPUs on one or more machines. |
+| Layer mapping | Uneven devices, unavailable NCCL, or explicit layer placement. |
+| Ring backend | You specifically need the `ring` transport instead of NCCL. |
 
 ## Selection flow
 
-With a CUDA build and no manual mapping:
+Multiple visible CUDA GPUs use NCCL when compiled in, otherwise layer mapping. `MISTRALRS_NO_NCCL=1` disables NCCL. Manual layer mapping overrides automatic placement. Check startup logs for the selected layout.
 
-1. One visible GPU runs the model on that GPU.
-2. Multiple visible GPUs use NCCL tensor parallelism when the binary has `cuda nccl` and `MISTRALRS_NO_NCCL` is not set.
-3. If NCCL is unavailable or disabled, mistral.rs uses layer mapping. CUDA pairs use P2P when the driver allows it; otherwise transfers stage through CPU.
-4. If `MISTRALRS_MN_GLOBAL_WORLD_SIZE` is set, NCCL tensor parallelism is extended across nodes.
-5. If `RING_CONFIG` is set and the binary has `ring`, the ring backend is available. If the binary also has NCCL, set `MISTRALRS_NO_NCCL=1` to force ring.
-
-The selected layout is printed in the startup logs at `INFO` level. When a topology file is in use, the logs list the device for each layer; `nvidia-smi` shows per-GPU memory at runtime.
+Use `MISTRALRS_MN_*` for multi-node NCCL, or `RING_CONFIG` for ring. A binary with both features needs `MISTRALRS_NO_NCCL=1` to select ring.
 
 ## Single machine, multiple GPUs
-
-Covers the NCCL tensor parallelism and layer mapping modes from the table above.
 
 ### Build requirements
 
@@ -67,9 +56,7 @@ If the visible GPU count is incompatible, mistral.rs errors instead of selecting
 
 ### Layer mapping (CUDA P2P)
 
-Without explicit layer counts, automatic layer mapping assigns contiguous layer ranges in visible-device order using each device's available memory. With paged attention enabled, it budgets weights, execution workspace, and KV storage together using the shared [memory goal](/guides/perf/paged-attention/#memory-budget) and [serving limits](/guides/perf/throughput-tuning/#memory-planning-for-automatic-device-mapping).
-
-To override placement, assign explicit layer counts to devices. For uneven GPUs, put fewer layers on the smaller or busier GPU.
+Automatic mapping assigns contiguous layers using available device memory and the [memory budget](/guides/perf/paged-attention/#memory-budget). Override it when uneven GPUs or transfer costs need a different split:
 
 <Tabs>
 <TabItem label="CLI">
@@ -104,31 +91,15 @@ For per-layer or per-tensor placement, use the [topology guide](/guides/perf/top
 
 ### Performance notes
 
-Use NCCL when possible for single-machine CUDA tensor parallelism. It keeps collective communication on the GPU path and is the expected path for multiple similar GPUs.
+Layer mapping uses CUDA peer access where available; CPU-staged transfers log a warning and can be slower. Automatic placement accounts for memory, not PCIe/NVLink topology or GPU speed. Use explicit layer counts when those differences matter.
 
-Layer mapping moves activations only at layer-boundary device changes, so contiguous ranges matter. On CUDA, peer access is enabled for supported GPU pairs. If the driver reports that peer access is unavailable or cannot be enabled, those transfers stage through CPU and startup logs include a warning.
-
-Automatic layer mapping accounts for different per-device memory budgets, but does not optimize for PCIe/NVLink topology or balance compute across different GPU speeds. Use `--device-layers` when you need to control that tradeoff. Multi-socket servers with GPUs on different sockets can pay a cross-socket transfer penalty; restrict the visible devices or set placement explicitly when topology matters.
-
-On discrete-memory systems, automatic layer mapping can fall back to CPU placement when the model does not fit across GPUs. Mixed GPU/CPU placement disables paged attention; an explicit memory goal fails instead of being silently discarded.
-
-On Apple Silicon, CPU and GPU share unified memory. Automatic placement still checks whether the weights, execution workspace, and cache fit the Metal budget, including the recommended working-set limit and available system memory. It does not add CPU RAM as a separate fallback pool, because that would count the same memory twice.
+On discrete GPUs, automatic placement can spill weights to CPU; this disables paging. An explicit paged memory goal fails instead. Apple Silicon has one shared memory pool, so CPU placement does not add capacity. See [memory budgets](/guides/perf/paged-attention/#memory-budget).
 
 ## Multi-node NCCL
 
-Multi-node NCCL inference extends tensor parallelism across machines. Each node contributes one or more local CUDA ranks to one global NCCL communicator. It is selected by the `MISTRALRS_MN_*` environment variables and does not use `RING_CONFIG`.
+Use the same CUDA+NCCL build, model, dtype, quantization, and runtime arguments on every node. Each node must contribute the same number of visible GPUs. Global world size is that count multiplied by the number of nodes and must satisfy the model's head-divisibility rules.
 
-Build the same CUDA+NCCL binary on every node, and use the same model, dtype, quantization, and runtime arguments everywhere. Use `CUDA_VISIBLE_DEVICES` on each node to choose the local GPUs that participate.
-
-Use the same local tensor-parallel (TP) size on every node:
-
-```text
-global world size = local TP size * number of nodes
-```
-
-The global tensor-parallel size must satisfy the same head-divisibility constraints as single-machine TP. Incompatible sizes fail at startup; mistral.rs does not automatically drop ranks.
-
-The head node distributes the NCCL id to workers over TCP, then all ranks join one communicator. The variable roles (`MISTRALRS_MN_GLOBAL_WORLD_SIZE`, `MISTRALRS_MN_LOCAL_WORLD_SIZE`, head vs worker settings) are documented in the [environment variable reference](/reference/environment-variables/). Do not set `MISTRALRS_NO_NCCL` or `RING_CONFIG` in this mode.
+Do not set `MISTRALRS_NO_NCCL` or `RING_CONFIG`. The [environment reference](/reference/environment-variables/) documents all `MISTRALRS_MN_*` settings.
 
 Two nodes, four GPUs per node:
 
@@ -154,9 +125,7 @@ MISTRALRS_MN_WORKER_ID=0 \
 mistralrs serve -m Qwen/Qwen3-32B --quant 4
 ```
 
-Send client requests to the head node.
-
-The head port must be reachable from every worker.
+Send requests to the head node; its startup port must be reachable from every worker.
 
 :::caution
 On multi-interface machines, NCCL may pick the wrong network interface between nodes and hang at startup. Set `NCCL_SOCKET_IFNAME` (and other NCCL networking variables as needed) in the shell before launching.
@@ -164,9 +133,7 @@ On multi-interface machines, NCCL may pick the wrong network interface between n
 
 ## Ring backend
 
-The ring backend is a distributed transport selected by `RING_CONFIG`, available when the binary is compiled with the `ring` feature. Use it only when you intentionally want the `ring` transport; for CUDA tensor parallelism across machines, prefer multi-node NCCL.
-
-The `ring` feature must be compiled in:
+Ring requires the `ring` feature. Prefer multi-node NCCL for CUDA tensor parallelism unless you specifically need ring:
 
 ```bash
 cargo install mistralrs-cli --features "cuda flash-attn ring"
@@ -174,7 +141,7 @@ cargo install mistralrs-cli --features "cuda flash-attn ring"
 
 If the binary is also built with `nccl`, set `MISTRALRS_NO_NCCL=1` when launching so the ring backend is selected.
 
-The ring backend reads its configuration from a JSON file pointed to by the `RING_CONFIG` environment variable. Each participant has its own `RING_CONFIG` with rank-specific values:
+Set `RING_CONFIG` to a JSON file on each participant with its own rank and neighbor addresses:
 
 ```json
 {

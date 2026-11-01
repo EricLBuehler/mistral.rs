@@ -105,8 +105,7 @@ mistralrs quantize \
   -o output/
 ```
 
-A UQFF produced from GGUF preserves the source Q/K rotary layout. If that layout is adjacent,
-dynamic LoRA and X-LoRA remain unsupported after conversion; UQFF does not reorder those features.
+Converting GGUF to UQFF retains the source's [adapter limitations](/reference/gguf-support/#feature-compatibility).
 
 `--quant` and `-f` are mutually exclusive, and `--quant auto` does not select a GGUF artifact.
 Starting from a high-precision or higher-bit GGUF avoids compounding quantization loss. Supported
@@ -124,21 +123,12 @@ A [topology](/guides/perf/topology/) can pin specific layers to a different type
 (e.g. keep `lm_head` at `q8_0` in an otherwise Q4K file); pins are preserved in every output
 variant.
 
-Sensitive token embeddings and output heads follow the higher-precision defaults in the
-[quantization type reference](/reference/quantization-types/). For example, AFQ4 uses
-AFQ6 for those tensors, Q4K uses Q6K, and Q6K uses Q8_0. The filename still names the default model
-type, and `uqff_report.json` records the effective type for each tensor. Explicit topology pins take
-precedence. This promotion applies to the language model's embeddings and output head, not its
-vision, audio, or other auxiliary components.
+Some layers use [higher precision](/reference/quantization-types/#sensitive-tensor-precision) by default. The filename names the requested type; `uqff_report.json` records the effective type of each tensor. Explicit topology settings take precedence.
 
 In directory mode a README model card is generated unless `--no-readme` is passed;
 `--uqff-base-model` and `--uqff-repo-id` fill in its fields without the interactive prompt.
 
-`quantize` also writes `uqff_report.json` beside the UQFF files. It records the generated variants,
-shard names, stored layer formats, producer version, and fallback layers. When present, loaders use
-it to resolve quantization names and shard sets, including custom filenames. Conventionally named
-UQFF repositories remain loadable without a report. A report can be generated for existing
-artifacts by scanning them:
+`quantize` also writes `uqff_report.json` with the variants, shard names, and stored formats. Loaders use it to resolve names and shard sets. To create a report for existing artifacts:
 
 ```bash
 mistralrs uqff report -m gemma4_26b_a4b/ \
@@ -153,10 +143,7 @@ For Hugging Face repos, use the same model-id form and select a group with `--qu
 mistralrs uqff report -m mistralrs-community/gemma-4-26B-A4B-it --quant afq3 --json
 ```
 
-The `uqff report`, `uqff verify`, and `uqff inspect` commands are metadata-only. For local paths or
-already cached Hugging Face artifacts they seek-read only the needed byte ranges. For remote
-Hugging Face repos they use HTTP byte-range requests for safetensors headers and small UQFF
-metadata tensors, so they do not download the full model weights.
+`uqff report`, `verify`, and `inspect` read metadata without downloading full model weights.
 
 Before publishing, validate the structure:
 

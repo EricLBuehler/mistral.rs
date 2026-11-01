@@ -14,16 +14,7 @@ safetensors source, it falls back to runtime quantization when no matching UQFF 
 mistralrs run --quant 4 -m google/gemma-4-E4B-it
 ```
 
-`--quant 4` first looks for a matching prebuilt
-[UQFF (Universal Quantized File Format)](/guides/quantization/uqff/) in
-`mistralrs-community/<model>-UQFF` and loads it directly if one is published. Otherwise it falls
-back to [ISQ (in-situ quantization)](/reference/quantization-types/): the engine
-quantizes weights on the fly as they load, picking a hardware-appropriate format (AFQ4 on Metal,
-Q4K elsewhere). With ISQ the full unquantized model is never resident in memory; loading just
-takes longer than a pre-quantized file.
-
-For a local safetensors model path, `--quant` skips the UQFF probe and applies ISQ directly. A
-local directory containing GGUF files instead selects a matching GGUF artifact.
+For a Hugging Face safetensors model, `--quant` prefers a matching prebuilt [UQFF](/guides/quantization/uqff/) and otherwise quantizes during loading (ISQ). Local safetensors paths use ISQ directly; GGUF repositories and directories select an existing GGUF variant. See [format and backend choices](/reference/quantization-types/) for exact mappings.
 
 ## How much memory you save
 
@@ -86,14 +77,7 @@ format name.
 mistralrs tune -m google/gemma-4-E4B-it
 ```
 
-Output is a table with columns `Quant | Est. Size | VRAM % | Context Room | Quality | Status`.
-One row is marked `Recommended`; the others are marked `Fits`, `Hybrid` (split across GPU and
-CPU), or `Too Large`. A recommended command line is printed below the table.
-
-`tune` is a config-based estimator, not a benchmark. It downloads only the model's config files,
-computes per-quantization sizes from the architecture, and checks them against detected VRAM.
-No weights are downloaded, no model is loaded, and the quality column is a fixed tier per format
-(`Baseline`, `Near-lossless`, `Good`, `Acceptable`, `Degraded`), not a measurement.
+`tune` estimates memory from configuration files without downloading weights. It prints a recommended command and reports which formats fit. Its quality labels are format tiers, not measured model quality; benchmark the chosen setup with your workload.
 
 Variations:
 
@@ -190,27 +174,6 @@ ISQ converts the model during loading rather than requiring a prebuilt artifact.
 but avoids keeping the complete source model in memory at once. To skip the conversion on repeated
 loads, [save the result as UQFF](/guides/quantization/uqff/).
 
-<details>
-<summary>Format families</summary>
-
-- **Q\*K** (`q2k`-`q6k`): GGML-compatible block quantization. Broadly applicable, works on all
-  backends.
-- **AFQ** (`afq2`-`afq8`): affine quantization optimized for Apple Silicon. Runs on Metal
-  (native kernels), CUDA (dedicated backend), and CPU (fallback).
-- **Legacy GGML** (`q4_0`, `q4_1`, `q5_0`, `q5_1`, `q8_0`): supported for GGUF compatibility.
-- **FP8** (`fp8`): E4M3 weights on CUDA. Published block-scaled checkpoints load their original
-  scales and activation scheme; Hopper uses a CUTLASS W8A8 provider for 128x128 weights with
-  dynamic 1x128 activation scaling.
-- **F8Q8** (`f8q8`): CPU-only 8-bit format.
-- **MXFP4** (4-bit microscaling): CUDA and Metal; CPU is not supported.
-- **HQQ** (`hqq4`, `hqq8`): alternative 4- and 8-bit schemes.
-
-The numeric shorthand picks a format the active device supports; explicit names override that,
-and incompatible combinations are rejected at load time. Full constraint table:
-[quantization types reference](/reference/quantization-types/).
-
-</details>
-
 ### Organization: default vs moqe
 
 `--isq-organization` selects which layers get quantized:
@@ -224,9 +187,7 @@ It applies when mistral.rs performs ISQ, including UQFF generation. Loading a pr
 
 ### imatrix
 
-An importance matrix (imatrix) is a per-column weight derived from running the model on
-calibration data and accumulating squared input activations. The quantizer uses it to allocate
-precision to higher-impact weights, which matters most at low bit widths.
+An importance matrix uses representative inputs to reduce quantization error in K-quant formats.
 
 Two flags, used with `--isq`:
 
@@ -245,16 +206,6 @@ see [online calibration](/guides/quantization/online-calibration/).
 
 Full example: [Rust](/examples/rust/quantization/imatrix/),
 [Python](/examples/python/imatrix/).
-
-<details>
-<summary>Interaction with paged attention and flash attention</summary>
-
-ISQ applies to weights. The KV cache is a separate budget:
-[paged attention](/guides/perf/paged-attention/) manages its memory independently, and
-`--pa-cache-type` quantizes the cache itself. Flash attention operates on activations, not
-weights, and composes with any ISQ format.
-
-</details>
 
 ## Pre-quantized formats
 

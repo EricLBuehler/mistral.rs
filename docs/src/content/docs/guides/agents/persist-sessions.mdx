@@ -21,22 +21,9 @@ The response body includes a top-level `session_id` field.
 
 ## How a request finds its session
 
-- **Explicit `session_id` on the request**: direct lookup. An existing session continues; an unknown id starts a new session under that id.
-- **No `session_id`**: the server falls back to content matching. It matches the incoming messages against the user-visible message prefix of a stored session, subject to two conditions:
-  - tool-role entries in stored history are skipped;
-  - at least two incoming messages are required.
+An explicit `session_id` continues that session or creates it if unknown. Without one, the runtime tries to match visible message history, then creates an ID if no match is found. Identical opening messages can match the same session, so use unique explicit IDs when clients must remain separate.
 
-  On a match, that session and its id are reused; otherwise a fresh id is generated. Either way the id is returned in the response.
-
-Content matching exists for clients that cannot pass `session_id`. When two clients send identical opening messages, it can route them to the same session; pass an explicit `session_id` in correctness-sensitive deployments.
-
-A session holds:
-
-- the full message history, including tool-call records and synthesized tool messages;
-- multimodal payloads from earlier turns;
-- a handle to the Python code-execution subprocess, if any.
-
-On match, stored history is spliced into the request so that editing a previous turn works while tool-call history is retained; the algorithm is documented in [session memory internals](/developer/session-memory/).
+Sessions retain messages, tool history, media, and any live Python interpreter. See [session memory internals](/developer/session-memory/) for history matching and editing behavior.
 
 ## Export, import, delete
 

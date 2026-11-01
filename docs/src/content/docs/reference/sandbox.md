@@ -3,28 +3,19 @@ title: Sandbox
 description: OS-level sandbox applied to model-generated code and shell execution.
 ---
 
-mistral.rs can run model-generated Python code and shell commands in persistent subprocesses. To keep those subprocesses from doing damage, the spawned process is hardened with an OS-level sandbox.
-
-This is only supported on macOS and Linux environments.
+The sandbox limits filesystem, network, and resource access for model-generated Python and shell commands on Linux and macOS.
 
 :::caution
 The CLI and TOML default to sandboxing on Linux and macOS. The Python and Rust SDKs default to **no sandbox** - an embedding application must construct and attach a `SandboxPolicy` itself.
 :::
 
-On by default for the CLI on Linux and macOS. To tune it, use `--sandbox` / the `[sandbox]` TOML table (see [Configuration](#configuration)). To turn it off, see [Disabling](#disabling). For full setup examples, see [enable code execution](/guides/agents/enable-code-execution/) and [enable shell execution](/guides/agents/enable-shell/).
+Configure it with `--sandbox` / the `[sandbox]` TOML table (see [Configuration](#configuration)). To turn it off, see [Disabling](#disabling). For full setup examples, see [enable code execution](/guides/agents/enable-code-execution/) and [enable shell execution](/guides/agents/enable-shell/).
 
 The sandbox is not the same as permissioning. `--agent-permission ask` or `deny` decides whether model-requested agent actions are allowed to start. The sandbox controls what the subprocess can access after it starts. See [permissions and approvals](/guides/agents/permissions-and-approvals/) for the cross-API approval model.
 
 ## Threat model
 
-The sandbox targets **model misbehavior**: a confused or jailbroken model generating Python or shell commands that could:
-
-- delete or read arbitrary files (`rm -rf ~`, `~/.ssh/id_rsa`, `.env`)
-- exfiltrate data over the network
-- fork-bomb, allocate 200 GB, fill the disk
-- pivot to other binaries via `subprocess`
-- attach to host processes via `ptrace`
-- load kernel modules, manipulate mounts, etc.
+The sandbox limits accidental or model-requested access to host files, networks, processes, and resources.
 
 It is not a substitute for OS-level isolation against a determined attacker who can choose arbitrary code or commands. For high-assurance deployments (multi-tenant, untrusted prompts, regulated data), also isolate the mistral.rs process itself with a container or VM, a dedicated low-privilege user, and constrained network egress. `--tool-dispatch-url` is the alternative when execution should leave the mistral.rs host entirely.
 
@@ -41,7 +32,7 @@ The sandbox profile controls the filesystem and environment allowlist inside tha
 - `developer` - default when agent, code execution, or shell execution is enabled. It keeps writes limited to the session workdir, but allows reads from common local toolchain roots such as Conda/venv, pyenv, rustup, nvm, Homebrew, Nix, Java, Bun, Deno, and selected compiler/library search paths. Its default network mode is `full`.
 - `restricted` - for tighter deployments. It allows system/runtime reads plus the session workdir and explicitly configured paths. Its default network mode is `loopback`.
 
-The programmatic surfaces behave differently: `CodeExecutionConfig` and `ShellConfig` in the Python and Rust SDKs default to **no sandbox**. Omitting `sandbox_policy` (or passing `None`) is equivalent to `--sandbox off`; the sandbox engages only when a `SandboxPolicy` is constructed and attached. An application embedding mistral.rs as a library does not inherit the safer CLI default and is responsible for choosing a policy.
+Native Python and Rust applications must attach a `SandboxPolicy` to `CodeExecutionConfig` or `ShellConfig`; CLI defaults are not inherited.
 
 The restricted profile default policy:
 

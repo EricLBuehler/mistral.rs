@@ -1,19 +1,13 @@
 ---
 title: Speech models
-description: LFM3 speech conversations, Voxtral Realtime transcription, and Dia text-to-speech.
+description: Transcribe audio, synthesize speech, or hold a spoken conversation.
 ---
 
-import { Tabs, TabItem } from '@astrojs/starlight/components';
-
-mistral.rs supports these speech-related model families:
-
-- **LFM3-Audio and LFM3-Omni**: audio understanding, transcription, and speech generation through chat completions and dedicated audio endpoints.
-- **Voxtral Realtime**: multimodal model accepting audio input for speech transcription through
-  `/v1/chat/completions` or `/v1/audio/transcriptions`.
-- **Dia**: dedicated text-to-speech model served via `/v1/audio/speech`.
-
-Voxtral Realtime is classified as a multimodal model because audio is an input modality. Dia is a
-dedicated speech model.
+| Model | Tasks | HTTP endpoints |
+| --- | --- | --- |
+| LFM3-Audio / LFM3-Omni | Audio understanding, transcription, translation, speech generation | Chat Completions, audio speech/transcriptions/translations |
+| Voxtral Realtime | Transcription | Chat Completions, audio transcriptions |
+| Dia | Text-to-speech | Audio speech |
 
 ## LFM3: speech input and output
 
@@ -21,13 +15,53 @@ dedicated speech model.
 mistralrs serve -p 1234 -m LiquidAI/LFM3-Audio-2B --isq q8_0
 ```
 
-LFM3-Audio accepts text and audio and produces text, speech, or both. LFM3-Omni additionally accepts images and video. Both support standard WAV/MP3 `input_audio` chat content parts, multipart transcription and translation endpoints, and `/v1/audio/speech` synthesis. Chat PCM16 streaming emits audio during generation. The checkpoint has one default voice; OpenAI's named voices and Realtime API are not implemented.
+Use `LiquidAI/LFM3-Omni-2B` to add images and video. Both models also load from their `-GGUF` repositories with `--quant`; the companion projector includes the audio components.
 
-See the [LFM3 model notes](/guides/models/model-family-notes/#lfm3-audio), [audio compatibility details](/reference/openai-compatibility/#audio), and [OpenAI SDK endpoint example](/examples/server/lfm3-audio-endpoints/).
+For simple synthesis:
 
-Native Rust's `Model::generate_speech(prompt)` and Python's `Runner.generate_audio(prompt)` also support LFM3-Audio and LFM3-Omni, returning PCM samples with their sample rate and channel count. The [Rust example](/examples/rust/models/lfm3-audio/) saves those samples as WAV. Use chat requests with an audio output mode for mixed text and speech, media input, custom conversation prompts, or incremental PCM streaming. The native SDKs do not resolve HTTP `audio.id` history references.
+```bash
+curl http://localhost:1234/v1/audio/speech \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"default","input":"Hello from mistral.rs.","response_format":"wav"}' \
+  --output hello.wav
+```
 
-Load LFM3 through Rust's `ModelBuilder` or Python's `Which.MultimodalPlain`. Dia uses `SpeechModelBuilder` or `Which.Speech`, as shown below. Both use the same synthesis helper after loading.
+For transcription:
+
+```bash
+curl http://localhost:1234/v1/audio/transcriptions \
+  -F model=default -F file=@speech.wav
+```
+
+Use `/v1/audio/translations` to request an English translation. See the [endpoint example](/examples/server/lfm3-audio-endpoints/) for instructions, speed, output formats, and streaming.
+
+### Chat speech
+
+Send audio using [content parts](/guides/models/multimodal-input/#audio). Text output is the default. For speech, add:
+
+```json
+{
+  "modalities": ["text", "audio"],
+  "audio": {"format": "wav", "voice": "default"}
+}
+```
+
+Use `["audio"]` for audio-only output. Read base64 bytes from `choices[0].message.audio.data`. Both checkpoints have one default voice and produce mono 24 kHz audio.
+
+LFM3-Audio's task prompts are `Perform ASR in English.`, `Perform TTS in American English using a female voice.`, and `Respond with interleaved text and audio.` The dedicated endpoints and synthesis helpers choose the appropriate prompt. See [Audio](/examples/server/lfm3-audio/) and [Omni](/examples/server/lfm3-omni/) chat examples.
+
+For chat streaming, request `audio.format: "pcm16"` and concatenate decoded `delta.audio.data` bytes in order. Chunks arrive during generation; keep the final tail. [HTTP audio semantics](/reference/http-api/#audio-requests-and-history) covers transcripts and audio-ID history. Native SDKs do not resolve HTTP audio IDs or accept generated `<|audio_out|>` history directly.
+
+### Budgets and limits
+
+- Chat `max_tokens` counts text tokens, speech frames, and control tokens. Increase it when audio ends with `finish_reason: "length"`.
+- Text sampling settings do not control speech-code sampling. Omni defaults to temperature 0.4 and repetition penalty 1.2 over 64 frames; Audio uses temperature 1.0, top-k 128, and penalty 1.1 over 4,096 frames. GGUF can supply different embedded defaults. Text temperature 0 does not make speech deterministic.
+- Speech disables thinking by default; explicit reasoning controls are preserved.
+- Audio output rejects tool calls, constrained decoding, custom logits processors, and logprobs. OpenAI named voices and Realtime are unsupported.
+
+### Native SDKs
+
+Load LFM3 with Rust's `ModelBuilder` or Python's `Which.MultimodalPlain`. Call `Model::generate_speech(prompt)` or `Runner.generate_audio(prompt)` to receive PCM, sample rate, and channels. The [Rust example](/examples/rust/models/lfm3-audio/) saves WAV. For mixed output or streaming, use the [Rust audio builder](/reference/rust-sdk/#chat-speech-output) or Python's `modalities` and `audio` fields.
 
 ## Voxtral Realtime: audio in, text out
 
@@ -35,167 +69,20 @@ Load LFM3 through Rust's `ModelBuilder` or Python's `Which.MultimodalPlain`. Dia
 mistralrs serve -m mistralai/Voxtral-Mini-4B-Realtime-2602
 ```
 
-The auto-loader recognizes the Voxtral Realtime layout from `params.json`,
-`consolidated.safetensors`, and `tekken.json`. The earlier `VoxtralForConditionalGeneration`
-architecture is not supported.
+Use the transcription request above or an audio chat content part. This checkpoint is intended for transcription; arbitrary audio question answering is not implied. The older `VoxtralForConditionalGeneration` architecture is unsupported.
 
-Voxtral Realtime uses the multimodal chat request shape: audio is an input content part and the
-response is its transcription. The supported checkpoint is intended for transcription; the text
-part in these examples does not imply support for summarization, speaker analysis, or other audio
-tasks.
-
-<Tabs>
-<TabItem label="HTTP">
-
-```bash
-curl http://localhost:1234/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "default",
-    "messages": [{
-      "role": "user",
-      "content": [
-        {"type": "audio_url", "audio_url": {"url": "https://raw.githubusercontent.com/google-gemma/cookbook/refs/heads/main/apps/sample-data/journal1.wav"}},
-        {"type": "text", "text": "Transcribe this."}
-      ]
-    }]
-  }'
-```
-
-</TabItem>
-<TabItem label="Python">
-
-```python
-from mistralrs import ChatCompletionRequest, MultimodalArchitecture, Runner, Which
-
-runner = Runner(
-    which=Which.MultimodalPlain(
-        model_id="mistralai/Voxtral-Mini-4B-Realtime-2602",
-        arch=MultimodalArchitecture.Voxtral,
-    )
-)
-
-response = runner.send_chat_completion_request(
-    ChatCompletionRequest(
-        model="default",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "audio_url", "audio_url": {"url": "file:///absolute/path/clip.wav"}},
-                    {"type": "text", "text": "Transcribe this audio."},
-                ],
-            }
-        ],
-        max_tokens=256,
-        temperature=0,
-    )
-)
-print(response.choices[0].message.content)
-```
-
-</TabItem>
-<TabItem label="Rust">
-
-```rust
-use mistralrs::{AudioInput, MultimodalMessages, MultimodalModelBuilder, TextMessageRole};
-
-let model = MultimodalModelBuilder::new("mistralai/Voxtral-Mini-4B-Realtime-2602")
-    .build()
-    .await?;
-
-let audio_bytes = std::fs::read("clip.wav")?;
-let audio = AudioInput::from_bytes(&audio_bytes)?;
-
-let messages = MultimodalMessages::new().add_audio_message(
-    TextMessageRole::User,
-    "Transcribe this audio.",
-    vec![audio],
-);
-
-let response = model.send_chat_request(messages).await?;
-println!("{}", response.choices[0].message.content.as_ref().unwrap());
-```
-
-</TabItem>
-</Tabs>
+Native SDKs load Voxtral as a multimodal model and send audio through their normal [multimodal requests](/guides/models/multimodal-input/).
 
 ## Dia: text-to-speech
-
-Dia uses the OpenAI-compatible `/v1/audio/speech` request shape:
 
 ```bash
 mistralrs serve -m nari-labs/Dia-1.6B
 ```
 
-Dia understands dialogue speaker tags such as `[S1]` and `[S2]`, and nonverbal parentheticals such as `(laughs)` or `(coughs)`. Use them in the `input` string when you want dialogue or expressive speech.
+Use `/v1/audio/speech` as above, with dialogue tags such as `[S1]` and `[S2]` in `input`. Dia also understands parentheticals such as `(laughs)`.
 
-<Tabs>
-<TabItem label="HTTP">
+- `voice` must be omitted or `default`.
+- Formats are MP3 (default), Opus, AAC, FLAC, WAV, and PCM. Compressed output and speed adjustment require FFmpeg on the server's PATH.
+- `speed` ranges from 0.25 to 4.0. Dia rejects nonempty `instructions` and SSE speech streaming; ordinary responses contain the completed audio file.
 
-```bash
-curl http://localhost:1234/v1/audio/speech \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "default",
-    "input": "[S1] Hello. This is a test of the text-to-speech system.",
-    "response_format": "wav"
-  }' \
-  --output out.wav
-```
-
-- Output: raw audio bytes.
-- `response_format`: `mp3` (default), `opus`, `aac`, `flac`, `wav`, or `pcm`. Compressed formats require FFmpeg.
-- `voice`: `default` or omitted; other values are rejected. Dia's speaker tags belong in `input`.
-- `speed`: `0.25` to `4.0`, default `1.0`; adjustment requires FFmpeg.
-- Nonempty `instructions` are rejected for Dia. Put synthesis directions in `input` when supported by the checkpoint.
-- `stream_format="audio"` returns a completed file. Dia does not support speech SSE events.
-
-</TabItem>
-<TabItem label="Python">
-
-```python
-import struct
-import wave
-from pathlib import Path
-
-from mistralrs import Runner, SpeechLoaderType, Which
-
-runner = Runner(
-    which=Which.Speech(
-        model_id="nari-labs/Dia-1.6B",
-        arch=SpeechLoaderType.Dia,
-    )
-)
-
-response = runner.generate_audio("[S1] mistral r s can generate speech locally.")
-
-output_path = Path("out.wav")
-pcm_ints = [int(max(-32768, min(32767, sample * 32767))) for sample in response.pcm]
-with wave.open(output_path, "wb") as wav:
-    wav.setnchannels(response.channels)
-    wav.setsampwidth(2)
-    wav.setframerate(response.rate)
-    wav.writeframes(b"".join(struct.pack("<h", sample) for sample in pcm_ints))
-```
-
-</TabItem>
-<TabItem label="Rust">
-
-```rust
-use mistralrs::{speech_utils, SpeechLoaderType, SpeechModelBuilder};
-
-let model = SpeechModelBuilder::new("nari-labs/Dia-1.6B", SpeechLoaderType::Dia)
-    .build()
-    .await?;
-
-let (pcm, rate, channels) = model
-    .generate_speech("[S1] mistral r s can generate speech locally.")
-    .await?;
-
-let mut output = std::fs::File::create("out.wav")?;
-speech_utils::write_pcm_as_wav(&mut output, &pcm, rate as u32, channels as u16)?;
-```
-
-</TabItem>
-</Tabs>
+Native SDKs use `SpeechModelBuilder` / `Which.Speech` and the same `generate_speech` / `generate_audio` helpers. Complete Dia examples: [Python](/examples/python/dia/) and [Rust](/examples/rust/models/speech/). See [audio compatibility](/reference/openai-compatibility/#audio) for endpoint restrictions shared across models.

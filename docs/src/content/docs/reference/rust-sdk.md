@@ -3,31 +3,20 @@ title: Rust SDK reference
 description: The Model API surface of the mistralrs crate, with signatures and links to runnable examples.
 ---
 
-`Model` is the object every builder (`ModelBuilder`, `GgufModelBuilder`, `EmbeddingModelBuilder`, ...) returns. All methods take `&self`; share one instance by reference or in an `Arc`. This page lists the surface; [docs.rs/mistralrs](https://docs.rs/mistralrs) has full rustdoc, and the [Rust examples](/examples/) are runnable.
+Model builders return a `Model`. Reuse it by reference or in an `Arc`; request methods take `&self`. See [getting started](/guides/rust/getting-started/) for setup and [rustdoc](https://docs.rs/mistralrs) for complete signatures.
 
 Most request methods have a `*_with_model(..., model_id: Option<&str>)` twin for multi-model setups; `None` targets the default model. The twins are omitted below.
 
 ## Chat
 
-```rust
-async fn chat(&self, message: impl ToString) -> Result<String>
-```
-Quick one-shot: send a single user message, get the assistant's text reply.
+| Method | Result |
+| --- | --- |
+| `chat(message: impl ToString)` | Assistant text for a single user message. |
+| `send_chat_request(request: impl RequestLike)` | `ChatCompletionResponse`. Accepts `TextMessages`, `MultimodalMessages`, or `RequestBuilder`. |
+| `stream_chat_request(request: impl RequestLike)` | `Stream<'_>` yielding `Response` values and borrowing the model. See [streaming](/guides/rust/streaming/). |
+| `send_raw_chat_request(request: impl RequestLike)` | `(Vec<Tensor>, Vec<u32>)`: first generated-token logits and prompt tokens. See [perplexity](/examples/rust/advanced/perplexity/). |
 
-```rust
-async fn send_chat_request<R: RequestLike>(&self, request: R) -> Result<ChatCompletionResponse>
-```
-Generate non-streaming. Accepts `TextMessages`, `MultimodalMessages`, or `RequestBuilder`. Example: [text-generation](/examples/rust/getting-started/text-generation/).
-
-```rust
-async fn stream_chat_request<R: RequestLike>(&self, request: R) -> Result<Stream<'_>>
-```
-Generate streaming. The returned `Stream` implements `futures::Stream<Item = Response>` and borrows the model. Guide: [streaming](/guides/rust/streaming/).
-
-```rust
-async fn send_raw_chat_request<R: RequestLike>(&self, request: R) -> Result<(Vec<Tensor>, Vec<u32>)>
-```
-Returns raw logits of the first generated token plus the prompt tokens. Example: [perplexity](/examples/rust/advanced/perplexity/).
+All four are async and return `Result`.
 
 ### Chat speech output
 
@@ -44,7 +33,7 @@ let audio = response.choices[0].message.audio.as_ref();
 
 `ChatAudioMode::Audio` requests speech alone; `TextAudio` requests text and speech. `message.audio.data` contains base64 file bytes. Formats are `Wav`, `Pcm16`, `Mp3`, `Flac`, `Opus`, and `Aac`; compressed formats require FFmpeg. For `stream_chat_request`, choose `Pcm16` and concatenate decoded `choices[].delta.audio.data` bytes, including the final tail. LFM3 PCM is mono, signed 16-bit little-endian at 24 kHz.
 
-The native SDK does not provide the HTTP server's transcript cache or `audio.id` history lookup. Preserve assistant text explicitly for later turns. See [speech sampling and limits](/guides/models/model-family-notes/#lfm3-speech-input-and-output) for model defaults and incompatible request options.
+Keep assistant text for later turns; native SDKs have no HTTP `audio.id` history cache. See [speech sampling and limits](/guides/models/model-family-notes/#lfm3-speech-input-and-output) for defaults and incompatible options.
 
 ## Reasoning
 
@@ -68,22 +57,17 @@ Constrains generation to the JSON schema derived from `T` (via `schemars`), then
 
 ## Agentic tools
 
-Enable built-in executors on the model builder, then opt in per request:
+Configure executors on the model builder, then enable them on a `RequestBuilder`:
 
-```rust
-let model = ModelBuilder::new("Qwen/Qwen3-4B")
-    .with_code_execution(CodeExecutionConfig::default())
-    .with_shell_execution(ShellConfig::default())
-    .build()
-    .await?;
+| Request method | Purpose |
+| --- | --- |
+| `with_code_execution()` | Python execution. |
+| `with_shell_execution()` | Shell execution. |
+| `with_shell_skill(name, description, path)` | Mount a local Skill. |
+| `with_input_file(InputFile::from_text(...))` | Attach a file. |
+| `with_max_tool_rounds(6)` | Limit tool-loop rounds. |
 
-let req = RequestBuilder::from(messages)
-    .with_code_execution()
-    .with_shell_skill("my-skill", "Local task-specific skill.", "skills/my-skill")
-    .with_max_tool_rounds(6);
-```
-
-`with_input_file(InputFile::from_text(...))` attaches user-provided request files. `with_shell_execution()` enables plain shell for a request. `with_shell_skill(...)` mounts a local skill directory using the same directory shape as OpenAI-compatible Skills. Guides: [file inputs](/guides/agents/file-inputs/), [code execution](/guides/agents/enable-code-execution/), [shell execution](/guides/agents/enable-shell/), [OpenAI-compatible Skills](/guides/agents/skills/). Examples: [file inputs](/examples/rust/advanced/file-inputs/), [code execution](/examples/rust/advanced/code-execution/), [shell](/examples/rust/advanced/shell/), [shell skills](/examples/rust/advanced/shell-skills/).
+See [code execution](/guides/agents/enable-code-execution/), [shell](/guides/agents/enable-shell/), [Skills](/guides/agents/skills/), and [file inputs](/guides/agents/file-inputs/) for builder configuration and examples.
 
 ## Embeddings
 
@@ -110,7 +94,7 @@ async fn generate_speech(&self, prompt: impl ToString) -> Result<(Arc<Vec<f32>>,
 ```
 Text to speech; returns `(pcm, sample_rate, channels)`. This works with dedicated speech models such as Dia and chat speech models such as LFM3-Audio and LFM3-Omni. For LFM3 it requests audio-only synthesis with the checkpoint's TTS system prompt, thinking disabled, and its default voice. Examples: [LFM3 speech](/examples/rust/models/lfm3-audio/) and [Dia speech](/examples/rust/models/speech/).
 
-Use `send_chat_request` with `RequestBuilder::with_audio_output` when you need a custom system prompt, multimodal input, text with speech, an encoded output format, or generation controls. Use `stream_chat_request` for incremental PCM. Native helpers do not provide the HTTP server's transcript history cache or its `instructions`/`speed` request fields; chat instructions belong in messages.
+Use [chat speech output](#chat-speech-output) for custom messages, multimodal input, encoded formats, generation controls, or streaming. Native helpers have no HTTP `instructions`/`speed` fields; put synthesis instructions in chat messages.
 
 ## Quantization
 

@@ -44,25 +44,7 @@ quantized model:
 | Q2K, Q3K, Q4K, Q4_0, Q4_1 | Q6K |
 | Q5K, Q6K, Q8K, Q5_0, Q5_1, Q8_0, Q8_1 | Q8_0 |
 
-Q8_0 is the common high-precision Q target because quantized embedding kernels support it across
-CPU, CUDA, and Metal. This policy applies to token embeddings, quantized per-layer token embeddings,
-`lm_head`, and the top-level `output` head. Gemma 4 applies it to the PLE token-embedding table while
-keeping PLE projections at the model default and norms dense. Gemma 3n applies it to the PLE
-token-embedding table in the default full configuration; explicit MatFormer slices keep that table
-dense.
-
-Each supported model loader declares the exact language embedding and output-head paths that receive
-this policy. A similarly named tensor in a vision, audio, or auxiliary subtree is not promoted merely
-because its name ends in `embed_tokens`, `word_embeddings`, or `lm_head`.
-
-A tied output head reuses the effective embedding instead of storing a second copy. An explicit
-per-tensor ISQ type in a [topology](/guides/perf/topology/) takes precedence over these
-defaults.
-
-Embedding lookups on CUDA and Metal decode only the requested rows from supported compressed
-tables, including common GGUF, AFQ, FP8, and packed FP4 formats. Output conversion and embedding
-scaling operate on the gathered rows. The matrix-multiplication backend requirements below apply
-separately.
+These defaults apply to language token embeddings and output heads. Explicit [topology](/guides/perf/topology/) settings take precedence. Tied heads share the embedding storage. Auxiliary vision and audio tensors keep their model-specific settings.
 
 ## Format-specific types
 
@@ -123,12 +105,7 @@ dequantization multiplier. Static activation scales may be stored as `input_scal
 `[N/128, 1, K/128, 1]` layouts are normalized automatically. Older ModelOpt repositories that
 place their configuration in `hf_quant_config.json` are also detected.
 
-On cuTile builds, W8A16 keeps E4M3 weights resident and converts each weight tile to BF16 or F16
-inside the GEMM. Tensor and channel W8A8 use dedicated CUDA static-tensor or dynamic per-token
-activation quantizers followed by a cuTile FP8 GEMM. The existing 128x128 block W8A8 providers
-remain available, including CUTLASS and cuTile paths. Tensor and channel schemes use a cached
-dequantized-weight A16 matmul when their accelerated CUDA path is unavailable; this fallback does
-not emulate activation quantize/dequantize rounding.
+Acceleration depends on the GPU and build. Tensor/channel FP8 falls back to a cached dequantized-weight A16 matmul when its accelerated path is unavailable; that fallback does not reproduce activation quantization rounding. See [quantized execution](/developer/quantized-execution/) for backend details.
 
 The checkpoint adapters currently cover dense projections and recognized `gate_up_proj`/`qkv_proj`
 fusions. Partitioned tensor scales require equal-size fused chunks that the model loader exposes as
@@ -143,16 +120,9 @@ scale layouts are separate formats.
 
 ### MXFP8
 
-ModelOpt `MXFP8` checkpoints use E4M3 weights and one unsigned E8M0 power-of-two scale per 32
-weights. They are distinct from tensor-scaled and 128x128 block FP8 checkpoints. The loader keeps
-the packed weights and raw scale bytes. Prefill dynamically quantizes activation blocks using the
-same 32-value scaling convention. Single-token CUDA dense projections can preserve the original
-activation precision for faster decode; this does not change the stored weights.
+ModelOpt `MXFP8` checkpoints use block-scaled E4M3 weights. Dense projections and expert stacks are supported on CUDA, with a CPU reference path. Blackwell GPUs with CUDA 13.3 or newer and `cuda,cutile` use native block-scaled tensor cores for prefill.
 
-CUDA provides a decode matrix-vector kernel and tiled tensor-core prefill. Blackwell GPUs with
-CUDA 13.3 or newer and `cuda,cutile` use native block-scaled tensor cores for prefill. Dense
-projections and expert stacks are supported, with a CPU reference path. Input-dimension shards
-must align to 32 values. MXFP8 creation through ISQ and UQFF serialization are not supported.
+Input-dimension shards must align to 32 values. MXFP8 creation through ISQ and UQFF serialization are not supported.
 
 ### NVFP4
 
@@ -170,10 +140,7 @@ and reads older ModelOpt metadata from `hf_quant_config.json`. ModelOpt uses `we
 `input_scale`; compressed-tensors uses reciprocal `weight_global_scale` and `input_global_scale`.
 These conventions are normalized during loading.
 
-ModelOpt `weight_scale_encoding: "csf"` is supported for dense and expert projections. Compressed
-scales are decoded losslessly to E4M3 during loading; packed FP4 weights remain unchanged. Qwen
-n-gram embedding tables also support NVFP4, gathering and decoding only the requested rows from
-resident or memory-mapped packed tables.
+ModelOpt `weight_scale_encoding: "csf"` is supported for dense and expert projections. NVFP4 Qwen n-gram embedding tables are also supported.
 
 Accelerated inference requires an NVIDIA Blackwell GPU, CUDA 13.3 or newer, a compatible `tileiras`,
 and a binary built with `cuda,cutile`. Use BF16 or F16 model dtype. With CUDA 13.3 or newer selected in the
@@ -200,36 +167,7 @@ Dense and MoE projections are supported. Experts within each projection must sha
 scheme, and input-dimension shards must align to 16 weights. NVFP4 creation through ISQ, NVFP4 UQFF
 serialization, and NVFP4 GGUF loading are not supported.
 
-The CUDA backend uses a dedicated matrix-vector kernel for small decode batches. Larger dense
-batches use tiled matrix multiplication; W4A4 activations are quantized once and reused across
-output tiles. Packed checkpoint tensors are made contiguous during loading. Kernel compilation is
-warmed before CUDA graph capture.
-
-On SM 12.1 with CUDA 13.3 or newer, eligible large dense W4A4 projections use CUTLASS with BF16 or F16
-outputs. Weight scales are prepared during loading, and activation scales are converted for each
-native matrix multiplication. Eligible decode batches use a weight-first tile when packed weights
-and block scales fill at least the GPU L2 cache. Selection depends on hardware and matrix
-dimensions; output rounding still happens before bias addition.
-
-Compatible projections can share packed weights and quantized activations through the common
-projection loader. W4A4 projections share an activation buffer only when their normalized calibrated
-input scales match exactly. Each output row retains its own weight scale. These optimizations apply
-to supported ModelOpt and compressed-tensors checkpoints without model-specific configuration.
-
-Compatible gated feed-forward projections fuse activation, multiplication, and NVFP4 quantization
-for both packed and separate gate/up outputs. SiLU, ReLU, and sigmoid preserve the activation and
-product rounding of the unfused path; other activations use the existing path.
-
-To measure decode, prefill, and expert projections on your GPU:
-
-```bash
-cargo run --release -p mistralrs-quant --features cuda,cutile --example nvfp4_bench -- --graph
-```
-
-The benchmark checks its outputs and emits JSON with median GPU and host latency. Use
-`--suite decode`, `--suite dense`, or `--suite moe` to select cases, `--f16` for FP16, and
-`--w4a16` to preserve activations. Repeated projections can benefit from the GPU cache; measure
-full-model generation separately when comparing inference throughput.
+Kernel selection, precision behavior, and benchmarking are described in [quantized execution](/developer/quantized-execution/#nvfp4).
 
 ### MXFP4
 

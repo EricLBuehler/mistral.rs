@@ -3,7 +3,7 @@ title: Decision requests
 description: Typed d1 inference through SystemOne and the native Rust and Python SDKs.
 ---
 
-`LiquidAI/d1-2B` and `LiquidAI/d1-Omni-2B` answer named questions with probabilities and structured values. They score prepared answer positions directly, without generating an answer token by token. The canonical HTTP endpoint is `POST /v1/systemone`.
+`LiquidAI/d1-2B` and `LiquidAI/d1-Omni-2B` answer named questions with probabilities and structured values. They return typed answers without text generation. Use `POST /v1/systemone`.
 
 ```bash
 mistralrs serve -p 1234 -m LiquidAI/d1-Omni-2B
@@ -23,7 +23,7 @@ curl http://localhost:1234/v1/systemone \
   }'
 ```
 
-The request accepts `model`, `state`, `questions`, `images`, `media`, and `set_size`. `state` can be any JSON value, including `null`; question names become keys in the response's `answers` object. The response also contains `model` and `usage.input_tokens` / `usage.output_tokens`. `input_tokens` counts the expanded input across question groups, including repeated state. `output_tokens` is always zero because decision inference generates no tokens. Generation controls such as `temperature`, `max_tokens`, and `stream` are not accepted.
+`state` accepts any JSON value, including `null`. Question names become keys in response `answers`. Optional fields are `model`, `images`, `media`, and `set_size`. Response `usage.input_tokens` includes expanded media and state repeated across question groups; `usage.output_tokens` is zero. Generation controls (`temperature`, `max_tokens`, `stream`) are rejected.
 
 GGUF uses the same request API:
 
@@ -74,9 +74,9 @@ WAV and MP3 clips can also use `{"type":"input_audio","input_audio":{"data":"BAS
 
 ## Native SDKs
 
-Rust exposes `DecisionRequest`, `DecisionQuestion`, `DecisionAnswer`, and `DecisionResponse`, with typed `DecisionMedia::{Image, Audio, Video}` values and `DecisionInstructions::{Text, Audio}`. Call `Model::send_decision_request(request)` or `send_decision_request_with_model(request, Some(model_id))`.
+Rust uses typed `DecisionRequest`, `DecisionQuestion`, `DecisionAnswer`, and `DecisionMedia` values. Call `Model::send_decision_request(request)`; use its `_with_model` variant to select a loaded model. See the [Rust reference](/reference/rust-sdk/#decision-requests).
 
-Python exposes the same named request/response concepts:
+Python:
 
 ```python
 from mistralrs import DecisionQuestion, DecisionRequest, Runner, Which

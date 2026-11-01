@@ -83,14 +83,9 @@ To choose a shared KV cache capacity, add `memory_goal="4GiB"` or `memory_goal="
 
 Set `stream=True` to receive an iterator of chunks instead of a single response:
 
+Using the `runner` above:
+
 ```python
-from mistralrs import Runner, Which, ChatCompletionRequest
-
-runner = Runner(
-    which=Which.Plain(model_id="Qwen/Qwen3-4B"),
-    in_situ_quant="4",
-)
-
 stream = runner.send_chat_completion_request(
     ChatCompletionRequest(
         model="default",
@@ -107,14 +102,12 @@ for chunk in stream:
 print()
 ```
 
-Each chunk is a `ChatCompletionChunkResponse` with the OpenAI streaming shape. `choices[0].delta.content` carries one incremental piece of the reply; it can be `None` (for example on the final chunk, which carries `finish_reason`), which is why the example checks `delta` before printing.
+`ChatCompletionChunkResponse` follows the OpenAI chunk shape. Text is in `choices[0].delta.content`; it can be `None`, including in a terminal chunk carrying `finish_reason`.
 
 Full example: [streaming](/examples/python/streaming/). For async iteration, FastAPI integration, and mid-stream error handling, see [streaming from Python](/guides/python/streaming/).
 
 ## Notes
 
-The Runner keeps the model in memory for the process lifetime. Requests can be sent sequentially or from multiple threads, all reusing the loaded weights. To swap models, construct a new Runner; the old one releases GPU memory when it goes out of scope.
-
-Chat history is not tracked. Each call to `send_chat_completion_request` is independent; multi-turn conversation means assembling the `messages` list yourself, appending each new user question and prior assistant reply.
+For multi-turn chat, include previous user and assistant messages in every request. Ordinary chat history is not tracked automatically.
 
 The full Python surface (embeddings, speech, image generation, multimodal requests) is documented in the [Python reference](/reference/python/).

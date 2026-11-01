@@ -3,13 +3,13 @@ title: Stream chat responses from Rust
 description: Handle Response variants, errors, tool progress events, cancellation, and task spawning with stream_chat_request.
 ---
 
-`stream_chat_request` returns a value implementing `futures::Stream<Item = Response>`. The minimal loop is in [getting started](/guides/rust/getting-started/#streaming); this guide covers the variant taxonomy and production patterns.
+`stream_chat_request` returns a value implementing `futures::Stream<Item = Response>`. The minimal loop is in [getting started](/guides/rust/getting-started/#streaming); this guide covers errors, tool events, and cancellation.
 
 ## Handling every variant
 
 ```rust
 use futures::StreamExt;
-use mistralrs::{ChatCompletionChunkResponse, ChunkChoice, Delta, Response};
+use mistralrs::Response;
 use std::io::Write;
 
 let mut stream = model.stream_chat_request(messages).await?;
@@ -17,18 +17,13 @@ let mut out = std::io::BufWriter::new(std::io::stdout());
 
 while let Some(item) = stream.next().await {
     match item {
-        Response::Chunk(ChatCompletionChunkResponse { choices, .. }) => {
-            if let Some(ChunkChoice {
-                delta: Delta { content: Some(text), .. },
-                ..
-            }) = choices.first()
-            {
+        Response::Chunk(chunk) => {
+            if let Some(text) = chunk.choices.first().and_then(|c| c.delta.content.as_ref()) {
                 out.write_all(text.as_bytes())?;
                 out.flush()?;
             }
         }
-        Response::Done(_) => break,
-        Response::InternalError(e) => {
+        Response::InternalError(e) | Response::ValidationError(e) => {
             eprintln!("stream error: {e}");
             break;
         }
@@ -45,12 +40,12 @@ while let Some(item) = stream.next().await {
 
 - `Response::Chunk`: the common case. Carries incremental text in `choices[0].delta.content`.
 - Chat speech output also uses `Response::Chunk`, with base64 PCM in `choices[].delta.audio.data`. Select `ChatAudioFormat::Pcm16`, decode each chunk, and append bytes in arrival order, including any final tail. See [chat speech output](/reference/rust-sdk/#chat-speech-output).
-- `Response::Done`: end of stream, with the final `ChatCompletionResponse` and usage stats.
-- `Response::InternalError`: engine-level failure. The stream produces no further values.
+- The last chunk for each choice carries its `finish_reason`. Streaming does not return a non-streaming `Response::Done` object.
+- `Response::InternalError` and `Response::ValidationError`: engine or request failure; stop consuming the stream.
 - `Response::ModelError`: model-level failure, accompanied by the partial response built so far.
-- `Response::AgenticToolCallProgress`, `Response::AgenticToolApprovalRequired`, `Response::File`: emitted when server-side tools run mid-stream (next section).
+- `Response::AgenticToolCallProgress`, `Response::AgenticToolApprovalRequired`, `Response::File`: tool progress, approval requests, and generated files. `BlockDenoisingProgress` reports progress for diffusion language models.
 
-The example uses `_ => {}` for brevity; production code should match the agentic variants explicitly. Full example: [streaming](/examples/rust/getting-started/streaming/), [error-handling](/examples/rust/advanced/error-handling/).
+The loop prints the first choice and ignores non-text events; handle the agentic variants when your application needs them. Full example: [streaming](/examples/rust/getting-started/streaming/), [error-handling](/examples/rust/advanced/error-handling/).
 
 ## Streaming with tool calls
 
@@ -94,24 +89,4 @@ The response channel behind the stream is bounded, so a consumer that stops poll
 
 ## Collecting the full response
 
-To stream for early feedback while also assembling the final text:
-
-```rust
-let mut full_response = String::new();
-
-while let Some(item) = stream.next().await {
-    if let Response::Chunk(chunk) = item {
-        if let Some(choice) = chunk.choices.first() {
-            if let Some(text) = &choice.delta.content {
-                full_response.push_str(text);
-                out.write_all(text.as_bytes())?;
-                out.flush()?;
-            }
-        }
-    }
-}
-
-// `full_response` now holds the complete assistant output.
-```
-
-`full_response` holds the complete assistant output once the stream ends; use it to log or persist the final text.
+Append each nonempty `delta.content` to a `String` in the chunk arm above while displaying it. For `n > 1`, keep a separate buffer per `choice.index`. Preserve partial text if an error arrives; a successful stream ends after each choice's terminal chunk.

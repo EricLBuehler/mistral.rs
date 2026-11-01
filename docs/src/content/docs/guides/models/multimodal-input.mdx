@@ -1,73 +1,60 @@
 ---
 title: Send images, audio, and video
-description: Multimodal input on every surface - content-part messages, URL forms, and per-modality notes.
+description: Attach media through CLI flags, chat content parts, or native SDKs.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Multimodal models accept the OpenAI content-part message format: `content` is a list of typed parts instead of a string. The heavily tested families are Qwen3-VL (image, video) and Gemma 4 (image, audio, video); per-model modality support is in the [supported models reference](/reference/supported-models/).
+Choose a checkpoint that supports your input types in the [model inventory](/reference/supported-models/). Chat `content` becomes an ordered list of typed parts when you attach media.
 
 <Tabs>
 <TabItem label="CLI">
 
 ```bash
-mistralrs run -m Qwen/Qwen3-VL-4B-Instruct --image photo.jpg -i "What is this?"
+mistralrs run -m Qwen/Qwen3-VL-4B-Instruct \
+  --image photo.jpg -i "What is this?"
 ```
 
-`--image`, `--audio`, and `--video` each accept multiple values and require `-i`. Interactive mode also auto-detects file paths in prompts:
-
-```text
-> Describe this: /path/to/photo.jpg
-```
+`--image`, `--audio`, and `--video` accept multiple values and require `-i`. Interactive chat also detects local file paths in prompts.
 
 </TabItem>
 <TabItem label="HTTP">
 
+Replace the example URL with a publicly reachable image:
+
 ```bash
 curl http://localhost:1234/v1/chat/completions \
-  -H "Content-Type: application/json" \
+  -H 'Content-Type: application/json' \
   -d '{
     "model": "default",
-    "messages": [{
-      "role": "user",
-      "content": [
-        {"type": "image_url", "image_url": {"url": "file:///path/to/photo.jpg"}},
-        {"type": "text", "text": "Describe this image."}
-      ]
-    }]
+    "messages": [{"role": "user", "content": [
+      {"type": "image_url", "image_url": {"url": "https://example.com/photo.jpg"}},
+      {"type": "text", "text": "Describe this image."}
+    ]}]
   }'
 ```
 
-[Full example](/examples/server/qwen3-vl/).
+For a client-local file, send a base64 data URL as shown [below](#in-memory-images-from-python).
 
 </TabItem>
 <TabItem label="Python">
 
 ```python
-from mistralrs import Runner, Which, ChatCompletionRequest
+from mistralrs import ChatCompletionRequest, Runner, Which
 
-runner = Runner(
-    which=Which.MultimodalPlain(model_id="Qwen/Qwen3-VL-4B-Instruct"),
-    in_situ_quant="4",
-)
-
-response = runner.send_chat_completion_request(
-    ChatCompletionRequest(
-        model="default",
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "image_url", "image_url": {"url": "file:///path/to/photo.jpg"}},
-                {"type": "text", "text": "What do you see in this image?"},
-            ],
-        }],
-        max_tokens=256,
-    )
-)
+runner = Runner(which=Which.MultimodalPlain(model_id="Qwen/Qwen3-VL-4B-Instruct"))
+response = runner.send_chat_completion_request(ChatCompletionRequest(
+    model="default",
+    messages=[{"role": "user", "content": [
+        {"type": "image_url", "image_url": {"url": "file:///absolute/path/photo.jpg"}},
+        {"type": "text", "text": "Describe this image."},
+    ]}],
+    max_tokens=256,
+))
 print(response.choices[0].message.content)
 ```
 
-[Full example](/examples/python/qwen3-vl/).
+Local file URLs work in the native SDK; HTTP requests use public URLs or inline data.
 
 </TabItem>
 <TabItem label="Rust">
@@ -76,126 +63,72 @@ print(response.choices[0].message.content)
 use mistralrs::{ModelBuilder, MultimodalMessages, TextMessageRole};
 
 let model = ModelBuilder::new("Qwen/Qwen3-VL-4B-Instruct").build().await?;
-
-let image = image::open("photo.jpg")?;
-let messages = MultimodalMessages::new()
-    .add_image_message(TextMessageRole::User, "What is this?", vec![image]);
-
+let messages = MultimodalMessages::new().add_image_message(
+    TextMessageRole::User, "Describe this image.", vec![image::open("photo.jpg")?],
+);
 let response = model.send_chat_request(messages).await?;
 ```
 
-`add_audio_message` and `add_video_message` follow the same shape; `add_multimodal_message` mixes all three. [Full example](/examples/rust/models/multimodal-models/).
+Use `add_audio_message`, `add_video_message`, or `add_multimodal_message` for other inputs. [Complete example](/examples/rust/models/multimodal-models/).
 
 </TabItem>
 </Tabs>
 
 ## Content parts and URL forms
 
-Images and videos use `image_url` and `video_url` parts. WAV and MP3 audio can use standard `input_audio` parts with base64 `data` and `format`, as shown below. The `audio_url` extension accepts URLs and additional audio formats.
+| Part | Payload |
+| --- | --- |
+| `text` | `{"text":"Your question"}` |
+| `image_url` | `{"image_url":{"url":"..."}}` |
+| `video_url` | `{"video_url":{"url":"..."}}` |
+| `audio_url` | `{"audio_url":{"url":"..."}}` |
+| `input_audio` | `{"input_audio":{"data":"BASE64","format":"wav"}}` |
 
-URL parts wrap a `{"url": ...}` object and accept three forms:
-
-- `file:///absolute/path`: local files the server process can read.
-- `http(s)://...`: fetched over the network at request time.
-- `data:<mime>;base64,...`: inline base64.
-
-A message can contain any number of parts in any combination the model supports; the model sees them in order:
-
-```json
-{
-  "role": "user",
-  "content": [
-    {"type": "image_url", "image_url": {"url": "file:///before.jpg"}},
-    {"type": "image_url", "image_url": {"url": "file:///after.jpg"}},
-    {"type": "text", "text": "What changed between these images?"}
-  ]
-}
-```
+Each part also includes its `type`, as in the examples. HTTP URL parts accept public HTTP(S) URLs and `data:<mime>;base64,...`. They do not accept local paths, `file://` URLs, or private-network URLs. The CLI and native SDKs can read local media.
 
 ## Video
 
-Send video with `--video` on the CLI or a `video_url` part over HTTP/SDKs:
+Send `--video clip.mp4` or a content part:
 
 ```json
-{
-  "role": "user",
-  "content": [
-    {"type": "video_url", "video_url": {"url": "file:///absolute/path/clip.mp4"}},
-    {"type": "text", "text": "What happens in this video?"}
-  ]
-}
+{"type":"video_url","video_url":{"url":"https://example.com/clip.mp4"}}
 ```
 
-Non-GIF formats require FFmpeg on the server; install steps and troubleshooting are in [Set up video input](/guides/models/video-setup/).
-
-The engine decodes the file into sampled frames and feeds them through the model's vision path. Per-request frame-sampling controls are not currently exposed.
-
-Qwen3-VL, Gemma 4, LFM3-VL, LFM3-Omni, and the native Muse Glimmer safetensors checkpoint accept video; see the [supported models reference](/reference/supported-models/) for per-model modality support. Video soundtracks are not extracted automatically; send audio separately when the model supports it. [Full example](/examples/server/lfm3-omni/).
+Non-GIF video requires [FFmpeg on the server PATH](/guides/models/video-setup/). Frame sampling follows the model configuration; per-request sampling controls are not exposed. Video soundtracks are not extracted automatically: attach audio separately when the model supports it.
 
 ## Audio
 
-Audio support is model-specific: Gemma 4, Gemma 3n, Phi 4 Multimodal, MiniCPM-O, Voxtral, LFM3-Audio, and LFM3-Omni accept audio input. HTTP and the native Python SDK accept standard WAV/MP3 content parts:
+Standard WAV/MP3 input uses encoded file bytes without a data-URL prefix:
 
 ```json
-{
-  "role": "user",
-  "content": [
-    {"type": "input_audio", "input_audio": {"data": "<base64 file bytes>", "format": "wav"}},
-    {"type": "text", "text": "Transcribe this."}
-  ]
-}
+{"type":"input_audio","input_audio":{"data":"BASE64_FILE_BYTES","format":"wav"}}
 ```
 
-Use `format: "wav"` or `"mp3"`; `data` is the encoded file without a data-URL prefix. For local paths, network URLs, or other decodable formats, use `{"type":"audio_url","audio_url":{"url":"file:///clip.wav"}}`. WAV, MP3, FLAC, and OGG decode natively. Convert other formats with FFmpeg first. Request and file limits are in [HTTP API semantics](/reference/http-api/#audio-requests-and-history).
+For URLs or other supported formats, use `audio_url`. WAV, MP3, FLAC, and OGG decode natively; convert unsupported formats before sending. Rust accepts decoded `AudioInput`. Request limits are in [HTTP audio semantics](/reference/http-api/#audio-requests-and-history).
 
-Rust accepts decoded `AudioInput` through `MultimodalMessages::add_audio_message`. LFM3-Audio and LFM3-Omni can also return speech; see [speech models](/guides/models/use-speech-models/), the [Python example](/examples/python/lfm3-audio/), and the [HTTP example](/examples/server/lfm3-audio/).
+Audio input does not imply speech output. For LFM3 speech generation or transcription endpoints, see [Speech models](/guides/models/use-speech-models/).
 
 ## In-memory images from Python
 
-For bytes or PIL images, encode as base64 and pass a data URL; the engine handles decoding and preprocessing:
+A data URL works with either the OpenAI HTTP client or the native SDK:
 
 ```python
 import base64
-from io import BytesIO
-from PIL import Image
+from pathlib import Path
 
-img = Image.open("photo.jpg")
-buf = BytesIO()
-img.save(buf, format="PNG")
-b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-
-messages = [{
-    "role": "user",
-    "content": [
-        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-        {"type": "text", "text": "Describe this image."},
-    ],
-}]
+payload = base64.b64encode(Path("photo.jpg").read_bytes()).decode("ascii")
+messages = [{"role": "user", "content": [
+    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{payload}"}},
+    {"type": "text", "text": "Describe this image."},
+]}]
 ```
+
+For a PIL image, save it to `io.BytesIO` first and use the matching MIME type.
 
 ## Mixing modalities in one request
 
-Any combination the model supports works in a single message; order matters:
-
-```python
-messages = [{
-    "role": "user",
-    "content": [
-        {"type": "image_url", "image_url": {"url": "file:///chart.png"}},
-        {"type": "audio_url", "audio_url": {"url": "file:///commentary.wav"}},
-        {"type": "text", "text": "Does the commentary match what the chart shows?"},
-    ],
-}]
-```
-
-Which modalities a given model accepts is listed in the [supported models reference](/reference/supported-models/).
+Keep parts in the order you want the model to receive them. For example, send an image, an audio question, then a text instruction. Use a model that supports all those inputs, such as LFM3-Omni. See the [Omni example](/examples/server/lfm3-omni/).
 
 ## Preprocessing
 
-Vision encoders have fixed input resolutions, so each modality is normalized before reaching the model:
-
-- Images are resized to the model's input resolution, preserving aspect ratio (large images are downsized).
-- Video uses the decoded frames.
-- Audio is resampled to the model's expected rate.
-
-Per-request preprocessing overrides are not exposed. Load-time image bounds are set at launch with `--max-num-images` (default 1), `--max-edge`, and `--max-image-length` (default 1024).
+The model's processor resizes/patches images, samples video frames, and resamples audio. There is no universal fixed image resolution across models. Load-time bounds use `--max-num-images`, `--max-edge`, and `--max-image-length`; per-request preprocessing overrides are not exposed.

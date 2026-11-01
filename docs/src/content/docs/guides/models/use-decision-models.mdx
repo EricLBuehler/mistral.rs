@@ -1,0 +1,69 @@
+---
+title: Use decision models
+description: Classify, score, and extract information with d1 through SystemOne or the native SDKs.
+---
+
+Use d1 when you need named answers with probabilities or typed values rather than a generated chat response. `LiquidAI/d1-2B` accepts text, images, and video. `LiquidAI/d1-Omni-2B` also accepts audio and spoken question instructions.
+
+## Start a decision server
+
+```bash
+mistralrs serve -p 1234 -m LiquidAI/d1-Omni-2B
+```
+
+Send the evidence as `state` and the questions separately:
+
+```bash
+curl http://localhost:1234/v1/systemone \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "default",
+    "state": {"message": "Please cancel my subscription today."},
+    "questions": {
+      "cancel": {"type": "noul", "instructions": "Does the customer want to cancel?"},
+      "intent": {
+        "type": "choice",
+        "instructions": "What is the customer requesting?",
+        "criteria": {"cancel": "Cancel service", "billing": "Explain a payment", "other": null}
+      }
+    }
+  }'
+```
+
+Read `answers.cancel.noul` as the probability of yes. The choice answer contains the selected name, confidence, and option probabilities. These are model predictions, not guarantees; choose application thresholds using representative data.
+
+`state` can be text or any JSON value. Use `null` for a media-only task so unrelated text does not influence the result. Question names become response keys. Omit `set_size` to use the model's grouping default; multiple groups repeat the state.
+
+## Select a question type
+
+| Need | Type |
+| --- | --- |
+| Yes/no probability | `noul` |
+| Select one or more named options | `choice` |
+| Rate on ordered levels | `score` |
+| Copy text or parse a number/date from state | `text`, `number`, `date` |
+| Estimate a numeric value | `number` with `range` |
+| Locate objects in one image | `box`, `boxes` |
+
+Scores are expected levels on a 0 to N-1 scale. Extraction reads the supplied state; it does not generate new text. See the [decision reference](/reference/decisions/) for fields and answer semantics. Decision requests do not accept chat generation controls such as `temperature`, `max_tokens`, or streaming.
+
+## Use GGUF
+
+```bash
+mistralrs serve -p 1234 -m LiquidAI/d1-Omni-2B-GGUF --quant 8
+```
+
+The CLI selects its companion projector. Standalone GGUF supports `noul`, single-selection `choice`, and `score`. To enable the other question types, supply the matching original configuration and calibration:
+
+```bash
+mistralrs serve -p 1234 -m LiquidAI/d1-Omni-2B-GGUF --quant 8 \
+  --tok-model-id LiquidAI/d1-Omni-2B
+```
+
+For d1-2B, use the corresponding `LiquidAI/d1-2B-GGUF` and `LiquidAI/d1-2B` IDs. Local GGUF needs its projector beside the model or selected with `--mmproj`; `--tok-model-id` can point to a directory containing matching `config.json` and `calibration.json`.
+
+## Add media or use an SDK
+
+HTTP accepts `images` URL strings or ordered `media` content parts. Use public URLs or inline base64 data; the native SDKs also accept local media. Video soundtracks must be submitted separately. d1-Omni accepts an audio part in a question's `instructions` field.
+
+Rust and Python use `send_decision_request` after loading the model. Complete examples: [HTTP](/examples/server/lfm3-d1/), [Python](/examples/python/lfm3-d1/), and [Rust](/examples/rust/models/lfm3-d1/).

@@ -29,31 +29,7 @@ All images live at `ghcr.io/ericlbuehler/mistral.rs` ([package page](https://git
 - CUDA: `cuda128-sm{cc}-latest`, `cuda129-sm121-latest`, `cuda130-sm{cc}-latest`, `cuda131-sm{cc}-latest`, `cuda132-sm{cc}-latest`, `cuda133-sm90-latest` and matching `X.Y.Z` version tags.
 - CUDA legacy aliases: `cuda-sm{cc}-latest`, `cuda-sm{cc}-X.Y.Z` point at the `cuda131` image.
 
-Choose the CUDA lane from the CUDA version shown by `nvidia-smi`:
-
-| Driver reports | Use |
-|---|---|
-| CUDA 13.3+ on Hopper / `sm90` | `cuda133-sm90` |
-| CUDA 13.2+ on Ampere/Ada / `sm80`, `sm86`, `sm89` | `cuda132-sm{cc}` |
-| CUDA 13.2+ on Blackwell / `sm100`, `sm120`, `sm121` | `cuda132-sm{cc}` |
-| CUDA 13.1+ on Blackwell / `sm100`, `sm120`, `sm121` | `cuda131-sm{cc}` (no cuTile) |
-| CUDA 13.0+ | `cuda130-sm{cc}` |
-| CUDA 12.9+ on GB10 / `sm121` | `cuda129-sm121` |
-| CUDA 12.8+ | `cuda128-sm{cc}` |
-
-cuTile is available only on the supported CUDA lanes listed above. Install `tileiras` as described
-in [cuTile setup](/developer/moe-backends/).
-
-CUDA compute capability variants (SM80+):
-- `80` (A100)
-- `86` (A-series workstation/RTX 30)
-- `89` (RTX 40/L4)
-- `90` (H100)
-- `100` (B200)
-- `120` (RTX 50)
-- `121` (DGX Spark)
-
-See [hardware support](/reference/hardware-support/) for the full GPU mapping.
+Choose the toolkit lane and compute capability from the [hardware support table](/reference/hardware-support/#cuda-artifacts). Check the host with `nvidia-smi`. For optional cuTile acceleration, also install [tileiras](/developer/moe-backends/).
 
 The CPU image is multi-arch. CUDA `90` and `100` tags are multi-arch where both variants appear in the release table, while CUDA `121` is arm64-only for DGX Spark. Docker picks the matching architecture automatically; the other CUDA tags are x86_64 only.
 
@@ -61,7 +37,7 @@ The `*-latest` tags publish on releases and on manual CI dispatch from master; v
 
 For production, pin a version or sha tag rather than `*-latest`. Model ids also float: `-m Qwen/Qwen3-4B` resolves to whatever revision is tagged `main` at download time. The CLI has no revision flag; to pin a revision, use the Rust SDK's `with_hf_revision`.
 
-## Image contract
+## Ports and model cache
 
 - Entrypoint is the `mistralrs` binary; pass a subcommand and its flags as the container command.
 - `mistralrs serve` listens on port 1234 by default (the image's `EXPOSE`d port). To change it, change the flag and the mapping together: `serve -p 8080` with `-p 8080:8080`. There is no `PORT` environment variable.
@@ -128,7 +104,7 @@ The generous `--start-period` matters: first-run model loading can take minutes.
 
 The pieces above translate directly:
 
-- Use a Deployment with a readiness probe hitting `/health` (or a model-aware check; see the [production checklist](/guides/deploy/production-checklist/)).
+- Use `/health` for liveness and check the required model's status in `/v1/models` for readiness. See the [production checklist](/guides/deploy/production-checklist/).
 - Mount a PersistentVolumeClaim at `/data` for the Hugging Face cache.
 - Use the NVIDIA device plugin and a `nvidia.com/gpu` resource request for CUDA.
 - Use an initContainer to pre-download weights for fast pod startup.

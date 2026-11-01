@@ -1,23 +1,15 @@
 ---
 title: Build an agent
-description: Start an agent runtime with one flag, then drive it over HTTP with search, code execution, shell, files, Skills, and sessions.
+description: Run an agent that searches, executes code, and returns files.
 ---
 
-The agentic loop lets the server handle tool calls inside a single request: the model requests a tool, the server runs it, feeds the result back, and continues until the model produces a normal reply. This walkthrough builds one local agent over HTTP that searches the web, runs Python, returns a chart as a typed file, and keeps state across requests.
+Start a server with search, Python code execution, and shell:
 
 ```bash
 mistralrs serve --agent -m Qwen/Qwen3-4B
 ```
 
-`--agent` (alias `--agentic`) turns on three built-in tools:
-
-- `--enable-search`: the built-in web search tool.
-- `--enable-code-execution`: a Python subprocess that persists across calls within a session, in a per-session temp working directory.
-- `--enable-shell`: a shell subprocess that can run commands. It is also the executor used by [OpenAI-compatible Skills](/guides/agents/skills/).
-
-The loop's fallback cap is 256 tool rounds unless `--max-tool-rounds` says otherwise. On Linux and macOS, code and shell execution are [sandboxed by default](/reference/sandbox/) (`--sandbox auto`). The default timeouts are 60 seconds for Python code execution and 600 seconds for shell execution.
-
-Enabling the tools does not force tool use: the model sees the tools and their descriptions and decides when to call them.
+The server executes requested tools and returns the model's answer in one request. Code and shell are [sandboxed by default](/reference/sandbox/) on Linux and macOS. Tool use remains the model's choice; set a round cap to bound the work.
 
 ## Try it in the browser
 
@@ -55,60 +47,15 @@ curl http://localhost:1234/v1/chat/completions \
   }'
 ```
 
-The response keeps the normal OpenAI-compatible `choices` array and adds mistral.rs fields for tool work, files, and session state. Treat tool identifiers in `agentic_tool_calls` as opaque correlation values; use the `arguments`, `result_content`, and `file_ids` fields for app behavior.
-
-```json
-{
-  "choices": [
-    {
-      "message": {"role": "assistant", "content": "Tokyo is about ... Sources: ..."},
-      "finish_reason": "stop"
-    }
-  ],
-  "agentic_tool_calls": [
-    {"round": 0, "name": "<tool identifier>", "arguments": "{\"query\":\"Tokyo population\"}", "result_content": "..."},
-    {"round": 1, "name": "<tool identifier>", "arguments": "{\"code\":\"...\"}", "result_content": "Tokyo share: ...", "file_ids": ["file_tokyo_r1_0"]}
-  ],
-  "files": [
-    {"id": "file_tokyo_r1_0", "name": "tokyo-population.png", "format": "png", "mime_type": "image/png", "bytes": 14823, "data_base64": "iVBORw0KGgo..."}
-  ],
-  "session_id": "tokyo-demo"
-}
-```
-
-`agentic_tool_calls` records the work the server did on behalf of the model. `files` contains structured outputs produced by tools; small files are inlined, larger ones are fetched by id. The wire schema lives in the [HTTP API reference](/reference/http-api/).
+Read the answer from `choices[0].message.content`, tool history from `agentic_tool_calls`, and outputs from `files`. Fetch large files by ID; see [file results](/guides/agents/agentic-runtime/#files).
 
 ## Watch it stream
 
-With `stream: true`, model text arrives as OpenAI-compatible chunks while tool progress and files arrive as named Server-Sent Events (SSE):
-
-```text
-event: agentic_tool_call_progress
-data: {"type":"agentic_tool_call_progress","round":0,"tool_name":"<tool identifier>","phase":"calling","data":{"tool_type":"web_search","query":"Tokyo population Japan population"}}
-
-event: file_produced
-data: {"id":"file_tokyo_r1_0","name":"tokyo-population.png","format":"png","mime_type":"image/png","bytes":14823}
-```
-
-The [agentic runtime guide](/guides/agents/agentic-runtime/) covers the event stream and files contract in depth. [Full example](/examples/server/agentic-tool-rounds/)
+Add `stream: true` to receive model chunks, `agentic_tool_call_progress` events, and `file_produced` events. See the [app integration guide](/guides/agents/agentic-runtime/#http-run-stream) and [streaming example](/examples/server/agentic-tool-rounds/).
 
 ## Mix and match tools
 
-`--agent` is the fastest way to enable the full local agent runtime. Production servers can expose only the tools they need:
-
-```bash
-# Search only
-mistralrs serve --enable-search -m Qwen/Qwen3-4B
-
-# Python code execution only
-mistralrs serve --enable-code-execution -m Qwen/Qwen3-4B
-
-# Shell only
-mistralrs serve --enable-shell -m Qwen/Qwen3-4B
-
-# Search plus shell, without Python code execution
-mistralrs serve --enable-search --enable-shell -m Qwen/Qwen3-4B
-```
+Instead of `--agent`, enable only the executors you need with `--enable-search`, `--enable-code-execution`, or `--enable-shell`. Combine flags as needed.
 
 Chat Completions uses `web_search_options` for search and `code_interpreter` for Python code execution. Responses uses hosted tools in `tools[]`, including `web_search`, `code_interpreter`, and `shell`. [OpenAI-compatible Skills](/guides/agents/skills/) use uploaded skill references in the Responses tool environment and require `--enable-shell` or the broader `--agent` preset.
 

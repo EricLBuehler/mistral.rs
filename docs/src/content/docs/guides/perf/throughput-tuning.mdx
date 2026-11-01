@@ -50,32 +50,23 @@ let model = mistralrs::ModelBuilder::new("Qwen/Qwen3-4B")
 
 CLI `run` defaults to one concurrent sequence. CLI `serve`, Python, and Rust default to 32.
 
-More running sequences need more KV cache. If the pool runs out of blocks mid-generation, the scheduler preempts a running sequence, frees its blocks, and requeues it, which costs recomputation. Lower concurrency or adjust the [memory budget](/guides/perf/paged-attention/#memory-budget) if this happens frequently.
+Higher concurrency needs more cache. Frequent preemption means work is being recomputed; lower concurrency or adjust the [memory budget](/guides/perf/paged-attention/#memory-budget).
 
 ## Mixed prefill and decode
 
-Three limits control how new prompts share the GPU with active decodes:
+Tune these together with concurrency:
 
-- `--max-num-batched-tokens` bounds the total token work in a scheduler batch (default 4096).
-- `--max-prefill-chunk-tokens` bounds each chunkable CUDA or Metal text-prompt scheduling quantum (default
-  512). The budget is divided across admitted prompt sequences, limiting how long active decodes
-  wait behind one non-preemptible prefill step. Raw-logit, adapter, and multimodal prompt paths that
-  cannot be split remain atomic; the limit does not change CPU scheduling.
-- `--max-decode-steps-before-prefill` bounds how long a waiting prompt can be deferred while a
-  decode batch is active (default 8). Raise it to favor inter-token latency for active requests;
-  lower it to reduce time to first token under sustained arrivals.
+| Option | Default | Tradeoff |
+|---|---:|---|
+| `--max-num-batched-tokens` | 4096 | Total token work per scheduler batch. |
+| `--max-prefill-chunk-tokens` | 512 | Larger prompt chunks can improve prefill throughput but delay active decodes. |
+| `--max-decode-steps-before-prefill` | 8 | Higher values favor active decode latency; lower values serve new prompts sooner. |
 
-Measure both output throughput and latency percentiles when changing these values. A larger prefill
-chunk can improve prefill throughput while increasing decode latency, especially for long prompts.
+Chunking applies to supported CUDA/Metal prompt paths. Atomic paths and CPU scheduling are unaffected. Measure throughput, time to first token, and inter-token latency under representative load.
 
 ## When paged attention matters
 
-Paged attention shares a fixed cache pool across requests and is enabled by default on supported CUDA and Metal models:
-
-- With paged attention: continuous batching and block-level prefix sharing.
-- Without it (CPU or `--paged-attn off`): the default scheduler is first-come-first-served and batches running sequences by equal length; sequences at other lengths wait their turn and accumulate priority.
-
-See [paged attention and KV caching](/guides/perf/paged-attention/) for setup and cache controls.
+Paging is automatic on supported CUDA and Metal models and improves concurrent cache use. Without it, batching groups equal-length sequences. See [paged attention](/guides/perf/paged-attention/) for setup and cache controls.
 
 ## Prefix caching
 
