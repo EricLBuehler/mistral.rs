@@ -631,6 +631,9 @@ pub async fn interactive_mode(mistralrs: Arc<MistralRs>, config: InteractiveConf
         Ok(ModelCategory::Embedding) => error!(
             "Embedding models do not support interactive mode. Use the server or Python/Rust APIs."
         ),
+        Ok(ModelCategory::Decision { .. }) => error!(
+            "Decision models use named questions. Use /v1/systemone or the Python/Rust decision APIs."
+        ),
         Err(e) => eprintln!("Error getting model category: {e}"),
     }
 }
@@ -1507,6 +1510,7 @@ async fn stream_assistant_response(
             Response::Speech { .. } => unreachable!(),
             Response::Raw { .. } => unreachable!(),
             Response::Embeddings { .. } => unreachable!(),
+            Response::Decision { .. } => unreachable!(),
         }
     }
     denoising_progress.clear();

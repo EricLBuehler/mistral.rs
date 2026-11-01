@@ -1517,6 +1517,39 @@
         }
       }
     },
+    "/v1/systemone": {
+      "post": {
+        "tags": [
+          "Mistral.rs"
+        ],
+        "operationId": "systemone",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SystemOneRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Named decision answers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemOneResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid question or unsupported model"
+          }
+        }
+      }
+    },
     "/v1/unload_lora_adapter": {
       "post": {
         "tags": [
@@ -4152,6 +4185,585 @@
           },
           "source": {
             "$ref": "#/components/schemas/SourceMeta"
+          }
+        }
+      },
+      "DecisionAnswer": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "noul",
+              "type"
+            ],
+            "properties": {
+              "noul": {
+                "type": "number",
+                "format": "double"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "noul"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "probabilities",
+              "type"
+            ],
+            "properties": {
+              "choice": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "choices": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "string"
+                }
+              },
+              "confidence": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "probabilities": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "choice"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "score",
+              "confidence",
+              "probabilities",
+              "legend",
+              "type"
+            ],
+            "properties": {
+              "confidence": {
+                "type": "number",
+                "format": "double"
+              },
+              "legend": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "probabilities": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "score": {
+                "type": "number",
+                "format": "double"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "score"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "found",
+              "type"
+            ],
+            "properties": {
+              "found": {
+                "type": "number",
+                "format": "double"
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "span": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "text": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "text"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "found": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "interval": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                }
+              },
+              "number": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "span": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "text": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "number"
+                ]
+              },
+              "unit": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "found",
+              "type"
+            ],
+            "properties": {
+              "date": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "found": {
+                "type": "number",
+                "format": "double"
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "span": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "text": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "date"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "found",
+              "confidence",
+              "type"
+            ],
+            "properties": {
+              "box": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/DecisionBox"
+                  }
+                ]
+              },
+              "confidence": {
+                "type": "number",
+                "format": "double"
+              },
+              "found": {
+                "type": "number",
+                "format": "double"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "box"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "boxes",
+              "count",
+              "at_least",
+              "presence",
+              "type"
+            ],
+            "properties": {
+              "at_least": {
+                "type": "boolean"
+              },
+              "boxes": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/DecisionFoundBox"
+                }
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "presence": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "boxes"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "DecisionAudioSource": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "audio_url",
+              "type"
+            ],
+            "properties": {
+              "audio_url": {
+                "$ref": "#/components/schemas/DecisionUrl"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "audio_url"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "input_audio",
+              "type"
+            ],
+            "properties": {
+              "input_audio": {
+                "$ref": "#/components/schemas/DecisionInputAudio"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "input_audio"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "DecisionBox": {
+        "type": "object",
+        "required": [
+          "top",
+          "bottom",
+          "left",
+          "right"
+        ],
+        "properties": {
+          "bottom": {
+            "type": "number",
+            "format": "double"
+          },
+          "left": {
+            "type": "number",
+            "format": "double"
+          },
+          "right": {
+            "type": "number",
+            "format": "double"
+          },
+          "top": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "DecisionFoundBox": {
+        "type": "object",
+        "required": [
+          "box",
+          "found",
+          "confidence"
+        ],
+        "properties": {
+          "box": {
+            "$ref": "#/components/schemas/DecisionBox"
+          },
+          "confidence": {
+            "type": "number",
+            "format": "double"
+          },
+          "found": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "DecisionInputAudio": {
+        "type": "object",
+        "required": [
+          "data",
+          "format"
+        ],
+        "properties": {
+          "data": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string"
+          }
+        }
+      },
+      "DecisionInstructionSource": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "$ref": "#/components/schemas/DecisionAudioSource"
+          }
+        ]
+      },
+      "DecisionMediaSource": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "image_url",
+              "type"
+            ],
+            "properties": {
+              "image_url": {
+                "$ref": "#/components/schemas/DecisionUrl"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "image_url"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "audio_url",
+              "type"
+            ],
+            "properties": {
+              "audio_url": {
+                "$ref": "#/components/schemas/DecisionUrl"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "audio_url"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "input_audio",
+              "type"
+            ],
+            "properties": {
+              "input_audio": {
+                "$ref": "#/components/schemas/DecisionInputAudio"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "input_audio"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "video_url",
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "video_url"
+                ]
+              },
+              "video_url": {
+                "$ref": "#/components/schemas/DecisionUrl"
+              }
+            }
+          }
+        ]
+      },
+      "DecisionResponse": {
+        "type": "object",
+        "required": [
+          "answers",
+          "usage"
+        ],
+        "properties": {
+          "answers": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DecisionAnswer"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "usage": {
+            "$ref": "#/components/schemas/DecisionUsage"
+          }
+        }
+      },
+      "DecisionUrl": {
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "DecisionUsage": {
+        "type": "object",
+        "required": [
+          "input_tokens",
+          "output_tokens"
+        ],
+        "properties": {
+          "input_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "output_tokens": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },
@@ -8770,6 +9382,279 @@
             "description": "Include usage statistics in stream"
           }
         }
+      },
+      "SystemOneQuestion": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "instructions",
+              "type"
+            ],
+            "properties": {
+              "criteria": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": {},
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "instructions": {
+                "$ref": "#/components/schemas/DecisionInstructionSource"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "noul"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "instructions",
+              "criteria",
+              "type"
+            ],
+            "properties": {
+              "criteria": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "instructions": {
+                "$ref": "#/components/schemas/DecisionInstructionSource"
+              },
+              "multiple": {
+                "type": "boolean"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "choice"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "instructions",
+              "criteria",
+              "type"
+            ],
+            "properties": {
+              "criteria": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "instructions": {
+                "$ref": "#/components/schemas/DecisionInstructionSource"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "score"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "instructions",
+              "type"
+            ],
+            "properties": {
+              "instructions": {
+                "$ref": "#/components/schemas/DecisionInstructionSource"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "text"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "instructions",
+              "type"
+            ],
+            "properties": {
+              "instructions": {
+                "$ref": "#/components/schemas/DecisionInstructionSource"
+              },
+              "range": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                }
+              },
+              "step": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "number"
+                ]
+              },
+              "unit": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "instructions",
+              "type"
+            ],
+            "properties": {
+              "instructions": {
+                "$ref": "#/components/schemas/DecisionInstructionSource"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "date"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "instructions",
+              "type"
+            ],
+            "properties": {
+              "instructions": {
+                "$ref": "#/components/schemas/DecisionInstructionSource"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "box"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "instructions",
+              "type"
+            ],
+            "properties": {
+              "instructions": {
+                "$ref": "#/components/schemas/DecisionInstructionSource"
+              },
+              "max": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "boxes"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "SystemOneRequest": {
+        "type": "object",
+        "required": [
+          "questions"
+        ],
+        "properties": {
+          "images": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "media": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DecisionMediaSource"
+            }
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "questions": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SystemOneQuestion"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "set_size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "state": {}
+        },
+        "additionalProperties": false
+      },
+      "SystemOneResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/DecisionResponse"
+          },
+          {
+            "type": "object",
+            "required": [
+              "model"
+            ],
+            "properties": {
+              "model": {
+                "type": "string"
+              }
+            }
+          }
+        ]
       },
       "TextConfig": {
         "type": "object",

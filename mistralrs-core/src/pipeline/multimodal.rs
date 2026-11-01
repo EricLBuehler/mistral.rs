@@ -13,8 +13,9 @@ use super::{
 };
 use super::{
     DiffusionGemmaLoader, Gemma3nLoader, Gemma4Loader, Idefics2Loader, Idefics3Loader, LLaVALoader,
-    LLaVANextLoader, Lfm2VlLoader, Lfm3AudioLoader, Lfm3OmniLoader, Lfm3VlLoader, Mistral3Loader,
-    MultimodalLoaderType, MuseGlimmerLoader, Phi3VLoader, Qwen2_5VLLoader, VoxtralLoader,
+    LLaVANextLoader, Lfm2VlLoader, Lfm3AudioLoader, Lfm3D1Loader, Lfm3OmniLoader, Lfm3VlLoader,
+    Mistral3Loader, MultimodalLoaderType, MuseGlimmerLoader, Phi3VLoader, Qwen2_5VLLoader,
+    VoxtralLoader,
 };
 use crate::attention::ATTENTION_CHUNK_SIZE;
 #[cfg(feature = "cuda")]
@@ -381,6 +382,7 @@ impl MultimodalLoaderBuilder {
             Some(MultimodalLoaderType::Lfm3Vl) => Box::new(Lfm3VlLoader),
             Some(MultimodalLoaderType::Lfm3Audio) => Box::new(Lfm3AudioLoader),
             Some(MultimodalLoaderType::Lfm3Omni) => Box::new(Lfm3OmniLoader),
+            Some(MultimodalLoaderType::Lfm3D1) => Box::new(Lfm3D1Loader),
             Some(MultimodalLoaderType::VLlama) => Box::new(VLlamaLoader),
             Some(MultimodalLoaderType::Qwen2VL) => Box::new(Qwen2VLLoader),
             Some(MultimodalLoaderType::Idefics3) => Box::new(Idefics3Loader),
@@ -570,6 +572,9 @@ impl Loader for MultimodalLoader {
         };
         super::loaders::validate_lora_qk_rope_layout(&config, self.lora_adapters.is_some())?;
         let modalities = self.inner.modalities(&config)?;
+        let is_decision = modalities
+            .output
+            .contains(&crate::SupportedModality::Decision);
         let runtime_config = self
             .inner
             .runtime_config(&config, self.config.max_model_len)?;
@@ -649,7 +654,7 @@ impl Loader for MultimodalLoader {
                 .as_deref()
                 .map(|json| serde_json::from_str(json).unwrap());
             let processor = self.inner.get_processor(
-                &config,
+                &runtime_config,
                 processor_config,
                 preprocessor_config.clone(),
                 self.config.max_edge,
@@ -1683,7 +1688,7 @@ impl Loader for MultimodalLoader {
                 num_hidden_layers,
                 eos_tok: eos,
                 kind: self.kind.clone(),
-                no_kv_cache: false,
+                no_kv_cache: is_decision,
                 no_prefix_cache: !self.inner.supports_prefix_cacher(&config),
                 activation_dtype: dtype,
                 sliding_window,
@@ -1795,6 +1800,9 @@ impl IsqPipelineMixin for MultimodalPipeline {
 
 impl CacheManagerMixin for MultimodalPipeline {
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence]) -> candle_core::Result<()> {
+        if self.metadata.no_kv_cache {
+            return Ok(());
+        }
         match self.model.cache() {
             EitherCache::Full(_) => FullCacheManager.clone_in_cache(self, seqs, false),
             EitherCache::Normal(_) => NormalCacheManager.clone_in_cache(self, seqs, false),
@@ -1802,6 +1810,9 @@ impl CacheManagerMixin for MultimodalPipeline {
         }
     }
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence]) {
+        if self.metadata.no_kv_cache {
+            return;
+        }
         match self.model.cache() {
             EitherCache::Full(_) => FullCacheManager.clone_out_cache(self, seqs, false),
             EitherCache::Normal(_) => NormalCacheManager.clone_out_cache(self, seqs, false),
@@ -1816,23 +1827,25 @@ impl CacheManagerMixin for MultimodalPipeline {
 
         load_preallocated_cache: bool,
     ) -> candle_core::Result<()> {
-        match self.model.cache() {
-            EitherCache::Full(_) => {
-                FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, false)
-            }
-            EitherCache::Normal(_) => NormalCacheManager.set_none_cache(
-                self,
-                seqs,
-                modify_draft_cache,
-                load_preallocated_cache,
-            ),
-            EitherCache::Hybrid(_) => HybridCacheManager.set_none_cache(
-                self,
-                seqs,
-                modify_draft_cache,
-                load_preallocated_cache,
-            ),
-        }?;
+        if !self.metadata.no_kv_cache {
+            match self.model.cache() {
+                EitherCache::Full(_) => {
+                    FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, false)
+                }
+                EitherCache::Normal(_) => NormalCacheManager.set_none_cache(
+                    self,
+                    seqs,
+                    modify_draft_cache,
+                    load_preallocated_cache,
+                ),
+                EitherCache::Hybrid(_) => HybridCacheManager.set_none_cache(
+                    self,
+                    seqs,
+                    modify_draft_cache,
+                    load_preallocated_cache,
+                ),
+            }?;
+        }
         let sequence_ids = seqs.iter().map(|seq| *seq.id()).collect::<Vec<_>>();
         self.model
             .reset_model_specific_state_for_sequences(&sequence_ids);
@@ -2896,6 +2909,26 @@ impl Pipeline for MultimodalPipeline {
         Ok(self.forward_step(inputs, return_raw_logits)?.output)
     }
 
+    fn forward_decision(
+        &self,
+        sequence: &mut Sequence,
+    ) -> Result<crate::decision::DecisionResponse> {
+        let tokenizer = self
+            .tokenizer()
+            .context("Decision models require a tokenizer")?;
+        let processor = self.get_processor();
+        self.model.forward_decision(
+            sequence,
+            super::DecisionForwardContext {
+                tokenizer: &tokenizer,
+                processor: processor.as_ref(),
+                device: &self.device(),
+                processor_config: self.get_input_processor_config(),
+                mapper: self.device_mapper(),
+            },
+        )
+    }
+
     fn forward_step(
         &mut self,
         inputs: Box<dyn Any>,
@@ -3336,7 +3369,16 @@ impl Pipeline for MultimodalPipeline {
         .await
     }
     fn category(&self) -> ModelCategory {
-        if matches!(
+        if self
+            .metadata
+            .modalities
+            .output
+            .contains(&crate::SupportedModality::Decision)
+        {
+            ModelCategory::Decision {
+                video_sampling: self.video_sampling,
+            }
+        } else if matches!(
             self.metadata.modalities.input.as_slice(),
             [crate::SupportedModality::Text]
         ) {

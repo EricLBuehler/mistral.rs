@@ -287,6 +287,7 @@ pub fn resolve_reasoning_controls(
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Message or messages for a [`Request`].
 pub enum RequestMessage {
+    Decision(crate::decision::DecisionRequest),
     Chat {
         messages: Vec<IndexMap<String, MessageContent>>,
         enable_thinking: Option<bool>,
@@ -574,6 +575,23 @@ pub struct NormalRequest {
 }
 
 impl NormalRequest {
+    pub fn decision(
+        input: crate::decision::DecisionRequest,
+        response: Sender<Response>,
+        id: usize,
+        model_id: Option<String>,
+    ) -> Self {
+        let mut request = Self::new_simple(
+            RequestMessage::Decision(input),
+            SamplingParams::deterministic(),
+            response,
+            id,
+            None,
+            None,
+        );
+        request.model_id = model_id;
+        request
+    }
     pub(crate) fn response_is_closed(&self) -> bool {
         self.response.is_closed()
     }

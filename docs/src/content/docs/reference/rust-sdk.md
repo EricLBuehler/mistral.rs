@@ -161,3 +161,7 @@ async fn detokenize(&self, tokens: Vec<u32>, skip_special_tokens: bool) -> Resul
 - `list_mcp_tools(model_id)`: [MCP (Model Context Protocol)](/guides/agents/connect-mcp-server/)-provided tools registered for a model, as `(name, description)` pairs.
 - `find_file(id)`: fetch the full body of a file emitted by the agentic runtime.
 - `inner() -> &MistralRs`: escape hatch to the underlying engine; `Model::new(Arc<MistralRs>)` wraps one back up.
+
+## Decision requests
+
+Use `Model::send_decision_request(DecisionRequest)` with d1 models. `DecisionQuestion` and `DecisionAnswer` are typed enums; requests carry arbitrary JSON state, named questions, and optional `DecisionMedia` values. `send_decision_request_with_model(request, Some(model_id))` selects a loaded model. See [decision request semantics](/reference/decisions/) and the [Rust example](/examples/rust/models/lfm3-d1/).

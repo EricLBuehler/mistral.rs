@@ -751,6 +751,7 @@ pub fn build_mm_features_from_ranges_with_policy(
 }
 
 pub struct Sequence {
+    pub(crate) decision: Option<Arc<crate::decision::DecisionRequest>>,
     audio_output: Option<crate::ChatAudioRequest>,
     generated_audio: Option<crate::ChatAudioResponse>,
     // Metadata, const
@@ -904,6 +905,7 @@ impl Sequence {
         Self {
             tokens,
             audio_output: None,
+            decision: None,
             generated_audio: None,
             prompt,
             logprobs: Vec::new(),

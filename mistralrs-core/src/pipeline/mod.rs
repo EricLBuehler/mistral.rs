@@ -77,15 +77,16 @@ pub use loaders::{
     FluxLoader, GLM4Loader, GLM4MoeLiteLoader, GLM4MoeLoader, Gemma2Loader, Gemma3Loader,
     Gemma3nLoader, Gemma4Loader, GemmaLoader, GptOssLoader, GraniteMoeHybridLoader,
     HunYuanDenseV1Loader, HunYuanMoEV1Loader, Idefics2Loader, Idefics3Loader, LLaVALoader,
-    LLaVANextLoader, Lfm2Loader, Lfm2VlLoader, Lfm3AudioLoader, Lfm3Loader, Lfm3OmniLoader,
-    Lfm3VlLoader, LlamaLoader, Loader, LocalModelPaths, MiniCpmOLoader, Mistral3Loader,
-    MistralLoader, MixtralLoader, ModelKind, ModelPaths, MultimodalLoaderType, MultimodalModel,
-    MultimodalModelLoader, MuseGlimmerLoader, NormalLoaderType, NormalLoadingMetadata, NormalModel,
-    NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader, Phi3_5MoELoader, Phi4MMLoader,
-    PrettyName, QuantizationKind, Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader,
-    Qwen3EmbeddingLoader, Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, Qwen3VLLoader,
-    Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader, Qwen3_5TextLoader, Qwen4ExpLoader,
-    SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader, VLlamaLoader, VoxtralLoader,
+    LLaVANextLoader, Lfm2Loader, Lfm2VlLoader, Lfm3AudioLoader, Lfm3D1Loader, Lfm3Loader,
+    Lfm3OmniLoader, Lfm3VlLoader, LlamaLoader, Loader, LocalModelPaths, MiniCpmOLoader,
+    Mistral3Loader, MistralLoader, MixtralLoader, ModelKind, ModelPaths, MultimodalLoaderType,
+    MultimodalModel, MultimodalModelLoader, MuseGlimmerLoader, NormalLoaderType,
+    NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader,
+    Phi3_5MoELoader, Phi4MMLoader, PrettyName, QuantizationKind, Qwen2Loader, Qwen2VLLoader,
+    Qwen2_5VLLoader, Qwen3EmbeddingLoader, Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader,
+    Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader, Qwen3_5TextLoader,
+    Qwen4ExpLoader, SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader, VLlamaLoader,
+    VoxtralLoader,
 };
 pub use loaders::{LayerResource, ResourceSource};
 #[allow(clippy::too_many_arguments)]
@@ -165,6 +166,7 @@ pub(crate) use paths::{
     get_adapter_paths, get_chat_template, get_model_paths, AdapterPathOptions, XLoraPreload,
 };
 pub use paths::{AdapterPaths, ResolvedLoraAdapter};
+pub use processing::DecisionForwardContext;
 pub(crate) use processing::{
     apply_chat_template, BasicProcessor, MessagesAction, Processor, ProcessorCreator,
 };
@@ -1418,6 +1420,7 @@ impl LogitsSelection {
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum SupportedModality {
+    Decision,
     Text,
     Audio,
     Vision,
@@ -1428,6 +1431,7 @@ pub enum SupportedModality {
 impl Debug for SupportedModality {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Decision => write!(f, "Decision"),
             Self::Text => write!(f, "📝 Text"),
             Self::Audio => write!(f, "🔊 Audio"),
             Self::Vision => write!(f, "🖼️ Vision"),
@@ -1640,6 +1644,9 @@ pub trait AnyMoePipelineMixin {
 /// such as the multimodal model prompt prefixer.
 #[derive(Clone)]
 pub enum ModelCategory {
+    Decision {
+        video_sampling: crate::VideoFrameSampling,
+    },
     Text,
     Multimodal {
         prefixer: Arc<dyn MultimodalPromptPrefixer>,
@@ -1654,6 +1661,7 @@ pub enum ModelCategory {
 impl std::fmt::Debug for ModelCategory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ModelCategory::Decision { .. } => write!(f, "ModelCategory::Decision"),
             ModelCategory::Text => write!(f, "ModelCategory::Text"),
             ModelCategory::Multimodal { .. } => {
                 write!(f, "ModelCategory::Multimodal {{ prefixer: .. }}")
@@ -1669,6 +1677,7 @@ impl std::fmt::Debug for ModelCategory {
 impl PartialEq for ModelCategory {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
+            (Self::Decision { .. }, Self::Decision { .. }) => true,
             (Self::Text, Self::Text) => true,
             (Self::Multimodal { .. }, Self::Multimodal { .. }) => true,
             (Self::Audio, Self::Audio) => true,
@@ -1677,6 +1686,7 @@ impl PartialEq for ModelCategory {
             (Self::Embedding, Self::Embedding) => true,
             (
                 Self::Text
+                | Self::Decision { .. }
                 | Self::Multimodal { .. }
                 | Self::Diffusion
                 | Self::Audio
@@ -1966,6 +1976,13 @@ pub trait Pipeline:
         return_raw_logits: bool,
     ) -> Result<ForwardInputsResult, candle_core::Error>;
 
+    fn forward_decision(
+        &self,
+        _sequence: &mut Sequence,
+    ) -> Result<crate::decision::DecisionResponse> {
+        anyhow::bail!("This pipeline does not support decision requests")
+    }
+
     #[doc(hidden)]
     fn forward_step(
         &mut self,
@@ -2192,6 +2209,44 @@ pub trait Pipeline:
         logger: &IntervalLogger,
         lookahead: StepLookahead,
     ) -> Result<StepSubmission, candle_core::Error> {
+        if matches!(self.category(), ModelCategory::Decision { .. }) {
+            let mut duration = Duration::ZERO;
+            for seq in input_seqs {
+                if seq.responder().is_closed() {
+                    seq.set_state(crate::sequence::SequenceState::Done(
+                        crate::sequence::StopReason::Canceled,
+                    ));
+                    continue;
+                }
+                let start = Instant::now();
+                let result = self.forward_decision(seq);
+                duration += start.elapsed();
+                if seq.responder().is_closed() {
+                    seq.set_state(crate::sequence::SequenceState::Done(
+                        crate::sequence::StopReason::Canceled,
+                    ));
+                    continue;
+                }
+                let response = match result {
+                    Ok(result) => {
+                        seq.set_state(crate::sequence::SequenceState::Done(
+                            crate::sequence::StopReason::Length(0),
+                        ));
+                        crate::Response::Decision { result }
+                    }
+                    Err(error) => {
+                        seq.set_state(crate::sequence::SequenceState::Error);
+                        if is_inputs_processor_validation_error(&error) {
+                            crate::Response::ValidationError(error.into())
+                        } else {
+                            crate::Response::InternalError(error.into())
+                        }
+                    }
+                };
+                let _ = seq.responder().send(response).await;
+            }
+            return Ok(StepSubmission::ready(duration));
+        }
         match backend_metadata {
             CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
                 if !is_prompt && !return_raw_logits {

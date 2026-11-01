@@ -1616,7 +1616,8 @@ impl futures::Stream for AnthropicStreamer {
                         | Response::ImageGeneration(_)
                         | Response::Speech { .. }
                         | Response::Raw { .. }
-                        | Response::Embeddings { .. } => unreachable!(),
+                        | Response::Embeddings { .. }
+                        | Response::Decision { .. } => unreachable!(),
                     }
                 }
                 Poll::Ready(None) => {

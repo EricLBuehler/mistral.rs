@@ -170,7 +170,7 @@ impl futures::Stream for CompletionStreamer {
                     Response::ModelError(_, _) => unreachable!(),
                     Response::Speech { .. } => unreachable!(),
                     Response::Raw { .. } => unreachable!(),
-                    Response::Embeddings { .. } => unreachable!(),
+                    Response::Embeddings { .. } | Response::Decision { .. } => unreachable!(),
                 }
             }
             Poll::Ready(None) => {
@@ -456,7 +456,7 @@ pub fn match_responses(state: SharedMistralRsState, response: Response) -> Compl
         Response::ImageGeneration(_) => unreachable!(),
         Response::Speech { .. } => unreachable!(),
         Response::Raw { .. } => unreachable!(),
-        Response::Embeddings { .. } => unreachable!(),
+        Response::Embeddings { .. } | Response::Decision { .. } => unreachable!(),
         Response::AgenticToolCallProgress { .. } => unreachable!(),
         Response::BlockDenoisingProgress(_) => unreachable!(),
         Response::AgenticToolApprovalRequired { .. } => unreachable!(),

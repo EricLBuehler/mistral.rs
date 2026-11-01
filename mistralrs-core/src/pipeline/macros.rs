@@ -73,6 +73,12 @@ macro_rules! get_paths {
             tracing::trace!("Loading `hf_quant_config.json` at `{}`", $this.model_id);
             let _ = $crate::api_get_file!(api, "hf_quant_config.json", model_id, &revision);
         }
+        if dir_list.contains(&"calibration.json".to_string()) {
+            let config: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&config_filename)?)?;
+            if config["architectures"].as_array().is_some_and(|architectures| architectures.iter().any(|name| name == "D1Model")) {
+                let _ = $crate::api_get_file!(api, "calibration.json", model_id, &revision);
+            }
+        }
         const CODEC_CONFIG: &str = "audio_tokenizer/config.json";
         if dir_list.iter().any(|file| file == CODEC_CONFIG)
             || model_id.join(CODEC_CONFIG).is_file()

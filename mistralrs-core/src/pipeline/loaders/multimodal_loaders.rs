@@ -22,8 +22,8 @@ use serde::Deserialize;
 use self::minicpmo::{MiniCpmOConfig, MiniCpmOModel, MiniCpmOProcessor};
 
 use super::{
-    ActivationModelConfig, DeviceMappedModelLoader, Lfm3AudioLoader, Lfm3OmniLoader, Lfm3VlLoader,
-    NonMappedSubModel, NormalLoadingMetadata,
+    ActivationModelConfig, DeviceMappedModelLoader, Lfm3AudioLoader, Lfm3D1Loader, Lfm3OmniLoader,
+    Lfm3VlLoader, NonMappedSubModel, NormalLoadingMetadata,
 };
 use crate::amoe::AnyMoeBaseModelMixin;
 use crate::attention::ATTENTION_CHUNK_SIZE;
@@ -129,6 +129,13 @@ const QWEN3_VIDEO_SAMPLING: crate::VideoFrameSampling = crate::VideoFrameSamplin
 pub trait MultimodalModel:
     IsqModel + AnyMoeBaseModelMixin + SpeculativeTargetMixin + BlockDiffusionMixin
 {
+    fn forward_decision(
+        &self,
+        _sequence: &mut crate::sequence::Sequence,
+        _context: crate::pipeline::DecisionForwardContext<'_>,
+    ) -> Result<crate::decision::DecisionResponse> {
+        anyhow::bail!("This model does not support decision requests")
+    }
     // pixel_values and pixel_attention_mask only specified for prompt seqs
     fn forward(
         &self,
@@ -376,6 +383,8 @@ pub enum MultimodalLoaderType {
     Lfm3Audio,
     #[serde(rename = "lfm3omni", alias = "lfm3_omni")]
     Lfm3Omni,
+    #[serde(rename = "lfm3d1", alias = "lfm3_d1")]
+    Lfm3D1,
     #[serde(rename = "vllama")]
     VLlama,
     #[serde(rename = "qwen2vl")]
@@ -428,6 +437,7 @@ impl MultimodalLoaderType {
             "Lfm3VlForConditionalGeneration" => Ok(Self::Lfm3Vl),
             "Lfm3AudioForConditionalGeneration" => Ok(Self::Lfm3Audio),
             "Lfm3OmniForConditionalGeneration" => Ok(Self::Lfm3Omni),
+            "D1Model" => Ok(Self::Lfm3D1),
             "MllamaForConditionalGeneration" => Ok(Self::VLlama),
             "Qwen2VLForConditionalGeneration" => Ok(Self::Qwen2VL),
             "Idefics3ForConditionalGeneration" => Ok(Self::Idefics3),
@@ -469,6 +479,7 @@ impl FromStr for MultimodalLoaderType {
             "lfm3vl" | "lfm3_vl" => Ok(Self::Lfm3Vl),
             "lfm3audio" | "lfm3_audio" => Ok(Self::Lfm3Audio),
             "lfm3omni" | "lfm3_omni" => Ok(Self::Lfm3Omni),
+            "lfm3d1" | "lfm3_d1" => Ok(Self::Lfm3D1),
             "vllama" => Ok(Self::VLlama),
             "qwen2vl" => Ok(Self::Qwen2VL),
             "idefics3" => Ok(Self::Idefics3),
@@ -488,7 +499,7 @@ impl FromStr for MultimodalLoaderType {
             "qwen3_5moe" => Ok(Self::Qwen3_5Moe),
             "qwen4exp" => Ok(Self::Qwen4Exp),
             "voxtral" => Ok(Self::Voxtral),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `lfm2vl`, `lfm3vl`, `lfm3omni`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`, `gemma3n`, `gemma4`, `muse_glimmer`, `qwen3vl`, `qwen3vlmoe`, `qwen3_5`, `qwen3_5moe`, `qwen4exp`, `voxtral`, `diffusiongemma`.")),
+            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `phi3v`, `idefics2`, `llava_next`, `llava`, `lfm2vl`, `lfm3vl`, `lfm3audio`, `lfm3omni`, `lfm3d1`, `vllama`, `qwen2vl`, `idefics3`, `minicpmo`, `phi4mm`, `qwen2_5vl`, `gemma3`, `mistral3`, `llama4`, `gemma3n`, `gemma4`, `muse_glimmer`, `qwen3vl`, `qwen3vlmoe`, `qwen3_5`, `qwen3_5moe`, `qwen4exp`, `voxtral`, `diffusiongemma`.")),
         }
     }
 }
@@ -504,6 +515,7 @@ impl std::fmt::Display for MultimodalLoaderType {
             MultimodalLoaderType::Lfm3Vl => "lfm3vl",
             MultimodalLoaderType::Lfm3Audio => "lfm3audio",
             MultimodalLoaderType::Lfm3Omni => "lfm3omni",
+            MultimodalLoaderType::Lfm3D1 => "lfm3d1",
             MultimodalLoaderType::VLlama => "vllama",
             MultimodalLoaderType::Qwen2VL => "qwen2vl",
             MultimodalLoaderType::Idefics3 => "idefics3",
@@ -569,6 +581,7 @@ impl AutoMultimodalLoader {
             MultimodalLoaderType::Lfm3Vl => Box::new(Lfm3VlLoader),
             MultimodalLoaderType::Lfm3Audio => Box::new(Lfm3AudioLoader),
             MultimodalLoaderType::Lfm3Omni => Box::new(Lfm3OmniLoader),
+            MultimodalLoaderType::Lfm3D1 => Box::new(Lfm3D1Loader),
             MultimodalLoaderType::VLlama => Box::new(VLlamaLoader),
             MultimodalLoaderType::Qwen2VL => Box::new(Qwen2VLLoader),
             MultimodalLoaderType::Idefics3 => Box::new(Idefics3Loader),

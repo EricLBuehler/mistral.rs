@@ -1,10 +1,14 @@
-use std::sync::Arc;
+use std::{any::Any, sync::Arc};
 
 use anyhow::{Context, Result};
+use as_any::AsAny;
+use candle_core::Device;
 use either::Either;
 use indexmap::IndexMap;
+use tokenizers::Tokenizer;
 
 use crate::{
+    device_map::DeviceMapper,
     request::ReasoningEffort,
     special_text::{defuse_tool_output, SpecialStrings},
     vision_models::{preprocessor_config::PreProcessorConfig, processor_config::ProcessorConfig},
@@ -12,6 +16,15 @@ use crate::{
 };
 
 use super::{chat_template::apply_chat_template_to, text_models_inputs_processor, InputsProcessor};
+
+#[doc(hidden)]
+pub struct DecisionForwardContext<'a> {
+    pub tokenizer: &'a Arc<Tokenizer>,
+    pub processor: &'a dyn Processor,
+    pub device: &'a Device,
+    pub processor_config: Option<Arc<dyn Any>>,
+    pub mapper: Option<&'a dyn DeviceMapper>,
+}
 
 /// Trait to create processors.
 pub trait ProcessorCreator {
@@ -33,7 +46,7 @@ pub enum MessagesAction {
 /// Processor for messages.
 /// Also includes method to retrieve the input processor for processing inputs for the
 /// model.
-pub trait Processor {
+pub trait Processor: AsAny {
     /// Get the tokens and the untokenized prompt. `add_special_tokens` should usually be true.
     #[allow(clippy::too_many_arguments)]
     fn process(

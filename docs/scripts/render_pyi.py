@@ -57,6 +57,8 @@ GROUPS = [
             "ChatCompletionRequest",
             "CompletionRequest",
             "EmbeddingRequest",
+            "DecisionQuestion",
+            "DecisionRequest",
         ],
     ),
     (
@@ -64,6 +66,9 @@ GROUPS = [
         "responses",
         "Response and streaming types returned by the engine.",
         [
+            "DecisionResponse",
+            "DecisionAnswer",
+            "DecisionUsage",
             "ChatCompletionResponse",
             "ChatCompletionChunkResponse",
             "AgenticToolCallRecord",

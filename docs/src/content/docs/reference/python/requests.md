@@ -140,6 +140,51 @@ An EmbeddingRequest represents a request to compute embeddings for the provided 
 | `input` | `str \| list[str] \| list[int] \| list[list[int]]` | required |
 | `truncate_sequence` | `bool` | `False` |
 
+
+## `DecisionQuestion`
+
+A typed decision question; spoken instructions accept audio_url/input_audio content parts.
+
+### `DecisionQuestion.__init__`
+
+```text
+__init__(
+    kind: Literal['noul', 'choice', 'score', 'text', 'number', 'date', 'box', 'boxes'],
+    instructions: str | dict[str, Any],
+    *,
+    criteria: dict[str, Any] | list[str] | None = None,
+    multiple: bool = False,
+    range: tuple[float, float] | None = None,
+    step: float | None = None,
+    unit: str | None = None,
+    max: int | None = None,
+) -> None
+```
+
+### `DecisionQuestion.to_dict`
+
+```text
+to_dict() -> dict[str, Any]
+```
+
+
+## `DecisionRequest`
+
+State is any JSON value. Media accepts image_url, audio_url, input_audio, and video_url parts.
+
+### `DecisionRequest.__init__`
+
+```text
+__init__(
+    state: Any,
+    questions: dict[str, DecisionQuestion | dict[str, Any]],
+    *,
+    images: list[str] | None = None,
+    media: list[dict[str, Any]] | None = None,
+    set_size: int | None = None,
+) -> None
+```
+
 ---
 
 <small>Generated from [`mistralrs-pyo3/mistralrs.pyi`](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs-pyo3/mistralrs.pyi).</small>

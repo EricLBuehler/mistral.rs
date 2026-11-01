@@ -393,6 +393,9 @@ pub struct ServiceUnavailableError(pub String);
 /// - Chat (no prefix)
 /// - Completion (Completion- prefix)
 pub enum Response {
+    Decision {
+        result: crate::decision::DecisionResponse,
+    },
     InternalError(Box<dyn Error + Send + Sync>),
     ValidationError(Box<dyn Error + Send + Sync>),
     // Chat
@@ -441,6 +444,9 @@ pub enum Response {
 
 #[derive(Debug, Clone)]
 pub enum ResponseOk {
+    Decision {
+        result: crate::decision::DecisionResponse,
+    },
     // Chat
     Done(ChatCompletionResponse),
     Chunk(ChatCompletionChunkResponse),
@@ -532,6 +538,7 @@ impl Response {
     /// Convert the response into a result form.
     pub fn as_result(self) -> Result<ResponseOk, Box<ResponseErr>> {
         match self {
+            Self::Decision { result } => Ok(ResponseOk::Decision { result }),
             Self::Done(x) => Ok(ResponseOk::Done(x)),
             Self::Chunk(x) => Ok(ResponseOk::Chunk(x)),
             Self::CompletionDone(x) => Ok(ResponseOk::CompletionDone(x)),

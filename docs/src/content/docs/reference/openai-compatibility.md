@@ -5,6 +5,8 @@ description: Which OpenAI API fields mistralrs implements, which it extends, and
 
 mistral.rs targets field-level OpenAI API compatibility. Most OpenAI client libraries work against mistral.rs unchanged. This page lists the exceptions. For setup and examples, see [OpenAI-compatible APIs](/guides/serve/openai-compatible-apis/).
 
+Decision models use the [SystemOne API at `POST /v1/systemone`](/reference/decisions/), a separate endpoint outside the OpenAI API.
+
 ## Chat Completions fields
 
 ### Implemented

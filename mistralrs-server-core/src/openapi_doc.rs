@@ -22,6 +22,10 @@ use crate::{
     },
     chat_completion::__path_chatcompletions,
     completions::__path_completions,
+    decisions::{
+        __path_systemone, DecisionAudioSource, DecisionInputAudio, DecisionInstructionSource,
+        DecisionMediaSource, DecisionUrl, SystemOneQuestion, SystemOneRequest, SystemOneResponse,
+    },
     embeddings::__path_embeddings,
     files::{
         __path_delete_file, __path_get_container_file, __path_get_container_file_content,
@@ -75,7 +79,8 @@ use crate::{
     },
 };
 use mistralrs_core::{
-    ApproximateUserLocation, CalibrationStatus, Function, ImageGenerationResponseFormat,
+    ApproximateUserLocation, CalibrationStatus, DecisionAnswer, DecisionBox, DecisionFoundBox,
+    DecisionResponse, DecisionUsage, Function, ImageGenerationResponseFormat,
     NamedFunctionToolChoice, SearchContextSize, SerializedSession, Tool, ToolChoice, ToolType,
     WebSearchContentType, WebSearchFilters, WebSearchImageSettings, WebSearchOptions,
     WebSearchReturnTokenBudget, WebSearchUserLocation,
@@ -123,8 +128,11 @@ use mistralrs_core::{
 pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
     #[derive(OpenApi)]
     #[openapi(
-        paths(models, health, chatcompletions, anthropic_messages, anthropic_count_tokens, completions, embeddings, re_isq, calibration_start, calibration_status, calibration_apply, image_generation, speech_generation, audio_transcriptions, audio_translations, create_response, get_response, delete_response, cancel_response, upload_skill, list_skills, upload_skill_version, list_skill_versions, load_lora_adapter, unload_lora_adapter, list_lora_adapters, unload_model, reload_model, get_model_status, tune_model, system_info, system_doctor, get_session, put_session, delete_session, list_files, upload_file, get_file, get_file_content, delete_file, list_container_files, get_container_file, get_container_file_content, resolve_agent_approval, metrics),
+        paths(models, health, chatcompletions, anthropic_messages, anthropic_count_tokens, completions, embeddings, systemone, re_isq, calibration_start, calibration_status, calibration_apply, image_generation, speech_generation, audio_transcriptions, audio_translations, create_response, get_response, delete_response, cancel_response, upload_skill, list_skills, upload_skill_version, list_skill_versions, load_lora_adapter, unload_lora_adapter, list_lora_adapters, unload_model, reload_model, get_model_status, tune_model, system_info, system_doctor, get_session, put_session, delete_session, list_files, upload_file, get_file, get_file_content, delete_file, list_container_files, get_container_file, get_container_file_content, resolve_agent_approval, metrics),
         components(schemas(
+            SystemOneRequest, SystemOneResponse, SystemOneQuestion,
+            DecisionAnswer, DecisionResponse, DecisionUsage,
+            DecisionBox, DecisionFoundBox, DecisionMediaSource, DecisionInstructionSource, DecisionAudioSource, DecisionInputAudio, DecisionUrl,
             ApprovalDecision,
             ApprovalDecisionRequest,
             ApprovalDecisionResponse,
