@@ -17,6 +17,23 @@ members = [
     "mistralrs-code-exec",
     "mistralrs-sandbox",
 ]
+# Root builds skip mistralrs-pyo3; unifying its pyo3 features would link libpython into the CLI
+default-members = [
+    "mistralrs-server-core",
+    "mistralrs-cli",
+    "mistralrs-core",
+    "mistralrs",
+    "mistralrs-vision",
+    "mistralrs-quant",
+    "mistralrs-paged-attn",
+    "mistralrs-metal-compile",
+    "mistralrs-flash-attn",
+    "mistralrs-audio",
+    "mistralrs-mcp",
+    "mistralrs-macros",
+    "mistralrs-code-exec",
+    "mistralrs-sandbox",
+]
 resolver = "2"
 
 [workspace.package]
