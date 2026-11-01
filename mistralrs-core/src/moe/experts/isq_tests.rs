@@ -37,8 +37,9 @@ fn isq_experts_on_device(device: Device) -> Result<()> {
     let mut tensors = HashMap::new();
     for expert in 0..EXPERTS {
         let mut values = vec![0f32; FEATURES * FEATURES];
+        let scale = f32::from(u16::try_from(expert + 1).unwrap()) / 8.0;
         for diagonal in 0..FEATURES {
-            values[diagonal * FEATURES + diagonal] = (expert + 1) as f32 / 8.0;
+            values[diagonal * FEATURES + diagonal] = scale;
         }
         for projection in ["gate_proj", "up_proj", "down_proj"] {
             tensors.insert(
@@ -50,10 +51,12 @@ fn isq_experts_on_device(device: Device) -> Result<()> {
     let input = Tensor::ones((1, 2, FEATURES), DType::F32, &device)?;
     let ids = Tensor::new(&[[1u32, 0], [0, 1]], &device)?;
     let weights = Tensor::new(&[[0.75f32, 0.25], [0.25, 0.75]], &device)?;
+    let expert_weights =
+        Regex::new(r"^experts\.\d+\.(gate_proj|up_proj|down_proj)\.weight$").unwrap();
     for ty in [IsqType::HQQ4, IsqType::HQQ8, IsqType::F8E4M3, IsqType::F8Q8] {
         mistralrs_quant::set_immediate_isq(
             Some(ty),
-            vec![Regex::new(r"^experts\.\d+\.(gate_proj|up_proj|down_proj)\.weight$").unwrap()],
+            vec![expert_weights.clone()],
             IsqCaptureMode::Immediate,
         );
         let _clear = ClearIsq;

@@ -140,6 +140,7 @@ $fixtureFunctions = {
     function Enable-FakeDownload {
         function script:Download-File($Url, $Destination, $Label) {
             $script:DownloadedUrl = $Url
+            Add-Type -AssemblyName System.IO.Compression
             Add-Type -AssemblyName System.IO.Compression.FileSystem
             $archive = [IO.Compression.ZipFile]::Open($Destination, [IO.Compression.ZipArchiveMode]::Create)
             try {
