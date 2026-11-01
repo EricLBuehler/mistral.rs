@@ -5,7 +5,7 @@ description: Generate text vectors for search, clustering, and retrieval.
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Embedding models return vectors through `/v1/embeddings` or the native SDKs. Use the same model and preprocessing for indexed documents and later queries.
+An embedding model turns text into a vector of numbers, so that texts with similar meaning get nearby vectors. You use them for semantic search, clustering, deduplication, and retrieval for RAG. mistral.rs serves them through the OpenAI-compatible `/v1/embeddings` endpoint, so tools that already use that endpoint work unchanged.
 
 ## Loading an embedding model
 
@@ -13,7 +13,12 @@ Embedding models return vectors through `/v1/embeddings` or the native SDKs. Use
 mistralrs serve -m google/embeddinggemma-300m
 ```
 
-EmbeddingGemma-300M returns 768-dimensional vectors. `Qwen/Qwen3-Embedding-0.6B` is another supported checkpoint with 1,024-dimensional output. Check license/access requirements before loading.
+| Model | Size | Vector length |
+| --- | --- | --- |
+| `google/embeddinggemma-300m` | 300M parameters | 768 |
+| `Qwen/Qwen3-Embedding-0.6B` | 600M parameters | 1,024 |
+
+EmbeddingGemma is gated: accept its license on Hugging Face and run `mistralrs login` before the first download.
 
 ## Requesting an embedding
 
@@ -42,7 +47,7 @@ vectors = runner.send_embedding_request(EmbeddingRequest(
     input=["task: search result | query: What is graphene?"],
     truncate_sequence=True,
 ))
-print(vectors[0])
+print(len(vectors[0]))  # 768
 ```
 
 </TabItem>
@@ -62,23 +67,23 @@ let vectors = model.generate_embeddings(
 
 ## Batching
 
-Pass a list in `input` to embed multiple strings. The response's `data` entries preserve input order.
+To embed several texts in one call, pass a list as `input` (or use `add_prompts` in Rust). You get one entry in `data` per input, in the same order.
 
 ## Request fields
 
-| Field | Behavior |
+| Field | Values |
 | --- | --- |
-| `encoding_format` | `float` (default), or `base64` containing little-endian f32 bytes. |
-| `truncate_sequence` | Extension: truncate overlong input instead of returning an error. |
-| `dimensions` | Unsupported; supplying it returns an error. |
+| `encoding_format` | `float` (default) returns a list of numbers. `base64` returns each vector as base64-encoded little-endian f32 bytes, which is smaller to send. |
+| `truncate_sequence` | mistral.rs extension. `true` cuts inputs longer than the model's context to fit. The default, `false`, returns an error instead. |
+| `dimensions` | Not supported. Sending it returns an error rather than silently giving you a different length. |
 
 ## Normalization
 
-Normalization depends on the checkpoint's `modules.json`; EmbeddingGemma includes a normalization module. If your similarity calculation requires unit vectors and the model does not normalize, apply `v / numpy.linalg.norm(v)` before storing and querying. Check your vector store's metric rather than assuming it performs this step.
+mistral.rs runs the post-processing steps listed in the checkpoint's `modules.json`. Both EmbeddingGemma and Qwen3-Embedding end with a normalize step, so their vectors already have length 1, and a plain dot product gives you cosine similarity. For another model, check its `modules.json` for a `Normalize` entry. If there isn't one and your vector store expects unit vectors, divide each vector by its length before storing and querying.
 
 ## EmbeddingGemma prompts
 
-Prefixes are part of the input; the server does not add them automatically.
+EmbeddingGemma expects a task prefix on every input. mistral.rs doesn't add it, so include it in the text you send:
 
 | Use | Prefix |
 | --- | --- |
@@ -91,8 +96,22 @@ Prefixes are part of the input; the server does not add them automatically.
 | Similarity | `task: sentence similarity \| query: <text>` |
 | Code search | `task: code retrieval \| query: <query>` |
 
-These are EmbeddingGemma formats. Follow the selected checkpoint's instructions for other embedding models.
+For search, embed queries with the query prefix and documents with the document prefix. Other models use their own formats; check the model card.
 
-## Using the vectors
+## Comparing vectors
 
-Store document vectors, embed each query with the same model, and retrieve nearby vectors with your chosen metric. Your application can then pass the retrieved text to a chat model. See [web search](/guides/agents/web-search/) for retrieval in an agent workflow.
+Because both models return unit-length vectors, ranking documents against a query is one matrix product:
+
+```python
+import numpy as np
+
+query, *docs = runner.send_embedding_request(EmbeddingRequest(input=[
+    "task: search result | query: What is graphene?",
+    "title: none | text: Graphene is a single layer of carbon atoms.",
+    "title: none | text: Apples grow on trees in temperate climates.",
+]))
+scores = np.array(docs) @ np.array(query)
+print(scores)  # one score per document; higher means more similar
+```
+
+For a real corpus, embed your documents once, store the vectors in a vector database, and embed each incoming query with the same model and prefix.

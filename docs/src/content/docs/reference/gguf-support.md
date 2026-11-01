@@ -3,7 +3,9 @@ title: GGUF compatibility
 description: Supported GGUF architectures, projectors, storage formats, and feature limits.
 ---
 
-For loading commands, see [Run GGUF models](/guides/models/run-gguf/). The architecture column below is the file's `general.architecture` value. Fine-tunes share their base family's entry; checkpoint capabilities and chat-template requirements still apply.
+Which GGUF files mistral.rs can load. For loading commands, see [Run GGUF models](/guides/models/run-gguf/).
+
+To find a file's row, match the architecture column against the file's `general.architecture` metadata value. Fine-tunes use their base family's row.
 
 ## Text model families
 
@@ -40,11 +42,13 @@ For loading commands, see [Run GGUF models](/guides/models/run-gguf/). The archi
 | LFM2 and LFM2.5 MoE | `lfm2moe` |
 | LFM3 | `lfm3` |
 
-Shared architecture names may need original assets to identify the family; use `--tok-model-id` when identification is ambiguous. GLM files configured for multimodal input cannot load as text-only models.
+Some architecture names, such as `llama`, cover several families. If mistral.rs can't tell which family a standalone file belongs to, pass the original model with `--tok-model-id`.
+
+GLM files configured for multimodal input can't load as text-only models.
 
 ## Multimodal model families
 
-These models need a matching companion projector. The CLI selects one from an unambiguous repository or beside a direct local `-f` file. Some families also need original config/processor assets.
+A multimodal GGUF model comes as two files: the language model and a projector, usually named `mmproj-*.gguf`, which holds the vision or audio encoder. The CLI finds the projector in the Hub repository, or in the same folder as a local `-f` file. If there are several and it can't tell which to use, pass `--mmproj <file>`. Some families also need the original model's config or processor files; the notes below the table say which.
 
 | Model family | GGUF architecture |
 | --- | --- |
@@ -65,43 +69,48 @@ These models need a matching companion projector. The CLI selects one from an un
 | Qwen3.5 and Qwen3.6 MoE | `qwen35moe` |
 | Qwen3.8-Flash-Next | `qwen4exp` |
 
-Check the checkpoint's input modalities; a multimodal entry does not imply audio or video support.
+A listed family doesn't necessarily take every input type. Check the model card for whether it accepts images, audio, or video. Family notes:
 
-- **LFM3:** configuration and preprocessing are reconstructed from main/projector files. VL accepts images/video; Audio accepts audio and generates speech; Omni combines those capabilities. No original model assets are required.
-- **d1:** standalone files support `noul`, single-selection `choice`, and `score`. Optional matching `config.json` and `calibration.json` supplied through `--tok-model-id` enable the [full decision API](/guides/models/use-decision-models/#use-gguf).
-- **Muse Glimmer:** published GGUFs need `--tok-model-id meta-models/Muse-Glimmer-30B`. Images work; video is rejected because conversion merges temporal patch weights irreversibly.
-- **Qwen3.5/3.6:** images and video work; audio is unsupported. **Gemma 4** additionally supports audio when the matching components are present.
+- **LFM3:** loads from the GGUF files alone. LFM3-VL takes images and video, LFM3-Audio takes audio and generates speech, and LFM3-Omni does both.
+- **d1:** the GGUF files alone answer `noul` (yes/no), single-answer `choice`, and `score` questions. For every [question type](/reference/decisions/#question-types), also pass the original model with `--tok-model-id`. See [d1 with GGUF](/guides/models/use-decision-models/#use-gguf).
+- **Muse Glimmer:** published GGUFs need `--tok-model-id meta-models/Muse-Glimmer-30B`. Images work. Video doesn't, because the llama.cpp conversion irreversibly merges the projector weights that video needs.
+- **Qwen3.5 and Qwen3.6:** images and video, no audio.
+- **Gemma 4:** images and video, plus audio when the model and projector files include the audio components.
 
-`gemma3n`, `gemma4`, `llama4`, `qwen2vl`, `qwen3vl`, `qwen3vlmoe`, and `muse-glimmer` always require a projector. Dual text/multimodal architectures can load text-only without one, except d1 decision models, which require their projector even for text questions.
+These architectures always need a projector: `gemma3n`, `gemma4`, `llama4`, `qwen2vl`, `qwen3vl`, `qwen3vlmoe`, and `muse-glimmer`. Architectures in both tables load as text-only models when there's no projector, except d1, which always needs its projector.
 
 ## Storage formats
 
-A file may mix supported types, as `_K_M` and `_K_S` artifacts commonly do.
+A file can mix the types below, as `_K_M` and `_K_S` files usually do.
 
 | Category | Types |
 | --- | --- |
 | Floating point | F32, F16, BF16 |
 | Legacy block quants | Q4_0, Q4_1, Q5_0, Q5_1, Q8_0, Q8_1 |
 | K-quants | Q2_K, Q3_K, Q4_K, Q5_K, Q6_K, Q8_K |
-| GPT-OSS | Its MXFP4 representation |
+| GPT-OSS | GPT-OSS's MXFP4 weights |
 
-IQ types are unsupported for matrix projections. IQ4_NL is supported by embedding gather, including Qwen3.8-Flash-Next's PLE table. Choose Q/K artifacts for other weights. Unlisted formats, including NVFP4, and big-endian files are unsupported.
+Not supported:
+
+- IQ types, such as IQ4_XS, so pick a Q or K file instead. The one exception is IQ4_NL in embedding tables, such as Qwen3.8-Flash-Next's per-layer embedding table.
+- Other types not listed above, including NVFP4.
+- Big-endian files.
 
 ## Feature compatibility
 
 | Capability | Support |
 | --- | --- |
-| Exact local / Hub files | `-f`, with `-m` for a Hub repository |
-| Artifact selection | `-m` with `--quant` |
-| Tokenizer/template | Embedded metadata or supplied model assets |
-| Projector discovery | Unambiguous repository or adjacent direct-local file |
-| Serving and tools | Normal model APIs; model/template restrictions still apply |
-| Dynamic LoRA | Compatible language-model weights; see rotary-layout restriction below |
-| Multimodal adapters | Language model only; no media encoder/projector adapters |
-| Legacy static LoRA / X-LoRA | Text `phi3` only; no multimodal GGUF |
-| ISQ requantization | Compatible weights in an exact `-f` file |
-| Offline loading | All required files must be local or cached |
+| Load a specific file | `-f <file>` for a local file, or `-m <repo> -f <file>` from the Hub. |
+| Pick a quantization from a repo | `-m <repo> --quant <bits or name>`, such as `--quant 4` or `--quant q8_0`. `--quant auto` isn't supported. |
+| Tokenizer and chat template | Read from the GGUF metadata, or from the original model passed with `--tok-model-id`. |
+| Projector for multimodal models | Found in the repo or next to a local `-f` file. Pass `--mmproj` to choose one yourself. |
+| Serving, tool calling, agents | Same as other formats. The model and its chat template still need to support tool calling. |
+| Dynamic LoRA | Language-model adapters, except on the architectures listed below. |
+| LoRA on multimodal models | Language-model adapters only. Vision, audio, and projector adapters aren't supported. |
+| Static LoRA and X-LoRA | Text-only `phi3` files only. |
+| ISQ requantization | Pass `--isq` with an exact `-f` file. |
+| Offline loading | Works when every required file is local or cached. |
 
-Dynamic LoRA rejects adjacent rotary layouts: `llama`, `mistral3`, `deepseek2`, `glm4`, `smollm3`, `granite`, `granitemoe`, `granitehybrid`, `llama4`, and `muse-glimmer`. This includes multimodal families routed through those architectures. Base loading is unaffected.
+Dynamic LoRA doesn't work with GGUF files for these architectures: `llama`, `mistral3`, `deepseek2`, `glm4`, `smollm3`, `granite`, `granitemoe`, `granitehybrid`, `llama4`, and `muse-glimmer`. That includes multimodal models built on them, such as Idefics3, Mistral 3, Pixtral, and Llama 4. The base model still loads; use the original safetensors checkpoint if you need adapters.
 
-LFM3-Audio/Omni speech output works through their multimodal GGUF loaders. Dedicated speech models such as Dia, embedding models, and image-generation/diffusion pipelines do not load from GGUF.
+LFM3-Audio and LFM3-Omni can generate speech from GGUF. Dedicated speech models such as Dia, embedding models, and image-generation models don't load from GGUF.

@@ -25,15 +25,32 @@ The request `model` field selects among loaded models. `"default"` (or omitting 
 
 ## LoRA adapter routing and management
 
-Chat Completions, Completions, and Responses accept `adapter` as a loaded alias or `{"generation":"<generation-id>"}`. A loaded adapter can also be selected through its exact model-card ID from `GET /v1/models`; a unique short alias is accepted. Responses report the resolved `adapter_generation`. Replacing or unloading an alias does not change in-flight requests.
+Chat Completions, Completions, and Responses can run a request on a loaded LoRA adapter. Each adapter is loaded under an alias, and each set of adapter files gets a generation: an ID computed from the adapter's config and weights. Loading different files under the same alias gives it a new generation.
+
+Select an adapter in any of these ways:
+
+- `"adapter": "<alias>"` uses the alias's current generation.
+- `"adapter": {"generation": "<id>"}` uses that exact generation, as long as it's still loaded.
+- `model` set to the adapter's ID from `GET /v1/models`, or to its bare alias when only one model has an adapter by that name.
+
+Responses include the `adapter_generation` that ran. Replacing or unloading an alias doesn't affect requests already running.
 
 | Route | Behavior |
 | --- | --- |
-| `GET /v1/lora_adapters` | Lists aliases, generations, capacity, and limits. Always registered; returns 409 `lora_runtime_unavailable` if the target model has no dynamic LoRA runtime. |
-| `POST /v1/load_lora_adapter` | Loads a local adapter. Replacement requires `load_inplace: true`; `expected_generation` provides compare-and-set protection. |
-| `POST /v1/unload_lora_adapter` | Removes an alias. Optional `expected_generation` prevents stale removal. |
+| `GET /v1/lora_adapters` | Lists aliases, their generations, and capacity limits. Returns 409 `lora_runtime_unavailable` if the model has no dynamic LoRA support. |
+| `POST /v1/load_lora_adapter` | Loads an adapter from a directory on the server under an alias. To replace an alias that's already loaded, pass `load_inplace: true`. |
+| `POST /v1/unload_lora_adapter` | Removes an alias. |
 
-For `mistralrs serve`, mutation requires `MISTRALRS_ALLOW_RUNTIME_LORA_UPDATING=1` (also accepts `true`, `yes`, or `on`). Embedded servers use `LoraAdapterApiConfig`. Sources are redacted when mutation is disabled. Concurrent loads return 429; admitted loads continue after client disconnect, so check the listed generation before retrying.
+To avoid overwriting someone else's change, pass the generation you last saw as `expected_generation` to load or unload. The call then fails with 409 `lora_generation_mismatch` if the alias has changed since. On load, `expected_generation` also needs `load_inplace: true`.
+
+Loading and unloading are off by default:
+
+- For `mistralrs serve`, set `MISTRALRS_ALLOW_RUNTIME_LORA_UPDATING=1` (`true`, `yes`, and `on` also work).
+- For an embedded server, enable them with `LoraAdapterApiConfig`.
+
+While they're off, the load and unload routes don't exist, and `GET /v1/lora_adapters` hides each adapter's source path.
+
+The server loads one adapter at a time, and a second load sent meanwhile gets 429. A load that has started finishes even if the client disconnects, so after a timeout, check `GET /v1/lora_adapters` before retrying.
 
 See the [LoRA guide](/guides/customize/lora-adapters/) for setup, immutable adapter paths, access controls, and error recovery.
 
@@ -45,7 +62,7 @@ Chat Completions, Responses, Messages, speech, and transcriptions use distinct S
 
 `stream: true` returns unnamed SSE `data:` payloads in OpenAI chat chunk format, followed by `data: [DONE]`.
 
-Models with chat speech output emit `delta.audio.data` during synthesis when `modalities` includes `"audio"` and `audio.format` is `"pcm16"`. For LFM3-Audio and LFM3-Omni, regular chunks contain about 0.96 seconds of mono, signed 16-bit little-endian PCM at 24 kHz; the final chunk contains the remaining tail. Decode each base64 chunk and append its bytes in arrival order. The chunks share an audio ID; completed metadata supplies `transcript` and `expires_at`. The audio-only transcript requires a final ASR pass, which can delay the terminal metadata after the last speech chunk. See [LFM3 speech behavior](/guides/models/model-family-notes/#lfm3-speech-input-and-output) for model defaults and limits.
+Models with chat speech output emit `delta.audio.data` during synthesis when `modalities` includes `"audio"` and `audio.format` is `"pcm16"`. For LFM3-Audio and LFM3-Omni, regular chunks contain about 0.96 seconds of mono, signed 16-bit little-endian PCM at 24 kHz; the final chunk contains the remaining tail. Decode each base64 chunk and append its bytes in arrival order. The chunks share an audio ID, and the final metadata carries `transcript` and `expires_at`. For audio-only replies, mistral.rs transcribes the finished speech to produce `transcript`, so that metadata can arrive a little after the last audio chunk. See [LFM3 speech behavior](/guides/models/use-speech-models/#reply-length-and-speech-sampling) for model defaults and limits.
 
 Agentic requests can interleave named events:
 
@@ -100,7 +117,7 @@ Chat input uses `{"type":"input_audio","input_audio":{"data":"<base64>","format"
 
 Non-streaming output is base64 in `message.audio.data`; streamed PCM arrives in `delta.audio.data`. See [chat streaming](#streaming-chat-completions) for chunk assembly and [OpenAI compatibility](/reference/openai-compatibility/#audio) for dedicated speech/transcription endpoints, formats, and controls. LFM3 uses the checkpoint's voice: omit `voice` or use `"default"`.
 
-Completed HTTP chat responses include `audio.id`, `audio.transcript`, and Unix timestamp `audio.expires_at`. Send `{"role":"assistant","audio":{"id":"..."}}` in a later conversation to restore that transcript as text context. This does not restore speech tokens or voice. Mixed text/audio uses its generated text; audio-only output requires an ASR pass, which can delay completion metadata.
+Completed HTTP chat responses include `audio.id`, `audio.transcript`, and Unix timestamp `audio.expires_at`. Send `{"role":"assistant","audio":{"id":"..."}}` in a later conversation to restore that transcript as text context. This restores the words only, not the speech itself. For text-and-audio replies, the transcript is the generated text. For audio-only replies, mistral.rs transcribes the finished speech, which can delay the completion metadata.
 
 IDs expire after one hour and may be evicted earlier or lost on server restart. Unknown or expired IDs return an error; keep the transcript as assistant `content` for durable history. If both content and an ID are supplied, content takes precedence but the ID must still be valid. When transcription fails or exceeds resource limits, generated audio is preserved with an empty transcript and an expired ID. This history service is HTTP-only; native SDK callers manage conversation text themselves.
 

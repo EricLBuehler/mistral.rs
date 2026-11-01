@@ -21,6 +21,8 @@ const REGEN_HINT: &str = "cargo test -p mistralrs-cli regenerate_cli_reference -
 const GENERATED_NOTICE: &str =
     "<!-- Generated from clap definitions by mistralrs-cli docgen. Do not edit. -->\n\n";
 const SKIPPED_ARG_IDS: &[&str] = &["help", "version"];
+// table cells can't hold newlines, so help paragraphs and per-value lines become breaks
+const CELL_LINE_BREAK: &str = "<br>";
 
 fn yaml_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
@@ -63,27 +65,44 @@ fn flag_syntax(arg: &Arg) -> String {
 }
 
 fn arg_description(arg: &Arg) -> String {
-    let mut desc = arg
+    let help = arg
         .get_long_help()
         .or_else(|| arg.get_help())
         .map(|s| s.to_string())
         .unwrap_or_default();
-    let possible: Vec<String> = arg
-        .get_possible_values()
-        .iter()
-        .filter(|pv| !pv.is_hide_set())
-        .map(|pv| format!("`{}`", pv.get_name()))
+    let mut lines: Vec<String> = help
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
         .collect();
-    if !possible.is_empty() {
-        if !desc.is_empty() {
-            if !matches!(desc.trim_end().chars().last(), Some('.' | '!' | '?')) {
-                desc.push('.');
+    let possible: Vec<_> = arg
+        .get_possible_values()
+        .into_iter()
+        .filter(|pv| !pv.is_hide_set())
+        .collect();
+    if possible.iter().any(|pv| pv.get_help().is_some()) {
+        lines.extend(possible.iter().map(|pv| match pv.get_help() {
+            Some(help) => format!("`{}`: {help}", pv.get_name()),
+            None => format!("`{}`", pv.get_name()),
+        }));
+    } else if !possible.is_empty() {
+        let names: Vec<String> = possible
+            .iter()
+            .map(|pv| format!("`{}`", pv.get_name()))
+            .collect();
+        let values = format!("Possible values: {}.", names.join(", "));
+        match lines.last_mut() {
+            Some(last) => {
+                if !matches!(last.chars().last(), Some('.' | '!' | '?')) {
+                    last.push('.');
+                }
+                write!(last, " {values}").unwrap();
             }
-            desc.push(' ');
+            None => lines.push(values),
         }
-        write!(desc, "Possible values: {}.", possible.join(", ")).unwrap();
     }
-    desc
+    lines.join(CELL_LINE_BREAK)
 }
 
 fn arg_default(arg: &Arg) -> String {

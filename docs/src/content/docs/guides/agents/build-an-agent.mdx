@@ -3,13 +3,25 @@ title: Build an agent
 description: Run an agent that searches, executes code, and returns files.
 ---
 
-Start a server with search, Python code execution, and shell:
+This walkthrough builds a local agent that searches the web, runs Python, returns a chart as a file, and remembers its work across requests. mistral.rs runs the tools itself: the model asks for a tool, the server runs it, feeds the result back, and the model continues until it has an answer, all inside one HTTP request.
+
+Start a server with every built-in tool:
 
 ```bash
 mistralrs serve --agent -m Qwen/Qwen3-4B
 ```
 
-The server executes requested tools and returns the model's answer in one request. Code and shell are [sandboxed by default](/reference/sandbox/) on Linux and macOS. Tool use remains the model's choice; set a round cap to bound the work.
+`--agent` (alias `--agentic`) turns on three tools:
+
+| Tool | Flag on its own | What the model can do |
+|---|---|---|
+| [Web search](/guides/agents/web-search/) | `--enable-search` | Search the web and read pages. |
+| [Code execution](/guides/agents/enable-code-execution/) | `--enable-code-execution` | Run Python. Variables persist between calls in the same session. |
+| [Shell](/guides/agents/enable-shell/) | `--enable-shell` | Run command-line programs. Also needed for [Skills](/guides/agents/skills/). |
+
+On Linux and macOS, Python and shell commands run in a [sandbox](/reference/sandbox/) that keeps their writes inside a per-session working directory. A Python call times out after 60 seconds and a shell call after 600. A single request runs at most 256 tools unless you set `--max-tool-rounds` or `max_tool_rounds`.
+
+Turning tools on doesn't force the model to use them. It sees each tool's description and decides when one helps.
 
 ## Try it in the browser
 
@@ -20,11 +32,11 @@ Find recent population figures for Tokyo and Japan, calculate Tokyo's share of
 Japan's population, and create a simple bar chart. Cite sources and show the calculation.
 ```
 
-The UI renders a collapsed search block, the Python code the model ran (with stdout), the generated chart, and a final reply with citations. Everything between the question and the reply happens inside one HTTP request; the UI is just rendering events any client can consume.
+The UI shows a collapsed search step, the Python code the model ran with its output, the generated chart, and a final reply with citations. All of it happens inside one HTTP request. The UI only renders events that any client can read.
 
 ## The same task over HTTP
 
-Apps can make the output contract explicit by declaring files up front. This request asks for a PNG chart and tells mistral.rs to surface it as a typed file:
+Over the API, you turn each tool on per request. This request enables search and Python, caps the run at 6 tool calls, and names the chart file it expects back:
 
 ```bash
 curl http://localhost:1234/v1/chat/completions \
@@ -47,21 +59,78 @@ curl http://localhost:1234/v1/chat/completions \
   }'
 ```
 
-Read the answer from `choices[0].message.content`, tool history from `agentic_tool_calls`, and outputs from `files`. Fetch large files by ID; see [file results](/guides/agents/agentic-runtime/#files).
+Listing the file in `files` tells the model to produce it, and guarantees you an entry for it in the response: the file itself, or an error if the model never wrote it.
+
+The response is a normal chat completion with three extra fields:
+
+```json
+{
+  "choices": [
+    {
+      "message": {"role": "assistant", "content": "Tokyo is about ... Sources: ..."},
+      "finish_reason": "stop"
+    }
+  ],
+  "agentic_tool_calls": [
+    {"round": 0, "name": "<tool identifier>", "arguments": "{\"query\":\"Tokyo population\"}", "result_content": "..."},
+    {"round": 1, "name": "<tool identifier>", "arguments": "{\"code\":\"...\"}", "result_content": "Tokyo share: ...", "file_ids": ["file_9b1c2d3e4f5a_r1_0"]}
+  ],
+  "files": [
+    {"id": "file_9b1c2d3e4f5a_r1_0", "name": "tokyo-population.png", "format": "png", "mime_type": "image/png", "bytes": 14823, "data_base64": "iVBORw0KGgo..."}
+  ],
+  "session_id": "tokyo-demo"
+}
+```
+
+| Field | What it holds |
+|---|---|
+| `choices[0].message.content` | The model's final answer. |
+| `agentic_tool_calls` | Each tool call the server ran, in order, with its arguments and result. Treat `name` as an opaque ID. |
+| `files` | Files the tools wrote. Files up to 8 MiB are inline; download bigger ones by ID. See [files](/guides/agents/agentic-runtime/#files). |
+| `session_id` | The session to continue in a later request. |
 
 ## Watch it stream
 
-Add `stream: true` to receive model chunks, `agentic_tool_call_progress` events, and `file_produced` events. See the [app integration guide](/guides/agents/agentic-runtime/#http-run-stream) and [streaming example](/examples/server/agentic-tool-rounds/).
+Add `"stream": true` to see the run as it happens. The model's text arrives as normal chat chunks, and tool steps and files arrive as named events in between:
+
+```text
+event: agentic_tool_call_progress
+data: {"type":"agentic_tool_call_progress","round":0,"tool_name":"<tool identifier>","phase":"calling","data":{"tool_type":"web_search","query":"Tokyo population Japan population"}}
+
+event: file_produced
+data: {"id":"file_9b1c2d3e4f5a_r1_0","name":"tokyo-population.png","format":"png","mime_type":"image/png","bytes":14823}
+```
+
+[Streaming a run](/guides/agents/agentic-runtime/#stream-a-run-over-http) lists every event and its fields. The [streaming example](/examples/server/agentic-tool-rounds/) has a complete client.
 
 ## Mix and match tools
 
-Instead of `--agent`, enable only the executors you need with `--enable-search`, `--enable-code-execution`, or `--enable-shell`. Combine flags as needed.
+On a production server, turn on only the tools you need:
 
-Chat Completions uses `web_search_options` for search and `code_interpreter` for Python code execution. Responses uses hosted tools in `tools[]`, including `web_search`, `code_interpreter`, and `shell`. [OpenAI-compatible Skills](/guides/agents/skills/) use uploaded skill references in the Responses tool environment and require `--enable-shell` or the broader `--agent` preset.
+```bash
+# Search only
+mistralrs serve --enable-search -m Qwen/Qwen3-4B
+
+# Python only
+mistralrs serve --enable-code-execution -m Qwen/Qwen3-4B
+
+# Search plus shell, without Python
+mistralrs serve --enable-search --enable-shell -m Qwen/Qwen3-4B
+```
+
+Each API turns the tools on per request in its own way:
+
+| Tool | Chat Completions | Responses |
+|---|---|---|
+| Web search | `"web_search_options": {}` | `{"type": "web_search"}` in `tools` |
+| Python | `{"type": "code_interpreter", "container": {"type": "auto"}}` in `tools` | the same `code_interpreter` entry |
+| Shell | `"enable_shell": true` | `{"type": "shell", "environment": {"type": "container_auto"}}` in `tools` |
+
+[Skills](/guides/agents/skills/) ride on the shell tool, so they need `--enable-shell` or `--agent`.
 
 ## Continue the session
 
-`session_id` lets later requests pick up the same agent state: message history, tool records, and the live Python interpreter.
+For a follow-up, send the conversation so far plus the new question, with the same `session_id`. The session fills in the searches and code from the first request, which aren't in the messages you send, and keeps the Python interpreter with its variables:
 
 ```bash
 curl http://localhost:1234/v1/chat/completions \
@@ -70,13 +139,15 @@ curl http://localhost:1234/v1/chat/completions \
     "model": "default",
     "session_id": "tokyo-demo",
     "messages": [
+      {"role": "user", "content": "Find recent population figures for Tokyo and Japan, calculate the population share for Tokyo relative to Japan, and save a bar chart as tokyo-population.png. Cite sources and show the calculation."},
+      {"role": "assistant", "content": "Tokyo is about ... Sources: ..."},
       {"role": "user", "content": "Using the same analysis, explain the chart in one paragraph."}
     ],
     "tools": [{"type": "code_interpreter", "container": {"type": "auto"}}]
   }'
 ```
 
-If no `session_id` is passed, the server resolves or creates one and returns it in the response; see [sessions](/guides/agents/persist-sessions/) for matching rules, export/import, and lifetimes.
+If you leave out `session_id`, the server creates a session and returns its ID in the response. See [sessions](/guides/agents/persist-sessions/) for how requests are matched to sessions, how long they last, and how to export them.
 
 ## Where to go next
 

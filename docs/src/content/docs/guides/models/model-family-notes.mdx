@@ -3,71 +3,130 @@ title: Model family notes
 description: Model-specific settings, limitations, and template fixes.
 ---
 
-Most checkpoints need only `mistralrs run -m <model-id>`. Use [Choose a model](/guides/models/choose-a-model/) to find the right task and [supported models](/reference/supported-models/) for the architecture inventory. This page covers exceptions to the usual loading and request behavior.
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+Most checkpoints need only `mistralrs run -m <model-id>`. This page collects the families that need an extra flag, have a setting worth knowing, or behave differently from the defaults. [Choose a model](/guides/models/choose-a-model/) helps you pick a model for a task, the [supported models reference](/reference/supported-models/) lists every architecture, and block-diffusion models like DiffusionGemma have [their own page](/guides/models/use-block-diffusion/).
 
 ## Reasoning controls
 
-`reasoning_effort` accepts `off`, `low`, `medium`, `high`, and `xhigh`; `none` aliases `off`. An explicit positive effort enables thinking; `off` disables it. The legacy `enable_thinking` boolean also works, but contradictory explicit settings return an error.
+Reasoning models accept a `reasoning_effort` setting:
 
-These are chat-template inputs. Each checkpoint decides which tiers it recognizes. With neither setting supplied, thinking is normally enabled; speech requests and model templates can choose different defaults.
+| Value | Effect |
+| --- | --- |
+| `off` (or `none`) | Turns thinking off. |
+| `low`, `medium`, `high`, `xhigh` | Turns thinking on and passes the tier to the model's chat template. |
+| Not set | Thinking is on, with no tier, except in requests that ask for speech output, where it's off. |
+
+Set it per request with `"reasoning_effort": "low"`, or for a `mistralrs run` session with `--reasoning-effort low`. The older `enable_thinking` boolean still works. If you send both and they disagree, such as `enable_thinking: true` with `reasoning_effort: "off"`, the request fails.
+
+What a tier changes is up to the chat template. A template that only reads `enable_thinking` treats every tier as plain "on"; Muse Glimmer's maps the tiers to its own reasoning strengths.
 
 ## Thinking models (Qwen3, SmolLM3)
 
-Disable default thinking with `--thinking false` on the CLI or `enable_thinking: false` in a chat request:
+Qwen3 and SmolLM3 think by default. To turn it off:
+
+<Tabs>
+<TabItem label="CLI">
 
 ```bash
 mistralrs run -m Qwen/Qwen3-4B --thinking false
 ```
 
-`--reasoning-effort` also applies to interactive and one-shot requests. Qwen3 templates recognize inline `/think` and `/no_think` instructions.
+`--thinking` and `--reasoning-effort` apply to both interactive and one-shot (`-i`) runs. You can also end a message with `/no_think` or `/think` to switch for that turn:
 
-Published FP8 checkpoints load directly, without `--quant`. For example:
+```text
+How many rs are in blueberry? /no_think
+```
+
+</TabItem>
+<TabItem label="HTTP">
 
 ```bash
-mistralrs serve -m Qwen/Qwen3.8-27B-FP8 --pa-cache-type f8e4m3 --max-seqs 16
+curl http://localhost:1234/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "default",
+    "messages": [{"role": "user", "content": "How many rs are in blueberry?"}],
+    "enable_thinking": false
+  }'
 ```
+
+</TabItem>
+<TabItem label="Python">
+
+```python
+runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[{"role": "user", "content": "How many rs are in blueberry?"}],
+        enable_thinking=False,
+    )
+)
+```
+
+</TabItem>
+</Tabs>
+
+Qwen3 also publishes FP8 checkpoints. Pass the FP8 model ID and the weights load as published, without `--quant`. You can store the KV cache in FP8 as well, which halves its memory compared to BF16:
+
+```bash
+mistralrs serve -m Qwen/Qwen3.8-27B-FP8 --pa-cache-type f8e4m3
+```
+
+An FP8 KV cache needs CUDA with compute capability 8.0 or newer, or Metal. See [FP8 KV cache](/guides/perf/paged-attention/#fp8-kv-cache).
 
 ## Flint
 
+[RecursiveSI/flint](https://huggingface.co/RecursiveSI/flint) is a text-only MoE model with optional reasoning, built-in tool calling, and a 262,144-token context window.
+
 ```bash
-mistralrs run -m RecursiveSI/flint --quant 4
+mistralrs serve -m RecursiveSI/flint --quant 4
+mistralrs run -m RecursiveSI/flint-int4-gguf -f flint-int4-q4_1.gguf
 ```
 
-Flint supports ISQ, MoQE, UQFF, and GGUF; X-LoRA and NVFP4 GGUF are unsupported. Its template chooses when to reason and ignores `enable_thinking` and `reasoning_effort`. Preserve assistant `reasoning_content` when sending conversation history back, including tool-call turns.
+It works with `--quant`, [MoQE](#moe-models-and-moqe), UQFF, and GGUF files in a [supported storage format](/reference/gguf-support/#storage-formats) such as Q4_1 or a K-quant. NVFP4 GGUF files and X-LoRA don't load.
 
-Tool calls use the normal API; send tool definitions on every request. See the [Flint tool example](/examples/server/flint-tools/). Long reasoning may exhaust the output budget: check `finish_reason: "length"` before treating a partial answer as complete.
+Flint decides on each turn whether to reason, so `enable_thinking` and `reasoning_effort` have no effect. Its reasoning comes back in `reasoning_content`. When you send the conversation back, keep that field on every assistant message, including ones with tool calls.
+
+Tool calls come back as standard `tool_calls`, streaming or not. Send the tool definitions with every request. See the [Flint tool calling example](/examples/server/flint-tools/).
+
+The checkpoint sets its own sampling defaults: temperature 1.0, top-p 0.95, and top-k 20. For hard problems, the model authors recommend an output budget of at least 32,768 tokens, since reasoning counts toward it. A `finish_reason` of `"length"` means the model ran out of budget, possibly before it answered.
 
 ## MoE models and MoQE
 
-[MoQE](/guides/quantization/quantize-a-model/) quantizes routed experts while leaving other weights at their existing precision:
+MoQE quantizes only the routed experts of a mixture-of-experts (MoE) model, which hold most of its weights, and leaves the rest at its original precision:
 
 ```bash
 mistralrs run -m Qwen/Qwen3-30B-A3B --isq 4 --isq-organization moqe
 ```
 
-Use it during ISQ or UQFF creation. It does not rewrite an already-quantized GGUF or UQFF selected by `--quant`. Python uses `organization=IsqOrganization.MoQE` on the model selector. Quantization can change routing and outputs.
+It works with DeepSeek V2/V3, GLM-4.7, GLM-4.7-Flash, Phi 3.5 MoE, Qwen3 MoE, Qwen3-VL MoE, Qwen3.5/Qwen3.6 MoE, LFM2/LFM2.5 MoE, and Flint. Use it with `--isq` or when you build a UQFF with `mistralrs quantize`. A GGUF or UQFF that `--quant` picks loads exactly as it was published, so MoQE doesn't change it. In Python, pass `organization=IsqOrganization.MoQE` to `Which.Plain(...)` or `Which.MultimodalPlain(...)`.
+
+The router that picks experts is sensitive to small numerical changes, so outputs shift slightly between quantization levels.
 
 ## MLA models (DeepSeek V2/V3, GLM-4.7-Flash)
 
-These models store a compact latent KV cache. CUDA paged attention can use specialized MLA kernels. For suspected kernel problems, compare with `MISTRALRS_NO_MLA=1` and then `--paged-attn off`. See [paged attention](/guides/perf/paged-attention/) for memory sizing.
+DeepSeek V2, DeepSeek V3 (including the full R1, which uses the V3 architecture), and GLM-4.7-Flash use multi-head latent attention. On Linux CUDA builds with paged attention, mistral.rs caches a compressed latent for these models instead of full keys and values, so the same KV cache memory holds many more tokens. On Metal, on CPU, or with paged attention off, they use a regular-size cache.
+
+The FP8 KV cache (`--pa-cache-type f8e4m3`) doesn't work with the compressed cache. See [paged attention](/guides/perf/paged-attention/#memory-budget) for sizing the cache.
 
 ## GPT-OSS
 
-Load published MXFP4 expert weights without an extra quantization flag:
+GPT-OSS ships its expert weights already quantized to MXFP4, so load it without a quantization flag:
 
 ```bash
 mistralrs run -m openai/gpt-oss-20b
 ```
 
-ISQ applies to attention layers and the output head; experts are already quantized.
+If you quantize it further with `--isq`, only the attention layers and the output head change; the experts stay in MXFP4.
 
 ## Qwen3 Next
 
-Qwen3-Next and Qwen3-Coder-Next share a loader. Their recurrent and attention layers have different cache costs from a pure attention model; use automatic memory sizing before manually reserving KV capacity.
+Qwen3-Next and Qwen3-Coder-Next mix linear-attention layers with standard attention. In the standard config, one layer in four is standard attention. Only those layers keep a KV cache that grows with the context; the others keep a fixed-size state per request. So the KV cache grows at about a quarter of the rate it would if every layer were standard attention.
 
 ## Qwen3.5 and Qwen3.6
 
-Both dense and MoE variants are supported. To extend context with YaRN, override the model config as well as the serving limit:
+Dense and MoE checkpoints of both are supported, and Qwen3.6 loads through the same code as Qwen3.5. To go past the native context length, turn on YaRN scaling with a config override and raise the serving limit. This extends Qwen3.5-27B from its native 262,144 tokens:
 
 ```bash
 mistralrs serve -m Qwen/Qwen3.5-27B \
@@ -75,75 +134,104 @@ mistralrs serve -m Qwen/Qwen3.5-27B \
   --max-model-len 1010000
 ```
 
-Overrides merge recursively. `--max-model-len` alone does not enable RoPE scaling, and static YaRN can reduce short-context quality.
+`factor: 4.0` stretches 262,144 tokens to about 1M, and `--max-model-len 1010000` lets one request use that much. The override merges into the checkpoint's config, so its other RoPE settings stay as they are. You need both parts, since `--max-model-len` alone doesn't turn on scaling. Static YaRN can lower quality on short inputs, so turn it on only when you need more than 262,144 tokens.
 
 ## Qwen3.8-Flash-Next
 
-This is a large hybrid MoE model with a hashed embedding table (PLE). Use quantization to reduce memory; CUDA builds need `cuda,flash-attn,cutile`:
+Qwen3.8-Flash-Next is a large hybrid MoE model. The checkpoint is about 360 GB, and 102 GB of that is a BF16 hashed embedding table (PLE). Quantize it to fit, and on CUDA build with the `cuda,flash-attn,cutile` features:
 
 ```bash
 mistralrs serve -m Qwen/Qwen3.8-Flash-Next --quant 4
+mistralrs run -m unsloth/Qwen3.8-Flash-Next-GGUF --quant 4
 ```
 
-- PLE placement is automatic. The table can remain in host memory when it does not fit on the device, increasing prompt-processing cost. CPU and Metal gather its rows on the host.
-- Paged attention is CUDA-only; use `--paged-attn off` elsewhere. FP8 KV caches and tensor parallelism are unsupported.
-- Built-in `--mtp` works with safetensors or UQFF containing MTP weights. `--mtp-n-predict N` fixes draft depth. MTP uses extra memory and recomputes cached prompt prefixes.
-- GGUF supports text, images, and video, including packed PLE weights. GGUF MTP, external MTP, and DFlash drafters are unsupported.
-
-For GGUF, use `mistralrs run -m unsloth/Qwen3.8-Flash-Next-GGUF --quant 4`. Keep automatic memory sizing unless you need a fixed shared `--kv-cache`; `--max-model-len` instead limits each request. See [memory budgeting](/guides/perf/paged-attention/#memory-budget).
-
-## Granite 4.0 (GraniteMoeHybrid)
-
-Granite 4.0 hybrid checkpoints, such as `ibm-granite/granite-4.0-micro`, load automatically. They combine recurrent and attention layers.
+- **Embedding table.** On CUDA, the PLE table is quantized separately at startup: to 8-bit if it fits in GPU memory, otherwise to 4-bit (about 29 GB). If it still doesn't fit, it stays in system RAM, which makes prompt processing slower. On CPU and Metal, the table is always read on the host.
+- **Paged attention** works only on CUDA, so pass `--paged-attn off` on other devices. The FP8 KV cache and tensor parallelism don't work with this model.
+- **MTP.** Add `--mtp` to use the model's built-in [speculative decoding](/guides/perf/speculative-decoding/), from safetensors or a UQFF that includes the MTP weights. It picks a draft depth of 2, 3, 4, or 6 tokens as it goes; `--mtp-n-predict N` fixes it at `N`. MTP needs extra memory and recomputes cached prompt prefixes, so repeated prompts take longer to prefill. GGUF files, external MTP models, and DFlash drafters can't do speculative decoding with this model.
+- **GGUF** supports text, images, and video, and `--quant` picks the projector along with the model file.
 
 ## LFM2 and LFM2.5
 
-Dense, MoE, and VL variants are supported; VL accepts images. The checkpoint's Liquid tool-call template is detected automatically.
+Dense, MoE, and VL checkpoints are supported, and the VL models take images. Tool calling works out of the box: mistral.rs detects the Liquid tool-call format from the checkpoint's chat template.
 
 ## LFM3 and LFM3-VL
 
-`LiquidAI/LFM3-1.7B` accepts text; `LiquidAI/LFM3-VL-2B` also accepts images and video. Both support safetensors, ISQ, UQFF, and GGUF. For example:
+`LiquidAI/LFM3-1.7B` is a text model, and `LiquidAI/LFM3-VL-2B` adds images and video. Both run on CPU, Metal, and CUDA, and load from safetensors, UQFF, or GGUF, with or without quantization:
 
 ```bash
-mistralrs run -m LiquidAI/LFM3-VL-2B --isq q4k \
-  --image photo.jpg -i "Describe this image."
+mistralrs run -m LiquidAI/LFM3-1.7B --cpu --isq q4k
+mistralrs run -m LiquidAI/LFM3-VL-2B --isq q4k --image photo.jpg -i "Describe this image."
+mistralrs run -m LiquidAI/LFM3-VL-2B --isq q4k --video clip.mp4 -i "Describe what happens in order."
+mistralrs run -m LiquidAI/LFM3-VL-2B-GGUF --quant 4 --image photo.jpg -i "Describe this image."
 ```
 
-VL video sampling uses 2 FPS and 4 to 768 frames. ISQ covers the language model and projector; the vision encoder remains unquantized. See [multimodal input](/guides/models/multimodal-input/) and [GGUF loading](/guides/models/run-gguf/).
+- Video is sampled at 2 frames per second, with 4 to 768 frames per clip. Animated GIFs work as is; other formats need [FFmpeg on your PATH](/guides/models/video-setup/).
+- `--isq` quantizes the language model and the projector. The vision encoder stays at full precision.
+- The GGUF needs only the model file and its projector; no original config is required.
 
-## LFM3-Audio
+Examples: Python [text](/examples/python/lfm3/), [images](/examples/python/lfm3-vl/), and [video](/examples/python/lfm3-vl-video/); HTTP [text](/examples/server/lfm3/), [images](/examples/server/lfm3-vl/), and [video](/examples/server/lfm3-vl-video/).
 
-`LiquidAI/LFM3-Audio-2B` accepts text and audio and returns text, speech, or both. Use LFM3-Omni when images or video are also needed. See [speech input and output](/guides/models/use-speech-models/#lfm3-speech-input-and-output) for requests and task prompts.
+## LFM3-Audio and LFM3-Omni
 
-## LFM3-Omni
+Both models take audio in and can answer with text, speech, or both:
 
-`LiquidAI/LFM3-Omni-2B` accepts text, images, audio, and video together and returns text, speech, or both. Video uses 2 FPS and 4 to 384 frames; submit its soundtrack separately as audio.
+| Model | Accepts | Returns |
+| --- | --- | --- |
+| `LiquidAI/LFM3-Audio-2B` | Text and audio | Text, speech, or both |
+| `LiquidAI/LFM3-Omni-2B` | Text, images, video, and audio together | Text, speech, or both |
 
-Both Audio and Omni support safetensors, ISQ, UQFF, and standalone GGUF with a companion projector. Paged attention, chunked prefill, and media embedding caching are supported. Speech encoders, the audio projector, depth decoder, and codec remain unquantized during ISQ; Omni also keeps its vision encoder unquantized. See the [Omni example](/examples/server/lfm3-omni/).
+```bash
+mistralrs serve -m LiquidAI/LFM3-Audio-2B --isq q8_0
+mistralrs serve -m LiquidAI/LFM3-Omni-2B-GGUF --quant 4
+mistralrs run -m LiquidAI/LFM3-Omni-2B --isq q4k --audio question.wav --image photo.jpg \
+  -i "Answer the spoken question about this picture."
+```
+
+- Audio input is mixed down to mono and resampled to 16 kHz.
+- Omni samples video at 2 frames per second, with 4 to 384 frames. It doesn't extract a video's soundtrack, so send that separately as audio.
+- `--isq` quantizes the language model, plus Omni's vision projector. The audio encoder, audio projector, speech decoder, and codec stay at full precision, and so does Omni's vision encoder.
+- The GGUF projector holds the audio and speech parts, so the model file and projector are all you need.
+
+[Speech models](/guides/models/use-speech-models/#lfm3-speech-input-and-output) covers requesting speech output, the audio endpoints, speech sampling, and limits. Examples: [Audio](/examples/server/lfm3-audio/) and [Omni](/examples/server/lfm3-omni/) over HTTP, and [Audio](/examples/python/lfm3-audio/) and [Omni](/examples/python/lfm3-omni/) in Python.
 
 ## d1 and d1-Omni
 
-Decision models answer named questions through `/v1/systemone` or `send_decision_request`, rather than chat generation. d1 accepts text, images, and video; d1-Omni also accepts audio and spoken instructions.
+`LiquidAI/d1-2B` and `LiquidAI/d1-Omni-2B` are decision models. Instead of chatting, they answer named questions about some text or JSON state and return probabilities, extracted values, or boxes. Send questions to `POST /v1/systemone`, or call `send_decision_request` in the Python and Rust SDKs.
 
-Standalone GGUF supports `noul`, single-selection `choice`, and `score`. Other question types require the original model configuration and calibration. Start with [Use decision models](/guides/models/use-decision-models/).
+| Model | Accepts |
+| --- | --- |
+| d1-2B | Text, images, and video |
+| d1-Omni-2B | Text, images, video, and audio, including spoken questions |
 
-### LFM3 speech input and output
+Both load from safetensors, ISQ, UQFF, or GGUF:
 
-Speech behavior, formats, output budgets, and SDK helpers are collected in [Speech models](/guides/models/use-speech-models/#lfm3-speech-input-and-output).
+```bash
+mistralrs serve -m LiquidAI/d1-Omni-2B
+mistralrs serve -m LiquidAI/d1-Omni-2B-GGUF --quant 8
+mistralrs serve -m LiquidAI/d1-Omni-2B-GGUF --quant 8 --tok-model-id LiquidAI/d1-Omni-2B
+```
+
+The GGUF on its own answers `noul`, single-selection `choice`, and `score` questions. To also get text, number, and date extraction, multiple choice, estimates, and boxes, add `--tok-model-id` with the original model, or with a local directory holding its `config.json` and `calibration.json`. For the d1-2B GGUF, pass `--tok-model-id LiquidAI/d1-2B`. Start with [Use decision models](/guides/models/use-decision-models/).
 
 ## Gemma
 
-For gated repositories, accept the license on Hugging Face and authenticate with `mistralrs login`. Gemma 4 accepts image, audio, and video parts and constrains its tool-call format by default; see [tool calling](/guides/agents/tool-calling-basics/).
+Gemma repositories are gated. Accept the license on the model's Hugging Face page, then run `mistralrs login` so mistral.rs can download it.
+
+Gemma 4 accepts image, audio, and video parts in one message. By default it uses constrained decoding to keep tool calls in its native format; see [tool calling](/guides/agents/tool-calling-basics/).
 
 ## Muse Glimmer
 
-`meta-models/Muse-Glimmer-30B` accepts text, images, and video from safetensors; audio is unsupported. Its ATEM template and tool calls are detected automatically. `reasoning_effort` maps to its `reasoning_strength` setting; omission uses the template's `high` default.
+```bash
+mistralrs run -m meta-models/Muse-Glimmer-30B
+```
 
-ISQ, UQFF, paged attention, prefix caching, tensor parallelism, and text-backbone LoRA are supported. GGUF needs original model assets and supports images only; see [GGUF compatibility](/reference/gguf-support/#multimodal-model-families).
+Muse Glimmer takes text, images, and video, but not audio. The model card says it was trained mainly for images, so expect weaker results on video. Tool calls work through the normal APIs, including required, named, and parallel calls. `reasoning_effort` sets its reasoning strength to `low`, `medium`, `high`, or `xhigh`, and the template uses `high` if you leave it out.
+
+The GGUF needs `--tok-model-id meta-models/Muse-Glimmer-30B` and handles images only; see [GGUF compatibility](/reference/gguf-support/#multimodal-model-families).
 
 ## MatFormer
 
-Gemma 3n can load a smaller slice of the same checkpoint:
+Gemma 3n (`google/gemma-3n-E4B-it`) packs several model sizes into one checkpoint. Load a smaller slice when you need to save memory and time, at some cost in quality:
 
 ```bash
 mistralrs run -m google/gemma-3n-E4B-it \
@@ -151,11 +239,18 @@ mistralrs run -m google/gemma-3n-E4B-it \
   --matformer-slice-name "Config for E2.49B (block-level)"
 ```
 
-Without a slice, the full configuration loads. The bundled CSV includes E4B, E2B, and intermediate slices. The same `matformer_config_path` and `matformer_slice_name` settings are available in TOML/Python; Rust builders use `with_` methods of those names.
+The bundled `matformer_configs/gemma3n.csv` lists the slices: `Main model` (the full E4B), `Config for official E2B Model`, and sizes in between, from `Config for E1.96B (layer-level)` up to `Config for E3.79B (block-level)`. Without a slice name, the full model loads.
+
+| Where | Settings |
+| --- | --- |
+| CLI (`run`, `serve`, `bench`) | `--matformer-config-path`, `--matformer-slice-name` |
+| TOML config | `matformer_config_path`, `matformer_slice_name` |
+| Python `Which` selectors | `matformer_config_path`, `matformer_slice_name` |
+| Rust model builders | `with_matformer_config_path`, `with_matformer_slice_name` |
 
 ## Mistral Small tool calling
 
-For checkpoints missing a suitable template, use the bundled override:
+Mistral Small 3 checkpoints can call tools, but some repositories don't ship a template that supports it. Use the bundled one:
 
 ```bash
 mistralrs serve -m mistralai/Mistral-Small-3.2-24B-Instruct-2506 --quant 4 \
@@ -164,33 +259,23 @@ mistralrs serve -m mistralai/Mistral-Small-3.2-24B-Instruct-2506 --quant 4 \
 
 ## LLaVA chat templates
 
-Vicuna-backed checkpoints need the Vicuna template; Mistral-backed checkpoints use the default:
+Mistral-based LLaVA checkpoints work with their default template. Vicuna-based ones need the Vicuna template:
 
 ```bash
 mistralrs run -m llava-hf/llava-v1.6-vicuna-7b-hf \
   -c chat_templates/vicuna.json --image photo.jpg -i "Describe this image."
 ```
 
-## Qwen3-VL
-
-Video frame sampling follows the model configuration; per-request overrides are not exposed.
-
-## Llama 4
-
-Scout's full 10M-token context requires a large memory budget, generally with paged attention and multi-GPU tensor parallelism. Set a smaller `--max-model-len` when that capacity is unnecessary.
-
 ## Multimodal device mapping
 
-Device mapping primarily distributes the text backbone. Media encoders follow their model-specific device paths; do not assume every component is split across GPUs.
+When you split a multimodal model across GPUs, only the text model's layers are spread out. The vision and audio encoders load whole on the first GPU, so it needs room for them on top of its share of layers. Automatic device mapping accounts for this. If you assign layers yourself with `-n`, give the first GPU fewer of them, for example `-n "0:10;1:30"`.
 
 ## Phi
 
-Phi 3.5 Vision works best with one image; multiple images are resized together. Phi 4 Multimodal accepts images and audio in one message. Phi 3.5 MoE supports [MoQE](#moe-models-and-moqe).
-
-## DiffusionGemma
-
-See [block-diffusion models](/guides/models/use-block-diffusion/) for sampling, streaming, and tool-call limitations.
+- Phi 3.5 Vision works best with one image per request; multiple images are resized together.
+- Phi 4 Multimodal accepts images and audio in the same message.
+- Phi 3.5 MoE has 16 experts and routes each token to 2 of them. Quantize the experts with [MoQE](#moe-models-and-moqe).
 
 ## Reporting issues
 
-Include the model ID, command or request, backend, and error in a [GitHub issue](https://github.com/EricLBuehler/mistral.rs/issues).
+Open a [GitHub issue](https://github.com/EricLBuehler/mistral.rs/issues) with the model ID, the command or request you ran, your backend (CUDA, Metal, or CPU), and the error.

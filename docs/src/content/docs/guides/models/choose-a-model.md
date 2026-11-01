@@ -18,8 +18,8 @@ The [supported-models inventory](/reference/supported-models/) groups supported 
 
 ## Choose a loading format
 
-- **Original checkpoint:** pass its Hugging Face ID or local directory with `-m`. Add `--quant 4` to reduce memory through a matching UQFF or runtime quantization.
-- **GGUF:** select a published artifact with `--quant`, or an exact file with `-f`. Check [GGUF compatibility](/reference/gguf-support/); it differs from safetensors support.
-- **Saved UQFF:** reuse a quantized model without repeating conversion. See [quantization](/guides/quantization/quantize-a-model/).
+- **Original checkpoint:** pass its Hugging Face ID or a local directory with `-m`. To use less memory, add `--quant` with a bit width of `2`, `3`, `4`, `5`, `6`, or `8`. Lower is smaller: `--quant 8` needs about half the memory of the original weights and `--quant 4` about a quarter. `--quant auto` picks the highest bit width, up to 6, that fits your hardware. To run at full precision, leave out `--quant`. Specific formats like `q4k` and `fp8` are covered in [quantize a model](/guides/quantization/quantize-a-model/).
+- **GGUF:** pass a bit width with `--quant` to pick the matching file from the repo, or name an exact file with `-f`. GGUF supports a different set of models than safetensors; see [GGUF compatibility](/reference/gguf-support/).
+- **UQFF:** a model that's already been quantized and saved, so it loads without quantizing again. See [UQFF](/guides/quantization/uqff/).
 
-Start with automatic memory sizing. Weights, context, concurrent requests, and media processing all consume memory; a model's parameter count alone does not determine whether it fits. Use [hardware tuning](/reference/cli/tune/) and [memory budgeting](/guides/perf/paged-attention/#memory-budget) when selecting a larger model.
+Not sure a model will fit? `mistralrs tune -m <model>` estimates memory use and recommends a `--quant` level before you download the weights.

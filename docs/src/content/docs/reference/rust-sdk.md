@@ -31,13 +31,29 @@ let response = model.send_chat_request(request).await?;
 let audio = response.choices[0].message.audio.as_ref();
 ```
 
-`ChatAudioMode::Audio` requests speech alone; `TextAudio` requests text and speech. `message.audio.data` contains base64 file bytes. Formats are `Wav`, `Pcm16`, `Mp3`, `Flac`, `Opus`, and `Aac`; compressed formats require FFmpeg. For `stream_chat_request`, choose `Pcm16` and concatenate decoded `choices[].delta.audio.data` bytes, including the final tail. LFM3 PCM is mono, signed 16-bit little-endian at 24 kHz.
+| Mode | Output |
+| --- | --- |
+| `ChatAudioMode::Audio` | Speech only. |
+| `ChatAudioMode::TextAudio` | Text and speech. |
 
-Keep assistant text for later turns; native SDKs have no HTTP `audio.id` history cache. See [speech sampling and limits](/guides/models/model-family-notes/#lfm3-speech-input-and-output) for defaults and incompatible options.
+`message.audio.data` holds the encoded audio file as base64. Formats are `Wav`, `Pcm16`, `Mp3`, `Flac`, `Opus`, and `Aac`; the compressed ones need FFmpeg.
+
+To stream speech with `stream_chat_request`:
+
+- Choose `Pcm16`.
+- Base64-decode each `choices[].delta.audio.data` chunk and append the bytes in order, including the final chunk.
+- The result is mono, signed 16-bit little-endian PCM at 24 kHz.
+
+To continue a conversation, keep the assistant's text yourself. The HTTP server's `audio.id` history isn't available in the SDK. See [speech sampling and limits](/guides/models/use-speech-models/#reply-length-and-speech-sampling) for defaults and options that don't combine with speech output.
 
 ## Reasoning
 
-`ReasoningEffort::{Off, Low, Medium, High, XHigh}` is accepted by `TextMessages::with_reasoning_effort`, `MultimodalMessages::with_reasoning_effort`, `RequestBuilder::with_reasoning_effort`, and `AgentBuilder::with_reasoning_effort`. The existing `enable_thinking(bool)` or `with_enable_thinking(bool)` methods remain available. Omission leaves effort unspecified with thinking enabled for text output. Chat requests with speech output default to thinking disabled. Explicit controls take precedence; contradictory explicit controls return a request-validation error.
+Set `ReasoningEffort::{Off, Low, Medium, High, XHigh}` with `with_reasoning_effort` on `TextMessages`, `MultimodalMessages`, `RequestBuilder`, or `AgentBuilder`. To turn thinking on or off without choosing an effort, use `enable_thinking(bool)` or `with_enable_thinking(bool)`.
+
+Defaults and conflicts:
+
+- With neither set, thinking is on for text output and off for speech output.
+- Setting both to values that disagree, such as `ReasoningEffort::High` with thinking disabled, returns a validation error.
 
 ```rust
 let messages = TextMessages::new()
@@ -92,9 +108,9 @@ Diffusion image generation. Example: [diffusion](/examples/rust/models/diffusion
 ```rust
 async fn generate_speech(&self, prompt: impl ToString) -> Result<(Arc<Vec<f32>>, usize, usize)>
 ```
-Text to speech; returns `(pcm, sample_rate, channels)`. This works with dedicated speech models such as Dia and chat speech models such as LFM3-Audio and LFM3-Omni. For LFM3 it requests audio-only synthesis with the checkpoint's TTS system prompt, thinking disabled, and its default voice. Examples: [LFM3 speech](/examples/rust/models/lfm3-audio/) and [Dia speech](/examples/rust/models/speech/).
+Text to speech; returns `(pcm, sample_rate, channels)`. Works with dedicated speech models such as Dia, and with chat models that can speak, such as LFM3-Audio and LFM3-Omni. With LFM3, it reads the text aloud in the model's default voice, with thinking off. Examples: [LFM3 speech](/examples/rust/models/lfm3-audio/) and [Dia speech](/examples/rust/models/speech/).
 
-Use [chat speech output](#chat-speech-output) for custom messages, multimodal input, encoded formats, generation controls, or streaming. Native helpers have no HTTP `instructions`/`speed` fields; put synthesis instructions in chat messages.
+For your own messages, multimodal input, encoded formats, sampling settings, or streaming, use [chat speech output](#chat-speech-output) instead. The HTTP endpoint's `instructions` and `speed` fields have no SDK equivalent; to tell the model how to speak, put that in the chat messages.
 
 ## Quantization
 

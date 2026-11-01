@@ -5,7 +5,7 @@ description: Attach media through CLI flags, chat content parts, or native SDKs.
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Choose a checkpoint that supports your input types in the [model inventory](/reference/supported-models/). Chat `content` becomes an ordered list of typed parts when you attach media.
+Vision, audio, and omni models take media alongside your text. The [supported models](/reference/supported-models/) list shows which inputs each model accepts. To attach media to a chat message, make its `content` a list of parts, text and media mixed, instead of a single string.
 
 <Tabs>
 <TabItem label="CLI">
@@ -15,7 +15,7 @@ mistralrs run -m Qwen/Qwen3-VL-4B-Instruct \
   --image photo.jpg -i "What is this?"
 ```
 
-`--image`, `--audio`, and `--video` accept multiple values and require `-i`. Interactive chat also detects local file paths in prompts.
+`--image`, `--audio`, and `--video` take a file path or URL and need a prompt with `-i`. Repeat a flag to attach several files. In interactive chat, you can also type a file path into your message and mistral.rs attaches the file.
 
 </TabItem>
 <TabItem label="HTTP">
@@ -34,7 +34,7 @@ curl http://localhost:1234/v1/chat/completions \
   }'
 ```
 
-For a client-local file, send a base64 data URL as shown [below](#in-memory-images-from-python).
+To send a file from the client's disk, inline it as a base64 data URL as shown [below](#in-memory-images-from-python).
 
 </TabItem>
 <TabItem label="Python">
@@ -54,7 +54,7 @@ response = runner.send_chat_completion_request(ChatCompletionRequest(
 print(response.choices[0].message.content)
 ```
 
-Local file URLs work in the native SDK; HTTP requests use public URLs or inline data.
+In the Python SDK, `url` can be a plain file path, a `file://` URL, an `http(s)` URL, or a data URL.
 
 </TabItem>
 <TabItem label="Rust">
@@ -84,33 +84,44 @@ Use `add_audio_message`, `add_video_message`, or `add_multimodal_message` for ot
 | `audio_url` | `{"audio_url":{"url":"..."}}` |
 | `input_audio` | `{"input_audio":{"data":"BASE64","format":"wav"}}` |
 
-Each part also includes its `type`, as in the examples. HTTP URL parts accept public HTTP(S) URLs and `data:<mime>;base64,...`. They do not accept local paths, `file://` URLs, or private-network URLs. The CLI and native SDKs can read local media.
+Each part also has a `type` field, as in the examples above.
+
+Over HTTP, a `url` can be:
+
+- An `http://` or `https://` URL on the public internet. The server refuses URLs that point at localhost or a private network address.
+- An inline `data:<mime>;base64,...` URL.
+
+Local paths and `file://` URLs don't work over HTTP, because the server won't read its own disk on a client's behalf. Read the file on the client and send it inline instead. The CLI and the Python and Rust SDKs read local files directly.
+
+Each media file can be up to 64 MiB. The whole request body is capped at 50 MiB, and base64 makes a file about a third larger, so send large files by URL.
 
 ## Video
 
-Send `--video clip.mp4` or a content part:
+Attach a video with `--video clip.mp4` on the CLI, or with a content part:
 
 ```json
 {"type":"video_url","video_url":{"url":"https://example.com/clip.mp4"}}
 ```
 
-Non-GIF video requires [FFmpeg on the server PATH](/guides/models/video-setup/). Frame sampling follows the model configuration; per-request sampling controls are not exposed. Video soundtracks are not extracted automatically: attach audio separately when the model supports it.
+Formats other than GIF need FFmpeg on the server; see [video setup](/guides/models/video-setup/). mistral.rs samples frames from the clip using the model's own frame rate and frame-count limits. LFM3-VL, for example, takes 2 frames per second, between 4 and 768 frames in total.
+
+The soundtrack isn't used. If the model accepts audio and you want it to hear the clip too, extract the track (for example, `ffmpeg -i clip.mp4 -vn clip.wav`) and attach it as a separate audio part.
 
 ## Audio
 
-Standard WAV/MP3 input uses encoded file bytes without a data-URL prefix:
+For WAV or MP3, base64-encode the file and send it in an `input_audio` part. Don't add a `data:` prefix:
 
 ```json
 {"type":"input_audio","input_audio":{"data":"BASE64_FILE_BYTES","format":"wav"}}
 ```
 
-For URLs or other supported formats, use `audio_url`. WAV, MP3, FLAC, and OGG decode natively; convert unsupported formats before sending. Rust accepts decoded `AudioInput`. Request limits are in [HTTP audio semantics](/reference/http-api/#audio-requests-and-history).
+For FLAC or OGG, or to point at a URL, use an `audio_url` part with an `https://` or `data:` URL. mistral.rs decodes WAV, MP3, FLAC, and OGG. Convert anything else first, for example with `ffmpeg -i clip.m4a clip.wav`. In Rust, build an `AudioInput` with `AudioInput::from_bytes` and pass it to `add_audio_message`. See [HTTP audio requests](/reference/http-api/#audio-requests-and-history) for request limits.
 
-Audio input does not imply speech output. For LFM3 speech generation or transcription endpoints, see [Speech models](/guides/models/use-speech-models/).
+This covers sending audio in. To get spoken replies, see [Speech models](/guides/models/use-speech-models/).
 
 ## In-memory images from Python
 
-A data URL works with either the OpenAI HTTP client or the native SDK:
+A data URL works with both the OpenAI client and the native SDK:
 
 ```python
 import base64
@@ -123,12 +134,30 @@ messages = [{"role": "user", "content": [
 ]}]
 ```
 
-For a PIL image, save it to `io.BytesIO` first and use the matching MIME type.
+For a PIL image, save it into an `io.BytesIO` buffer first, then encode the buffer's bytes and use the matching MIME type, such as `image/png`.
 
 ## Mixing modalities in one request
 
-Keep parts in the order you want the model to receive them. For example, send an image, an audio question, then a text instruction. Use a model that supports all those inputs, such as LFM3-Omni. See the [Omni example](/examples/server/lfm3-omni/).
+A message can hold any number of parts, and the model reads them in the order you send them. To compare two images:
 
-## Preprocessing
+```json
+{"role": "user", "content": [
+  {"type": "image_url", "image_url": {"url": "https://example.com/before.jpg"}},
+  {"type": "image_url", "image_url": {"url": "https://example.com/after.jpg"}},
+  {"type": "text", "text": "What changed between these images?"}
+]}
+```
 
-The model's processor resizes/patches images, samples video frames, and resamples audio. There is no universal fixed image resolution across models. Load-time bounds use `--max-num-images`, `--max-edge`, and `--max-image-length`; per-request preprocessing overrides are not exposed.
+You can also mix kinds, such as a chart, a spoken question about it, and a text instruction, as long as the model accepts all of them. LFM3-Omni and Gemma 4 take images, audio, and video together. See the [Omni example](/examples/server/lfm3-omni/).
+
+## Image size and memory
+
+Each model resizes images, samples video frames, and resamples audio into the shape it expects, so you don't need to prepare media yourself. Three load-time flags on `run` and `serve` change how much image work mistral.rs plans for:
+
+| Flag | Default | What it does |
+| --- | --- | --- |
+| `--max-edge <pixels>` | Off | Resizes each image so its longest side is this many pixels, keeping the aspect ratio. Smaller values mean fewer image tokens and less memory per image. The Qwen-VL, LFM3, Idefics, MiniCPM-O, and Muse Glimmer models use it; others, such as Gemma and Mistral 3, always use their own image size. |
+| `--max-num-images <n>` | 1 | How many images per request mistral.rs sets memory aside for when it loads the model. |
+| `--max-image-length <pixels>` | 1024 | The image side length that memory reservation assumes. |
+
+`--max-num-images` and `--max-image-length` don't reject requests. They decide how much working memory is reserved at load time, which changes how much is left for the KV cache and how layers are split across GPUs. If you regularly send several large images per request and run out of memory, raise them to match what you send, for example `--max-num-images 4 --max-image-length 2048`.

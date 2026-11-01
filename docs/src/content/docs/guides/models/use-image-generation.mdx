@@ -5,15 +5,22 @@ description: Run FLUX and retrieve generated images through HTTP or the native S
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
+mistral.rs generates images from text prompts with FLUX.1, served at `POST /v1/images/generations`.
+
 ## Running FLUX
 
 ```bash
 mistralrs serve -m black-forest-labs/FLUX.1-schnell
 ```
 
-For gated checkpoints such as FLUX.1-dev, accept the Hugging Face license and run `mistralrs login` first.
+There are two checkpoints:
 
-The CLI loads the fully resident `Flux` pipeline. If it does not fit, the native SDKs expose `FluxOffloaded`, which moves components to CPU at a speed cost. Diffusion models do not support ISQ; omit `--quant` and `--isq`.
+| Model | Denoising steps | Prompt length | Access |
+| --- | --- | --- | --- |
+| `black-forest-labs/FLUX.1-schnell` | 4, so it's fast | Up to 256 tokens. Longer prompts return an error. | Open |
+| `black-forest-labs/FLUX.1-dev` | 50, with guidance scale 4.0 | Not limited to 256 tokens | Gated: accept the license on its Hugging Face page, then run `mistralrs login` |
+
+The step count is fixed per checkpoint; request fields like `steps` and `guidance_scale` are ignored.
 
 <Tabs>
 <TabItem label="HTTP">
@@ -38,10 +45,14 @@ from mistralrs import DiffusionArchitecture, ImageGenerationResponseFormat, Runn
 
 runner = Runner(which=Which.DiffusionPlain(
     model_id="black-forest-labs/FLUX.1-schnell",
-    arch=DiffusionArchitecture.FluxOffloaded,
+    arch=DiffusionArchitecture.FluxOffloaded,  # or Flux to keep it all on the GPU
 ))
 response = runner.generate_image(
-    "A vibrant sunset in the mountains.", ImageGenerationResponseFormat.B64Json,
+    "A vibrant sunset in the mountains.",
+    ImageGenerationResponseFormat.Url,
+    height=1024,
+    width=1024,
+    save_file="sunset.png",
 )
 ```
 
@@ -57,8 +68,9 @@ let model = DiffusionModelBuilder::new(
 ).build().await?;
 let response = model.generate_image(
     "A vibrant sunset in the mountains.".to_string(),
-    ImageGenerationResponseFormat::B64Json,
-    DiffusionGenerationParams::default(), None,
+    ImageGenerationResponseFormat::Url,
+    DiffusionGenerationParams { height: 1024, width: 1024 },
+    Some("sunset.png".into()),
 ).await?;
 ```
 
@@ -69,18 +81,20 @@ let response = model.generate_image(
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `prompt` | Required | Image description |
-| `n` | 1 | Image count |
-| `height` / `width` | 720 / 1280 | Pixels; the OpenAI `size` string is unsupported |
-| `response_format` | `Url` | `Url` returns a server-side filename; `B64Json` returns an inline PNG data URL |
+| `prompt` | Required | What to draw |
+| `n` | 1 | How many images to generate |
+| `height`, `width` | 720, 1280 | Output size in pixels. OpenAI's `size` string (such as `"1024x1024"`) is ignored, so set these instead. |
+| `response_format` | `Url` | `Url` saves the image on the server and returns its filename. `B64Json` returns the image inline. See [Output handling](#output-handling). |
 
-## Memory notes
+## Memory
 
-FLUX includes a large diffusion model and text encoders. Quantization flags do not reduce its footprint; use `FluxOffloaded` from an SDK when full residency is impractical.
+FLUX can't be quantized: `--quant` and `--isq` don't apply to it. The FLUX transformer alone has about 12B parameters, roughly 24 GB at 16-bit precision, and the T5-XXL text encoder needs more memory on top while it reads the prompt.
+
+If that doesn't fit on your GPU, load the offloaded variant from Python or Rust (`FluxOffloaded`, as in the examples above). It keeps the model in system RAM and moves each layer onto the GPU only while that layer runs. GPU memory use drops sharply, but every step copies the model across, so images take longer. The CLI and server always load the full model onto the GPU.
 
 ## Output handling
 
-For remote clients, use `B64Json` and strip the data-URL prefix before decoding:
+With `B64Json`, `b64_json` holds a complete data URL (`data:image/png;base64,...`). Strip the prefix before decoding:
 
 ```python
 import base64
@@ -90,4 +104,4 @@ with open("out.png", "wb") as output:
     output.write(base64.b64decode(payload))
 ```
 
-`Url` refers to a file on the server, not an automatically hosted download URL. Read or copy it only from a process with access to that filesystem.
+With `Url`, the server writes a PNG named like `image-generation-<uuid>.png` into its working directory and returns that filename in `data[0].url`. It's a path on the server's disk, not a download link, so use `B64Json` when your client runs on another machine. In the SDKs, pass `save_file` to choose where the PNG goes.

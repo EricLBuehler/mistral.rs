@@ -18,17 +18,17 @@ mistralrs bench [OPTIONS] [COMMAND]
 | `-m, --model-id <MODEL_ID>` |  | Hugging Face model ID or local model directory; optional when `-f` names local files |
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
-| `--dtype <DTYPE>` | `auto` | Model data type |
-| `--hf-overrides <HF_OVERRIDES>` |  | Recursively merged JSON overrides for the Hugging Face model config |
-| `--max-model-len <MAX_MODEL_LEN>` |  | Runtime model context length |
-| `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified. Possible values: `plain`, `gguf`, `ggml`. |
+| `--dtype <DTYPE>` | `auto` | Weight data type: `auto`, `bf16`, `f16`, or `f32`. `auto` picks the best one for the device |
+| `--hf-overrides <HF_OVERRIDES>` |  | JSON to merge into the model's `config.json`; nested objects merge key by key |
+| `--max-model-len <MAX_MODEL_LEN>` |  | Maximum context length, in tokens |
+| `--format <FORMAT>` |  | Model file format. Auto-detected from `-f` when omitted<br>`plain`: Safetensors weights<br>`gguf`: GGUF file<br>`ggml`: GGML file |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
-| `--mmproj <MMPROJ>` |  | GGUF projector override; auto-selected when unambiguous (semicolon-separated for multiple) |
-| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a quantized model |
-| `--gqa <GQA>` | `1` | GQA value for GGML models |
+| `--mmproj <MMPROJ>` |  | GGUF vision or audio projector file(s), separated by semicolons. Auto-selected when there is only one |
+| `--tok-model-id <TOK_MODEL_ID>` |  | Model ID to take the config, tokenizer, and processor files from, for a GGUF or GGML model |
+| `--gqa <GQA>` | `1` | Grouped-query attention (GQA) factor for GGML models |
 | `--enable-lora` | `false` | Enable dynamic LoRA without preloading an adapter. Supports compatible text and multimodal language models, including GGUF. Vision, audio, and projector adapters are unsupported |
 | `--lora <ALIAS=SOURCE\|JSON>` |  | Preload a language-model LoRA adapter as ALIAS=SOURCE. Supports compatible text and multimodal language models, including GGUF. Remote adapters use revision main. May be repeated. Vision, audio, and projector adapters are unsupported |
-| `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum loaded LoRA aliases and, independently, resident adapter generations |
+| `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum LoRA adapters loaded at once. Separately caps adapter versions in memory, counting old versions still used by running requests |
 | `--lora-max-rank <LORA_MAX_RANK>` | `256` | Maximum rank accepted for a LoRA adapter |
 | `--lora-max-bytes <BYTES>` | `8589934592` | Maximum memory used by loaded adapters |
 | `--legacy-lora <SOURCE>` |  | Static LoRA adapter source for GGML or a Phi3 GGUF model |
@@ -36,36 +36,36 @@ mistralrs bench [OPTIONS] [COMMAND]
 | `--xlora <XLORA>` |  | X-LoRA adapter model ID |
 | `--xlora-order <XLORA_ORDER>` |  | X-LoRA ordering JSON file |
 | `--tgt-non-granular-index <TGT_NON_GRANULAR_INDEX>` |  | Target non-granular index for X-LoRA |
-| `--quant <QUANT>` |  | Quantization target. Inference commands select a matching GGUF or UQFF artifact when available. Source checkpoints without a matching UQFF use in-situ quantization. `tune` evaluates the requested level instead of selecting an artifact. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or supported quantization names |
-| `--isq <IN_SITU_QUANT>` |  | In-situ quantization target. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.). Supports compatible GGUF sources |
-| `--from-uqff <FROM_UQFF>` |  | UQFF artifact to load. Accepts a filename, numeric quantization level (`2`, `3`, `4`, `5`, `6`, `8`), or quantization type (`q4k`, `afq8`, etc.). Report-declared artifacts and conventional shard names expand to all of their shards. Use semicolons only to list disjoint shards manually |
-| `--isq-organization <ISQ_ORGANIZATION>` |  | ISQ organization strategy: default or moqe |
-| `--imatrix <IMATRIX>` |  | imatrix file for enhanced quantization |
-| `--calibration-file <CALIBRATION_FILE>` |  | Calibration file for imatrix generation |
+| `--quant <QUANT>` |  | Quantization level: a bit width (`2`, `3`, `4`, `5`, `6`, `8`), a named type such as `q4k` or `fp8`, or `auto` to pick one that fits your hardware. Uses a matching prebuilt file when one exists, otherwise quantizes at load time |
+| `--isq <IN_SITU_QUANT>` |  | Quantize the weights at load time (in-situ quantization, ISQ): a bit width (`2`, `3`, `4`, `5`, `6`, `8`) or a named type such as `q4k` or `q8_0`. Unlike `--quant`, never swaps in a prebuilt file |
+| `--from-uqff <FROM_UQFF>` |  | Prebuilt UQFF file to load: a filename, a bit width (`2`, `3`, `4`, `5`, `6`, `8`), or a type such as `q4k` or `afq8`. Sharded files load every shard; separate names with `;` to pick shards yourself |
+| `--isq-organization <ISQ_ORGANIZATION>` |  | Which layers to quantize: `default` for all supported layers, or `moqe` for only the experts of a mixture-of-experts model, leaving the rest unquantized |
+| `--imatrix <IMATRIX>` |  | Importance matrix (imatrix) file, which tells the quantizer which weights matter most and improves quality at low bit widths |
+| `--calibration-file <CALIBRATION_FILE>` |  | Text file to compute an importance matrix from, instead of passing `--imatrix` |
 | `--cpu` | `false` | Force CPU-only execution |
-| `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
-| `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
+| `-n, --device-layers <DEVICE_LAYERS>` |  | Layers per device as `ORD:NUM;...`, e.g. `0:10;1:20` puts 10 layers on GPU 0 and 20 on GPU 1. Omit for automatic mapping |
+| `--topology <TOPOLOGY>` |  | YAML file setting the device and quantization for each layer range |
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
-| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA and Metal, disabled on CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
-| `--gpu-memory-utilization <GPU_MEMORY_UTILIZATION>` |  | Fraction of physical GPU memory available to model weights, workspace, and KV cache |
+| `--paged-attn <MODE>` | `auto` | Store the KV cache in PagedAttention blocks so more requests fit in memory<br>`auto`: On for CUDA and Metal, off for CPU<br>`on`: Always on; fails if the device does not support it<br>`off`: Always off |
+| `--gpu-memory-utilization <GPU_MEMORY_UTILIZATION>` |  | Fraction of GPU memory (e.g. 0.9) to use for weights, activations, and the KV cache |
 | `--kv-cache <KV_CACHE>` |  | Explicit KV cache capacity, such as 4GiB or 65536tokens |
-| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA and Metal) |
-| `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
-| `--encoder-cache-memory-mb <ENCODER_CACHE_MEMORY_MB>` |  | Maximum logical tensor memory retained by the multimodal encoder cache, in MiB |
+| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per PagedAttention block (default: 32) |
+| `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache data type: `auto` or `f8e4m3` (8-bit float, about half the memory) |
+| `--encoder-cache-memory-mb <ENCODER_CACHE_MEMORY_MB>` |  | Memory cap, in MiB, for cached image and audio encoder outputs |
 | `--max-edge <MAX_EDGE>` |  | Maximum edge length for image resizing (aspect ratio preserved) |
 | `--max-num-images <MAX_NUM_IMAGES>` |  | Maximum number of images per request |
-| `--max-image-length <MAX_IMAGE_LENGTH>` |  | Maximum image dimension for device mapping |
+| `--max-image-length <MAX_IMAGE_LENGTH>` |  | Largest image side, in pixels, to reserve memory for when placing layers on devices |
 | `--no-kv-cache` | `false` | Disable KV cache entirely |
 | `--matformer-config-path <MATFORMER_CONFIG_PATH>` |  | Path to a MatFormer config (CSV/JSON describing available slices). See model card |
 | `--matformer-slice-name <MATFORMER_SLICE_NAME>` |  | MatFormer slice to load (must match a slice name in the config file) |
-| `--mtp` | `false` | Enable MTP speculative decoding with the head built into the model checkpoint |
-| `--mtp-model <MTP_MODEL>` |  | MTP assistant model id or path |
+| `--mtp` | `false` | Speed up generation with multi-token prediction (MTP), using the draft head built into the checkpoint |
+| `--mtp-model <MTP_MODEL>` |  | Separate MTP draft model, as a Hugging Face ID or local path |
 | `--mtp-n-predict <MTP_N_PREDICT>` |  | Fixed MTP draft tokens per step; omit to adapt the depth automatically |
-| `--mtp-draft-sampling <MTP_DRAFT_SAMPLING>` | `auto` | MTP draft sampling policy. Auto uses probabilistic DFlash2 drafting when supported. Possible values: `auto`, `greedy`, `probabilistic`. |
+| `--mtp-draft-sampling <MTP_DRAFT_SAMPLING>` | `auto` | How the MTP drafter picks the tokens it proposes<br>`auto`: Probabilistic when the drafter supports it, otherwise greedy<br>`greedy`: Always propose the most likely token<br>`probabilistic`: Sample proposals from the draft distribution; fails if unsupported |
 | `--adapter <ADAPTER>` |  | LoRA adapter alias to benchmark. Omit to benchmark the base model |
-| `--prompt-len <PROMPT_LEN>` | `512` | Input lengths used to measure time to first token. Zero skips TTFT. Accepts comma-separated values for sweeps |
+| `--prompt-len <PROMPT_LEN>` | `512` | Prompt lengths for measuring time to first token (TTFT); `0` skips it. Comma-separate for sweeps |
 | `--gen-len <GEN_LEN>` | `128` | Output tokens per decode request. Values below 2 skip decode metrics |
-| `--depth <DEPTH>` | `4` | Input context lengths used to measure decode TPOT. Accepts comma-separated values for sweeps |
+| `--depth <DEPTH>` | `4` | Context lengths for measuring decode time per output token (TPOT). Comma-separate for sweeps |
 | `--iterations <ITERATIONS>` | `3` | Number of benchmark iterations |
 | `--warmup <WARMUP>` | `1` | Number of warmup runs per benchmark case (discarded) |
 
@@ -82,17 +82,17 @@ mistralrs bench auto [OPTIONS] --model-id <MODEL_ID>
 | `-m, --model-id <MODEL_ID>` | required | Hugging Face model ID or local path to model directory |
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
-| `--dtype <DTYPE>` | `auto` | Model data type |
-| `--hf-overrides <HF_OVERRIDES>` |  | Recursively merged JSON overrides for the Hugging Face model config |
-| `--max-model-len <MAX_MODEL_LEN>` |  | Runtime model context length |
-| `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified. Possible values: `plain`, `gguf`, `ggml`. |
+| `--dtype <DTYPE>` | `auto` | Weight data type: `auto`, `bf16`, `f16`, or `f32`. `auto` picks the best one for the device |
+| `--hf-overrides <HF_OVERRIDES>` |  | JSON to merge into the model's `config.json`; nested objects merge key by key |
+| `--max-model-len <MAX_MODEL_LEN>` |  | Maximum context length, in tokens |
+| `--format <FORMAT>` |  | Model file format. Auto-detected from `-f` when omitted<br>`plain`: Safetensors weights<br>`gguf`: GGUF file<br>`ggml`: GGML file |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
-| `--mmproj <MMPROJ>` |  | GGUF projector override; auto-selected when unambiguous (semicolon-separated for multiple) |
-| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a quantized model |
-| `--gqa <GQA>` | `1` | GQA value for GGML models |
+| `--mmproj <MMPROJ>` |  | GGUF vision or audio projector file(s), separated by semicolons. Auto-selected when there is only one |
+| `--tok-model-id <TOK_MODEL_ID>` |  | Model ID to take the config, tokenizer, and processor files from, for a GGUF or GGML model |
+| `--gqa <GQA>` | `1` | Grouped-query attention (GQA) factor for GGML models |
 | `--enable-lora` | `false` | Enable dynamic LoRA without preloading an adapter. Supports compatible text and multimodal language models, including GGUF. Vision, audio, and projector adapters are unsupported |
 | `--lora <ALIAS=SOURCE\|JSON>` |  | Preload a language-model LoRA adapter as ALIAS=SOURCE. Supports compatible text and multimodal language models, including GGUF. Remote adapters use revision main. May be repeated. Vision, audio, and projector adapters are unsupported |
-| `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum loaded LoRA aliases and, independently, resident adapter generations |
+| `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum LoRA adapters loaded at once. Separately caps adapter versions in memory, counting old versions still used by running requests |
 | `--lora-max-rank <LORA_MAX_RANK>` | `256` | Maximum rank accepted for a LoRA adapter |
 | `--lora-max-bytes <BYTES>` | `8589934592` | Maximum memory used by loaded adapters |
 | `--legacy-lora <SOURCE>` |  | Static LoRA adapter source for GGML or a Phi3 GGUF model |
@@ -100,25 +100,25 @@ mistralrs bench auto [OPTIONS] --model-id <MODEL_ID>
 | `--xlora <XLORA>` |  | X-LoRA adapter model ID |
 | `--xlora-order <XLORA_ORDER>` |  | X-LoRA ordering JSON file |
 | `--tgt-non-granular-index <TGT_NON_GRANULAR_INDEX>` |  | Target non-granular index for X-LoRA |
-| `--quant <QUANT>` |  | Quantization target. Inference commands select a matching GGUF or UQFF artifact when available. Source checkpoints without a matching UQFF use in-situ quantization. `tune` evaluates the requested level instead of selecting an artifact. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or supported quantization names |
-| `--isq <IN_SITU_QUANT>` |  | In-situ quantization target. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.). Supports compatible GGUF sources |
-| `--from-uqff <FROM_UQFF>` |  | UQFF artifact to load. Accepts a filename, numeric quantization level (`2`, `3`, `4`, `5`, `6`, `8`), or quantization type (`q4k`, `afq8`, etc.). Report-declared artifacts and conventional shard names expand to all of their shards. Use semicolons only to list disjoint shards manually |
-| `--isq-organization <ISQ_ORGANIZATION>` |  | ISQ organization strategy: default or moqe |
-| `--imatrix <IMATRIX>` |  | imatrix file for enhanced quantization |
-| `--calibration-file <CALIBRATION_FILE>` |  | Calibration file for imatrix generation |
+| `--quant <QUANT>` |  | Quantization level: a bit width (`2`, `3`, `4`, `5`, `6`, `8`), a named type such as `q4k` or `fp8`, or `auto` to pick one that fits your hardware. Uses a matching prebuilt file when one exists, otherwise quantizes at load time |
+| `--isq <IN_SITU_QUANT>` |  | Quantize the weights at load time (in-situ quantization, ISQ): a bit width (`2`, `3`, `4`, `5`, `6`, `8`) or a named type such as `q4k` or `q8_0`. Unlike `--quant`, never swaps in a prebuilt file |
+| `--from-uqff <FROM_UQFF>` |  | Prebuilt UQFF file to load: a filename, a bit width (`2`, `3`, `4`, `5`, `6`, `8`), or a type such as `q4k` or `afq8`. Sharded files load every shard; separate names with `;` to pick shards yourself |
+| `--isq-organization <ISQ_ORGANIZATION>` |  | Which layers to quantize: `default` for all supported layers, or `moqe` for only the experts of a mixture-of-experts model, leaving the rest unquantized |
+| `--imatrix <IMATRIX>` |  | Importance matrix (imatrix) file, which tells the quantizer which weights matter most and improves quality at low bit widths |
+| `--calibration-file <CALIBRATION_FILE>` |  | Text file to compute an importance matrix from, instead of passing `--imatrix` |
 | `--cpu` | `false` | Force CPU-only execution |
-| `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
-| `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
+| `-n, --device-layers <DEVICE_LAYERS>` |  | Layers per device as `ORD:NUM;...`, e.g. `0:10;1:20` puts 10 layers on GPU 0 and 20 on GPU 1. Omit for automatic mapping |
+| `--topology <TOPOLOGY>` |  | YAML file setting the device and quantization for each layer range |
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
-| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA and Metal, disabled on CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
-| `--gpu-memory-utilization <GPU_MEMORY_UTILIZATION>` |  | Fraction of physical GPU memory available to model weights, workspace, and KV cache |
+| `--paged-attn <MODE>` | `auto` | Store the KV cache in PagedAttention blocks so more requests fit in memory<br>`auto`: On for CUDA and Metal, off for CPU<br>`on`: Always on; fails if the device does not support it<br>`off`: Always off |
+| `--gpu-memory-utilization <GPU_MEMORY_UTILIZATION>` |  | Fraction of GPU memory (e.g. 0.9) to use for weights, activations, and the KV cache |
 | `--kv-cache <KV_CACHE>` |  | Explicit KV cache capacity, such as 4GiB or 65536tokens |
-| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA and Metal) |
-| `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
-| `--encoder-cache-memory-mb <ENCODER_CACHE_MEMORY_MB>` |  | Maximum logical tensor memory retained by the multimodal encoder cache, in MiB |
+| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per PagedAttention block (default: 32) |
+| `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache data type: `auto` or `f8e4m3` (8-bit float, about half the memory) |
+| `--encoder-cache-memory-mb <ENCODER_CACHE_MEMORY_MB>` |  | Memory cap, in MiB, for cached image and audio encoder outputs |
 | `--max-edge <MAX_EDGE>` |  | Maximum edge length for image resizing (aspect ratio preserved) |
 | `--max-num-images <MAX_NUM_IMAGES>` |  | Maximum number of images per request |
-| `--max-image-length <MAX_IMAGE_LENGTH>` |  | Maximum image dimension for device mapping |
+| `--max-image-length <MAX_IMAGE_LENGTH>` |  | Largest image side, in pixels, to reserve memory for when placing layers on devices |
 
 ## mistralrs bench text
 
@@ -133,17 +133,17 @@ mistralrs bench text [OPTIONS] --model-id <MODEL_ID>
 | `-m, --model-id <MODEL_ID>` | required | Hugging Face model ID or local path to model directory |
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
-| `--dtype <DTYPE>` | `auto` | Model data type |
-| `--hf-overrides <HF_OVERRIDES>` |  | Recursively merged JSON overrides for the Hugging Face model config |
-| `--max-model-len <MAX_MODEL_LEN>` |  | Runtime model context length |
-| `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified. Possible values: `plain`, `gguf`, `ggml`. |
+| `--dtype <DTYPE>` | `auto` | Weight data type: `auto`, `bf16`, `f16`, or `f32`. `auto` picks the best one for the device |
+| `--hf-overrides <HF_OVERRIDES>` |  | JSON to merge into the model's `config.json`; nested objects merge key by key |
+| `--max-model-len <MAX_MODEL_LEN>` |  | Maximum context length, in tokens |
+| `--format <FORMAT>` |  | Model file format. Auto-detected from `-f` when omitted<br>`plain`: Safetensors weights<br>`gguf`: GGUF file<br>`ggml`: GGML file |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
-| `--mmproj <MMPROJ>` |  | GGUF projector override; auto-selected when unambiguous (semicolon-separated for multiple) |
-| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a quantized model |
-| `--gqa <GQA>` | `1` | GQA value for GGML models |
+| `--mmproj <MMPROJ>` |  | GGUF vision or audio projector file(s), separated by semicolons. Auto-selected when there is only one |
+| `--tok-model-id <TOK_MODEL_ID>` |  | Model ID to take the config, tokenizer, and processor files from, for a GGUF or GGML model |
+| `--gqa <GQA>` | `1` | Grouped-query attention (GQA) factor for GGML models |
 | `--enable-lora` | `false` | Enable dynamic LoRA without preloading an adapter. Supports compatible text and multimodal language models, including GGUF. Vision, audio, and projector adapters are unsupported |
 | `--lora <ALIAS=SOURCE\|JSON>` |  | Preload a language-model LoRA adapter as ALIAS=SOURCE. Supports compatible text and multimodal language models, including GGUF. Remote adapters use revision main. May be repeated. Vision, audio, and projector adapters are unsupported |
-| `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum loaded LoRA aliases and, independently, resident adapter generations |
+| `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum LoRA adapters loaded at once. Separately caps adapter versions in memory, counting old versions still used by running requests |
 | `--lora-max-rank <LORA_MAX_RANK>` | `256` | Maximum rank accepted for a LoRA adapter |
 | `--lora-max-bytes <BYTES>` | `8589934592` | Maximum memory used by loaded adapters |
 | `--legacy-lora <SOURCE>` |  | Static LoRA adapter source for GGML or a Phi3 GGUF model |
@@ -151,21 +151,21 @@ mistralrs bench text [OPTIONS] --model-id <MODEL_ID>
 | `--xlora <XLORA>` |  | X-LoRA adapter model ID |
 | `--xlora-order <XLORA_ORDER>` |  | X-LoRA ordering JSON file |
 | `--tgt-non-granular-index <TGT_NON_GRANULAR_INDEX>` |  | Target non-granular index for X-LoRA |
-| `--quant <QUANT>` |  | Quantization target. Inference commands select a matching GGUF or UQFF artifact when available. Source checkpoints without a matching UQFF use in-situ quantization. `tune` evaluates the requested level instead of selecting an artifact. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or supported quantization names |
-| `--isq <IN_SITU_QUANT>` |  | In-situ quantization target. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.). Supports compatible GGUF sources |
-| `--from-uqff <FROM_UQFF>` |  | UQFF artifact to load. Accepts a filename, numeric quantization level (`2`, `3`, `4`, `5`, `6`, `8`), or quantization type (`q4k`, `afq8`, etc.). Report-declared artifacts and conventional shard names expand to all of their shards. Use semicolons only to list disjoint shards manually |
-| `--isq-organization <ISQ_ORGANIZATION>` |  | ISQ organization strategy: default or moqe |
-| `--imatrix <IMATRIX>` |  | imatrix file for enhanced quantization |
-| `--calibration-file <CALIBRATION_FILE>` |  | Calibration file for imatrix generation |
+| `--quant <QUANT>` |  | Quantization level: a bit width (`2`, `3`, `4`, `5`, `6`, `8`), a named type such as `q4k` or `fp8`, or `auto` to pick one that fits your hardware. Uses a matching prebuilt file when one exists, otherwise quantizes at load time |
+| `--isq <IN_SITU_QUANT>` |  | Quantize the weights at load time (in-situ quantization, ISQ): a bit width (`2`, `3`, `4`, `5`, `6`, `8`) or a named type such as `q4k` or `q8_0`. Unlike `--quant`, never swaps in a prebuilt file |
+| `--from-uqff <FROM_UQFF>` |  | Prebuilt UQFF file to load: a filename, a bit width (`2`, `3`, `4`, `5`, `6`, `8`), or a type such as `q4k` or `afq8`. Sharded files load every shard; separate names with `;` to pick shards yourself |
+| `--isq-organization <ISQ_ORGANIZATION>` |  | Which layers to quantize: `default` for all supported layers, or `moqe` for only the experts of a mixture-of-experts model, leaving the rest unquantized |
+| `--imatrix <IMATRIX>` |  | Importance matrix (imatrix) file, which tells the quantizer which weights matter most and improves quality at low bit widths |
+| `--calibration-file <CALIBRATION_FILE>` |  | Text file to compute an importance matrix from, instead of passing `--imatrix` |
 | `--cpu` | `false` | Force CPU-only execution |
-| `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
-| `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
+| `-n, --device-layers <DEVICE_LAYERS>` |  | Layers per device as `ORD:NUM;...`, e.g. `0:10;1:20` puts 10 layers on GPU 0 and 20 on GPU 1. Omit for automatic mapping |
+| `--topology <TOPOLOGY>` |  | YAML file setting the device and quantization for each layer range |
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
-| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA and Metal, disabled on CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
-| `--gpu-memory-utilization <GPU_MEMORY_UTILIZATION>` |  | Fraction of physical GPU memory available to model weights, workspace, and KV cache |
+| `--paged-attn <MODE>` | `auto` | Store the KV cache in PagedAttention blocks so more requests fit in memory<br>`auto`: On for CUDA and Metal, off for CPU<br>`on`: Always on; fails if the device does not support it<br>`off`: Always off |
+| `--gpu-memory-utilization <GPU_MEMORY_UTILIZATION>` |  | Fraction of GPU memory (e.g. 0.9) to use for weights, activations, and the KV cache |
 | `--kv-cache <KV_CACHE>` |  | Explicit KV cache capacity, such as 4GiB or 65536tokens |
-| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA and Metal) |
-| `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
+| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per PagedAttention block (default: 32) |
+| `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache data type: `auto` or `f8e4m3` (8-bit float, about half the memory) |
 
 ## mistralrs bench multimodal
 
@@ -180,38 +180,38 @@ mistralrs bench multimodal [OPTIONS] --model-id <MODEL_ID>
 | `-m, --model-id <MODEL_ID>` | required | Hugging Face model ID or local path to model directory |
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
-| `--dtype <DTYPE>` | `auto` | Model data type |
-| `--hf-overrides <HF_OVERRIDES>` |  | Recursively merged JSON overrides for the Hugging Face model config |
-| `--max-model-len <MAX_MODEL_LEN>` |  | Runtime model context length |
-| `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified. Possible values: `plain`, `gguf`, `ggml`. |
+| `--dtype <DTYPE>` | `auto` | Weight data type: `auto`, `bf16`, `f16`, or `f32`. `auto` picks the best one for the device |
+| `--hf-overrides <HF_OVERRIDES>` |  | JSON to merge into the model's `config.json`; nested objects merge key by key |
+| `--max-model-len <MAX_MODEL_LEN>` |  | Maximum context length, in tokens |
+| `--format <FORMAT>` |  | Model file format. Auto-detected from `-f` when omitted<br>`plain`: Safetensors weights<br>`gguf`: GGUF file<br>`ggml`: GGML file |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
-| `--mmproj <MMPROJ>` |  | GGUF projector override; auto-selected when unambiguous (semicolon-separated for multiple) |
-| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a quantized model |
-| `--gqa <GQA>` | `1` | GQA value for GGML models |
+| `--mmproj <MMPROJ>` |  | GGUF vision or audio projector file(s), separated by semicolons. Auto-selected when there is only one |
+| `--tok-model-id <TOK_MODEL_ID>` |  | Model ID to take the config, tokenizer, and processor files from, for a GGUF or GGML model |
+| `--gqa <GQA>` | `1` | Grouped-query attention (GQA) factor for GGML models |
 | `--enable-lora` | `false` | Enable dynamic LoRA for the language model without preloading an adapter. Vision, audio, and projector adapters are unsupported |
 | `--lora <ALIAS=SOURCE\|JSON>` |  | Preload a language-model LoRA adapter as ALIAS=SOURCE. Remote adapters use revision main. May be repeated. Vision, audio, and projector adapters are unsupported |
-| `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum loaded LoRA aliases and, independently, resident adapter generations |
+| `--lora-max-adapters <LORA_MAX_ADAPTERS>` | `16` | Maximum LoRA adapters loaded at once. Separately caps adapter versions in memory, counting old versions still used by running requests |
 | `--lora-max-rank <LORA_MAX_RANK>` | `256` | Maximum rank accepted for a LoRA adapter |
 | `--lora-max-bytes <BYTES>` | `8589934592` | Maximum memory used by loaded adapters |
-| `--quant <QUANT>` |  | Quantization target. Inference commands select a matching GGUF or UQFF artifact when available. Source checkpoints without a matching UQFF use in-situ quantization. `tune` evaluates the requested level instead of selecting an artifact. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or supported quantization names |
-| `--isq <IN_SITU_QUANT>` |  | In-situ quantization target. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.). Supports compatible GGUF sources |
-| `--from-uqff <FROM_UQFF>` |  | UQFF artifact to load. Accepts a filename, numeric quantization level (`2`, `3`, `4`, `5`, `6`, `8`), or quantization type (`q4k`, `afq8`, etc.). Report-declared artifacts and conventional shard names expand to all of their shards. Use semicolons only to list disjoint shards manually |
-| `--isq-organization <ISQ_ORGANIZATION>` |  | ISQ organization strategy: default or moqe |
-| `--imatrix <IMATRIX>` |  | imatrix file for enhanced quantization |
-| `--calibration-file <CALIBRATION_FILE>` |  | Calibration file for imatrix generation |
+| `--quant <QUANT>` |  | Quantization level: a bit width (`2`, `3`, `4`, `5`, `6`, `8`), a named type such as `q4k` or `fp8`, or `auto` to pick one that fits your hardware. Uses a matching prebuilt file when one exists, otherwise quantizes at load time |
+| `--isq <IN_SITU_QUANT>` |  | Quantize the weights at load time (in-situ quantization, ISQ): a bit width (`2`, `3`, `4`, `5`, `6`, `8`) or a named type such as `q4k` or `q8_0`. Unlike `--quant`, never swaps in a prebuilt file |
+| `--from-uqff <FROM_UQFF>` |  | Prebuilt UQFF file to load: a filename, a bit width (`2`, `3`, `4`, `5`, `6`, `8`), or a type such as `q4k` or `afq8`. Sharded files load every shard; separate names with `;` to pick shards yourself |
+| `--isq-organization <ISQ_ORGANIZATION>` |  | Which layers to quantize: `default` for all supported layers, or `moqe` for only the experts of a mixture-of-experts model, leaving the rest unquantized |
+| `--imatrix <IMATRIX>` |  | Importance matrix (imatrix) file, which tells the quantizer which weights matter most and improves quality at low bit widths |
+| `--calibration-file <CALIBRATION_FILE>` |  | Text file to compute an importance matrix from, instead of passing `--imatrix` |
 | `--cpu` | `false` | Force CPU-only execution |
-| `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
-| `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
+| `-n, --device-layers <DEVICE_LAYERS>` |  | Layers per device as `ORD:NUM;...`, e.g. `0:10;1:20` puts 10 layers on GPU 0 and 20 on GPU 1. Omit for automatic mapping |
+| `--topology <TOPOLOGY>` |  | YAML file setting the device and quantization for each layer range |
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
-| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA and Metal, disabled on CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
-| `--gpu-memory-utilization <GPU_MEMORY_UTILIZATION>` |  | Fraction of physical GPU memory available to model weights, workspace, and KV cache |
+| `--paged-attn <MODE>` | `auto` | Store the KV cache in PagedAttention blocks so more requests fit in memory<br>`auto`: On for CUDA and Metal, off for CPU<br>`on`: Always on; fails if the device does not support it<br>`off`: Always off |
+| `--gpu-memory-utilization <GPU_MEMORY_UTILIZATION>` |  | Fraction of GPU memory (e.g. 0.9) to use for weights, activations, and the KV cache |
 | `--kv-cache <KV_CACHE>` |  | Explicit KV cache capacity, such as 4GiB or 65536tokens |
-| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA and Metal) |
-| `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
-| `--encoder-cache-memory-mb <ENCODER_CACHE_MEMORY_MB>` |  | Maximum logical tensor memory retained by the multimodal encoder cache, in MiB |
+| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per PagedAttention block (default: 32) |
+| `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache data type: `auto` or `f8e4m3` (8-bit float, about half the memory) |
+| `--encoder-cache-memory-mb <ENCODER_CACHE_MEMORY_MB>` |  | Memory cap, in MiB, for cached image and audio encoder outputs |
 | `--max-edge <MAX_EDGE>` |  | Maximum edge length for image resizing (aspect ratio preserved) |
 | `--max-num-images <MAX_NUM_IMAGES>` |  | Maximum number of images per request |
-| `--max-image-length <MAX_IMAGE_LENGTH>` |  | Maximum image dimension for device mapping |
+| `--max-image-length <MAX_IMAGE_LENGTH>` |  | Largest image side, in pixels, to reserve memory for when placing layers on devices |
 
 ## mistralrs bench diffusion
 
@@ -226,12 +226,12 @@ mistralrs bench diffusion [OPTIONS] --model-id <MODEL_ID>
 | `-m, --model-id <MODEL_ID>` | required | Hugging Face model ID or local path to model directory |
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
-| `--dtype <DTYPE>` | `auto` | Model data type |
-| `--hf-overrides <HF_OVERRIDES>` |  | Recursively merged JSON overrides for the Hugging Face model config |
-| `--max-model-len <MAX_MODEL_LEN>` |  | Runtime model context length |
+| `--dtype <DTYPE>` | `auto` | Weight data type: `auto`, `bf16`, `f16`, or `f32`. `auto` picks the best one for the device |
+| `--hf-overrides <HF_OVERRIDES>` |  | JSON to merge into the model's `config.json`; nested objects merge key by key |
+| `--max-model-len <MAX_MODEL_LEN>` |  | Maximum context length, in tokens |
 | `--cpu` | `false` | Force CPU-only execution |
-| `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
-| `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
+| `-n, --device-layers <DEVICE_LAYERS>` |  | Layers per device as `ORD:NUM;...`, e.g. `0:10;1:20` puts 10 layers on GPU 0 and 20 on GPU 1. Omit for automatic mapping |
+| `--topology <TOPOLOGY>` |  | YAML file setting the device and quantization for each layer range |
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 
 ## mistralrs bench speech
@@ -247,12 +247,12 @@ mistralrs bench speech [OPTIONS] --model-id <MODEL_ID>
 | `-m, --model-id <MODEL_ID>` | required | Hugging Face model ID or local path to model directory |
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
-| `--dtype <DTYPE>` | `auto` | Model data type |
-| `--hf-overrides <HF_OVERRIDES>` |  | Recursively merged JSON overrides for the Hugging Face model config |
-| `--max-model-len <MAX_MODEL_LEN>` |  | Runtime model context length |
+| `--dtype <DTYPE>` | `auto` | Weight data type: `auto`, `bf16`, `f16`, or `f32`. `auto` picks the best one for the device |
+| `--hf-overrides <HF_OVERRIDES>` |  | JSON to merge into the model's `config.json`; nested objects merge key by key |
+| `--max-model-len <MAX_MODEL_LEN>` |  | Maximum context length, in tokens |
 | `--cpu` | `false` | Force CPU-only execution |
-| `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
-| `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
+| `-n, --device-layers <DEVICE_LAYERS>` |  | Layers per device as `ORD:NUM;...`, e.g. `0:10;1:20` puts 10 layers on GPU 0 and 20 on GPU 1. Omit for automatic mapping |
+| `--topology <TOPOLOGY>` |  | YAML file setting the device and quantization for each layer range |
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
 
 ## mistralrs bench embedding
@@ -268,26 +268,26 @@ mistralrs bench embedding [OPTIONS] --model-id <MODEL_ID>
 | `-m, --model-id <MODEL_ID>` | required | Hugging Face model ID or local path to model directory |
 | `-t, --tokenizer <TOKENIZER>` |  | Path to local tokenizer.json file |
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
-| `--dtype <DTYPE>` | `auto` | Model data type |
-| `--hf-overrides <HF_OVERRIDES>` |  | Recursively merged JSON overrides for the Hugging Face model config |
-| `--max-model-len <MAX_MODEL_LEN>` |  | Runtime model context length |
-| `--format <FORMAT>` |  | Model format: plain (safetensors), GGUF, or GGML. Auto-detected from `-f` when not specified. Possible values: `plain`, `gguf`, `ggml`. |
+| `--dtype <DTYPE>` | `auto` | Weight data type: `auto`, `bf16`, `f16`, or `f32`. `auto` picks the best one for the device |
+| `--hf-overrides <HF_OVERRIDES>` |  | JSON to merge into the model's `config.json`; nested objects merge key by key |
+| `--max-model-len <MAX_MODEL_LEN>` |  | Maximum context length, in tokens |
+| `--format <FORMAT>` |  | Model file format. Auto-detected from `-f` when omitted<br>`plain`: Safetensors weights<br>`gguf`: GGUF file<br>`ggml`: GGML file |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
-| `--mmproj <MMPROJ>` |  | GGUF projector override; auto-selected when unambiguous (semicolon-separated for multiple) |
-| `--tok-model-id <TOK_MODEL_ID>` |  | Optional model ID overriding configuration, tokenizer, and processor assets for a quantized model |
-| `--gqa <GQA>` | `1` | GQA value for GGML models |
-| `--quant <QUANT>` |  | Quantization target. Inference commands select a matching GGUF or UQFF artifact when available. Source checkpoints without a matching UQFF use in-situ quantization. `tune` evaluates the requested level instead of selecting an artifact. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or supported quantization names |
-| `--isq <IN_SITU_QUANT>` |  | In-situ quantization target. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or raw quant names (`q4k`, `q8_0`, etc.). Supports compatible GGUF sources |
-| `--from-uqff <FROM_UQFF>` |  | UQFF artifact to load. Accepts a filename, numeric quantization level (`2`, `3`, `4`, `5`, `6`, `8`), or quantization type (`q4k`, `afq8`, etc.). Report-declared artifacts and conventional shard names expand to all of their shards. Use semicolons only to list disjoint shards manually |
-| `--isq-organization <ISQ_ORGANIZATION>` |  | ISQ organization strategy: default or moqe |
-| `--imatrix <IMATRIX>` |  | imatrix file for enhanced quantization |
-| `--calibration-file <CALIBRATION_FILE>` |  | Calibration file for imatrix generation |
+| `--mmproj <MMPROJ>` |  | GGUF vision or audio projector file(s), separated by semicolons. Auto-selected when there is only one |
+| `--tok-model-id <TOK_MODEL_ID>` |  | Model ID to take the config, tokenizer, and processor files from, for a GGUF or GGML model |
+| `--gqa <GQA>` | `1` | Grouped-query attention (GQA) factor for GGML models |
+| `--quant <QUANT>` |  | Quantization level: a bit width (`2`, `3`, `4`, `5`, `6`, `8`), a named type such as `q4k` or `fp8`, or `auto` to pick one that fits your hardware. Uses a matching prebuilt file when one exists, otherwise quantizes at load time |
+| `--isq <IN_SITU_QUANT>` |  | Quantize the weights at load time (in-situ quantization, ISQ): a bit width (`2`, `3`, `4`, `5`, `6`, `8`) or a named type such as `q4k` or `q8_0`. Unlike `--quant`, never swaps in a prebuilt file |
+| `--from-uqff <FROM_UQFF>` |  | Prebuilt UQFF file to load: a filename, a bit width (`2`, `3`, `4`, `5`, `6`, `8`), or a type such as `q4k` or `afq8`. Sharded files load every shard; separate names with `;` to pick shards yourself |
+| `--isq-organization <ISQ_ORGANIZATION>` |  | Which layers to quantize: `default` for all supported layers, or `moqe` for only the experts of a mixture-of-experts model, leaving the rest unquantized |
+| `--imatrix <IMATRIX>` |  | Importance matrix (imatrix) file, which tells the quantizer which weights matter most and improves quality at low bit widths |
+| `--calibration-file <CALIBRATION_FILE>` |  | Text file to compute an importance matrix from, instead of passing `--imatrix` |
 | `--cpu` | `false` | Force CPU-only execution |
-| `-n, --device-layers <DEVICE_LAYERS>` |  | Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20") Omit for automatic device mapping |
-| `--topology <TOPOLOGY>` |  | Topology YAML file for device mapping |
+| `-n, --device-layers <DEVICE_LAYERS>` |  | Layers per device as `ORD:NUM;...`, e.g. `0:10;1:20` puts 10 layers on GPU 0 and 20 on GPU 1. Omit for automatic mapping |
+| `--topology <TOPOLOGY>` |  | YAML file setting the device and quantization for each layer range |
 | `--hf-cache <HF_CACHE>` |  | Custom Hugging Face cache directory |
-| `--paged-attn <MODE>` | `auto` | PagedAttention mode - auto: enabled on CUDA and Metal, disabled on CPU (default) - on: force enable (fails if unsupported) - off: force disable. Possible values: `auto`, `on`, `off`. |
-| `--gpu-memory-utilization <GPU_MEMORY_UTILIZATION>` |  | Fraction of physical GPU memory available to model weights, workspace, and KV cache |
+| `--paged-attn <MODE>` | `auto` | Store the KV cache in PagedAttention blocks so more requests fit in memory<br>`auto`: On for CUDA and Metal, off for CPU<br>`on`: Always on; fails if the device does not support it<br>`off`: Always off |
+| `--gpu-memory-utilization <GPU_MEMORY_UTILIZATION>` |  | Fraction of GPU memory (e.g. 0.9) to use for weights, activations, and the KV cache |
 | `--kv-cache <KV_CACHE>` |  | Explicit KV cache capacity, such as 4GiB or 65536tokens |
-| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per block (default: 32 on CUDA and Metal) |
-| `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache quantization type |
+| `--pa-block-size <BLOCK_SIZE>` |  | Tokens per PagedAttention block (default: 32) |
+| `--pa-cache-type <CACHE_TYPE>` | `auto` | KV cache data type: `auto` or `f8e4m3` (8-bit float, about half the memory) |

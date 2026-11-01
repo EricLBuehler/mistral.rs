@@ -3,12 +3,11 @@ title: Stream chat responses from Rust
 description: Handle Response variants, errors, tool progress events, cancellation, and task spawning with stream_chat_request.
 ---
 
-`stream_chat_request` returns a value implementing `futures::Stream<Item = Response>`. The minimal loop is in [getting started](/guides/rust/getting-started/#streaming); this guide covers errors, tool events, and cancellation.
+`stream_chat_request` returns a `futures::Stream` of `Response` values that you read with `.next().await`. The minimal loop is in [getting started](/guides/rust/getting-started/#streaming); this page covers errors, tool events, cancellation, and collecting the full reply.
 
 ## Handling every variant
 
 ```rust
-use futures::StreamExt;
 use mistralrs::Response;
 use std::io::Write;
 
@@ -36,16 +35,21 @@ while let Some(item) = stream.next().await {
 }
 ```
 
-`Response` variants seen on a chat stream:
+These are the `Response` variants a chat stream can send:
 
-- `Response::Chunk`: the common case. Carries incremental text in `choices[0].delta.content`.
-- Chat speech output also uses `Response::Chunk`, with base64 PCM in `choices[].delta.audio.data`. Select `ChatAudioFormat::Pcm16`, decode each chunk, and append bytes in arrival order, including any final tail. See [chat speech output](/reference/rust-sdk/#chat-speech-output).
-- The last chunk for each choice carries its `finish_reason`. Streaming does not return a non-streaming `Response::Done` object.
-- `Response::InternalError` and `Response::ValidationError`: engine or request failure; stop consuming the stream.
-- `Response::ModelError`: model-level failure, accompanied by the partial response built so far.
-- `Response::AgenticToolCallProgress`, `Response::AgenticToolApprovalRequired`, `Response::File`: tool progress, approval requests, and generated files. `BlockDenoisingProgress` reports progress for diffusion language models.
+| Variant | Meaning |
+|---|---|
+| `Response::Chunk` | New output. Text is in `choices[0].delta.content`. |
+| `Response::InternalError`, `Response::ValidationError` | The engine or the request failed. Nothing else follows, so stop reading. |
+| `Response::ModelError` | The model failed. It carries the error message and the partial response built so far. |
+| `Response::AgenticToolCallProgress`, `Response::AgenticToolApprovalRequired`, `Response::File` | A server-side tool is starting or finished, needs your approval, or produced a file. See the next section. |
+| `Response::BlockDenoisingProgress` | Progress from a diffusion language model. |
 
-The loop prints the first choice and ignores non-text events; handle the agentic variants when your application needs them. Full example: [streaming](/examples/rust/getting-started/streaming/), [error-handling](/examples/rust/advanced/error-handling/).
+Each choice's last chunk carries its `finish_reason`, and the stream ends after that. The last chunk also carries token counts in `usage`.
+
+For [chat speech output](/reference/rust-sdk/#chat-speech-output), select `ChatAudioFormat::Pcm16`. Audio then arrives in `Response::Chunk` as base64 PCM in `choices[].delta.audio.data`: decode each chunk and append the bytes in the order they arrive, including the final one.
+
+The loop above prints only the first choice and skips everything else; match the agentic variants too if your app uses tools. Full examples: [streaming](/examples/rust/getting-started/streaming/) and [error-handling](/examples/rust/advanced/error-handling/).
 
 ## Streaming with tool calls
 
@@ -62,7 +66,7 @@ Response::AgenticToolCallProgress { round, tool_name, phase } => {
 }
 ```
 
-Note that the non-streaming `send_chat_request` skips these events internally and returns only the final response.
+The non-streaming `send_chat_request` doesn't surface these events; it returns only the final response.
 
 ## Spawning, backpressure, and cancellation
 
@@ -89,4 +93,35 @@ The response channel behind the stream is bounded, so a consumer that stops poll
 
 ## Collecting the full response
 
-Append each nonempty `delta.content` to a `String` in the chunk arm above while displaying it. For `n > 1`, keep a separate buffer per `choice.index`. Preserve partial text if an error arrives; a successful stream ends after each choice's terminal chunk.
+To show text as it arrives and also keep the whole reply, append each piece to a `String`:
+
+```rust
+use mistralrs::Response;
+use std::io::Write;
+
+let mut stream = model.stream_chat_request(messages).await?;
+let mut reply = String::new();
+
+while let Some(item) = stream.next().await {
+    match item {
+        Response::Chunk(chunk) => {
+            if let Some(text) = chunk.choices.first().and_then(|c| c.delta.content.as_deref()) {
+                print!("{text}");
+                std::io::stdout().flush()?;
+                reply.push_str(text);
+            }
+        }
+        Response::InternalError(e) | Response::ValidationError(e) => {
+            eprintln!("stream error: {e}");
+            break;
+        }
+        Response::ModelError(msg, _) => {
+            eprintln!("model error: {msg}");
+            break;
+        }
+        _ => {}
+    }
+}
+```
+
+When the loop ends, `reply` holds the whole reply, or everything generated before an error. With `n > 1`, chunks for different choices arrive interleaved: keep one buffer per choice and pick it with `choice.index`.

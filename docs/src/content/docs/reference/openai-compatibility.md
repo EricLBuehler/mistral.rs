@@ -19,7 +19,7 @@ Loaded LoRA adapters can be selected by their exact model-card ID from `GET /v1/
 
 | Field | Support and limits |
 | --- | --- |
-| `modalities`, `audio` | Chat speech models accept `["audio"]` or `["text", "audio"]`. Formats: `wav`, `pcm16`, `mp3`, `flac`, `opus`, `aac`; compressed output requires FFmpeg. Voice must be omitted or `"default"`. Streaming requires PCM16. Audio output cannot be combined with tools, constrained decoding, custom logits processors, or logprobs. |
+| `modalities`, `audio` | Spoken replies from chat models that can speak, such as LFM3-Audio and LFM3-Omni. See [audio output](#audio-output) below. |
 | `input_audio` content parts | WAV/MP3 base64 file bytes in `input_audio: {"data":"...","format":"wav"}`. `audio_url` is an extension for URLs and other decodable formats. |
 | Assistant `audio.id` | Restores the server-cached transcript as text context. IDs can expire or be evicted; see [audio history](/reference/http-api/#audio-requests-and-history). |
 | `tool_choice` | `auto`, `none`, `required`, specific function objects in Chat or Responses form, and function-only `allowed_tools` subsets. `required` needs available tools. |
@@ -27,9 +27,17 @@ Loaded LoRA adapters can be selected by their exact model-card ID from `GET /v1/
 | `code_interpreter` | Requires server-side code execution enabled. Only `container: {"type":"auto"}` is supported; container IDs, `file_ids`, `memory_limit`, and container lifecycle APIs are rejected. |
 | `file` content parts | Accept `file_id`, or `filename` plus base64/data-URL `file_data`. File URLs require Responses. |
 | `response_format` | `json_schema` constrains output; `json_object` is rejected. Ambiguous schemas can produce different shapes from OpenAI. |
-| `seed` | Seeds request-scoped sampling, with a distinct stream per choice when `n > 1`. |
+| `seed` | Makes the request's sampling reproducible. With `n > 1`, each choice gets its own random stream. |
 
 See [tool calling](/guides/agents/tool-calling-basics/), [structured output](/guides/serve/structured-output/), and [audio streaming](/reference/http-api/#streaming-chat-completions) for examples and wire formats.
+
+#### Audio output
+
+- `modalities`: `["audio"]` for speech only, or `["text", "audio"]` for both.
+- `audio.format`: `wav`, `pcm16`, `mp3`, `flac`, `opus`, or `aac`. `mp3`, `flac`, `opus`, and `aac` need FFmpeg on the server.
+- `audio.voice`: omit it or use `"default"`.
+- Streaming needs `pcm16`.
+- Audio output can't be combined with tools, structured output (`json_schema` or `grammar`), or `logprobs`.
 
 ### Silently ignored
 
@@ -51,7 +59,11 @@ See [tool calling](/guides/agents/tool-calling-basics/), [structured output](/gu
 | `truncate_sequence` | Truncate an oversized prompt instead of rejecting it. |
 | `adapter` | Loaded LoRA alias or `{"generation":"..."}`; omitted/null selects the base model. |
 
-`reasoning_effort` accepts `off`, `low`, `medium`, `high`, and `xhigh`, case-insensitively; `none` aliases `off`. Omission enables thinking for text output and disables it for speech output without selecting an effort. Positive effort enables thinking; `off` disables it. Contradictory explicit values of `reasoning_effort` and the legacy `enable_thinking` boolean are rejected. The model's chat template determines the effect of each tier; effort does not directly change sampling.
+`reasoning_effort` takes `off`, `low`, `medium`, `high`, or `xhigh`, in any case, and `none` means `off`. Any value except `off` turns thinking on. `enable_thinking` is a plain on/off switch.
+
+- With neither set, thinking is on for text replies and off for spoken replies.
+- Setting both to values that disagree, such as `"high"` with `enable_thinking: false`, is rejected.
+- The model's chat template decides what each level does. Effort doesn't change sampling settings.
 
 LoRA responses expose the selected `adapter_generation`, including Chat/Completions streaming chunks and completed Responses objects. See [adapter management](/reference/http-api/#lora-adapter-routing-and-management) for runtime requirements and errors.
 
@@ -80,7 +92,7 @@ Responses `tools` accepts:
 - Function tools in the Chat Completions nested form: `{"type":"function","function":{...}}`.
 - `{"type":"web_search", ...}` and `{"type":"web_search_preview"}` for server-side web search.
 - `{"type":"code_interpreter","container":{"type":"auto"}}` for server-side Python code execution.
-- `{"type":"shell","environment":{"type":"container_auto","skills":[{"type":"skill_reference","skill_id":"skill_...","version":"latest"}]}}` for server-side shell execution and OpenAI-compatible Skills. Skills require the shell executor, so start the server with at least `--enable-shell`; `--agent` is the recommended preset when you also want the full agentic runtime.
+- `{"type":"shell","environment":{"type":"container_auto","skills":[{"type":"skill_reference","skill_id":"skill_...","version":"latest"}]}}` for server-side shell execution and OpenAI-compatible Skills. Skills run in the shell tool, so start the server with `--enable-shell`, or with `--agent` for the full agent runtime.
 
 `tool_choice: "required"` is accepted and rejects requests that provide no tools. Specific function choices must reference a declared function tool. `tool_choice: {"type":"allowed_tools", ...}` is supported for function tool subsets only. Hosted tool forcing or filtering, such as `{"type":"web_search_preview"}`, `{"type":"code_interpreter"}`, `{"type":"shell"}`, or hosted tools inside `allowed_tools`, is not supported.
 
@@ -101,7 +113,14 @@ Upload, list, and version Skills through `/v1/skills`, then reference them in a 
 
 `top_k`, `min_p`, `repetition_penalty`, the `dry_*` sampling fields, `grammar`, `seed`, `ignore_eos`, and `adapter` follow the Chat Completions behavior. `files` requests tool-produced output files; `max_tool_rounds` caps agentic rounds. Chat-only `session_id`, `agent_permission`, and `web_search_options` are not accepted as controls here. Use the Responses `tools` array for hosted tools and Skills.
 
-Thinking, reasoning effort, and truncation are not top-level extension fields here; they are controlled through the standard Responses objects. Use `reasoning.effort` with `off`, `low`, `medium`, `high`, or `xhigh`; `none` is accepted as an alias for `off`. Omission enables thinking without choosing an effort. `reasoning.summary` is accepted for compatibility but currently does not change the response. Use `truncation` for sequence truncation. Top-level `enable_thinking`, `reasoning_effort`, and `truncate_sequence` keys are silently ignored on this endpoint.
+For thinking and truncation, Responses uses the standard OpenAI fields instead of the Chat Completions extensions:
+
+| Chat Completions field | Responses field |
+| --- | --- |
+| `reasoning_effort`, `enable_thinking` | `reasoning.effort`: `off`, `low`, `medium`, `high`, or `xhigh` (`none` means `off`). Omit it to leave thinking on without choosing a level. |
+| `truncate_sequence` | `truncation` |
+
+The Chat Completions names are ignored here. `reasoning.summary` is accepted but has no effect.
 
 ### Background runs
 
@@ -138,9 +157,17 @@ SSE sends incremental audio only for PCM at speed 1.0; other formats/speeds send
 
 ### `/v1/audio/transcriptions` and `/v1/audio/translations`
 
-Both endpoints accept multipart `file` and `model` fields and route to a loaded model with audio input support. Transcriptions return the spoken text; translations request English output. Model language coverage still applies.
+Both take multipart `file` and `model` fields and run on a loaded model that accepts audio. Transcriptions return the spoken text; translations return it in English. Which languages work depends on the model.
 
-`response_format="json"` (default) returns `{"text":"..."}`; `"text"` returns plain text. `prompt` provides spelling and vocabulary context, and `temperature` accepts values from `0` to `1`. Transcriptions also accept `language` and `stream=true`; streaming requires JSON format. Translations reject `stream`. See [transcription streaming](/reference/http-api/#streaming-transcriptions) for event schemas. Timestamp, diarization, subtitle, verbose JSON, and logprob options return explicit validation errors.
+| Field | Support |
+| --- | --- |
+| `response_format` | `json` (default) returns `{"text":"..."}`; `text` returns plain text. |
+| `prompt` | Spelling and vocabulary hints. |
+| `temperature` | `0` to `1`. |
+| `language` | Transcriptions only. |
+| `stream` | Transcriptions only, with `json` format. See [transcription streaming](/reference/http-api/#streaming-transcriptions) for event schemas. |
+
+Timestamps, diarization, subtitle formats, verbose JSON, and logprobs are rejected with a validation error.
 
 See the [dedicated audio endpoint example](/examples/server/lfm3-audio-endpoints/) and [speech models guide](/guides/models/use-speech-models/). The OpenAI Realtime API and live microphone sessions are not implemented.
 

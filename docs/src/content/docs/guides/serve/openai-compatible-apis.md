@@ -3,7 +3,7 @@ title: Serve an OpenAI-compatible API
 description: Run mistralrs serve and use OpenAI SDKs and compatible clients against the local server.
 ---
 
-`mistralrs serve` puts a local model behind OpenAI-compatible endpoints under `/v1`. Configure your OpenAI client with `http://localhost:1234/v1` as its base URL.
+`mistralrs serve` puts a local model behind OpenAI-compatible endpoints under `/v1`. Point any OpenAI SDK or compatible client at `http://localhost:1234/v1` as its base URL.
 
 ```bash
 mistralrs serve -m Qwen/Qwen3-4B --quant 4
@@ -23,9 +23,7 @@ curl http://localhost:1234/v1/chat/completions \
   }'
 ```
 
-With a single `-m` model, the request `model` is `"default"` (or omitted). In [multi-model serving](/guides/serve/multiple-models/), use a model id exactly as it appears in `GET /v1/models`.
-
-For dynamic LoRA aliases and exact generations, see [adapter routing](/reference/http-api/#lora-adapter-routing-and-management).
+With a single `-m` model, set `model` to `"default"` or leave it out. When [serving several models](/guides/serve/multiple-models/), use a model ID exactly as `GET /v1/models` lists it.
 
 ## OpenAI Python client
 
@@ -42,9 +40,9 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
-For a loaded LoRA alias, either set `model="code"` like vLLM or keep the base model explicit and pass `extra_body={"adapter": "code"}`. The latter also accepts an exact generation object.
+If you've loaded [LoRA adapters](/guides/customize/lora-adapters/), pick one by setting `model` to its alias, such as `model="code"`, or keep the base model and pass `extra_body={"adapter": "code"}`.
 
-The `api_key` is required by the client but not validated by the server; see [authentication](/reference/http-api/#authentication). Set `stream=True` for token-by-token output ([full example](/examples/server/streaming/)).
+The client requires an `api_key`, but the server ignores it, so any non-empty string works; see [authentication](/reference/http-api/#authentication). Set `stream=True` to get tokens as they're generated ([full example](/examples/server/streaming/)).
 
 ## Endpoints
 
@@ -58,9 +56,9 @@ The `api_key` is required by the client but not validated by the server; see [au
 | Speech and recognition | `/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/audio/translations` | [Speech models](/guides/models/use-speech-models/) |
 | Typed decisions | `/v1/systemone` | [Decision requests](/reference/decisions/) |
 
-Each task needs a model that supports it. Field support also differs by endpoint; check [OpenAI compatibility](/reference/openai-compatibility/) when adapting an existing client.
+Each endpoint needs a model of the matching kind loaded, such as an embedding model for `/v1/embeddings`. If you're pointing an existing OpenAI client at mistral.rs, check [OpenAI compatibility](/reference/openai-compatibility/) for fields that behave differently. For example, embeddings reject `dimensions` instead of truncating.
 
-The live Swagger UI is at `http://localhost:1234/docs`. The [generated HTTP reference](/reference/http-api-generated/) lists all routes, including model management, legacy Completions, files, and Skills. [HTTP semantics](/reference/http-api/) defines routing, streaming, and history.
+A running server shows an interactive API explorer (Swagger UI) at `http://localhost:1234/docs`. The [generated HTTP reference](/reference/http-api-generated/) lists every route, including model management, legacy Completions, files, LoRA adapters, and Skills. [HTTP semantics](/reference/http-api/) covers routing, streaming, and history.
 
 ## Tools, structured output, and agentic features
 
@@ -68,20 +66,26 @@ OpenAI-compatible function tools work on Chat Completions and Responses, includi
 
 `response_format` with `json_schema` and the `grammar` extension constrain output server-side. See [structured output](/guides/serve/structured-output/).
 
-To execute tools on the server, enable the [agentic runtime](/guides/agents/agentic-runtime/):
+To have the server run tools itself, such as web search, code execution, and shell, start it with `--agent`:
 
 ```bash
 mistralrs serve --agent -m Qwen/Qwen3-4B
 ```
 
-For tool timelines, generated files, search, code execution, shell, Skills, and session state, see [agentic runtime for apps](/guides/agents/agentic-runtime/).
+See [agentic runtime for apps](/guides/agents/agentic-runtime/) for tool progress events, generated files, Skills, and session state.
 
 ## Configuration
 
-`-p/--port` (default 1234) and `--host` (default `0.0.0.0`) control the bind address. `--no-ui` disables the [web UI](/guides/serve/with-web-ui/) at `/ui`. All flags are in the [CLI reference](/reference/cli/serve/); the equivalent config file for multi-model, repeatable deployments is the [TOML config reference](/reference/cli-toml-config/), which also covers CORS, body limits, authentication, and logging.
+| Flag | Default | What it does |
+|---|---|---|
+| `-p`, `--port` | `1234` | Port to listen on. |
+| `--host` | `0.0.0.0` | Address to bind. `127.0.0.1` accepts local connections only. |
+| `--no-ui` | UI on | Turns off the [web UI](/guides/serve/with-web-ui/) at `/ui`. |
+
+Every flag is in the [CLI reference](/reference/cli/serve/). To keep a deployment in a file, including several models, use a [TOML config](/reference/cli-toml-config/).
 
 :::caution
-The default `--host 0.0.0.0` accepts connections from any host on the network. Use `--host 127.0.0.1` to restrict to the local machine, and put authentication in a reverse proxy before exposing the server.
+The default `--host 0.0.0.0` accepts connections from any machine on your network, and the server has no authentication of its own. Use `--host 127.0.0.1` to keep it local, or put an authenticated reverse proxy in front before exposing it.
 :::
 
 ## Examples
