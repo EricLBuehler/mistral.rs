@@ -70,6 +70,8 @@ mod cuda_decode;
 mod cuda_memory;
 #[cfg(any(feature = "cuda", feature = "metal", test))]
 mod memory;
+#[cfg(test)]
+mod prefix_capacity_tests;
 pub use agentic_loop::DEFAULT_MAX_TOOL_ROUNDS;
 pub(crate) mod agentic_session;
 mod file_tools;
@@ -533,6 +535,19 @@ impl Drop for Engine {
     }
 }
 
+fn effective_prefix_cache_capacity(
+    requested: usize,
+    paged: bool,
+    hybrid: bool,
+    planned: Option<usize>,
+) -> usize {
+    if paged && hybrid {
+        planned.map_or(requested, |capacity| requested.min(capacity))
+    } else {
+        requested
+    }
+}
+
 impl Engine {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -553,6 +568,19 @@ impl Engine {
         file_store: crate::files::FileStore,
     ) -> anyhow::Result<Self> {
         no_kv_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_kv_cache;
+
+        let prefix_cache_n = {
+            let pipeline = get_mut_arcmutex!(pipeline);
+            let metadata = pipeline.get_metadata();
+            effective_prefix_cache_capacity(
+                prefix_cache_n,
+                !no_kv_cache && metadata.cache_config.is_some(),
+                pipeline.cache().is_hybrid(),
+                metadata
+                    .memory_plan
+                    .map(|plan| plan.recurrent_prefix_capacity),
+            )
+        };
 
         no_prefix_cache = no_prefix_cache
             || no_kv_cache
@@ -717,6 +745,14 @@ impl Engine {
 
         let mut prefix_cacher =
             PrefixCacheManagerV2::new(prefix_cache_n, no_prefix_cache, has_paged_attention);
+        #[cfg(feature = "cuda")]
+        if let Some(reservation) = get_mut_arcmutex!(pipeline)
+            .get_metadata()
+            .runtime_memory_reservation
+            .clone()
+        {
+            prefix_cacher.attach_runtime_memory_reservation(reservation);
+        }
         if let Some(retention) = paged_block_retention {
             prefix_cacher.attach_paged_block_retention(retention);
         }

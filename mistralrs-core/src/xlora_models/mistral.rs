@@ -581,7 +581,9 @@ impl XLoraModel {
         } else {
             self.cache.full().lock()
         };
-        let mut xs = self.embed_tokens.embedding_forward(input_ids, self.dtype)?;
+        let mut xs = self
+            .embed_tokens
+            .embedding_forward(input_ids, self.dtype.into())?;
         let attention_mask = CausalMasker.make_causal_mask(
             input_ids,
             &*cache,

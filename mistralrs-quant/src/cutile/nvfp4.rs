@@ -1,21 +1,22 @@
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
-use candle_core::{CudaDevice, DType, Device, DeviceLocation, Result, Storage, Tensor};
+use candle_core::{CudaDevice, DType, Device, Result, Storage, Tensor};
 use cutile::cutile_compiler::specialization::DivHint;
 
-use super::warmup::CutileKernel;
-use super::{device_compute_major, jit_available};
+use super::warmup::{CutileKernel, WarmupProgress};
 
 const BLOCK_SIZE: usize = 16;
-const MIN_CUDA_VERSION: u32 = 1303;
-const MIN_TILEIRAS_VERSION: (u32, u32) = (13, 3);
 const GEMV_MAX_ROWS: usize = 1;
 const SMALL_MATMUL_MIN_COLUMNS: usize = 4096;
 const SMALL_MATMUL_MAX_K: usize = 8192;
 const SMALL_MATMUL_MAX_ELEMENTS: usize = 32 * 1024 * 1024;
 const GROUPED_MIN_TOKENS: usize = 4;
 const GROUPED_MIN_ROUTES_PER_EXPERT: usize = 2;
+const SHARED_MIN_PROJECTIONS: usize = 2;
+const SHARED_MIN_TOKENS: usize = 2;
+const SHARED_MIN_K_TILES: usize = 4;
+const SHARED_MIN_OUTPUT_WAVES: usize = 4;
 const MAX_KERNEL_DIMENSION: usize = i32::MAX as usize;
 // cuTile specializes dynamic dimensions by powers of two capped at 16.
 const MAX_DIMENSION_DIVISOR: usize = 16;
@@ -33,12 +34,37 @@ pub struct Nvfp4GemmArgs<'a> {
     pub activation_global_scale: Option<&'a Tensor>,
 }
 
+/// Owned [`Nvfp4GemmArgs`], for state that outlives the borrowed layer.
+#[derive(Clone)]
+pub(super) struct Nvfp4Weights {
+    pub(super) weights: Tensor,
+    pub(super) weight_scales: Tensor,
+    pub(super) weight_global_scale: Tensor,
+    pub(super) activation_global_scale: Option<Tensor>,
+}
+
+impl Nvfp4Weights {
+    pub(super) fn new(args: Nvfp4GemmArgs<'_>) -> Self {
+        Self {
+            weights: args.weights.clone(),
+            weight_scales: args.weight_scales.clone(),
+            weight_global_scale: args.weight_global_scale.clone(),
+            activation_global_scale: args.activation_global_scale.cloned(),
+        }
+    }
+
+    pub(super) fn args(&self) -> Nvfp4GemmArgs<'_> {
+        Nvfp4GemmArgs {
+            weights: &self.weights,
+            weight_scales: &self.weight_scales,
+            weight_global_scale: &self.weight_global_scale,
+            activation_global_scale: self.activation_global_scale.as_ref(),
+        }
+    }
+}
+
 pub fn nvfp4_supported(dev: &CudaDevice) -> bool {
-    device_compute_major(dev) >= 10
-        && super::build_cuda_version_code().is_some_and(|version| version >= MIN_CUDA_VERSION)
-        && super::tileiras_capabilities()
-            .is_some_and(|capabilities| capabilities.version >= MIN_TILEIRAS_VERSION)
-        && jit_available(dev)
+    super::block_scaled_mma_supported(dev)
 }
 
 pub fn cutile_nvfp4(x: &Tensor, args: Nvfp4GemmArgs<'_>) -> Result<Tensor> {
@@ -136,6 +162,15 @@ pub fn cutile_nvfp4_gather(
     launch(x, Some(indices), args, false)
 }
 
+pub(crate) fn cutile_nvfp4_gather_calibrated(
+    x: &Tensor,
+    indices: &Tensor,
+    args: Nvfp4GemmArgs<'_>,
+    uniform_input_scale: bool,
+) -> Result<Tensor> {
+    launch_calibrated(x, Some(indices), args, false, uniform_input_scale)
+}
+
 fn validate_kernel_dimensions(dimensions: &[usize]) -> Result<()> {
     if dimensions
         .iter()
@@ -154,6 +189,14 @@ fn launch(
     args: Nvfp4GemmArgs<'_>,
     compile_only: bool,
 ) -> Result<Tensor> {
+    launch_calibrated(x, indices, args, compile_only, false)
+}
+
+fn validate_input(
+    x: &Tensor,
+    indices: Option<&Tensor>,
+    args: Nvfp4GemmArgs<'_>,
+) -> Result<(usize, usize, usize, usize)> {
     let (experts, n, packed_k) = if indices.is_some() {
         args.weights.dims3()?
     } else {
@@ -239,15 +282,90 @@ fn launch(
             "cuTile NVFP4 requires Blackwell or newer with CUDA 13.3 or newer and a compatible tileiras"
         )
     }
+    Ok((experts, n, k, rows))
+}
+
+pub(crate) fn try_cutile_nvfp4_gather_shared(
+    x: &Tensor,
+    indices: &Tensor,
+    projections: &[Nvfp4GemmArgs<'_>],
+) -> Result<Option<Vec<Tensor>>> {
+    let first = projections[0];
+    let shape = validate_input(x, Some(indices), first)?;
+    let (experts, n, k, _) = shape;
+    let (tokens, topk) = indices.dims2()?;
+    let dev = x.device().as_cuda_device()?;
+    let a4 = first.activation_global_scale.is_some();
+    let key = super::nvfp4_tune::RoutedKey::new(dev, experts, n, k, topk, a4, x.dtype());
+    let geometry = super::nvfp4_tune::routed_config(key, tokens);
+    if tokens < grouped_min_tokens(experts, topk)
+        && (projections.len() < SHARED_MIN_PROJECTIONS
+            || first.activation_global_scale.is_none()
+            || tokens
+                < shared_grouped_min_tokens(
+                    n,
+                    k,
+                    topk,
+                    super::device_multiprocessor_count(dev),
+                    geometry,
+                ))
+    {
+        return Ok(None);
+    }
+    for &projection in projections {
+        if validate_input(x, Some(indices), projection)? != shape
+            || projection.activation_global_scale.is_some()
+                != first.activation_global_scale.is_some()
+            || !projection.weights.is_contiguous()
+            || !projection.weight_scales.is_contiguous()
+            || !projection.weight_global_scale.is_contiguous()
+        {
+            return Ok(None);
+        }
+    }
+    validate_kernel_dimensions(&[crate::moe::cuda::moe_align_em(
+        tokens,
+        topk,
+        experts,
+        geometry.rows,
+    )])?;
+    let prepared = super::nvfp4_matmul::prepare_gather(x, indices, first, true, false)?;
+    projections
+        .iter()
+        .map(|&projection| {
+            super::nvfp4_matmul::launch_gather_prepared(&prepared, projection, false)
+        })
+        .collect::<Result<Vec<_>>>()
+        .map(Some)
+}
+
+fn launch_calibrated(
+    x: &Tensor,
+    indices: Option<&Tensor>,
+    args: Nvfp4GemmArgs<'_>,
+    compile_only: bool,
+    uniform_input_scale: bool,
+) -> Result<Tensor> {
+    let (experts, n, k, rows) = validate_input(x, indices, args)?;
     if let Some(indices) = indices {
         if indices.dim(0)? < grouped_min_tokens(experts, indices.dim(1)?) {
             return super::nvfp4_gemv::launch(x, Some(indices), args, compile_only);
         }
-        validate_kernel_dimensions(&[crate::moe::cuda::moe_align_em(
-            indices.dim(0)?,
-            indices.dim(1)?,
+        let (tokens, topk) = indices.dims2()?;
+        let key = super::nvfp4_tune::RoutedKey::new(
+            x.device().as_cuda_device()?,
             experts,
-            super::nvfp4_matmul::ROUTED_ROWS,
+            n,
+            k,
+            topk,
+            args.activation_global_scale.is_some(),
+            x.dtype(),
+        );
+        validate_kernel_dimensions(&[crate::moe::cuda::moe_align_em(
+            tokens,
+            topk,
+            experts,
+            super::nvfp4_tune::routed_config(key, tokens).rows,
         )])?;
     } else if rows <= GEMV_MAX_ROWS
         && !(args.activation_global_scale.is_some()
@@ -272,55 +390,19 @@ fn launch(
         activation_global_scale: activation_global_scale.as_ref(),
     };
     if let Some(indices) = indices {
-        super::nvfp4_matmul::launch_gather(&x, indices, args, compile_only)
+        super::nvfp4_matmul::launch_gather(&x, indices, args, uniform_input_scale, compile_only)
     } else {
         super::nvfp4_matmul::launch(&x, args, compile_only)
     }
 }
 
 struct RegisteredShape {
-    weights: Tensor,
-    weight_scales: Tensor,
-    weight_global_scale: Tensor,
-    activation_global_scale: Option<Tensor>,
+    layer: Nvfp4Weights,
     activation_dtype: DType,
     pointer_hints: [Option<DivHint>; 4],
 }
 
 static SHAPES: OnceLock<Mutex<Vec<RegisteredShape>>> = OnceLock::new();
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct RegisteredRouting {
-    device: DeviceLocation,
-    experts: usize,
-    topk: usize,
-}
-
-static ROUTING: OnceLock<Mutex<Vec<RegisteredRouting>>> = OnceLock::new();
-
-/// Register routing before loading expert weights so warmup covers the model's top-k.
-pub fn register_nvfp4_routing(device: &Device, experts: usize, topk: usize) -> Result<()> {
-    if experts == 0 || topk == 0 || topk > experts {
-        candle_core::bail!("NVFP4 routing requires 1 <= topk <= experts")
-    }
-    if !device.is_cuda() {
-        return Ok(());
-    }
-    let entry = RegisteredRouting {
-        device: device.location(),
-        experts,
-        topk,
-    };
-    let mut routing = ROUTING
-        .get_or_init(|| Mutex::new(Vec::new()))
-        .lock()
-        .unwrap();
-    if !routing.contains(&entry) {
-        routing.push(entry);
-        super::warmup::mark_dirty();
-    }
-    Ok(())
-}
 
 fn tensor_pointer_hint<T>(tensor: &Tensor) -> Result<DivHint>
 where
@@ -353,19 +435,17 @@ pub fn register_nvfp4_shape(args: Nvfp4GemmArgs<'_>, activation_dtype: DType) ->
         .lock()
         .unwrap();
     if shapes.iter().any(|shape| {
-        shape.weights.dims() == args.weights.dims()
-            && shape.weights.device().same_device(args.weights.device())
+        let layer = shape.layer.args();
+        layer.weights.dims() == args.weights.dims()
+            && layer.weights.device().same_device(args.weights.device())
             && shape.activation_dtype == activation_dtype
-            && shape.activation_global_scale.is_some() == args.activation_global_scale.is_some()
+            && layer.activation_global_scale.is_some() == args.activation_global_scale.is_some()
             && shape.pointer_hints == pointer_hints
     }) {
         return Ok(());
     }
     shapes.push(RegisteredShape {
-        weights: args.weights.clone(),
-        weight_scales: args.weight_scales.clone(),
-        weight_global_scale: args.weight_global_scale.clone(),
-        activation_global_scale: args.activation_global_scale.cloned(),
+        layer: Nvfp4Weights::new(args),
         activation_dtype,
         pointer_hints,
     });
@@ -380,10 +460,25 @@ fn dimension_divisor(value: usize) -> usize {
     (1usize << value.trailing_zeros()).min(MAX_DIMENSION_DIVISOR)
 }
 
-fn grouped_min_tokens(experts: usize, topk: usize) -> usize {
+pub(crate) fn grouped_min_tokens(experts: usize, topk: usize) -> usize {
     (experts * GROUPED_MIN_ROUTES_PER_EXPERT)
         .div_ceil(topk)
         .max(GROUPED_MIN_TOKENS)
+}
+
+fn shared_grouped_min_tokens(
+    n: usize,
+    k: usize,
+    topk: usize,
+    multiprocessors: usize,
+    geometry: super::nvfp4_matmul::RoutedGeometry,
+) -> usize {
+    if n >= k || k < SHARED_MIN_K_TILES * geometry.k {
+        return usize::MAX;
+    }
+    SHARED_MIN_TOKENS.max(multiprocessors.div_ceil(topk)).max(
+        (SHARED_MIN_OUTPUT_WAVES * multiprocessors).div_ceil(topk * n.div_ceil(geometry.columns)),
+    )
 }
 
 fn dense_warmup_rows() -> Vec<usize> {
@@ -407,70 +502,117 @@ fn dense_warmup_rows() -> Vec<usize> {
     rows
 }
 
-fn grouped_warmup_rows(experts: usize, topk: usize) -> Vec<usize> {
-    let block = super::nvfp4_matmul::ROUTED_ROWS;
-    let period = block * MAX_DIMENSION_DIVISOR;
-    let start = grouped_min_tokens(experts, topk);
+fn grouped_warmup_rows(
+    experts: usize,
+    topk: usize,
+    geometry: impl Fn(usize) -> super::nvfp4_matmul::RoutedGeometry,
+) -> Vec<usize> {
+    grouped_warmup_rows_from(experts, topk, grouped_min_tokens(experts, topk), geometry)
+}
+
+fn grouped_warmup_rows_from(
+    experts: usize,
+    topk: usize,
+    start: usize,
+    geometry: impl Fn(usize) -> super::nvfp4_matmul::RoutedGeometry,
+) -> Vec<usize> {
+    let period = super::nvfp4_matmul::MAX_ROUTED_ROWS * MAX_DIMENSION_DIVISOR;
     let mut seen = HashSet::new();
-    (start..start + period)
-        .filter(|&tokens| {
-            let routes = tokens * topk;
-            let em = crate::moe::cuda::moe_align_em(tokens, topk, experts, block);
-            seen.insert((
-                dimension_divisor(routes),
-                dimension_divisor(em),
-                dimension_divisor(em.div_ceil(block)),
-            ))
-        })
-        .collect()
+    [
+        start,
+        start.max(super::nvfp4_matmul::ROUTED_PREFILL_MIN_TOKENS),
+        start.max(super::nvfp4_matmul::ROUTED_LARGE_PREFILL_MIN_TOKENS),
+    ]
+    .into_iter()
+    .flat_map(|start| start..start + period)
+    .filter(|&tokens| {
+        let cfg = geometry(tokens);
+        let routes = tokens * topk;
+        let em = crate::moe::cuda::moe_align_em(tokens, topk, experts, cfg.rows);
+        seen.insert((
+            cfg,
+            dimension_divisor(routes),
+            dimension_divisor(em),
+            dimension_divisor(em.div_ceil(cfg.rows)),
+        ))
+    })
+    .collect()
 }
 
 impl RegisteredShape {
-    fn args(&self) -> Nvfp4GemmArgs<'_> {
-        Nvfp4GemmArgs {
-            weights: &self.weights,
-            weight_scales: &self.weight_scales,
-            weight_global_scale: &self.weight_global_scale,
-            activation_global_scale: self.activation_global_scale.as_ref(),
-        }
-    }
-
     fn warm(&self) -> Result<()> {
-        let device = self.weights.device();
-        let k = self.weights.dim(self.weights.rank() - 1)? * 2;
-        if self.weights.rank() == 2 {
-            for rows in dense_warmup_rows() {
+        let args = self.layer.args();
+        let device = args.weights.device();
+        let k = args.weights.dim(args.weights.rank() - 1)? * 2;
+        if args.weights.rank() == 2 {
+            super::nvfp4_tune::tune_dense(args, self.activation_dtype)?;
+            let mut rows = dense_warmup_rows();
+            rows.extend(super::nvfp4_tune::dense_warm_rows());
+            rows.sort_unstable();
+            rows.dedup();
+            for rows in rows {
                 let x = Tensor::zeros((rows, k), self.activation_dtype, device)?;
-                launch(&x, None, self.args(), true)?;
+                launch(&x, None, args, true)?;
             }
-            if let Some(global) = &self.activation_global_scale {
+            if let Some(global) = args.activation_global_scale {
                 super::nvfp4_glu::warm_common(global, self.activation_dtype, k)?;
             }
             return Ok(());
         }
-        let experts = self.weights.dim(0)?;
-        let mut topks: Vec<_> = ROUTING
-            .get_or_init(|| Mutex::new(Vec::new()))
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|entry| entry.device == device.location() && entry.experts == experts)
-            .map(|entry| entry.topk)
-            .collect();
-        if topks.is_empty() {
-            topks.push(1);
-        }
+        let experts = args.weights.dim(0)?;
+        let n = args.weights.dim(1)?;
+        let a4 = args.activation_global_scale.is_some();
+        let topks = super::warmup::registered_moe_topks(device, experts);
         for topk in topks {
+            let key = super::nvfp4_tune::RoutedKey::new(
+                device.as_cuda_device()?,
+                experts,
+                n,
+                k,
+                topk,
+                a4,
+                self.activation_dtype,
+            );
+            super::nvfp4_tune::tune_routed(args, key)?;
+            let geometry = |tokens| super::nvfp4_tune::routed_config(key, tokens);
+            let grouped_start = grouped_min_tokens(experts, topk);
+            let shared_start = if args.activation_global_scale.is_some() {
+                shared_grouped_min_tokens(
+                    n,
+                    k,
+                    topk,
+                    super::device_multiprocessor_count(device.as_cuda_device()?),
+                    geometry(1),
+                )
+            } else {
+                usize::MAX
+            };
             for rows in ROUTED_GEMV_WARMUP_ROWS
                 .into_iter()
-                .chain(grouped_warmup_rows(experts, topk))
+                .chain(grouped_warmup_rows(experts, topk, geometry))
+                .chain(
+                    grouped_warmup_rows_from(
+                        experts,
+                        topk,
+                        grouped_start.min(shared_start),
+                        geometry,
+                    )
+                    .into_iter()
+                    .filter(|&rows| rows < grouped_start),
+                )
             {
                 let indices = Tensor::zeros((rows, topk), DType::U32, device)?;
                 let x = Tensor::zeros((rows, k), self.activation_dtype, device)?;
-                launch(&x, Some(&indices), self.args(), true)?;
+                launch(&x, Some(&indices), args, true)?;
+                if rows >= shared_start && rows < grouped_start {
+                    super::nvfp4_matmul::launch_gather(&x, &indices, args, true, true)?;
+                }
                 if topk > 1 {
                     let x = Tensor::zeros((rows, topk, k), self.activation_dtype, device)?;
-                    launch(&x, Some(&indices), self.args(), true)?;
+                    launch(&x, Some(&indices), args, true)?;
+                    if rows >= shared_start && rows < grouped_start {
+                        super::nvfp4_matmul::launch_gather(&x, &indices, args, true, true)?;
+                    }
                 }
             }
         }
@@ -479,7 +621,7 @@ impl RegisteredShape {
 }
 
 impl CutileKernel for Nvfp4Kernel {
-    fn warm(&self, dev: &CudaDevice) -> Result<()> {
+    fn warm(&self, dev: &CudaDevice, silent: bool) -> Result<()> {
         let device = Device::Cuda(dev.clone());
         let shapes = {
             let mut registered = SHAPES
@@ -488,11 +630,24 @@ impl CutileKernel for Nvfp4Kernel {
                 .unwrap();
             let (shapes, other_devices): (Vec<_>, Vec<_>) = std::mem::take(&mut *registered)
                 .into_iter()
-                .partition(|shape| shape.weights.device().same_device(&device));
+                .partition(|shape| shape.layer.weights.device().same_device(&device));
             *registered = other_devices;
             shapes
         };
-        if let Err(error) = shapes.iter().try_for_each(RegisteredShape::warm) {
+        if shapes.is_empty() {
+            return Ok(());
+        }
+        let progress = WarmupProgress::new("NVFP4 shapes", shapes.len(), silent);
+        if let Err(error) = shapes.iter().try_for_each(|shape| {
+            progress.run(
+                format!(
+                    "{:?} {:?}",
+                    shape.activation_dtype,
+                    shape.layer.weights.dims()
+                ),
+                || shape.warm(),
+            )
+        }) {
             SHAPES.get().unwrap().lock().unwrap().extend(shapes);
             return Err(error);
         }
@@ -529,7 +684,6 @@ mod tests {
         const WIDTH: usize = 8192;
         const WEIGHT_BYTES: usize = WIDTH * WIDTH / 2 + WIDTH * WIDTH / BLOCK_SIZE;
         let device = MatmulDevice {
-            compute_major: 12,
             l2_bytes: WEIGHT_BYTES - 1,
         };
         assert_eq!(
@@ -542,29 +696,10 @@ mod tests {
         );
         for l2_bytes in [0, WEIGHT_BYTES, WEIGHT_BYTES + 1] {
             assert_eq!(
-                dense_geometry(
-                    ROWS,
-                    WIDTH,
-                    WIDTH,
-                    true,
-                    MatmulDevice { l2_bytes, ..device }
-                ),
+                dense_geometry(ROWS, WIDTH, WIDTH, true, MatmulDevice { l2_bytes }),
                 (128, 64, 1)
             );
         }
-        assert_eq!(
-            dense_geometry(
-                ROWS,
-                WIDTH,
-                WIDTH,
-                true,
-                MatmulDevice {
-                    compute_major: 10,
-                    ..device
-                }
-            ),
-            (128, 64, 1)
-        );
         assert_eq!(
             dense_geometry(ROWS - 1, WIDTH, WIDTH, true, device),
             (64, 128, 1)
@@ -587,103 +722,103 @@ mod tests {
         const K: usize = 4096;
         const MEDIUM_ROWS: [usize; 7] = [17, 18, 20, 23, 24, 31, 32];
         let device = MatmulDevice {
-            compute_major: 12,
             l2_bytes: TEST_L2_BYTES,
         };
         for rows in MEDIUM_ROWS {
             assert_eq!(dense_geometry(rows, N, K, true, device), (32, 64, 1));
-            assert_eq!(dense_worker_warps(rows, N, K, true, device), Some(16));
-            for (n, k, a4, compute_major) in [
-                (N - 1, K, true, 12),
-                (N, K - BLOCK_SIZE, true, 12),
-                (N, K, false, 12),
-                (N, K, true, 10),
-                (N, K, true, 11),
-                (N, K, true, 13),
-            ] {
-                let device = MatmulDevice {
-                    compute_major,
-                    ..device
-                };
+            assert_eq!(dense_worker_warps(rows, N, K, true), Some(16));
+            for (n, k, a4) in [(N - 1, K, true), (N, K - BLOCK_SIZE, true), (N, K, false)] {
                 assert_eq!(dense_geometry(rows, n, k, a4, device), (64, 128, 1));
-                assert_eq!(dense_worker_warps(rows, n, k, a4, device), None);
+                assert_eq!(dense_worker_warps(rows, n, k, a4), None);
             }
         }
         assert_eq!(dense_geometry(16, N, K, true, device), (16, 64, 1));
-        assert_eq!(dense_worker_warps(16, N, K, true, device), None);
+        assert_eq!(dense_worker_warps(16, N, K, true), None);
         for rows in [33, 34, 36, 40, 48, 64, 127] {
             assert_eq!(dense_geometry(rows, N, K, true, device), (64, 128, 1));
-            assert_eq!(dense_worker_warps(rows, N, K, true, device), None);
+            assert_eq!(dense_worker_warps(rows, N, K, true), None);
         }
-        assert_eq!(dense_worker_warps(128, N, K, true, device), Some(16));
+        assert_eq!(dense_worker_warps(128, N, K, true), Some(16));
     }
 
     #[test]
     fn warmup_covers_batch_and_routing_specializations() {
         use super::super::nvfp4_matmul::{dense_geometry, dense_worker_warps, MatmulDevice};
 
-        for compute_major in [10, 12] {
-            for l2_bytes in [0, TEST_L2_BYTES, TEST_L2_BYTES * 4] {
-                let device = MatmulDevice {
-                    compute_major,
-                    l2_bytes,
-                };
-                for a4 in [false, true] {
-                    for (n, k) in TEST_DENSE_SHAPES {
-                        let dense_key = |rows| {
+        for l2_bytes in [0, TEST_L2_BYTES, TEST_L2_BYTES * 4] {
+            let device = MatmulDevice { l2_bytes };
+            for a4 in [false, true] {
+                for (n, k) in TEST_DENSE_SHAPES {
+                    let dense_key = |rows| {
+                        (
+                            rows <= GEMV_MAX_ROWS,
+                            dense_geometry(rows, n, k, a4, device),
+                            dense_worker_warps(rows, n, k, a4),
+                            dimension_divisor(rows),
+                        )
+                    };
+                    let dense_keys: HashSet<_> =
+                        dense_warmup_rows().into_iter().map(dense_key).collect();
+                    for rows in 1..=COVERAGE_TOKENS {
+                        assert!(
+                            dense_keys.contains(&dense_key(rows)),
+                            "dense rows={rows} n={n} k={k} a4={a4} l2={l2_bytes}"
+                        );
+                    }
+                }
+            }
+        }
+        for (n, k) in [(640, 2560), (2560, 640), (73, 144)] {
+            for a4 in [false, true] {
+                let geometry =
+                    |tokens| super::super::nvfp4_matmul::routed_geometry(tokens, n, k, a4);
+                for experts in [3, 128, 256, 512] {
+                    for topk in [1, 2, 8, 10, 32]
+                        .into_iter()
+                        .filter(|&topk| topk <= experts)
+                    {
+                        let grouped_key = |tokens| {
+                            let cfg = geometry(tokens);
+                            let routes = tokens * topk;
+                            let em =
+                                crate::moe::cuda::moe_align_em(tokens, topk, experts, cfg.rows);
                             (
-                                rows <= GEMV_MAX_ROWS,
-                                dense_geometry(rows, n, k, a4, device),
-                                dense_worker_warps(rows, n, k, a4, device),
-                                dimension_divisor(rows),
+                                cfg,
+                                dimension_divisor(routes),
+                                dimension_divisor(em),
+                                dimension_divisor(em.div_ceil(cfg.rows)),
                             )
                         };
-                        let dense_keys: HashSet<_> =
-                            dense_warmup_rows().into_iter().map(dense_key).collect();
-                        for rows in 1..=COVERAGE_TOKENS {
-                            assert!(dense_keys.contains(&dense_key(rows)), "dense rows={rows} n={n} k={k} a4={a4} major={compute_major} l2={l2_bytes}");
+                        let grouped_keys: HashSet<_> = grouped_warmup_rows(experts, topk, geometry)
+                            .into_iter()
+                            .map(grouped_key)
+                            .collect();
+                        let gemv_keys: HashSet<_> = ROUTED_GEMV_WARMUP_ROWS
+                            .into_iter()
+                            .filter(|&tokens| tokens < grouped_min_tokens(experts, topk))
+                            .map(|tokens| {
+                                (dimension_divisor(tokens), dimension_divisor(tokens * topk))
+                            })
+                            .collect();
+                        for tokens in 1..grouped_min_tokens(experts, topk) {
+                            assert!(
+                                gemv_keys.contains(&(
+                                    dimension_divisor(tokens),
+                                    dimension_divisor(tokens * topk)
+                                )),
+                                "routed GEMV tokens={tokens} experts={experts} topk={topk}"
+                            );
+                        }
+                        for tokens in grouped_min_tokens(experts, topk)..=COVERAGE_TOKENS {
+                            assert!(grouped_keys.contains(&grouped_key(tokens)), "grouped tokens={tokens} experts={experts} topk={topk} n={n} k={k} a4={a4}");
                         }
                     }
                 }
             }
         }
-        for experts in [3, 128, 256] {
-            for topk in [1, 2, 8, 32].into_iter().filter(|&topk| topk <= experts) {
-                let grouped_key = |tokens| {
-                    let block = super::super::nvfp4_matmul::ROUTED_ROWS;
-                    let routes = tokens * topk;
-                    let em = crate::moe::cuda::moe_align_em(tokens, topk, experts, block);
-                    (
-                        dimension_divisor(routes),
-                        dimension_divisor(em),
-                        dimension_divisor(em.div_ceil(block)),
-                    )
-                };
-                let grouped_keys: HashSet<_> = grouped_warmup_rows(experts, topk)
-                    .into_iter()
-                    .map(grouped_key)
-                    .collect();
-                let gemv_keys: HashSet<_> = ROUTED_GEMV_WARMUP_ROWS
-                    .into_iter()
-                    .filter(|&tokens| tokens < grouped_min_tokens(experts, topk))
-                    .map(|tokens| (dimension_divisor(tokens), dimension_divisor(tokens * topk)))
-                    .collect();
-                for tokens in 1..grouped_min_tokens(experts, topk) {
-                    assert!(
-                        gemv_keys.contains(&(
-                            dimension_divisor(tokens),
-                            dimension_divisor(tokens * topk)
-                        )),
-                        "routed GEMV tokens={tokens} experts={experts} topk={topk}"
-                    );
-                }
-                for tokens in grouped_min_tokens(experts, topk)..=COVERAGE_TOKENS {
-                    assert!(
-                        grouped_keys.contains(&grouped_key(tokens)),
-                        "grouped tokens={tokens} experts={experts} topk={topk}"
-                    );
-                }
-            }
-        }
     }
 }
+
+#[cfg(test)]
+#[path = "nvfp4_routed_tests.rs"]
+mod routed_tests;

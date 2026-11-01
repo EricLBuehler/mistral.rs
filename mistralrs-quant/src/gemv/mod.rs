@@ -15,20 +15,18 @@ mod ffi;
 
 #[cfg(feature = "cuda")]
 use candle_core::{
-    cuda::cudarc::driver::DevicePtrMut, CudaDevice, CudaStorage, DType, Result, Shape, Storage,
-    Tensor,
+    cuda::cudarc::driver::{CudaStream, DevicePtrMut},
+    CudaDevice, CudaStorage, DType, Result, Shape, Storage, Tensor,
 };
 
 #[cfg(feature = "cuda")]
-use crate::utils::{get_cuda_device, slice_ptr};
+use crate::utils::{get_cuda_device, slice_ptr_on_stream};
 
 #[cfg(feature = "cuda")]
 use half::{bf16, f16};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::LazyLock;
-#[cfg(feature = "cuda")]
-use std::{collections::HashMap, sync::Mutex};
 
 /// Maximum batch size supported by the GEMV kernel
 pub const MAX_GEMV_BATCH_SIZE: usize = 8;
@@ -37,26 +35,26 @@ const MAX_GEMV_OUTPUT_ELEMENTS: usize = 4_096;
 #[cfg(any(feature = "cuda", test))]
 const WIDE_GEMV_MIN_OUTPUT_DIM: usize = 32_768;
 #[cfg(any(feature = "cuda", test))]
-const WIDE_GEMV_MIN_INPUT_DIM: usize = 3_072;
+const WIDE_GEMV_MIN_INPUT_DIM: usize = 2_048;
 #[cfg(any(feature = "cuda", test))]
 const WIDE_GEMV_MAX_INPUT_DIM: usize = 8_192;
-#[cfg(any(feature = "cuda", test))]
-const WIDE_GEMV_COMPUTE_MAJOR: i32 = 12;
-#[cfg(any(feature = "cuda", test))]
-const WIDE_GEMV_COMPUTE_MINOR: i32 = 1;
 #[cfg(feature = "cuda")]
-const HALF_PAIR_ALIGNMENT_BYTES: u64 = 4;
+const GEMV_VECTOR_ELEMENTS: usize = 2;
 #[cfg(any(feature = "cuda", test))]
 const SM90_SPLIT_K_MIN_BATCH_REDUCTION: usize = 32_768;
 #[cfg(any(feature = "cuda", test))]
 const SM90_SPLIT_K_MAX_GEMV_CTA_WAVES: usize = 4;
 
 #[cfg(any(feature = "cuda", test))]
+const HOPPER_COMPUTE_MAJOR: i32 = 9;
+
+#[cfg(any(feature = "cuda", test))]
 #[derive(Clone, Copy)]
 struct GemvDeviceInfo {
     compute_major: i32,
-    compute_minor: i32,
     multiprocessor_count: usize,
+    // cuBLAS loses to one-CTA-per-row streaming for wide LPDDR-bound decode projections on unified memory.
+    unified_memory: bool,
 }
 
 #[cfg(any(feature = "cuda", test))]
@@ -76,7 +74,7 @@ fn should_use_gemv_shape(
         return true;
     };
     let gemv_cta_waves = output_dim.div_ceil(device.multiprocessor_count);
-    let sm90_split_k = device.compute_major == 9
+    let sm90_split_k = device.compute_major == HOPPER_COMPUTE_MAJOR
         && is_bf16
         && batch_size == MAX_GEMV_BATCH_SIZE
         && batch_size.saturating_mul(input_dim) >= SM90_SPLIT_K_MIN_BATCH_REDUCTION
@@ -100,43 +98,17 @@ fn should_use_wide_gemv_shape(
         && output_dim
             .checked_mul(input_dim)
             .is_some_and(|elements| elements <= i32::MAX as usize)
-        && device.is_some_and(|device| {
-            device.compute_major == WIDE_GEMV_COMPUTE_MAJOR
-                && device.compute_minor == WIDE_GEMV_COMPUTE_MINOR
-        })
+        && device.is_some_and(|device| device.unified_memory)
 }
 
 #[cfg(feature = "cuda")]
-static GEMV_DEVICE_INFO: LazyLock<Mutex<HashMap<candle_core::cuda::DeviceId, GemvDeviceInfo>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-
-#[cfg(feature = "cuda")]
-fn gemv_device_info(device: &CudaDevice) -> Option<GemvDeviceInfo> {
-    use candle_core::cuda::cudarc::driver::sys::CUdevice_attribute;
-
-    if let Some(info) = GEMV_DEVICE_INFO.lock().unwrap().get(&device.id()).copied() {
-        return Some(info);
+fn gemv_device_info(device: &CudaDevice) -> GemvDeviceInfo {
+    let info = crate::cuda_device::cuda_device_info(device);
+    GemvDeviceInfo {
+        compute_major: info.major,
+        multiprocessor_count: info.sms,
+        unified_memory: info.integrated,
     }
-    let stream = device.cuda_stream();
-    let context = stream.context();
-    let compute_major = context
-        .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR)
-        .ok()?;
-    let compute_minor = context
-        .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR)
-        .ok()?;
-    let multiprocessor_count = context
-        .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT)
-        .ok()
-        .and_then(|count| usize::try_from(count).ok())
-        .filter(|&count| count != 0)?;
-    let info = GemvDeviceInfo {
-        compute_major,
-        compute_minor,
-        multiprocessor_count,
-    };
-    GEMV_DEVICE_INFO.lock().unwrap().insert(device.id(), info);
-    Some(info)
 }
 
 /// Controller for enabling/disabling custom GEMV kernel.
@@ -161,18 +133,9 @@ pub static GEMV_CONTROLLER: LazyLock<GemvController> = LazyLock::new(|| GemvCont
     enabled: AtomicBool::new(true),
 });
 
-/// Check if custom GEMV should be used instead of cuBLAS.
-///
-/// Returns true if:
-/// - GEMV is enabled via controller
-/// - Tensors are on CUDA device
-/// - Batch size is 1-8
-/// - The shape and device favor GEMV over a split-K GEMM
-/// - Data type is supported (BF16, F16, F32)
-/// - K dimension is even (required for vectorized loads)
+/// Whether the CUDA geometry, dtype, and vector alignment favor GEMV over split-K GEMM.
 #[cfg(feature = "cuda")]
 pub fn should_use_gemv(x: &Tensor, w: &Tensor) -> bool {
-    // Check if enabled
     if !GEMV_CONTROLLER.is_enabled() {
         return false;
     }
@@ -181,24 +144,20 @@ pub fn should_use_gemv(x: &Tensor, w: &Tensor) -> bool {
         return false;
     };
 
-    // Check batch size (1-8 supported)
     let x_dims = x.dims();
     let batch_size: usize = x_dims[..x_dims.len().saturating_sub(1)]
         .iter()
         .product::<usize>()
         .max(1);
-    // Must be supported dtype
     let supported = matches!(x.dtype(), DType::BF16 | DType::F16 | DType::F32);
     if !supported {
         return false;
     }
 
-    // Must match dtypes
     if x.dtype() != w.dtype() {
         return false;
     }
 
-    // K must be even for vectorized loads
     let k = x.dim(x.rank() - 1).unwrap_or(0);
     if !k.is_multiple_of(2) {
         return false;
@@ -210,22 +169,22 @@ pub fn should_use_gemv(x: &Tensor, w: &Tensor) -> bool {
         output_dim,
         k,
         x.dtype() == DType::BF16,
-        gemv_device_info(device),
+        Some(gemv_device_info(device)),
     ) {
         return false;
     }
 
-    // Check that K dimensions match
     let w_k = w.dim(w.rank() - 1).unwrap_or(0);
     if k != w_k {
         return false;
     }
 
-    true
+    let stream = device.cuda_stream();
+    has_aligned_pairs(x, &stream) && has_aligned_pairs(w, &stream)
 }
 
 #[cfg(feature = "cuda")]
-fn has_aligned_half_pairs(tensor: &Tensor) -> bool {
+fn has_aligned_pairs(tensor: &Tensor, stream: &CudaStream) -> bool {
     let (storage, layout) = tensor.storage_and_layout();
     let Storage::Cuda(storage) = &*storage else {
         return false;
@@ -235,19 +194,26 @@ fn has_aligned_half_pairs(tensor: &Tensor) -> bool {
             let Ok(slice) = storage.as_cuda_slice::<bf16>() else {
                 return false;
             };
-            let (pointer, _guard) = slice_ptr(slice, layout.start_offset());
+            let (pointer, _guard) = slice_ptr_on_stream(slice, layout.start_offset(), stream);
             pointer
         }
         DType::F16 => {
             let Ok(slice) = storage.as_cuda_slice::<f16>() else {
                 return false;
             };
-            let (pointer, _guard) = slice_ptr(slice, layout.start_offset());
+            let (pointer, _guard) = slice_ptr_on_stream(slice, layout.start_offset(), stream);
+            pointer
+        }
+        DType::F32 => {
+            let Ok(slice) = storage.as_cuda_slice::<f32>() else {
+                return false;
+            };
+            let (pointer, _guard) = slice_ptr_on_stream(slice, layout.start_offset(), stream);
             pointer
         }
         _ => return false,
     };
-    pointer.is_multiple_of(HALF_PAIR_ALIGNMENT_BYTES)
+    pointer.is_multiple_of((GEMV_VECTOR_ELEMENTS * tensor.dtype().size_in_bytes()) as u64)
 }
 
 #[cfg(feature = "cuda")]
@@ -275,14 +241,15 @@ pub(crate) fn should_use_wide_gemv(x: &Tensor, w: &Tensor) -> bool {
     if batch_dims.iter().any(|&dimension| dimension != 1) || input_dim != weight_input_dim {
         return false;
     }
+    let stream = device.cuda_stream();
     should_use_wide_gemv_shape(
         1,
         output_dim,
         input_dim,
         matches!(x.dtype(), DType::BF16 | DType::F16),
-        gemv_device_info(device),
-    ) && has_aligned_half_pairs(x)
-        && has_aligned_half_pairs(w)
+        Some(gemv_device_info(device)),
+    ) && has_aligned_pairs(x, &stream)
+        && has_aligned_pairs(w, &stream)
 }
 
 /// Fallback for non-CUDA builds
@@ -369,6 +336,7 @@ fn gemv_bf16(
     output_shape: &[usize],
 ) -> Result<Tensor> {
     // Allocate output: [B, M]
+    let stream = dev.cuda_stream();
     let mut y_buf = unsafe { dev.alloc::<bf16>(batch_size * m)? };
 
     // Get weight pointer
@@ -376,7 +344,8 @@ fn gemv_bf16(
     let Storage::Cuda(w_s) = &*w_s else {
         candle_core::bail!("Expected CUDA storage for weights");
     };
-    let (w_ptr, _w_guard) = slice_ptr(w_s.as_cuda_slice::<bf16>()?, w_l.start_offset());
+    let (w_ptr, _w_guard) =
+        slice_ptr_on_stream(w_s.as_cuda_slice::<bf16>()?, w_l.start_offset(), &stream);
 
     let x_contig;
     let (x_s, x_l) = if batch_size == 1 && x.layout().stride()[x.rank() - 1] == 1 {
@@ -388,9 +357,9 @@ fn gemv_bf16(
     let Storage::Cuda(x_s) = &*x_s else {
         candle_core::bail!("Expected CUDA storage for input");
     };
-    let (x_ptr, _x_guard) = slice_ptr(x_s.as_cuda_slice::<bf16>()?, x_l.start_offset());
+    let (x_ptr, _x_guard) =
+        slice_ptr_on_stream(x_s.as_cuda_slice::<bf16>()?, x_l.start_offset(), &stream);
 
-    let stream = dev.cuda_stream();
     let (y_ptr, y_guard) = y_buf.device_ptr_mut(&stream);
 
     // Get bias storage
@@ -399,7 +368,8 @@ fn gemv_bf16(
         let Storage::Cuda(b_s) = &**b_arc else {
             candle_core::bail!("Expected CUDA storage for bias");
         };
-        let (b_ptr, b_guard) = slice_ptr(b_s.as_cuda_slice::<bf16>()?, b_l.start_offset());
+        let (b_ptr, b_guard) =
+            slice_ptr_on_stream(b_s.as_cuda_slice::<bf16>()?, b_l.start_offset(), &stream);
         (b_ptr, true, Some(b_guard))
     } else {
         (0u64, false, None)
@@ -439,13 +409,15 @@ fn gemv_f16(
     k: usize,
     output_shape: &[usize],
 ) -> Result<Tensor> {
+    let stream = dev.cuda_stream();
     let mut y_buf = unsafe { dev.alloc::<f16>(batch_size * m)? };
 
     let (w_s, w_l) = w.storage_and_layout();
     let Storage::Cuda(w_s) = &*w_s else {
         candle_core::bail!("Expected CUDA storage for weights");
     };
-    let (w_ptr, _w_guard) = slice_ptr(w_s.as_cuda_slice::<f16>()?, w_l.start_offset());
+    let (w_ptr, _w_guard) =
+        slice_ptr_on_stream(w_s.as_cuda_slice::<f16>()?, w_l.start_offset(), &stream);
 
     let x_contig;
     let (x_s, x_l) = if batch_size == 1 && x.layout().stride()[x.rank() - 1] == 1 {
@@ -457,9 +429,9 @@ fn gemv_f16(
     let Storage::Cuda(x_s) = &*x_s else {
         candle_core::bail!("Expected CUDA storage for input");
     };
-    let (x_ptr, _x_guard) = slice_ptr(x_s.as_cuda_slice::<f16>()?, x_l.start_offset());
+    let (x_ptr, _x_guard) =
+        slice_ptr_on_stream(x_s.as_cuda_slice::<f16>()?, x_l.start_offset(), &stream);
 
-    let stream = dev.cuda_stream();
     let (y_ptr, y_guard) = y_buf.device_ptr_mut(&stream);
 
     let bias_storage = bias.map(|b| b.storage_and_layout());
@@ -467,7 +439,8 @@ fn gemv_f16(
         let Storage::Cuda(b_s) = &**b_arc else {
             candle_core::bail!("Expected CUDA storage for bias");
         };
-        let (b_ptr, b_guard) = slice_ptr(b_s.as_cuda_slice::<f16>()?, b_l.start_offset());
+        let (b_ptr, b_guard) =
+            slice_ptr_on_stream(b_s.as_cuda_slice::<f16>()?, b_l.start_offset(), &stream);
         (b_ptr, true, Some(b_guard))
     } else {
         (0u64, false, None)
@@ -507,13 +480,15 @@ fn gemv_f32(
     k: usize,
     output_shape: &[usize],
 ) -> Result<Tensor> {
+    let stream = dev.cuda_stream();
     let mut y_buf = unsafe { dev.alloc::<f32>(batch_size * m)? };
 
     let (w_s, w_l) = w.storage_and_layout();
     let Storage::Cuda(w_s) = &*w_s else {
         candle_core::bail!("Expected CUDA storage for weights");
     };
-    let (w_ptr, _w_guard) = slice_ptr(w_s.as_cuda_slice::<f32>()?, w_l.start_offset());
+    let (w_ptr, _w_guard) =
+        slice_ptr_on_stream(w_s.as_cuda_slice::<f32>()?, w_l.start_offset(), &stream);
 
     let x_contig;
     let (x_s, x_l) = if batch_size == 1 && x.layout().stride()[x.rank() - 1] == 1 {
@@ -525,9 +500,9 @@ fn gemv_f32(
     let Storage::Cuda(x_s) = &*x_s else {
         candle_core::bail!("Expected CUDA storage for input");
     };
-    let (x_ptr, _x_guard) = slice_ptr(x_s.as_cuda_slice::<f32>()?, x_l.start_offset());
+    let (x_ptr, _x_guard) =
+        slice_ptr_on_stream(x_s.as_cuda_slice::<f32>()?, x_l.start_offset(), &stream);
 
-    let stream = dev.cuda_stream();
     let (y_ptr, y_guard) = y_buf.device_ptr_mut(&stream);
 
     let bias_storage = bias.map(|b| b.storage_and_layout());
@@ -535,7 +510,8 @@ fn gemv_f32(
         let Storage::Cuda(b_s) = &**b_arc else {
             candle_core::bail!("Expected CUDA storage for bias");
         };
-        let (b_ptr, b_guard) = slice_ptr(b_s.as_cuda_slice::<f32>()?, b_l.start_offset());
+        let (b_ptr, b_guard) =
+            slice_ptr_on_stream(b_s.as_cuda_slice::<f32>()?, b_l.start_offset(), &stream);
         (b_ptr, true, Some(b_guard))
     } else {
         (0u64, false, None)
@@ -579,16 +555,16 @@ mod policy_tests {
 
     #[test]
     fn wide_gemv_policy_stays_within_measured_hardware_and_shape_bounds() {
-        let sm121 = Some(GemvDeviceInfo {
-            compute_major: WIDE_GEMV_COMPUTE_MAJOR,
-            compute_minor: WIDE_GEMV_COMPUTE_MINOR,
+        let unified = Some(GemvDeviceInfo {
+            compute_major: 12,
             multiprocessor_count: 48,
+            unified_memory: true,
         });
         for input_dim in [WIDE_GEMV_MIN_INPUT_DIM, WIDE_GEMV_MAX_INPUT_DIM] {
             let largest_output = i32::MAX as usize / input_dim;
             for output_dim in [WIDE_GEMV_MIN_OUTPUT_DIM, largest_output] {
                 assert!(should_use_wide_gemv_shape(
-                    1, output_dim, input_dim, true, sm121
+                    1, output_dim, input_dim, true, unified
                 ));
             }
             assert!(!should_use_wide_gemv_shape(
@@ -596,7 +572,7 @@ mod policy_tests {
                 largest_output + 1,
                 input_dim,
                 true,
-                sm121
+                unified
             ));
         }
         for (batch, output, input, half) in [
@@ -630,19 +606,19 @@ mod policy_tests {
             (1, WIDE_GEMV_MIN_OUTPUT_DIM, WIDE_GEMV_MIN_INPUT_DIM, false),
         ] {
             assert!(!should_use_wide_gemv_shape(
-                batch, output, input, half, sm121
+                batch, output, input, half, unified
             ));
         }
-        for (major, minor) in [(9, 0), (10, 0), (12, 0), (12, 2)] {
+        for (compute_major, multiprocessor_count) in [(9, 132), (10, 148), (12, 84)] {
             assert!(!should_use_wide_gemv_shape(
                 1,
                 WIDE_GEMV_MIN_OUTPUT_DIM,
                 WIDE_GEMV_MIN_INPUT_DIM,
                 true,
                 Some(GemvDeviceInfo {
-                    compute_major: major,
-                    compute_minor: minor,
-                    multiprocessor_count: 48
+                    compute_major,
+                    multiprocessor_count,
+                    unified_memory: false,
                 }),
             ));
         }
@@ -683,8 +659,8 @@ mod policy_tests {
     fn sm90_long_reduction_uses_split_k_gemm_for_small_cta_grids() {
         let sm90 = Some(GemvDeviceInfo {
             compute_major: 9,
-            compute_minor: 0,
             multiprocessor_count: 132,
+            unified_memory: false,
         });
         assert!(!should_use_gemv_shape(8, 96, 5120, true, sm90));
         assert!(!should_use_gemv_shape(8, 512, 5120, true, sm90));
@@ -698,8 +674,8 @@ mod policy_tests {
             true,
             Some(GemvDeviceInfo {
                 compute_major: 8,
-                compute_minor: 0,
                 multiprocessor_count: 108,
+                unified_memory: false,
             })
         ));
         assert!(should_use_gemv_shape(
@@ -709,8 +685,8 @@ mod policy_tests {
             true,
             Some(GemvDeviceInfo {
                 compute_major: 9,
-                compute_minor: 0,
                 multiprocessor_count: 16,
+                unified_memory: false,
             })
         ));
     }
@@ -894,7 +870,7 @@ mod tests {
                     output_dim,
                     BENCH_INPUT_DIM,
                     true,
-                    gemv_device_info(device.as_cuda_device()?),
+                    Some(gemv_device_info(device.as_cuda_device()?)),
                 ) {
                     "gemv"
                 } else {
@@ -939,3 +915,6 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(all(test, feature = "cuda"))]
+mod alignment_tests;

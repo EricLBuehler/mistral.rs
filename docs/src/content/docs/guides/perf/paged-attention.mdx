@@ -117,6 +117,12 @@ When planning persistent allocations, `Auto` leaves the larger of 5% of physical
 
 Temporary inference work can use this headroom when physical memory and device working-set limits allow it. This accommodates runtime buffers and changes in system memory after startup. KV allocation and retained CUDA graphs continue to use the conservative planning budget. An explicit `--gpu-memory-utilization` remains a hard limit for both planning and inference.
 
+Activation workspace shares the automatic headroom. The planner checks persistent allocations against the conservative budget and checks those allocations plus temporary workspace against the execution budget. Persistent encoder caches, recurrent prefix snapshots, and pending weights retain separate reservations. On unified-memory devices, moving owned weights to host RAM does not increase the available capacity.
+
+When CUDA decode graphs are supported and enabled, automatic sizing reserves an allowance for retained runtime buffers before choosing recurrent prefix retention and KV capacity. The allowance uses the baseline activation estimate and leaves enough KV space for the configured workload. It stays within the persistent memory budget; the startup log reports it separately. Explicit KV capacities remain unchanged, and graph admission still checks the live memory budget.
+
+For recurrent models using paged attention, the default prefix cache retains up to 16 sequences. After loading weights, the planner can lower this automatic limit to leave room for runtime buffers and KV; the engine uses the selected limit. Retained recurrent snapshots count as persistent memory, while one staging snapshot shares the temporary workspace budget. An explicit `--prefix-cache-n` preserves the requested count, including `0` to disable retention.
+
 The planner accounts for serving concurrency and prompt-processing limits. Increasing them can require more temporary memory and leave less room for the cache. Long cached prefixes may also need smaller batches to fit. These estimates guide allocation; the engine checks available memory before running each batch.
 
 After allocation, the engine checks that the actual cache footprint still leaves room for runtime reservations. Automatic and utilization-based sizing can reduce the cache before serving requests; explicit capacities fail if they cannot fit. On integrated CUDA devices, planning, graph capture, and inference all count reclaimable system memory as available.
@@ -129,7 +135,7 @@ Byte budgets allocate whole cache blocks within the requested limit. Metal also 
 
 ### Multiple models
 
-For [multi-model serving](/guides/serve/multiple-models/), each model receives a fixed share of the initial per-device memory budget, weighted by its maximum serving concurrency. Its weights, workspace, and KV pool must fit within that share. A utilization override becomes the shared engine target, including models using `Auto`; conflicting utilization overrides are rejected. Models with paging disabled count toward the share calculation, but their placement and growing dense caches are not bounded by these paged-cache quotas. Explicit KV capacities are preserved in full; a capacity that exceeds the model's share fails instead of being silently reduced.
+For [multi-model serving](/guides/serve/multiple-models/), each model receives a fixed share of the initial per-device memory budget, weighted by its maximum serving concurrency. Its persistent weights and KV pool must fit within that share; temporary workspace receives the same fraction of the execution budget, including automatic headroom. A utilization override becomes the shared engine target, including models using `Auto`; conflicting utilization overrides are rejected. Models with paging disabled count toward the share calculation, but their placement and growing dense caches are not bounded by these paged-cache quotas. Explicit KV capacities are preserved in full; a capacity that exceeds the model's share fails instead of being silently reduced.
 
 In Rust, set memory goals before calling `plan_paged_kv`. Changing a goal on a planned configuration requires re-planning the group.
 

@@ -92,36 +92,3 @@ instantiate_dtype_to_fp8(bfloat16_t);
 instantiate_fp8_pertensor_dequant(float);
 instantiate_fp8_pertensor_dequant(half);
 instantiate_fp8_pertensor_dequant(bfloat16_t);
-
-// ============================================================================
-// Vector FP8 dequantization: output[i] = fp8_weight[i] * scale[i / VECTOR_SIZE]
-// Each group of 128 elements shares one scale
-// ============================================================================
-
-#define VECTOR_SIZE 128
-
-template <typename OutT>
-kernel void fp8_vector_dequant_kernel(device const uchar *weight [[buffer(0)]],
-                                      device const float *scale [[buffer(1)]],
-                                      device OutT *output [[buffer(2)]],
-                                      constant uint &num_elements [[buffer(3)]],
-                                      uint idx [[thread_position_in_grid]]) {
-  if (idx >= num_elements)
-    return;
-  uint vector_idx = idx / VECTOR_SIZE;
-  float w_val = fp8_e4m3_to_float(weight[idx]);
-  float scaled = w_val * scale[vector_idx];
-  output[idx] = OutT(scaled);
-}
-
-#define instantiate_fp8_vector_dequant(type)                                   \
-  template [[host_name("fp8_vector_dequant_" #type)]] [[kernel]] void          \
-  fp8_vector_dequant_kernel<type>(device const uchar *weight [[buffer(0)]],    \
-                                  device const float *scale [[buffer(1)]],     \
-                                  device type *output [[buffer(2)]],           \
-                                  constant uint &num_elements [[buffer(3)]],   \
-                                  uint idx [[thread_position_in_grid]]);
-
-instantiate_fp8_vector_dequant(float);
-instantiate_fp8_vector_dequant(half);
-instantiate_fp8_vector_dequant(bfloat16_t);

@@ -176,7 +176,7 @@ pub use mistralrs_mcp::{
 };
 pub use mistralrs_quant::{IsqBits, IsqType};
 pub use mistralrs_sandbox::{NetworkMode, SandboxPolicy};
-pub use paged_attention::{PagedAttentionConfig, PagedCacheType};
+pub use paged_attention::{PagedAttentionConfig, PagedCacheType, PrefixCacheCapacity};
 pub use pipeline::hf::{
     get_model_file, hf_home_dir, hf_hub_cache_dir, hf_token_path, is_hf_hub_offline,
     list_model_files, probe_hf_repo_files, read_model_file_range, try_get_model_file,
@@ -255,6 +255,8 @@ pub fn set_hf_cache_path(path: impl Into<PathBuf>) {
     GLOBAL_HF_CACHE.get_or_init(|| Cache::new(path.into()));
 }
 
+pub const DEFAULT_PREFIX_CACHE_N: usize = 16;
+
 /// Configuration for creating an engine instance
 #[derive(Clone)]
 pub struct EngineConfig {
@@ -273,7 +275,7 @@ impl Default for EngineConfig {
         Self {
             no_kv_cache: false,
             no_prefix_cache: false,
-            prefix_cache_n: 16,
+            prefix_cache_n: DEFAULT_PREFIX_CACHE_N,
             disable_eos_stop: false,
             throughput_logging_enabled: true,
             search_embedding_model: None,
@@ -1251,7 +1253,10 @@ impl MistralRs {
                     file_store_for_engine.spawn_cleanup_task();
                     // cuTile warmup precedes graph capture.
                     #[cfg(feature = "cutile")]
-                    if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(&warmup_device) {
+                    if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(
+                        &warmup_device,
+                        crate::utils::progress::progress_suppressed(),
+                    ) {
                         warn!("Failed to warm up cuTile MoE kernels: {err}");
                     }
                     let engine = match Engine::new(
@@ -1291,7 +1296,10 @@ impl MistralRs {
                     file_store_for_engine.spawn_cleanup_task();
                     // cuTile warmup precedes graph capture.
                     #[cfg(feature = "cutile")]
-                    if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(&warmup_device) {
+                    if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(
+                        &warmup_device,
+                        crate::utils::progress::progress_suppressed(),
+                    ) {
                         warn!("Failed to warm up cuTile MoE kernels: {err}");
                     }
                     let engine = match Engine::new(
@@ -1564,7 +1572,7 @@ impl MistralRs {
 
         let no_kv_cache = no_kv_cache.unwrap_or(false);
         let no_prefix_cache = no_prefix_cache.unwrap_or(false);
-        let prefix_cache_n = prefix_cache_n.unwrap_or(16);
+        let prefix_cache_n = prefix_cache_n.unwrap_or(DEFAULT_PREFIX_CACHE_N);
         let disable_eos_stop = disable_eos_stop.unwrap_or(false);
 
         Self::init_external_tool_callbacks(

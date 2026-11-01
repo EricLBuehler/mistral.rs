@@ -780,7 +780,7 @@ class Runner:
         which: Which,
         max_seqs: int = 32,
         no_kv_cache: bool = False,
-        prefix_cache_n: int = 16,
+        prefix_cache_n: int | None = None,
         token_source: str = "cache",
         mtp_model: str | None = None,
         mtp_n_predict: int | None = None,
@@ -809,7 +809,7 @@ class Runner:
         - `which` specifies which model to load.
         - `max_seqs` specifies how many sequences may be running at any time.
         - `no_kv_cache` disables the KV cache.
-        - `prefix_cache_n` sets the number of sequences to hold in the device prefix cache; older ones are evicted (dropped) and re-prefilled on a later match.
+        - `prefix_cache_n` sets the number of sequences to retain in the prefix cache. The default `None` allows up to 16, reduced when recurrent state must share memory with model weights; explicit integers preserve the requested capacity, and `0` disables retention.
         - `token_source` specifies where to load the HF token from.
             The token source follows the following format: "literal:<value>", "env:<value>", "path:<value>", "cache" to use a cached token or "none" to use no token.
         - `mtp_model` attaches an MTP assistant from a model id or path.

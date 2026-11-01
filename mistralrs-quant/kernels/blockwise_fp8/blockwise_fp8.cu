@@ -6,6 +6,8 @@
 #include <cuda_fp16.h>
 #include <cuda_fp8.h>
 
+#include "../common/fp_codecs.cuh"
+
 constexpr int FP8_ROWWISE_THREADS = 256;
 constexpr float FP8_E4M3_MAX = 448.0f;
 constexpr float FP8_MIN_SCALE = 1e-12f;
@@ -38,8 +40,9 @@ __global__ void dequant_fp8_blockwise_kernel(
     int weight_row_stride, int scale_stride, int weight_block_size_y,
     int weight_block_size_x) {
   // Each block corresponds to a tile.
-  int grid_y = blockIdx.y; // tile row index
-  int grid_x = blockIdx.x; // tile column index
+  // Row tiles ride on x since per-channel scales give one tile per row, past the 65535 y limit.
+  int grid_y = blockIdx.x;
+  int grid_x = blockIdx.y;
 
   // Compute the starting indices for this tile.
   int start_y = grid_y * weight_block_size_y;
@@ -61,9 +64,8 @@ __global__ void dequant_fp8_blockwise_kernel(
       int weight_x = start_x + local_x;
       if (weight_y < weight_height && weight_x < weight_width) {
         int pos = weight_y * weight_row_stride + weight_x;
-        float w_val =
-            __half2float(__nv_cvt_fp8_to_halfraw(weight[pos].__x, __NV_E4M3));
-        output[pos] = static_cast<T>(w_val * block_scale);
+        output[pos] =
+            static_cast<T>(e4m3_to_float(weight[pos].__x) * block_scale);
       }
     }
   }
@@ -76,8 +78,9 @@ __global__ void quant_fp8_blockwise_kernel(
     int weight_row_stride, int scale_stride, int weight_block_size_y,
     int weight_block_size_x) {
   // Each block corresponds to a tile.
-  int grid_y = blockIdx.y; // tile row index
-  int grid_x = blockIdx.x; // tile column index
+  // Row tiles ride on x since per-channel scales give one tile per row, past the 65535 y limit.
+  int grid_y = blockIdx.x;
+  int grid_x = blockIdx.y;
 
   // Compute the starting indices for this tile.
   int start_y = grid_y * weight_block_size_y;
@@ -201,7 +204,7 @@ extern "C" void launch_dequant_fp8_blockwise_kernel_f32(
   int grid_y = (weight_height + weight_block_size_y - 1) / weight_block_size_y;
   int grid_x = (weight_width + weight_block_size_x - 1) / weight_block_size_x;
   dim3 blockDim(32, 32);
-  dim3 gridDim(grid_x, grid_y);
+  dim3 gridDim(grid_y, grid_x);
 
   dequant_fp8_blockwise_kernel<float><<<gridDim, blockDim, 0, stream>>>(
       d_weight, d_scale, d_output, weight_height, weight_width,
@@ -218,7 +221,7 @@ extern "C" void launch_dequant_fp8_blockwise_kernel_f16(
   int grid_y = (weight_height + weight_block_size_y - 1) / weight_block_size_y;
   int grid_x = (weight_width + weight_block_size_x - 1) / weight_block_size_x;
   dim3 blockDim(32, 32);
-  dim3 gridDim(grid_x, grid_y);
+  dim3 gridDim(grid_y, grid_x);
 
   dequant_fp8_blockwise_kernel<__half><<<gridDim, blockDim, 0, stream>>>(
       d_weight, d_scale, d_output, weight_height, weight_width,
@@ -235,7 +238,7 @@ extern "C" void launch_dequant_fp8_blockwise_kernel_bf16(
   int grid_y = (weight_height + weight_block_size_y - 1) / weight_block_size_y;
   int grid_x = (weight_width + weight_block_size_x - 1) / weight_block_size_x;
   dim3 blockDim(32, 32);
-  dim3 gridDim(grid_x, grid_y);
+  dim3 gridDim(grid_y, grid_x);
 
   dequant_fp8_blockwise_kernel<__nv_bfloat16><<<gridDim, blockDim, 0, stream>>>(
       d_weight, d_scale, d_output, weight_height, weight_width,
@@ -252,7 +255,7 @@ extern "C" void launch_quant_fp8_blockwise_kernel_f32(
   int grid_y = (weight_height + weight_block_size_y - 1) / weight_block_size_y;
   int grid_x = (weight_width + weight_block_size_x - 1) / weight_block_size_x;
   dim3 blockDim(32, 32);
-  dim3 gridDim(grid_x, grid_y);
+  dim3 gridDim(grid_y, grid_x);
 
   quant_fp8_blockwise_kernel<float><<<gridDim, blockDim, 0, stream>>>(
       d_input, d_weight, d_scale, weight_height, weight_width,
@@ -269,7 +272,7 @@ extern "C" void launch_quant_fp8_blockwise_kernel_f16(
   int grid_y = (weight_height + weight_block_size_y - 1) / weight_block_size_y;
   int grid_x = (weight_width + weight_block_size_x - 1) / weight_block_size_x;
   dim3 blockDim(32, 32);
-  dim3 gridDim(grid_x, grid_y);
+  dim3 gridDim(grid_y, grid_x);
 
   quant_fp8_blockwise_kernel<__half><<<gridDim, blockDim, 0, stream>>>(
       d_input, d_weight, d_scale, weight_height, weight_width,
@@ -286,7 +289,7 @@ extern "C" void launch_quant_fp8_blockwise_kernel_bf16(
   int grid_y = (weight_height + weight_block_size_y - 1) / weight_block_size_y;
   int grid_x = (weight_width + weight_block_size_x - 1) / weight_block_size_x;
   dim3 blockDim(32, 32);
-  dim3 gridDim(grid_x, grid_y);
+  dim3 gridDim(grid_y, grid_x);
 
   quant_fp8_blockwise_kernel<__nv_bfloat16><<<gridDim, blockDim, 0, stream>>>(
       d_input, d_weight, d_scale, weight_height, weight_width,

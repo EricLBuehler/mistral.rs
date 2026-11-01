@@ -8,13 +8,12 @@ use std::{
     },
 };
 
-use candle_core::{DType, Device, Module, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 use candle_nn::Linear;
 use mistralrs_quant::{QuantMethod, QuantizedConfig, ReplicatedLayer, ShardedVarBuilder};
 
 use super::{
     config::{LayerType, QsaConfig, TextConfig},
-    hyper::GatedResidual,
     mtp::Qwen4ExpMtpHead,
     ple::{PleBatch, PleLayer, PleStash, PleState},
     qsa::{QsaAttention, QsaMode, QsaStep},
@@ -30,7 +29,7 @@ use crate::{
         HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
         RecurrentStateSpec,
     },
-    layers::{self, Qwen3VLRotaryEmbedding},
+    layers::{self, GatedResidual, Qwen3VLRotaryEmbedding},
     moe::{MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
@@ -153,7 +152,7 @@ impl SparseMoeBlock {
     pub(super) fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden_dim))?;
-        let router_logits = self.gate.forward(&xs_flat)?;
+        let router_logits = crate::layers::router_linear(&self.gate, &xs_flat)?;
         let topk = crate::ops::moe_router_topk(
             &router_logits,
             crate::ops::MoeRouterTopKConfig {
@@ -172,13 +171,10 @@ impl SparseMoeBlock {
             .experts
             .forward(xs, topk.values, &topk.indices)?
             .reshape((b_size, seq_len, hidden_dim))?;
-        let shared_gate = candle_nn::ops::sigmoid(&self.shared_expert_gate.forward(&xs_flat)?)?
+        let shared_gate = crate::layers::router_linear(&self.shared_expert_gate, &xs_flat)?
             .reshape((b_size, seq_len, 1))?;
-        let shared_out = self
-            .shared_expert
-            .forward(xs)?
-            .broadcast_mul(&shared_gate)?;
-        y + shared_out
+        let shared_out = self.shared_expert.forward(xs)?;
+        crate::layers::sigmoid_gated_add(&y, &shared_out, &shared_gate)
     }
 }
 
@@ -228,14 +224,33 @@ pub struct Qwen4ExpTextModel {
 }
 
 fn text_model_vb(vb: &ShardedVarBuilder) -> ShardedVarBuilder {
-    if layers::contains_tensor_or_uqff(vb, "language_model.model.embed_tokens.weight") {
-        vb.pp("language_model").pp("model")
-    } else {
-        vb.pp("model").pp("language_model")
-    }
+    vb.pp(super::checkpoint::text_model_prefix(
+        layers::contains_tensor_or_uqff(vb, super::checkpoint::ALTERNATE_TEXT_EMBEDDING),
+    ))
 }
 
 impl Qwen4ExpTextModel {
+    #[cfg(feature = "cuda")]
+    pub(super) fn prepare_optional_weights(
+        &mut self,
+        budget: &dyn Fn(&Device) -> Result<crate::memory_plan::WeightAllocationBudget>,
+    ) -> Result<()> {
+        for layer in &mut self.layers {
+            if let Some(ple) = layer.ple.as_mut() {
+                ple.prepare_table(budget)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(super) fn reclaimable_weight_cache_bytes(&self) -> Vec<(Device, usize)> {
+        self.layers
+            .iter()
+            .filter_map(|layer| layer.ple.as_ref()?.reclaimable_weight_cache_bytes())
+            .collect()
+    }
+
     pub fn new(
         cfg: &TextConfig,
         vb: ShardedVarBuilder,
@@ -353,17 +368,29 @@ impl Qwen4ExpTextModel {
             Ok(DecoderLayer {
                 mixer,
                 ple,
-                attn_hc: GatedResidual::load(cfg, vb_plain.pp("attn_hyper_connection"), true)?,
-                mlp_hc: GatedResidual::load(cfg, vb_plain.pp("mlp_hyper_connection"), true)?,
+                attn_hc: GatedResidual::load(
+                    &cfg.gated_residual_config(),
+                    &cfg.quantization_config,
+                    vb_plain.pp("attn_hyper_connection"),
+                    true,
+                )?,
+                mlp_hc: GatedResidual::load(
+                    &cfg.gated_residual_config(),
+                    &cfg.quantization_config,
+                    vb_plain.pp("mlp_hyper_connection"),
+                    true,
+                )?,
                 moe,
             })
         })?;
 
+        #[cfg(feature = "cuda")]
         let mut layers = layers;
-        for (layer_idx, layer) in layers.iter_mut().enumerate() {
+        #[cfg(feature = "cuda")]
+        for layer in &mut layers {
             if let Some(ple) = layer.ple.as_mut() {
-                let device = mapper.device_for(layer_idx, false).unwrap_or(&real_device);
-                ple.make_table_resident(device)?;
+                ple.allow_resident_table =
+                    !mapper.uses_host_memory_for_resource(ple.table_resource_id());
             }
         }
         let mtp = mtp
@@ -381,7 +408,8 @@ impl Qwen4ExpTextModel {
             })
             .transpose()?;
         let final_mixer = GatedResidual::load(
-            cfg,
+            &cfg.gated_residual_config(),
+            &cfg.quantization_config,
             mapper.set_nm_device(vb_m.pp("hyper_connection_mixer"), false),
             false,
         )?;
@@ -646,6 +674,18 @@ impl Qwen4ExpTextModel {
             .reserve(&mut self.cache.hybrid())
     }
 
+    pub(super) fn reserve_recurrent_decode_deferred_storage(&self) -> Result<bool> {
+        crate::gdn::reserve_deferred_decode_state(
+            &mut self.cache.hybrid(),
+            self.gdn_transition_layers().layers,
+            self.dtype,
+        )
+    }
+
+    pub(super) fn disable_recurrent_decode_deferred_storage(&self) -> Result<bool> {
+        self.cache.hybrid().disable_gdn_deferred_state()
+    }
+
     pub(super) fn apply_current_recurrent_transitions(&self) -> Result<bool> {
         self.gdn_transition_layers()
             .apply_pending_for_current_batch(&self.cache.hybrid())
@@ -664,6 +704,7 @@ impl Qwen4ExpTextModel {
         {
             candle_core::bail!("Qwen4-Exp pending recurrent transitions cannot be applied");
         }
+        cache.materialize_deferred_state_for_current_batch()?;
         Ok(())
     }
 
@@ -681,6 +722,7 @@ impl Qwen4ExpTextModel {
         {
             candle_core::bail!("Qwen4-Exp pending recurrent transitions cannot be applied");
         }
+        cache.materialize_deferred_state_for_slots(&slots)?;
         Ok(())
     }
 
@@ -711,7 +753,8 @@ impl Qwen4ExpTextModel {
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.embedding_forward(input_ids, self.dtype)
+        self.embed_tokens
+            .embedding_forward(input_ids, self.dtype.into())
     }
 
     /// `(start, len)` of every logical sequence on the flattened token axis of `xs: [b, s, h]`.
@@ -933,8 +976,7 @@ impl Qwen4ExpTextModel {
                 Some(xn) if xn.device().same_device(res.device()) => xn,
                 _ => layer.attn_hc.norm(&res)?,
             };
-            let h = layer.attn_hc.mix(&xn)?;
-            let inject = layer.attn_hc.inject(&xn)?;
+            let (h, inject) = layer.attn_hc.mix_and_inject(&xn)?;
             let out = match &layer.mixer {
                 Mixer::Attention(attn) => {
                     let Some(HybridLayerCache::Attention(kv_cache)) = hybrid_cache.get_mut(i)
@@ -1026,8 +1068,7 @@ impl Qwen4ExpTextModel {
                 Some(xn) => xn,
                 None => layer.mlp_hc.norm(&res)?,
             };
-            let h = layer.mlp_hc.mix(&xn)?;
-            let inject = layer.mlp_hc.inject(&xn)?;
+            let (h, inject) = layer.mlp_hc.mix_and_inject(&xn)?;
             let out = layer.moe.forward(&h)?;
             let next = match self.layers.get(i + 1) {
                 Some(next) if next.ple.is_none() => Some(&next.attn_hc),

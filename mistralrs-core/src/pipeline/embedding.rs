@@ -293,17 +293,26 @@ impl Loader for EmbeddingLoader {
         } else if let DeviceMapSetting::Auto(params) = mapper.clone() {
             // Initial dtype
             let dtype = dtype.try_into_dtype(&available_devices.iter().collect::<Vec<_>>())?;
+            let sizing_source = super::loaders::ResourceSource {
+                weights: None,
+                paths: paths.get_weight_filenames(),
+            };
+            let checkpoint = sizing_source.checkpoint_tensors()?;
+            let source_quantization = QuantizationConfigShim::get_quantization_config(&config)?;
 
             // ISQ or UQFF: quantized path
             // Match logic below where UQFF has priority
             let (layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
                 if let Some(reader) = uqff_reader.as_ref() {
                     let weight_pack_factor = reader.pack_factor(dtype)?;
-                    let quantization = AutoDeviceMapQuantization::uqff(reader);
-                    let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
+                    let quantization = AutoDeviceMapQuantization::uqff(reader)
+                        .with_checkpoint(&checkpoint)
+                        .with_source_quantization(source_quantization.as_ref());
+                    let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes_with_quantization(
                         &config,
                         dtype,
                         weight_pack_factor,
+                        Some(&quantization),
                         None,
                     )?;
                     let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
@@ -321,13 +330,16 @@ impl Loader for EmbeddingLoader {
                     )
                 } else if let Some(isq) = in_situ_quant {
                     let quantization =
-                        AutoDeviceMapQuantization::isq(Some(isq), self.config.topology.as_ref());
+                        AutoDeviceMapQuantization::isq(Some(isq), self.config.topology.as_ref())
+                            .with_checkpoint(&checkpoint)
+                            .with_source_quantization(source_quantization.as_ref());
                     let weight_pack_factor =
                         quantization.conservative_pack_factor(dtype, isq.pack_factor(dtype));
-                    let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
+                    let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes_with_quantization(
                         &config,
                         dtype,
                         weight_pack_factor,
+                        Some(&quantization),
                         None,
                     )?;
                     let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
@@ -369,22 +381,31 @@ impl Loader for EmbeddingLoader {
                         // Be sure to get the weight pack factor here; we might be loading a prequantized model.
                         let weight_pack_factor =
                             QuantizationConfigShim::get_quant_config_pack_factor(&config, dtype)?;
-                        let quantization =
-                            self.config.topology.as_ref().map(|topology| {
-                                AutoDeviceMapQuantization::isq(None, Some(topology))
-                            });
+                        let checkpoint_quantization =
+                            QuantizationConfigShim::get_quantization_config(&config)?;
+                        let quantization = AutoDeviceMapQuantization::checkpoint(
+                            checkpoint_quantization.as_ref(),
+                            self.config.topology.as_ref(),
+                        )
+                        .map(|quantization| {
+                            quantization
+                                .with_checkpoint(&checkpoint)
+                                .with_source_quantization(source_quantization.as_ref())
+                        });
                         let weight_pack_factor =
                             quantization
                                 .as_ref()
                                 .map_or(weight_pack_factor, |quantization| {
                                     quantization.conservative_pack_factor(dtype, weight_pack_factor)
                                 });
-                        let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
-                            &config,
-                            dtype,
-                            weight_pack_factor,
-                            None,
-                        )?;
+                        let layer_sizes_in_bytes =
+                            self.inner.layer_sizes_in_bytes_with_quantization(
+                                &config,
+                                dtype,
+                                weight_pack_factor,
+                                quantization.as_ref(),
+                                None,
+                            )?;
                         let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
                             &config,
                             dtype,
@@ -417,6 +438,13 @@ impl Loader for EmbeddingLoader {
                 .checked_add(module_bytes)
                 .context("Embedding total size overflow")?;
 
+            let resources = self.inner.layer_resources(&config, sizing_source)?;
+            let mut layer_sizes_in_bytes = layer_sizes_in_bytes;
+            let total_model_size_in_bytes = super::loaders::add_resource_bytes(
+                &mut layer_sizes_in_bytes,
+                total_model_size_in_bytes,
+                &resources,
+            )?;
             let new = auto_device_map::get_device_layers(
                 &*self.inner,
                 &config,
@@ -428,6 +456,7 @@ impl Loader for EmbeddingLoader {
                 dtype,
                 &params,
                 paged_attn_config.as_mut(),
+                &resources,
             )?;
             mapper = DeviceMapSetting::Map(new);
         }

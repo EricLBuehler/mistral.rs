@@ -336,9 +336,11 @@ impl Fixture {
     }
 }
 
-fn sm121_device() -> Result<Option<Device>> {
+fn native_device() -> Result<Option<Device>> {
     let device = Device::new_cuda(0)?;
-    let supported = crate::cutile::device_compute_capability(device.as_cuda_device()?) == (12, 1);
+    let supported = super::cutlass::compiled_for(&crate::cuda_device::cuda_device_info(
+        device.as_cuda_device()?,
+    ));
     Ok(supported.then_some(device))
 }
 
@@ -351,10 +353,10 @@ fn odd_packed_view(activation: &QuantizedActivation) -> Result<Tensor> {
 }
 
 #[test]
-#[ignore = "requires an SM121 CUDA device"]
+#[ignore = "requires a CUDA device matching the NVFP4 CUTLASS build arch"]
 fn native_loading_mutable_shared_scales_and_post_cast_bias_match_oracle() -> Result<()> {
     let _guard = CUDA_TEST_LOCK.lock().unwrap();
-    let Some(device) = sm121_device()? else {
+    let Some(device) = native_device()? else {
         return Ok(());
     };
     for dtype in [DType::BF16, DType::F16] {
@@ -415,10 +417,10 @@ fn native_loading_mutable_shared_scales_and_post_cast_bias_match_oracle() -> Res
 }
 
 #[test]
-#[ignore = "requires an SM121 CUDA device"]
+#[ignore = "requires a CUDA device matching the NVFP4 CUTLASS build arch"]
 fn native_shared_activation_created_inside_graph_replays_fresh_scales() -> Result<()> {
     let _guard = CUDA_TEST_LOCK.lock().unwrap();
-    let Some(device) = sm121_device()? else {
+    let Some(device) = native_device()? else {
         return Ok(());
     };
     for (rows, columns, reduction) in REPLAY_SHAPES {
@@ -498,10 +500,10 @@ fn native_shared_activation_created_inside_graph_replays_fresh_scales() -> Resul
 }
 
 #[test]
-#[ignore = "requires an SM121 CUDA device"]
+#[ignore = "requires a CUDA device matching the NVFP4 CUTLASS build arch"]
 fn merged_rows_select_native_and_preserve_constituent_calibration() -> Result<()> {
     let _guard = CUDA_TEST_LOCK.lock().unwrap();
-    let Some(device) = sm121_device()? else {
+    let Some(device) = native_device()? else {
         return Ok(());
     };
     for dtype in [DType::BF16, DType::F16] {
@@ -539,7 +541,7 @@ fn merged_rows_select_native_and_preserve_constituent_calibration() -> Result<()
         fixture.check(&packed.packed.forward(&source)?, 0, COLUMNS, 1.0, false)?;
         for (index, constituent) in packed.constituents.iter().enumerate() {
             assert_eq!(
-                constituent.activation_quantization_global_scale(),
+                constituent.activation_calibration().global_scale(),
                 Some(ACTIVATION_GLOBAL)
             );
             let separate = constituent.forward_quantized(&activation)?;

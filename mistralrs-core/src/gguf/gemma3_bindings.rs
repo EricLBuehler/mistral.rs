@@ -1,10 +1,16 @@
 use anyhow::Result;
 use mistralrs_quant::{GgufArchive, GgufBindingMap, GgufTensorBinding};
 
-use super::multimodal_binding_utils::{
-    bind_required, bind_required_linear, bind_required_with, validate_architecture,
-    validate_projector, TensorInventory,
+use super::{
+    arch_registry::{GgufSynthesisInputs, SynthesizedGguf},
+    gemma3_config::{gemma3_text_uses_language_model_prefix, prepare_gemma3_text_config},
+    multimodal_binding_utils::{
+        bind_required, bind_required_linear, bind_required_with, validate_architecture,
+        validate_projector, TensorInventory,
+    },
+    normal_registry::RopePairing,
 };
+use crate::MultimodalLoaderType;
 
 const FAMILY: &str = "Gemma 3";
 
@@ -14,7 +20,24 @@ pub(crate) fn build_gemma3_bindings(archive: &GgufArchive) -> Result<GgufBinding
     build_gemma3_bindings_from_inventory(&TensorInventory::from_archive(archive))
 }
 
-pub(crate) fn build_gemma3_text_bindings(
+/// Projectorless Gemma 3 runs through the multimodal Gemma 3 model in text-only mode.
+pub(crate) fn synthesize_gemma3_text(inputs: &GgufSynthesisInputs<'_>) -> Result<SynthesizedGguf> {
+    let archive = inputs.archive;
+    let tensor_names = archive.tensors().keys().cloned().collect::<Vec<_>>();
+    let config =
+        prepare_gemma3_text_config(inputs.external_config, archive.metadata(), &tensor_names)?;
+    let use_language_model_prefix = gemma3_text_uses_language_model_prefix(&config)?;
+    Ok(SynthesizedGguf {
+        bindings: build_gemma3_text_bindings(archive, use_language_model_prefix)?,
+        config,
+        loader_type: MultimodalLoaderType::Gemma3,
+        processor_config: None,
+        preprocessor_config: None,
+        rope_pairing: RopePairing::HalfSplit,
+    })
+}
+
+fn build_gemma3_text_bindings(
     archive: &GgufArchive,
     use_language_model_prefix: bool,
 ) -> Result<GgufBindingMap> {

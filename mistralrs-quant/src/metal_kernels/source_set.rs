@@ -26,6 +26,7 @@ mistralrs_metal_compile::metal_source_set! {
         "softmax_with_sinks",
         "sort",
         "copy",
+        "embedding",
         "topk_logits",
     ],
     header_sources: ["utils", "bf16", "scan_impl", "sort_impl", "copy_impl"],

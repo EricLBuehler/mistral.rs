@@ -3,12 +3,18 @@ use candle_core::quantized::gguf_file::Value;
 use mistralrs_quant::{GgufArchive, GgufBindingMap, GgufTensorBinding};
 use serde_json::{json, Map, Value as JsonValue};
 
-use super::qwen_multimodal_bindings::{
-    bind, bind_experts, bind_gdn, bind_qwen3_vision, bind_shared_expert, metadata_bool_indices,
-    metadata_usize, read_gdn_metadata, TensorInventory, DEEPSTACK_LAYERS,
+use super::{
+    arch_registry::{GgufSynthesisInputs, SynthesizedGguf},
+    normal_bindings::bind_slices,
+    normal_registry::RopePairing,
+    qwen_multimodal_bindings::{
+        bind, bind_experts, bind_gdn, bind_qwen3_vision, bind_shared_expert, metadata_bool_indices,
+        metadata_usize, read_gdn_metadata, TensorInventory, DEEPSTACK_LAYERS,
+    },
 };
 use crate::gdn::GDN_V_HEAD_LAYOUT_CONFIG_KEY;
 use crate::vision_models::qwen4_exp::Config as Qwen4ExpConfig;
+use crate::MultimodalLoaderType;
 
 pub(crate) const ARCHITECTURE: &str = "qwen4exp";
 const NATIVE_ROOT: &str = "model.language_model";
@@ -90,9 +96,27 @@ pub(crate) fn has_projector(archive: &GgufArchive) -> bool {
     archive.contains_tensor(PROJECTOR_TENSOR)
 }
 
+pub(crate) fn synthesize_qwen4exp(inputs: &GgufSynthesisInputs<'_>) -> Result<SynthesizedGguf> {
+    let archive = inputs.archive;
+    let config = prepare_qwen4exp_config(inputs.external_config, archive)?;
+    let bindings = build_qwen4exp_bindings(archive)?;
+    let preprocessor_config = match inputs.preprocessor_config {
+        Some(path) => Some(std::fs::read_to_string(path)?),
+        None => qwen4exp_preprocessor_config(archive)?,
+    };
+    Ok(SynthesizedGguf {
+        config,
+        bindings,
+        loader_type: MultimodalLoaderType::Qwen4Exp,
+        processor_config: None,
+        preprocessor_config,
+        rope_pairing: RopePairing::HalfSplit,
+    })
+}
+
 /// Native names for a `qwen4exp` GGUF and its optional projector; the n-gram table stays out and is
 /// read raw.
-pub(crate) fn build_qwen4exp_bindings(archive: &GgufArchive) -> Result<GgufBindingMap> {
+fn build_qwen4exp_bindings(archive: &GgufArchive) -> Result<GgufBindingMap> {
     let inventory = TensorInventory::from_archive(archive);
     let gdn = read_gdn_metadata(archive)?;
     let mut bindings = GgufBindingMap::new();
@@ -162,9 +186,12 @@ pub(crate) fn build_qwen4exp_bindings(archive: &GgufArchive) -> Result<GgufBindi
                 GgufTensorBinding::tensor(&conv).reshape(vec![channels, 1, kernel]),
             );
         }
-        if inventory.contains(&format!("{source}.attn_qkv.weight")) {
+        if inventory.contains(&format!("{source}.attn_qkv.weight"))
+            || inventory.contains(&format!("{source}.attn_qkv_gate.weight"))
+        {
             bind_gdn(&inventory, &native, &source, gdn, &mut bindings)?;
         }
+        bind_merged_projections(archive, &inventory, &native, &source, &mut bindings)?;
         bind_experts(&inventory, &native, &source, &mut bindings);
         bind_shared_expert(&inventory, &native, &source, &mut bindings)?;
     }
@@ -181,6 +208,41 @@ pub(crate) fn build_qwen4exp_bindings(archive: &GgufArchive) -> Result<GgufBindi
     Ok(bindings)
 }
 
+fn bind_merged_projections(
+    archive: &GgufArchive,
+    inventory: &TensorInventory,
+    native: &str,
+    source: &str,
+    bindings: &mut GgufBindingMap,
+) -> Result<()> {
+    let size = |name: &str| metadata_usize(archive, &format!("{ARCHITECTURE}.{name}"));
+    for (module, role) in [
+        ("attn_hyper_connection", "hc_attn_down_inject.weight"),
+        ("mlp_hyper_connection", "hc_ffn_down_inject.weight"),
+    ] {
+        let merged = format!("{source}.{role}");
+        if inventory.contains(&merged) {
+            bind_slices(
+                bindings,
+                &merged,
+                0,
+                inventory.rows(&merged)?,
+                [
+                    (
+                        format!("{native}.{module}.input_mix_weight_down.weight"),
+                        size("hyper_connection.low_rank")?,
+                    ),
+                    (
+                        format!("{native}.{module}.block_inject_weight.weight"),
+                        size("hyper_connection.count")?,
+                    ),
+                ],
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn bind_shifted_norm(
     inventory: &TensorInventory,
     bindings: &mut GgufBindingMap,
@@ -195,10 +257,7 @@ fn bind_shifted_norm(
 
 /// Model config for a `qwen4exp` GGUF: an external `config.json` is used as is, otherwise it is
 /// rebuilt from metadata. The vision tower follows the projector, and the GGUF hash constants win.
-pub(crate) fn prepare_qwen4exp_config(
-    external: Option<&str>,
-    archive: &GgufArchive,
-) -> Result<String> {
+fn prepare_qwen4exp_config(external: Option<&str>, archive: &GgufArchive) -> Result<String> {
     let mut config = match external {
         Some(external) => serde_json::from_str::<JsonValue>(external)
             .context("Qwen4-Exp `config.json` is not valid JSON")?,
@@ -438,7 +497,7 @@ fn vision_config(archive: &GgufArchive) -> Result<JsonValue> {
 }
 
 /// Image preprocessing from the projector metadata; the processor defaults are the Qwen3-VL ones.
-pub(crate) fn qwen4exp_preprocessor_config(archive: &GgufArchive) -> Result<Option<String>> {
+fn qwen4exp_preprocessor_config(archive: &GgufArchive) -> Result<Option<String>> {
     if !has_projector(archive) {
         return Ok(None);
     }

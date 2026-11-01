@@ -1,3 +1,4 @@
+pub(crate) mod arch_registry;
 pub(crate) mod base_model;
 mod chat_template;
 mod content;

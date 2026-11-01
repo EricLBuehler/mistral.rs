@@ -66,6 +66,9 @@ impl Qwen3VLMoEModel {
         .without_lora_registry();
         let vision = Qwen3VLVisionModel::new(
             &cfg.vision_config,
+            &cfg.quantization_config
+                .clone()
+                .or_else(|| cfg.text_config.quantization_config.clone()),
             vision_vb.set_device(normal_loading_metadata.real_device.clone()),
         )?;
         // Use top-level quantization_config if present, otherwise fall back to text_config's

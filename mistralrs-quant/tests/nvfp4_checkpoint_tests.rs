@@ -860,27 +860,70 @@ fn packed_nvfp4_falls_back_for_distinct_calibrated_input_scales() -> Result<()> 
 }
 
 #[test]
-fn packed_nvfp4_keeps_exclusions_and_output_layout_fallbacks() -> Result<()> {
+fn packed_nvfp4_permutes_output_layouts_and_keeps_exclusion_fallbacks() -> Result<()> {
     use mistralrs_quant::{ColumnParallelLayer, Comm, Id, PackedOutputLayout};
     use std::sync::Arc;
 
+    const RUNTIME_TO_CANONICAL: [usize; OUTPUT_DIM] = [1, 3, 0, 2];
     let device = Device::Cpu;
     let comm = Arc::new(Comm::from_device(Id::new(), &device, 0, 1)?);
+    let input = Tensor::from_vec(
+        TIE_INPUT.repeat(2 * INPUT_DIM / TIE_INPUT.len()),
+        (2, 1, INPUT_DIM),
+        &device,
+    )?;
     let tensors = packed_tensors(Format::ModelOpt, false, [INPUT_SCALE; 2])?;
     let vb = ShardedSafeTensors::wrap(tensors.clone(), DType::F32, device.clone());
-    let layout = PackedOutputLayout::from_runtime_to_canonical(vec![1, 0, 2, 3])?;
-    assert!(ColumnParallelLayer::new_packed_with_output_layouts(
+    let layout = PackedOutputLayout::from_runtime_to_canonical(RUNTIME_TO_CANONICAL.to_vec())?;
+    let group = ColumnParallelLayer::new_packed_with_output_layouts(
         INPUT_DIM,
         &[OUTPUT_DIM; 2],
         &["first", "second"],
-        &[layout.clone(), layout],
+        &[layout.clone(), PackedOutputLayout::identity(OUTPUT_DIM)],
         &Some(Format::ModelOpt.config(false)?),
         false,
         &comm,
         None,
-        vb,
+        vb.clone(),
     )?
-    .is_none());
+    .expect("NVFP4 output rows permute as plain row gathers");
+    let output = group.packed.forward(&input)?;
+    for (index, projection) in ["first", "second"].into_iter().enumerate() {
+        let original = Nvfp4Layer::load(
+            INPUT_DIM,
+            OUTPUT_DIM,
+            Format::ModelOpt.spec(false)?,
+            false,
+            Shard::default(),
+            vb.pp(projection),
+        )?
+        .forward(&input)?;
+        let runtime = if index == 0 {
+            let rows = Tensor::new(&RUNTIME_TO_CANONICAL.map(|row| row as u32), &device)?;
+            original.index_select(&rows, 2)?
+        } else {
+            original.clone()
+        };
+        assert_eq!(
+            output
+                .narrow(2, index * OUTPUT_DIM, OUTPUT_DIM)?
+                .to_vec3::<f32>()?,
+            runtime.to_vec3::<f32>()?
+        );
+        assert_eq!(
+            group.constituents[index].dequantize_w()?.to_vec2::<f32>()?,
+            Nvfp4Layer::load(
+                INPUT_DIM,
+                OUTPUT_DIM,
+                Format::ModelOpt.spec(false)?,
+                false,
+                Shard::default(),
+                vb.pp(projection),
+            )?
+            .dequantize_w()?
+            .to_vec2::<f32>()?
+        );
+    }
     let config = serde_json::from_value::<QuantizedConfig>(json!({
         "quant_method": "modelopt", "quant_algo": "W4A16_NVFP4", "group_size": 16,
         "exclude_modules": ["second"]

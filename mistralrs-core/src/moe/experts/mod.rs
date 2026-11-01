@@ -6,16 +6,18 @@
 
 mod backends;
 #[cfg(feature = "cuda")]
-pub(crate) use backends::GROUPED_PREFILL_MIN_TOKENS;
+pub(crate) use mistralrs_quant::routed_moe::GROUPED_PREFILL_MIN_TOKENS;
 mod checkpoint;
 pub(crate) use checkpoint::{expert_stack_available, rebuild_expert_projection};
 mod config;
 mod forward;
+#[cfg(test)]
+mod isq_tests;
 
 use candle_core::{Device, Result, Tensor};
 use mistralrs_quant::{
-    IsqType, LoraExpertExecution, LoraExpertProjectionNames, LoraExpertSiteHandle,
-    LoraExpertSiteSpec, LoraSiteKey, QuantizedConfig, Shard, ShardedVarBuilder, SumAllReduce,
+    LoraExpertExecution, LoraExpertProjectionNames, LoraExpertSiteHandle, LoraExpertSiteSpec,
+    LoraSiteKey, QuantizedConfig, Shard, ShardedVarBuilder, SumAllReduce,
 };
 use std::sync::Arc;
 
@@ -86,10 +88,7 @@ fn check_isq_gather_support() -> Result<()> {
         return Ok(());
     };
     if let Some(ty) = params.ty {
-        if matches!(
-            ty,
-            IsqType::HQQ4 | IsqType::HQQ8 | IsqType::F8E4M3 | IsqType::F8Q8
-        ) {
+        if !ty.supports_stacked_gather() {
             candle_core::bail!("ISQ type {ty} is not supported for MoE experts.");
         }
     }
@@ -341,7 +340,6 @@ impl MoEExperts {
             .transpose()?
             .flatten();
         let forward = MoEForward {
-            xs,
             xs_flat: &xs_flat,
             topk_weights: &topk_weights,
             topk_ids,

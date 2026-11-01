@@ -566,7 +566,8 @@ impl Model {
     pub fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
         self.forward_embeds(
             input_ids,
-            self.embed_tokens.embedding_forward(input_ids, self.dtype)?,
+            self.embed_tokens
+                .embedding_forward(input_ids, self.dtype.into())?,
             ctx,
         )
     }

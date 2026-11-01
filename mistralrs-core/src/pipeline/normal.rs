@@ -244,26 +244,45 @@ pub(crate) fn build_normal_pipeline(
         super::prepare_cuda_runtime(&device, mapper.as_ref())?;
     }
 
+    if let Some(source) = &source_weight_source {
+        #[cfg(feature = "cuda")]
+        super::synchronize_cuda_contexts(&device, mapper.as_ref())?;
+        source.release_source_cache()?;
+    }
+
     let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config.as_mut() {
+        #[cfg(feature = "cuda")]
+        let reserve_decode_graphs = device.is_cuda()
+            && model.supports_cuda_decode_graphs()
+            && cuda_decode_graphs_enabled()
+            && cuda_decode_graph_supported_for_model(Some(model_metadata.as_ref()));
+        #[cfg(not(feature = "cuda"))]
+        let reserve_decode_graphs = false;
         let paged_snapshot = paged_attn_config.clone();
         let estimate_for_capacity =
             |usable_tokens| capacity_activation_estimate(&paged_snapshot, usable_tokens);
-        let memory_reservations =
-            paged_attention_memory_reservations(model.cache(), paged_attn_config, &device)?;
-        let (cache_config, cache_engine) = allocate_cache(
+        let memory_reservations = paged_attn_config.memory_reservations()?;
+        let layer_devices = (0..model_metadata.num_layers())
+            .map(|layer| mapper.device_for(layer, false).cloned())
+            .collect::<Vec<_>>();
+        let mut cache_request = CacheConfigRequest {
+            memory_reservations,
+            dtype,
+            model: model_metadata.as_ref(),
+            device: &device,
+            layer_devices: &layer_devices,
+            capacity_activation_estimate: &estimate_for_capacity,
+            reserve_decode_graphs,
+            silent,
+        };
+        super::configure_automatic_recurrent_prefix_capacity(
+            model.cache(),
             paged_attn_config,
-            CacheConfigRequest {
-                memory_reservations,
-                dtype,
-                model: model_metadata.as_ref(),
-                device: &device,
-                layer_devices: &(0..model_metadata.num_layers())
-                    .map(|layer| mapper.device_for(layer, false).cloned())
-                    .collect::<Vec<_>>(),
-                capacity_activation_estimate: &estimate_for_capacity,
-                silent,
-            },
+            cache_request,
         )?;
+        cache_request.memory_reservations =
+            paged_attention_memory_reservations(model.cache(), paged_attn_config, &device)?;
+        let (cache_config, cache_engine) = allocate_cache(paged_attn_config, cache_request)?;
         (Some(cache_config), Some(cache_engine))
     } else {
         (None, None)
@@ -275,6 +294,13 @@ pub(crate) fn build_normal_pipeline(
         .and_then(GenerationConfig::generation_defaults);
     let eos = calculate_eos_tokens(&chat_template, generation_config.as_ref(), &tokenizer);
     let sliding_window = model.config().sliding_window;
+    #[cfg(feature = "cuda")]
+    let runtime_memory_reservation = super::paged_attention_runtime_memory_reservation(
+        model.cache(),
+        paged_attn_config.as_ref(),
+        &device,
+        &mapper.get_unique_devices(),
+    )?;
 
     Ok(Arc::new(Mutex::new(NormalPipeline {
         model,
@@ -303,9 +329,7 @@ pub(crate) fn build_normal_pipeline(
                 .as_ref()
                 .map(|config| config.runtime_memory_plan()),
             #[cfg(feature = "cuda")]
-            runtime_memory_reservation: paged_attn_config.as_ref().and_then(|config| {
-                config.runtime_memory_reservation(&device, &mapper.get_unique_devices())
-            }),
+            runtime_memory_reservation,
             model_metadata: Some(model_metadata),
             modalities: Modalities {
                 input: vec![SupportedModality::Text],
@@ -373,31 +397,6 @@ pub(crate) struct PreparedNormalSource {
     pub unk_token: Option<String>,
     pub source_weight_files: Vec<PathBuf>,
     pub rope_pairing: crate::gguf::normal_registry::RopePairing,
-}
-
-pub(crate) fn new_dynamic_lora_registry(
-    config: &str,
-) -> Result<Arc<mistralrs_quant::LoraLayerRegistry>> {
-    let config = serde_json::from_str::<serde_json::Value>(config)?;
-    let qwen35_moe_identity = config
-        .get("architectures")
-        .and_then(serde_json::Value::as_array)
-        .and_then(|architectures| architectures.first())
-        .and_then(serde_json::Value::as_str)
-        == Some("Qwen3NextForCausalLM")
-        && config
-            .get(crate::gdn::GDN_V_HEAD_LAYOUT_CONFIG_KEY)
-            .and_then(serde_json::Value::as_str)
-            == Some("tiled");
-    let registry = if qwen35_moe_identity {
-        mistralrs_quant::LoraLayerRegistry::new_with_site_prefix_alias(
-            "model",
-            "model.language_model",
-        )?
-    } else {
-        mistralrs_quant::LoraLayerRegistry::new()
-    };
-    Ok(Arc::new(registry))
 }
 
 #[derive(Default)]
@@ -767,10 +766,16 @@ impl Loader for NormalLoader {
         } else if let DeviceMapSetting::Auto(params) = mapper.clone() {
             // Initial dtype
             let dtype = dtype.try_into_dtype(&available_devices.iter().collect::<Vec<_>>())?;
+            let sizing_source = super::loaders::ResourceSource {
+                weights: self.prepared_source.as_ref().map(|source| &source.weights),
+                paths: paths.get_weight_filenames(),
+            };
+            let checkpoint = sizing_source.checkpoint_tensors()?;
+            let source_quantization = QuantizationConfigShim::get_quantization_config(&config)?;
 
             // ISQ or UQFF: quantized path
             // Match logic below where UQFF has priority
-            let (layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
+            let (mut layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
                 match super::isq_flow::resolve_auto_device_map_sizing(
                     uqff_reader.is_some(),
                     has_prepared_weight_source,
@@ -786,7 +791,6 @@ impl Loader for NormalLoader {
                                 source.as_ref(),
                                 dtype,
                                 self.inner.num_layers(&config)?,
-                                &self.inner.unbound_layer_bytes(&config)?,
                             )?
                         } else {
                             None
@@ -807,14 +811,19 @@ impl Loader for NormalLoader {
                                         self.config.topology.as_ref(),
                                     )
                                 };
+                            let quantization = quantization
+                                .with_checkpoint(&checkpoint)
+                                .with_source_quantization(source_quantization.as_ref());
                             let weight_pack_factor = quantization
                                 .conservative_pack_factor(dtype, source.pack_factor(dtype)?);
-                            let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
-                                &config,
-                                dtype,
-                                weight_pack_factor,
-                                None,
-                            )?;
+                            let layer_sizes_in_bytes =
+                                self.inner.layer_sizes_in_bytes_with_quantization(
+                                    &config,
+                                    dtype,
+                                    weight_pack_factor,
+                                    Some(&quantization),
+                                    None,
+                                )?;
                             let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
                                 &config,
                                 dtype,
@@ -874,12 +883,17 @@ impl Loader for NormalLoader {
                                 quantization,
                             )
                         };
-                        let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
-                            &config,
-                            dtype,
-                            weight_pack_factor,
-                            None,
-                        )?;
+                        let quantization = quantization
+                            .with_checkpoint(&checkpoint)
+                            .with_source_quantization(source_quantization.as_ref());
+                        let layer_sizes_in_bytes =
+                            self.inner.layer_sizes_in_bytes_with_quantization(
+                                &config,
+                                dtype,
+                                weight_pack_factor,
+                                (!moqe).then_some(&quantization),
+                                None,
+                            )?;
                         let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
                             &config,
                             dtype,
@@ -923,8 +937,16 @@ impl Loader for NormalLoader {
                                 QuantizationConfigShim::get_quant_config_pack_factor(
                                     &config, dtype,
                                 )?;
-                            let quantization = self.config.topology.as_ref().map(|topology| {
-                                AutoDeviceMapQuantization::isq(None, Some(topology))
+                            let checkpoint_quantization =
+                                QuantizationConfigShim::get_quantization_config(&config)?;
+                            let quantization = AutoDeviceMapQuantization::checkpoint(
+                                checkpoint_quantization.as_ref(),
+                                self.config.topology.as_ref(),
+                            )
+                            .map(|quantization| {
+                                quantization
+                                    .with_checkpoint(&checkpoint)
+                                    .with_source_quantization(source_quantization.as_ref())
                             });
                             let weight_pack_factor =
                                 quantization
@@ -933,12 +955,14 @@ impl Loader for NormalLoader {
                                         quantization
                                             .conservative_pack_factor(dtype, weight_pack_factor)
                                     });
-                            let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
-                                &config,
-                                dtype,
-                                weight_pack_factor,
-                                None,
-                            )?;
+                            let layer_sizes_in_bytes =
+                                self.inner.layer_sizes_in_bytes_with_quantization(
+                                    &config,
+                                    dtype,
+                                    weight_pack_factor,
+                                    quantization.as_ref(),
+                                    None,
+                                )?;
                             let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
                                 &config,
                                 dtype,
@@ -956,6 +980,12 @@ impl Loader for NormalLoader {
                     }
                 };
 
+            let resources = self.inner.layer_resources(&config, sizing_source)?;
+            let total_model_size_in_bytes = super::loaders::add_resource_bytes(
+                &mut layer_sizes_in_bytes,
+                total_model_size_in_bytes,
+                &resources,
+            )?;
             let new = auto_device_map::get_device_layers(
                 &*self.inner,
                 &config,
@@ -967,6 +997,7 @@ impl Loader for NormalLoader {
                 dtype,
                 &params,
                 paged_attn_config.as_mut(),
+                &resources,
             )?;
             mapper = DeviceMapSetting::Map(new);
         }
@@ -1178,7 +1209,7 @@ impl Loader for NormalLoader {
                     ..
                 } => {
                     if let Some(source) = self.prepared_source.as_ref() {
-                        let layers = new_dynamic_lora_registry(&config)?;
+                        let layers = Arc::new(self.inner.new_lora_registry(&config)?);
                         let sharded_vb = sharded_vb.with_lora_registry(layers.clone());
                         let tracker = sharded_vb.tracker().clone();
                         let model = self.inner.load(
@@ -1306,7 +1337,7 @@ impl Loader for NormalLoader {
                     ..
                 } => {
                     if let Some(source) = self.prepared_source.as_ref() {
-                        let layers = new_dynamic_lora_registry(&config)?;
+                        let layers = Arc::new(self.inner.new_lora_registry(&config)?);
                         let vb = source
                             .weights
                             .clone()
@@ -2943,31 +2974,25 @@ fn exact_weight_source_sizes(
     source: &dyn mistralrs_quant::QuantizedWeightSource,
     dtype: DType,
     num_layers: usize,
-    unbound_layer_bytes: &[(usize, usize)],
 ) -> Result<Option<(Vec<usize>, usize, usize)>> {
     let Some(exact) = source.resident_layer_bytes(dtype)? else {
         return Ok(None);
     };
-    let mut layers = (0..num_layers)
+    let layers = (0..num_layers)
         .map(|layer| exact.layers.get(&layer).copied().unwrap_or(0))
         .collect::<Vec<_>>();
-    for &(layer, bytes) in unbound_layer_bytes {
-        if let Some(size) = layers.get_mut(layer) {
-            *size += bytes;
-        }
-    }
     let total = layers.iter().sum::<usize>() + exact.outside;
     Ok(Some((layers, exact.outside, total)))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        exact_weight_source_sizes, new_dynamic_lora_registry,
-        normal_model_requires_uniform_prompt_batch,
-    };
+    use super::{exact_weight_source_sizes, normal_model_requires_uniform_prompt_batch};
     use crate::pipeline::finish_dynamic_lora_runtime;
-    use crate::pipeline::{AdapterPaths, LocalModelPaths};
+    use crate::pipeline::{
+        AdapterPaths, AutoNormalLoader, LocalModelPaths, NormalModelLoader, Qwen3NextLoader,
+        Qwen3_5TextLoader,
+    };
     use crate::LoraRuntimeConfig;
     use candle_core::{DType, Device};
     use mistralrs_quant::{LoraLayerRegistry, LoraLinearSpec, LoraSiteKey};
@@ -3039,8 +3064,18 @@ mod tests {
         let archive = Arc::new(GgufArchive::open_file(file.path())?);
         let source = GgufWeightSource::new(archive, &bindings, DType::BF16)?;
         assert_eq!(source.pack_factor(DType::BF16)?, 1);
-        let (layers, outside, total) =
-            exact_weight_source_sizes(&source, DType::BF16, 2, &[(1, UNBOUND_BYTES)])?.unwrap();
+        let (mut layers, outside, total) =
+            exact_weight_source_sizes(&source, DType::BF16, 2)?.unwrap();
+        let total = crate::pipeline::loaders::add_resource_bytes(
+            &mut layers,
+            total,
+            &[crate::pipeline::loaders::LayerResource {
+                name: "extra".to_owned(),
+                layer: 1,
+                device_bytes: UNBOUND_BYTES,
+                host_backing: None,
+            }],
+        )?;
         let attention = WIDTH * WIDTH / Q8_BLOCK_ELEMS * Q8_BLOCK_BYTES;
         let experts = 2 * WIDTH * Q3_BLOCK_BYTES;
         let dense = 3 * WIDTH * DType::BF16.size_in_bytes();
@@ -3124,40 +3159,52 @@ mod tests {
             "architectures":["Qwen3NextForCausalLM"],
             "_mistralrs_gdn_v_head_layout":"tiled"
         }"#;
-        let registry = new_dynamic_lora_registry(config).unwrap();
-        let site = registry
-            .register(
-                LoraSiteKey::new("model.layers.0.self_attn.q_proj"),
-                LoraLinearSpec::replicated(2, 2),
-                DType::F32,
-                Device::Cpu,
-            )
-            .unwrap();
+        for loader in [
+            &AutoNormalLoader as &dyn NormalModelLoader,
+            &Qwen3NextLoader,
+        ] {
+            assert!(loader.new_lora_registry("").is_err());
+            assert!(loader.new_lora_registry("{").is_err());
+            let registry = loader.new_lora_registry(config).unwrap();
+            let site = registry
+                .register(
+                    LoraSiteKey::new("model.layers.0.self_attn.q_proj"),
+                    LoraLinearSpec::replicated(2, 2),
+                    DType::F32,
+                    Device::Cpu,
+                )
+                .unwrap();
 
-        assert_eq!(
-            site.key().path(),
-            "model.language_model.layers.0.self_attn.q_proj"
-        );
+            assert_eq!(
+                site.key().path(),
+                "model.language_model.layers.0.self_attn.q_proj"
+            );
+        }
     }
 
     #[test]
     fn dense_qwen35_config_does_not_alias_lora_namespace() {
-        let registry = new_dynamic_lora_registry(
-            r#"{
-                "architectures":["Qwen3_5ForCausalLM"],
-                "_mistralrs_gdn_v_head_layout":"tiled"
-            }"#,
-        )
-        .unwrap();
-        let site = registry
-            .register(
-                LoraSiteKey::new("model.layers.0.self_attn.q_proj"),
-                LoraLinearSpec::replicated(2, 2),
-                DType::F32,
-                Device::Cpu,
-            )
-            .unwrap();
+        let config = r#"{
+            "architectures":["Qwen3_5ForCausalLM"],
+            "_mistralrs_gdn_v_head_layout":"tiled"
+        }"#;
+        for loader in [
+            &AutoNormalLoader as &dyn NormalModelLoader,
+            &Qwen3_5TextLoader,
+        ] {
+            assert!(loader.new_lora_registry("").is_err());
+            assert!(loader.new_lora_registry("{").is_err());
+            let registry = loader.new_lora_registry(config).unwrap();
+            let site = registry
+                .register(
+                    LoraSiteKey::new("model.layers.0.self_attn.q_proj"),
+                    LoraLinearSpec::replicated(2, 2),
+                    DType::F32,
+                    Device::Cpu,
+                )
+                .unwrap();
 
-        assert_eq!(site.key().path(), "model.layers.0.self_attn.q_proj");
+            assert_eq!(site.key().path(), "model.layers.0.self_attn.q_proj");
+        }
     }
 }

@@ -177,6 +177,11 @@ pub fn mxfp4_indexed_moe_gemm(
     biases: Option<&Tensor>,
     indices: &Tensor,
 ) -> Result<Tensor> {
+    let input = if matches!(input.dims(), [_, 1, _]) {
+        input.squeeze(1)?
+    } else {
+        input.clone()
+    };
     let input = input.contiguous()?;
     let weights = weights.contiguous()?;
     let weight_scales = weight_scales.contiguous()?;

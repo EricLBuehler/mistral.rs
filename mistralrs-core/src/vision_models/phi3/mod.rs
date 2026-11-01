@@ -1026,7 +1026,7 @@ impl ImageEmbedding {
         }
 
         let input_ids = input_ids.clamp(0.0, self.vocab_size as f64)?;
-        let mut hidden_states = self.wte.embedding_forward(&input_ids, self.dtype)?;
+        let mut hidden_states = self.wte.embedding_forward(&input_ids, self.dtype.into())?;
         let expected_placeholder_rows = match (&hd_transform, &image_set_tensor) {
             (Some(output_lens), Some(Either::Left(outputs))) => {
                 if output_lens.len() != outputs.len() {
@@ -1335,7 +1335,8 @@ impl Model {
                 &self.encoder_cache,
             )?
         } else {
-            self.embed_tokens.embedding_forward(input_ids, self.dtype)?
+            self.embed_tokens
+                .embedding_forward(input_ids, self.dtype.into())?
         };
         let cache = &mut self.cache.normal().0;
         let mask_cache = ctx.mask_cache(cache);

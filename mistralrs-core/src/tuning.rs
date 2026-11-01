@@ -455,11 +455,17 @@ fn map_for_candidate(
 ) -> Result<(DeviceMapMetadata, usize)> {
     let pack_factor = isq.map(|i| i.pack_factor(dtype)).unwrap_or(1);
     let quantization = AutoDeviceMapQuantization::isq(isq, topology);
-    let layer_sizes = loader.layer_sizes_in_bytes(config, dtype, pack_factor, None)?;
+    let layer_sizes = loader.layer_sizes_in_bytes_with_quantization(
+        config,
+        dtype,
+        pack_factor,
+        Some(&quantization),
+        None,
+    )?;
     let non_mapped =
         loader.non_mapped_size_in_bytes(config, dtype, pack_factor, Some(&quantization), None)?;
     let total = layer_sizes.iter().sum::<usize>() + non_mapped;
-    let map = crate::pipeline::get_device_layers_for_loader(
+    let (map, total) = crate::pipeline::get_device_layers_for_loader(
         loader,
         config,
         loader.num_layers(config)?,

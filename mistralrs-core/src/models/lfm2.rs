@@ -327,7 +327,7 @@ impl MoeMlp {
     fn forward(&self, xs: &Tensor) -> Result<Tensor> {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden_dim))?;
-        let router_logits = self.gate.forward(&xs_flat)?;
+        let router_logits = crate::layers::router_linear(&self.gate, &xs_flat)?;
         let router_logits = match &self.gate_lora {
             Some(site) => mistralrs_quant::apply_dynamic_lora_delta(site, &xs_flat, router_logits)?,
             None => router_logits,
@@ -1161,7 +1161,8 @@ impl Model {
     }
 
     pub fn embed(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.embedding_forward(input_ids, self.dtype)
+        self.embed_tokens
+            .embedding_forward(input_ids, self.dtype.into())
     }
 
     pub fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {

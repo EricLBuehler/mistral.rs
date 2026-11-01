@@ -786,7 +786,7 @@ impl ImageEmbedding {
             }
         }
 
-        let mut hidden_states = self.wte.embedding_forward(&input_ids, self.dtype)?;
+        let mut hidden_states = self.wte.embedding_forward(&input_ids, self.dtype.into())?;
         if select && self.use_hd_transform {
             match image_set_tensor {
                 Some(image_set_tensors) => {

@@ -471,7 +471,7 @@ impl SparseMoeBlock {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden_dim))?;
 
-        let router_logits = self.gate.forward(&xs_flat)?;
+        let router_logits = crate::layers::router_linear(&self.gate, &xs_flat)?;
         let router_logits = match &self.gate_lora {
             Some(site) => mistralrs_quant::apply_dynamic_lora_delta(site, &xs_flat, router_logits)?,
             None => router_logits,
@@ -497,17 +497,13 @@ impl SparseMoeBlock {
         // 3. Shared expert with sigmoid gating
         let shared_out = self.shared_expert.forward(xs)?;
 
-        let shared_gate = self.shared_expert_gate.forward(&xs_flat)?;
+        let shared_gate = crate::layers::router_linear(&self.shared_expert_gate, &xs_flat)?;
         let shared_gate = match &self.shared_expert_gate_lora {
             Some(site) => mistralrs_quant::apply_dynamic_lora_delta(site, &xs_flat, shared_gate)?,
             None => shared_gate,
         };
-        let shared_gate = candle_nn::ops::sigmoid(&shared_gate)?;
         let shared_gate = shared_gate.reshape((b_size, seq_len, 1))?;
-        let shared_out = shared_out.broadcast_mul(&shared_gate)?;
-
-        // 4. Combine
-        y + shared_out
+        crate::layers::sigmoid_gated_add(&y, &shared_out, &shared_gate)
     }
 }
 
@@ -970,7 +966,9 @@ impl Model {
         input_ids: &Tensor,
         ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        let mut x = self.embed_tokens.embedding_forward(input_ids, self.dtype)?;
+        let mut x = self
+            .embed_tokens
+            .embedding_forward(input_ids, self.dtype.into())?;
 
         let recurrent_metadata = ctx.recurrent_metadata().cloned();
         let has_linear_attention = self
@@ -1184,7 +1182,37 @@ impl IsqModel for Model {
     }
 }
 
-impl crate::speculative::SpeculativeTargetMixin for Model {}
+impl crate::speculative::SpeculativeTargetMixin for Model {
+    fn reserve_recurrent_decode_deferred_storage(&self) -> Result<bool> {
+        crate::gdn::reserve_deferred_decode_state(
+            &mut self.kv_cache.hybrid(),
+            self.layers
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, layer)| match &layer.layer_impl {
+                    LayerImpl::LinearAttention(gdn) => Some((idx, gdn)),
+                    LayerImpl::FullAttention(_) => None,
+                }),
+            self.dtype,
+        )
+    }
+
+    fn disable_recurrent_decode_deferred_storage(&self) -> Result<bool> {
+        self.kv_cache.hybrid().disable_gdn_deferred_state()
+    }
+
+    fn flush_recurrent_state_for_current_batch(&self) -> Result<()> {
+        self.kv_cache
+            .hybrid()
+            .materialize_deferred_state_for_current_batch()
+    }
+
+    fn flush_recurrent_speculative_transitions(&self, sequence_ids: &[usize]) -> Result<()> {
+        let cache = self.kv_cache.hybrid();
+        let slots = cache.recurrent_slots_for_sequences(sequence_ids);
+        cache.materialize_deferred_state_for_slots(&slots)
+    }
+}
 
 impl NormalModel for Model {
     fn forward(

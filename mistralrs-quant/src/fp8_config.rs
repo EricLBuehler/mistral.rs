@@ -177,6 +177,18 @@ pub enum Nvfp4ActivationMode {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "snake_case")]
+pub enum Nvfp4ScaleEncoding {
+    Plain,
+    Csf,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+pub struct Mxfp8LinearSpec {
+    pub group_size: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ScaleConvention {
     Dequantize,
     Quantize,
@@ -196,6 +208,7 @@ pub struct Nvfp4LinearSpec {
     pub activation: Nvfp4ActivationMode,
     pub scale_names: Nvfp4ScaleNames,
     pub global_scale: ScaleConvention,
+    pub weight_scale_encoding: Nvfp4ScaleEncoding,
 }
 
 impl Nvfp4LinearSpec {
@@ -211,6 +224,7 @@ impl Nvfp4LinearSpec {
                     .then_some("input_scale"),
             },
             global_scale: ScaleConvention::Dequantize,
+            weight_scale_encoding: Nvfp4ScaleEncoding::Plain,
         }
     }
 
@@ -227,6 +241,7 @@ impl Nvfp4LinearSpec {
             },
             // compressed-tensors' ModelOpt converter reciprocates both global scales.
             global_scale: ScaleConvention::Quantize,
+            weight_scale_encoding: Nvfp4ScaleEncoding::Plain,
         }
     }
 }
@@ -235,7 +250,80 @@ impl Nvfp4LinearSpec {
 #[serde(rename_all = "snake_case")]
 pub enum CheckpointLinearSpec {
     Fp8(Fp8LinearSpec),
+    Mxfp8(Mxfp8LinearSpec),
     Nvfp4(Nvfp4LinearSpec),
+}
+
+impl CheckpointLinearSpec {
+    pub fn bits(self) -> usize {
+        match self {
+            Self::Nvfp4(_) => NVFP4_BITS as usize,
+            Self::Fp8(_) | Self::Mxfp8(_) => FP8_BITS as usize,
+        }
+    }
+
+    pub fn pack_factor(self, dtype: DType) -> usize {
+        (dtype.size_in_bytes() * u8::BITS as usize / self.bits()).max(1)
+    }
+
+    /// Resident weight and scale bytes for a matrix or stack of matrices.
+    pub fn size_in_bytes(self, shape: &[usize]) -> CandleResult<usize> {
+        let matrices = shape[..shape.len() - 2].iter().product::<usize>();
+        let rows = shape[shape.len() - 2];
+        let cols = shape[shape.len() - 1];
+        let elements = rows * cols;
+        let float_bytes = DType::F32.size_in_bytes();
+        let matrix_bytes = match self {
+            Self::Nvfp4(spec) => {
+                elements.div_ceil(2)
+                    + rows * cols.div_ceil(NVFP4_BLOCK_SIZE)
+                    + rows * float_bytes
+                    + usize::from(spec.activation == Nvfp4ActivationMode::DynamicBlock)
+                        * float_bytes
+            }
+            Self::Mxfp8(spec) => elements + rows * cols.div_ceil(spec.group_size),
+            Self::Fp8(spec) => {
+                let scales = spec
+                    .weight_scale
+                    .logical_shape([rows, cols])?
+                    .iter()
+                    .product::<usize>();
+                elements
+                    + scales * float_bytes
+                    + usize::from(spec.activation == Fp8ActivationMode::StaticTensor) * float_bytes
+            }
+        };
+        Ok(matrices * matrix_bytes)
+    }
+
+    pub fn has_weight_scales(self, vb: &crate::ShardedVarBuilder) -> bool {
+        match self {
+            Self::Fp8(spec) => spec
+                .scale_names
+                .weight
+                .iter()
+                .any(|name| vb.contains_tensor(name)),
+            Self::Nvfp4(spec) => crate::Nvfp4Layer::has_checkpoint_scales(vb, spec),
+            Self::Mxfp8(_) => vb.contains_tensor("weight_scale"),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct CheckpointPattern(Arc<Regex>);
+
+impl PartialEq for CheckpointPattern {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.as_str() == other.0.as_str()
+    }
+}
+
+impl Eq for CheckpointPattern {}
+
+impl Serialize for CheckpointPattern {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.0.as_str())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -245,8 +333,8 @@ enum CheckpointTarget {
     Exact(String),
     Module(String),
     Contains(String),
-    Regex(String),
-    Glob(String),
+    Regex(CheckpointPattern),
+    Glob(CheckpointPattern),
 }
 
 impl CheckpointTarget {
@@ -255,9 +343,9 @@ impl CheckpointTarget {
             return Ok(Self::Linear);
         }
         if let Some(pattern) = raw.strip_prefix("re:") {
-            Regex::new(pattern)
+            let compiled = Regex::new(pattern)
                 .map_err(|err| format!("invalid compressed-tensors target regex `{raw}`: {err}"))?;
-            return Ok(Self::Regex(pattern.to_string()));
+            return Ok(Self::Regex(CheckpointPattern(Arc::new(compiled))));
         }
         Ok(Self::Exact(raw.to_string()))
     }
@@ -281,9 +369,7 @@ impl CheckpointTarget {
                         .is_some_and(|suffix| suffix.starts_with('.'))
             }
             Self::Contains(target) => prefix.contains(target),
-            Self::Regex(pattern) | Self::Glob(pattern) => Regex::new(pattern)
-                .expect("checkpoint target regex is validated during config parsing")
-                .is_match(prefix),
+            Self::Regex(pattern) | Self::Glob(pattern) => pattern.0.is_match(prefix),
         }
     }
 
@@ -337,18 +423,35 @@ impl CheckpointQuantConfig {
             Some(CheckpointLinearSpec::Nvfp4(_)) => Err(format!(
                 "module `{prefix}` uses NVFP4, but an FP8 specification was requested"
             )),
+            Some(CheckpointLinearSpec::Mxfp8(_)) => Err(format!(
+                "module `{prefix}` uses MXFP8, but an FP8 specification was requested"
+            )),
             None => Ok(None),
         }
     }
 
     pub fn resolve_checked(&self, prefix: &str) -> Result<Option<CheckpointLinearSpec>, String> {
-        match self.resolve_state_checked(prefix)? {
+        match self.resolve_state_checked(prefix, true)? {
             CheckpointDirectResolution::NoMatch => Ok(None),
             CheckpointDirectResolution::Resolved(spec) => Ok(spec),
         }
     }
 
-    fn resolve_state_checked(&self, prefix: &str) -> Result<CheckpointDirectResolution, String> {
+    pub fn resolve_explicit_checked(
+        &self,
+        prefix: &str,
+    ) -> Result<Option<CheckpointLinearSpec>, String> {
+        match self.resolve_state_checked(prefix, false)? {
+            CheckpointDirectResolution::NoMatch => Ok(None),
+            CheckpointDirectResolution::Resolved(spec) => Ok(spec),
+        }
+    }
+
+    fn resolve_state_checked(
+        &self,
+        prefix: &str,
+        include_linear_default: bool,
+    ) -> Result<CheckpointDirectResolution, String> {
         let prefixes = prefix_candidates(prefix);
         if self
             .ignore
@@ -362,12 +465,13 @@ impl CheckpointQuantConfig {
             return Ok(exact);
         }
         if let Some(constituents) = fused_constituents(prefix) {
-            let fused = self.resolve_fused_state(&constituents)?;
+            let fused = self.resolve_fused_state(&constituents, include_linear_default)?;
             if fused != CheckpointDirectResolution::NoMatch {
                 return Ok(fused);
             }
         }
-        for priority in 1..3 {
+        let priorities = if include_linear_default { 1..3 } else { 1..2 };
+        for priority in priorities {
             let resolved = self.resolve_rules_at_priority(prefix, &prefixes, priority)?;
             if resolved != CheckpointDirectResolution::NoMatch {
                 return Ok(resolved);
@@ -407,7 +511,7 @@ impl CheckpointQuantConfig {
         &self,
         prefixes: &[S],
     ) -> Result<Option<CheckpointLinearSpec>, String> {
-        match self.resolve_fused_state(prefixes)? {
+        match self.resolve_fused_state(prefixes, true)? {
             CheckpointDirectResolution::NoMatch => Ok(None),
             CheckpointDirectResolution::Resolved(spec) => Ok(spec),
         }
@@ -416,13 +520,14 @@ impl CheckpointQuantConfig {
     fn resolve_fused_state<S: AsRef<str>>(
         &self,
         prefixes: &[S],
+        include_linear_default: bool,
     ) -> Result<CheckpointDirectResolution, String> {
         let Some((first, rest)) = prefixes.split_first() else {
             return Ok(CheckpointDirectResolution::NoMatch);
         };
-        let resolved = self.resolve_state_checked(first.as_ref())?;
+        let resolved = self.resolve_state_checked(first.as_ref(), include_linear_default)?;
         for prefix in rest {
-            let next = self.resolve_state_checked(prefix.as_ref())?;
+            let next = self.resolve_state_checked(prefix.as_ref(), include_linear_default)?;
             if next != resolved {
                 return Err(format!(
                     "fused quantized projection has different schemes for `{}` and `{}`",
@@ -543,11 +648,13 @@ impl CheckpointQuantConfig {
             .into_iter()
             .map(|target| CheckpointTarget::model_opt(&target))
             .collect::<Result<Vec<_>, _>>()?;
-        ignore.extend(
-            MODEL_OPT_LEGACY_VISION_EXCLUSIONS
-                .iter()
-                .map(|target| CheckpointTarget::Contains((*target).to_string())),
-        );
+        if algorithm != "MIXED_PRECISION" {
+            ignore.extend(
+                MODEL_OPT_LEGACY_VISION_EXCLUSIONS
+                    .iter()
+                    .map(|target| CheckpointTarget::Contains((*target).to_string())),
+            );
+        }
 
         let rules = if algorithm == "MIXED_PRECISION" {
             let layers = config
@@ -587,6 +694,9 @@ impl CheckpointQuantConfig {
                             resolution: CheckpointRuleResolution::Quantized(model_opt_spec(
                                 &algorithm,
                                 layer.get("group_size").or_else(|| config.get("group_size")),
+                                layer
+                                    .get("weight_scale_encoding")
+                                    .or_else(|| config.get("weight_scale_encoding")),
                             )?),
                         });
                     }
@@ -600,7 +710,11 @@ impl CheckpointQuantConfig {
             }
             rules
         } else {
-            let spec = model_opt_spec(&algorithm, config.get("group_size"))?;
+            let spec = model_opt_spec(
+                &algorithm,
+                config.get("group_size"),
+                config.get("weight_scale_encoding"),
+            )?;
             vec![CheckpointConfigRule {
                 targets: vec![CheckpointTarget::Linear],
                 resolution: CheckpointRuleResolution::Quantized(spec),
@@ -644,8 +758,16 @@ pub(crate) fn checkpoint_linear_b(
     hints: crate::Shard,
     vb: crate::ShardedVarBuilder,
 ) -> CandleResult<Arc<dyn crate::QuantMethod>> {
-    if let Some(CheckpointLinearSpec::Nvfp4(spec)) = config.resolve_checkpoint(&vb.prefix())? {
-        return crate::nvfp4::Nvfp4Layer::linear_b(in_dim, out_dim, spec, bias, hints, vb);
+    match config.resolve_checkpoint(&vb.prefix())? {
+        Some(CheckpointLinearSpec::Nvfp4(spec)) => {
+            return crate::nvfp4::Nvfp4Layer::linear_b(in_dim, out_dim, spec, bias, hints, vb);
+        }
+        Some(CheckpointLinearSpec::Mxfp8(_)) => {
+            return Ok(Arc::new(crate::mxfp8::Mxfp8Linear::load(
+                in_dim, out_dim, bias, hints, vb,
+            )?));
+        }
+        _ => {}
     }
     let Some(spec) = config.resolve_fp8(&vb.prefix())? else {
         if matches!(config, crate::QuantizedConfig::Fp8 { .. })
@@ -681,44 +803,11 @@ pub(crate) fn checkpoint_linear_b(
             )
         }
     };
-    let scale_shape = match vb.tensor_shape(scale_name) {
-        Some(shape) => shape.to_vec(),
-        None => spec.weight_scale.logical_shape([out_dim, in_dim])?,
-    };
-    let fused_partitions = fused_constituents(&vb.prefix()).map(|parts| parts.len());
-    let scale_hints = scale_shard(
-        spec.weight_scale,
-        [out_dim, in_dim],
-        &scale_shape,
-        hints,
-        fused_partitions,
-    )?;
-    let weight = vb.get_with_hints_dtype((out_dim, in_dim), "weight", hints, DType::F8E4M3)?;
-    let weight_scale = vb.get_with_hints_dtype(scale_shape, scale_name, scale_hints, DType::F32)?;
-    let weight_shape: [usize; 2] = weight.dims2().map(|(rows, cols)| [rows, cols])?;
-    let weight_scale = spec.weight_scale.normalize(weight_scale, weight_shape)?;
-    let activation_scale = if spec.activation == Fp8ActivationMode::StaticTensor {
-        let name = spec.scale_names.activation_name(&vb)?.ok_or_else(|| {
-            candle_core::Error::msg(format!(
-                "missing FP8 static activation scale at prefix `{}`; expected one of {}",
-                vb.prefix(),
-                spec.scale_names.activation.join(", ")
-            ))
-        })?;
-        let shape = vb
-            .tensor_shape(name)
-            .map(<[usize]>::to_vec)
-            .unwrap_or_default();
-        let scale_hints = tensor_scale_shard([out_dim, in_dim], &shape, hints, fused_partitions)?;
-        Some(spec.normalize_activation_scale(vb.get_with_hints_dtype(
-            shape,
-            name,
-            scale_hints,
-            DType::F32,
-        )?)?)
-    } else {
-        None
-    };
+    let CheckpointFp8Tensors {
+        weight,
+        weight_scale,
+        activation_scale,
+    } = load_checkpoint_fp8_tensors([out_dim, in_dim], spec, scale_name, hints, &vb)?;
     let bias = if bias {
         Some(vb.get((out_dim,), "bias")?)
     } else {
@@ -728,10 +817,7 @@ pub(crate) fn checkpoint_linear_b(
         .as_ref()
         .map(Tensor::dtype)
         .filter(|dtype| matches!(dtype, DType::F16 | DType::BF16 | DType::F32))
-        .unwrap_or_else(|| match vb.dtype() {
-            DType::F16 | DType::BF16 | DType::F32 => vb.dtype(),
-            _ => DType::BF16,
-        });
+        .unwrap_or_else(|| checkpoint_fp8_dequant_dtype(vb.dtype()));
 
     match spec.activation {
         Fp8ActivationMode::DynamicBlock(_) => {
@@ -764,6 +850,83 @@ pub(crate) fn checkpoint_linear_b(
             })
         }
     }
+}
+
+pub(crate) struct CheckpointFp8Tensors {
+    pub weight: Tensor,
+    pub weight_scale: Tensor,
+    pub activation_scale: Option<Tensor>,
+}
+
+pub(crate) fn checkpoint_fp8_dequant_dtype(dtype: DType) -> DType {
+    match dtype {
+        DType::F16 | DType::BF16 | DType::F32 => dtype,
+        _ => DType::BF16,
+    }
+}
+
+pub(crate) fn checkpoint_fp8_weight_scale_name(
+    vb: &crate::ShardedVarBuilder,
+    spec: Fp8LinearSpec,
+) -> CandleResult<Option<&'static str>> {
+    resolve_scale_name(vb, spec.scale_names.weight, "weight")
+}
+
+pub(crate) fn load_checkpoint_fp8_tensors(
+    weight_shape: [usize; 2],
+    spec: Fp8LinearSpec,
+    scale_name: &'static str,
+    hints: crate::Shard,
+    vb: &crate::ShardedVarBuilder,
+) -> CandleResult<CheckpointFp8Tensors> {
+    let scale_shape = match vb.tensor_shape(scale_name) {
+        Some(shape) => shape.to_vec(),
+        None => spec.weight_scale.logical_shape(weight_shape)?,
+    };
+    let fused_partitions = fused_constituents(&vb.prefix()).map(|parts| parts.len());
+    let scale_hints = scale_shard(
+        spec.weight_scale,
+        weight_shape,
+        &scale_shape,
+        hints,
+        fused_partitions,
+    )?;
+    let weight = vb.get_with_hints_dtype(
+        (weight_shape[0], weight_shape[1]),
+        "weight",
+        hints,
+        DType::F8E4M3,
+    )?;
+    let weight_scale = vb.get_with_hints_dtype(scale_shape, scale_name, scale_hints, DType::F32)?;
+    let local_shape: [usize; 2] = weight.dims2().map(|(rows, cols)| [rows, cols])?;
+    let weight_scale = spec.weight_scale.normalize(weight_scale, local_shape)?;
+    let activation_scale = if spec.activation == Fp8ActivationMode::StaticTensor {
+        let name = spec.scale_names.activation_name(vb)?.ok_or_else(|| {
+            candle_core::Error::msg(format!(
+                "missing FP8 static activation scale at prefix `{}`; expected one of {}",
+                vb.prefix(),
+                spec.scale_names.activation.join(", ")
+            ))
+        })?;
+        let shape = vb
+            .tensor_shape(name)
+            .map(<[usize]>::to_vec)
+            .unwrap_or_default();
+        let scale_hints = tensor_scale_shard(weight_shape, &shape, hints, fused_partitions)?;
+        Some(spec.normalize_activation_scale(vb.get_with_hints_dtype(
+            shape,
+            name,
+            scale_hints,
+            DType::F32,
+        )?)?)
+    } else {
+        None
+    };
+    Ok(CheckpointFp8Tensors {
+        weight,
+        weight_scale,
+        activation_scale,
+    })
 }
 
 fn unquantized_linear_b(
@@ -1154,7 +1317,36 @@ fn validate_nvfp4_args(
 fn model_opt_spec(
     algorithm: &str,
     group_size: Option<&Value>,
+    weight_scale_encoding: Option<&Value>,
 ) -> Result<CheckpointLinearSpec, String> {
+    let encoding = match weight_scale_encoding {
+        None | Some(Value::Null) => Nvfp4ScaleEncoding::Plain,
+        Some(Value::String(value)) if value == "csf" => Nvfp4ScaleEncoding::Csf,
+        Some(Value::String(value)) if value == "plain" => Nvfp4ScaleEncoding::Plain,
+        Some(value) => {
+            return Err(format!(
+                "unsupported ModelOpt weight_scale_encoding `{value}`"
+            ))
+        }
+    };
+    if encoding != Nvfp4ScaleEncoding::Plain && !matches!(algorithm, "NVFP4" | "W4A16_NVFP4") {
+        return Err(format!(
+            "ModelOpt {algorithm} does not support CSF weight scales"
+        ));
+    }
+    if algorithm == "MXFP8" {
+        if group_size
+            .is_some_and(|value| value.as_u64() != Some(crate::mxfp8::MXFP8_BLOCK_SIZE as u64))
+        {
+            return Err(format!(
+                "ModelOpt MXFP8 requires group_size={}",
+                crate::mxfp8::MXFP8_BLOCK_SIZE
+            ));
+        }
+        return Ok(CheckpointLinearSpec::Mxfp8(Mxfp8LinearSpec {
+            group_size: crate::mxfp8::MXFP8_BLOCK_SIZE,
+        }));
+    }
     if matches!(algorithm, "NVFP4" | "W4A16_NVFP4") {
         if group_size.is_some_and(|value| value.as_u64() != Some(NVFP4_BLOCK_SIZE as u64)) {
             return Err(format!(
@@ -1166,9 +1358,9 @@ fn model_opt_spec(
         } else {
             Nvfp4ActivationMode::None
         };
-        return Ok(CheckpointLinearSpec::Nvfp4(Nvfp4LinearSpec::model_opt(
-            activation,
-        )));
+        let mut spec = Nvfp4LinearSpec::model_opt(activation);
+        spec.weight_scale_encoding = encoding;
+        return Ok(CheckpointLinearSpec::Nvfp4(spec));
     }
     let (weight_scale, activation) = match algorithm {
         "FP8" => (
@@ -1206,6 +1398,7 @@ fn model_opt_fields(value: &Value) -> Result<serde_json::Map<String, Value>, Str
         "kv_cache_quant_algo",
         "kv_cache_scheme",
         "group_size",
+        "weight_scale_encoding",
         "quantized_layers",
     ] {
         if let Some(value) = root.get(name) {
@@ -1380,7 +1573,7 @@ fn optional_string_array(value: Option<&Value>, field: &str) -> Result<Vec<Strin
     }
 }
 
-fn glob_regex(glob: &str) -> Result<String, String> {
+fn glob_regex(glob: &str) -> Result<CheckpointPattern, String> {
     let mut regex = String::from("^");
     let mut chars = glob.chars().peekable();
     while let Some(ch) = chars.next() {
@@ -1411,8 +1604,9 @@ fn glob_regex(glob: &str) -> Result<String, String> {
         }
     }
     regex.push('$');
-    Regex::new(&regex).map_err(|err| format!("invalid ModelOpt glob `{glob}`: {err}"))?;
-    Ok(regex)
+    let compiled =
+        Regex::new(&regex).map_err(|err| format!("invalid ModelOpt glob `{glob}`: {err}"))?;
+    Ok(CheckpointPattern(Arc::new(compiled)))
 }
 
 #[cfg(test)]
@@ -2444,5 +2638,62 @@ mod tests {
         )
         .is_err());
         Ok(())
+    }
+    #[test]
+    fn model_opt_mxfp8_and_csf_keep_distinct_encodings() {
+        let config = CheckpointQuantConfig::model_opt(&serde_json::json!({
+            "quant_algo": "MIXED_PRECISION",
+            "quantized_layers": {
+                "model.vision_model.proj": {"quant_algo": "MXFP8", "group_size": 32},
+                "model.layers.0.mlp.experts": {"quant_algo": "NVFP4", "group_size": 16, "weight_scale_encoding": "csf"}
+            }
+        })).unwrap();
+        assert_eq!(
+            config.resolve_checked("model.vision_model.proj").unwrap(),
+            Some(CheckpointLinearSpec::Mxfp8(Mxfp8LinearSpec {
+                group_size: 32
+            }))
+        );
+        let Some(CheckpointLinearSpec::Nvfp4(spec)) = config
+            .resolve_checked("model.layers.0.mlp.experts.7.gate_proj")
+            .unwrap()
+        else {
+            panic!("expected NVFP4 expert")
+        };
+        assert_eq!(spec.weight_scale_encoding, Nvfp4ScaleEncoding::Csf);
+        assert!(CheckpointQuantConfig::model_opt(
+            &serde_json::json!({"quant_algo": "MXFP8", "group_size": 16})
+        )
+        .is_err());
+        assert!(CheckpointQuantConfig::model_opt(
+            &serde_json::json!({"quant_algo": "MXFP8", "weight_scale_encoding": "csf"})
+        )
+        .is_err());
+        assert!(CheckpointQuantConfig::model_opt(
+            &serde_json::json!({"quant_algo": "NVFP4", "weight_scale_encoding": "other"})
+        )
+        .is_err());
+        let legacy =
+            CheckpointQuantConfig::model_opt(&serde_json::json!({"quant_algo": "FP8"})).unwrap();
+        assert_eq!(
+            legacy.resolve_checked("model.vision_model.proj").unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn model_opt_external_csf_encoding_survives_merge() {
+        let config = CheckpointQuantConfig::model_opt_merged(
+            None,
+            &serde_json::json!({
+                "quant_algo": "NVFP4", "weight_scale_encoding": "csf"
+            }),
+        )
+        .unwrap();
+        let Some(CheckpointLinearSpec::Nvfp4(spec)) = config.resolve_checked("layer").unwrap()
+        else {
+            panic!("expected NVFP4")
+        };
+        assert_eq!(spec.weight_scale_encoding, Nvfp4ScaleEncoding::Csf);
     }
 }

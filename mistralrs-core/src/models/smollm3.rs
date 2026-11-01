@@ -497,7 +497,7 @@ impl SmolLm3 {
     ) -> Result<Tensor> {
         self.forward_embeds(
             input_ids,
-            self.wte.embedding_forward(input_ids, self.dtype)?,
+            self.wte.embedding_forward(input_ids, self.dtype.into())?,
             ctx,
         )
     }

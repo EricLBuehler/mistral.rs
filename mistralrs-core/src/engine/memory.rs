@@ -428,6 +428,7 @@ mod tests {
             memory_goal: Default::default(),
             logits_bytes_per_query_token: 0,
             limits: Default::default(),
+            recurrent_prefix_capacity: 0,
             primary_activation_bytes: 100,
             mapped_activation_bytes: 80,
             primary_non_attention_bytes: 60,

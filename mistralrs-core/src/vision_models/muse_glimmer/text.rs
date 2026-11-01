@@ -548,7 +548,9 @@ impl TextModel {
 
     pub(super) fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
         normalize_input_embeddings(
-            &self.embed_tokens.embedding_forward(input_ids, self.dtype)?,
+            &self
+                .embed_tokens
+                .embedding_forward(input_ids, self.dtype.into())?,
             self.norm.eps,
         )
     }

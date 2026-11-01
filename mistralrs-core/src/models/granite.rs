@@ -2179,7 +2179,7 @@ impl GraniteMoeHybrid {
 
     pub fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
         let (_batch_size, _seq_len) = input_ids.dims2()?;
-        let mut x = self.wte.embedding_forward(input_ids, self.dtype)?;
+        let mut x = self.wte.embedding_forward(input_ids, self.dtype.into())?;
         // Scale embeddings
         x = scale_tensor(x, self.embedding_multiplier)?;
 

@@ -11,6 +11,8 @@
 #include <cuda_fp16.h>
 #include <cuda_fp8.h>
 
+#include "../common/fp_codecs.cuh"
+
 #define CUDA_CHECK(call)                                                       \
   do {                                                                         \
     cudaError_t err = call;                                                    \
@@ -27,10 +29,6 @@ namespace fp8_gemm {
 // ============================================================================
 // Helper functions
 // ============================================================================
-
-__device__ __forceinline__ float fp8_to_float(__nv_fp8_e4m3 val) {
-  return __half2float(__nv_cvt_fp8_to_halfraw(val.__x, __NV_E4M3));
-}
 
 __device__ __forceinline__ float get_scale(const float *__restrict__ scale,
                                            int n, int k, int scale_stride,
@@ -97,7 +95,7 @@ __global__ void fp8_matmul_tiled(const T *__restrict__ input,
         w.__x = __ldg(reinterpret_cast<const uint8_t *>(&weight[gn * K + gk]));
         float s = get_scale(weight_scale, gn, gk, scale_row_stride,
                             block_size_y, block_size_x);
-        val = fp8_to_float(w) * s;
+        val = e4m3_to_float(w.__x) * s;
       }
       s_weight[ln][lk] = val;
     }
@@ -217,8 +215,8 @@ __global__ void fp8_moe_gemm(const T *__restrict__ input,
     float scale = __ldg(&expert_scale[scale_row_offset + scale_col]);
 
     // Accumulate
-    acc += scale * (i0 * fp8_to_float(w0) + i1 * fp8_to_float(w1) +
-                    i2 * fp8_to_float(w2) + i3 * fp8_to_float(w3));
+    acc += scale * (i0 * e4m3_to_float(w0.__x) + i1 * e4m3_to_float(w1.__x) +
+                    i2 * e4m3_to_float(w2.__x) + i3 * e4m3_to_float(w3.__x));
   }
 
   // Handle remainder
@@ -236,7 +234,7 @@ __global__ void fp8_moe_gemm(const T *__restrict__ input,
     int scale_col = k / block_size_x;
     float scale = __ldg(&expert_scale[scale_row_offset + scale_col]);
 
-    acc += scale * in_val * fp8_to_float(w);
+    acc += scale * in_val * e4m3_to_float(w.__x);
   }
 
 // Warp reduction using shuffle

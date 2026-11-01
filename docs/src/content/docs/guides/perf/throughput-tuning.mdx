@@ -81,7 +81,7 @@ See [paged attention and KV caching](/guides/perf/paged-attention/) for setup an
 
 Prefix caching is most useful for multi-turn chat and shared system prompts. When measuring it, include repeated prefixes in your test traffic and compare time to first token after the first request.
 
-`--prefix-cache-n` controls how many prefixes are retained (default 16; `0` disables). Python uses `Runner(prefix_cache_n=...)`, and Rust uses `.with_prefix_cache_n(Some(...))`. Retaining more prefixes can help workloads that cycle through many conversations.
+`--prefix-cache-n` controls how many prefixes are retained (`0` disables). By default, up to 16 are retained; recurrent models using paged attention can reduce that count to leave room for model weights, runtime buffers, and KV. An explicit count is preserved. Python uses `Runner(prefix_cache_n=...)`, and Rust uses `.with_prefix_cache_n(PrefixCacheCapacity::Fixed(n))` (`PrefixCacheCapacity::Auto` is the default; `PrefixCacheCapacity::DISABLED` turns retention off). Retaining more prefixes can help workloads that cycle through many conversations.
 
 With paged attention, matching prefixes share cache blocks. Without paging, completed sequences' caches are retained whole. `--no-kv-cache` disables both the KV cache and prefix caching; `--paged-attn off` keeps the standard KV cache.
 

@@ -154,10 +154,12 @@ fn random_layer(device: &Device, dtype: DType) -> Result<Nvfp4Layer> {
 }
 
 #[test]
-#[ignore = "requires an SM121 CUDA device; run CUDA tests with one test thread"]
+#[ignore = "requires a CUDA device matching the NVFP4 CUTLASS build arch; run CUDA tests with one test thread"]
 fn native_decode_arbitrary_data_matches_cutile_and_sampled_fp64_bounds() -> Result<()> {
     let device = Device::new_cuda(0)?;
-    if crate::cutile::device_compute_capability(device.as_cuda_device()?) != (12, 1) {
+    if !super::cutlass::compiled_for(&crate::cuda_device::cuda_device_info(
+        device.as_cuda_device()?,
+    )) {
         return Ok(());
     }
     for dtype in [DType::BF16, DType::F16] {

@@ -375,7 +375,7 @@ impl SparseMoeBlock {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden_dim))?;
 
-        let router_logits = self.gate.forward(&xs_flat)?;
+        let router_logits = crate::layers::router_linear(&self.gate, &xs_flat)?;
         let router_logits = match &self.gate_lora {
             Some(site) => mistralrs_quant::apply_dynamic_lora_delta(site, &xs_flat, router_logits)?,
             None => router_logits,
@@ -399,16 +399,13 @@ impl SparseMoeBlock {
         y = y.reshape((b_size, seq_len, hidden_dim))?;
 
         let shared_out = self.shared_expert.forward(xs)?;
-        let shared_gate = self.shared_expert_gate.forward(&xs_flat)?;
+        let shared_gate = crate::layers::router_linear(&self.shared_expert_gate, &xs_flat)?;
         let shared_gate = match &self.shared_expert_gate_lora {
             Some(site) => mistralrs_quant::apply_dynamic_lora_delta(site, &xs_flat, shared_gate)?,
             None => shared_gate,
         };
-        let shared_gate = candle_nn::ops::sigmoid(&shared_gate)?;
         let shared_gate = shared_gate.reshape((b_size, seq_len, 1))?;
-        let shared_out = shared_out.broadcast_mul(&shared_gate)?;
-
-        y + shared_out
+        crate::layers::sigmoid_gated_add(&y, &shared_out, &shared_gate)
     }
 }
 
@@ -523,6 +520,20 @@ fn text_model_vb(vb: ShardedVarBuilder) -> Result<ShardedVarBuilder> {
 }
 
 impl Qwen3_5MoeTextModel {
+    pub(super) fn reserve_recurrent_decode_deferred_storage(&self) -> Result<bool> {
+        crate::gdn::reserve_deferred_decode_state(
+            &mut self.cache.hybrid(),
+            self.layers
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, layer)| match &layer.layer_impl {
+                    LayerImpl::LinearAttention(gdn) => Some((idx, gdn)),
+                    LayerImpl::FullAttention(_) => None,
+                }),
+            self.dtype,
+        )
+    }
+
     pub fn new(
         cfg: &TextConfig,
         vb: ShardedVarBuilder,
@@ -771,7 +782,8 @@ impl Qwen3_5MoeTextModel {
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.embedding_forward(input_ids, self.dtype)
+        self.embed_tokens
+            .embedding_forward(input_ids, self.dtype.into())
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -39,6 +39,7 @@ SYSTEM_COMMANDS = (
     "date",
     "dd",
     "dirname",
+    "echo",
     "env",
     "grep",
     "gzip",

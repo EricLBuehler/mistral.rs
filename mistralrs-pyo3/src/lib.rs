@@ -1216,7 +1216,7 @@ impl Runner {
         which,
         max_seqs = mistralrs_core::memory_plan::DEFAULT_MAX_NUM_SEQS,
         no_kv_cache = false,
-        prefix_cache_n = 16,
+        prefix_cache_n = None,
         token_source = "cache",
         mtp_model = None,
         mtp_n_predict = None,
@@ -1243,7 +1243,7 @@ impl Runner {
         which: Which,
         max_seqs: usize,
         no_kv_cache: bool,
-        prefix_cache_n: usize,
+        prefix_cache_n: Option<usize>,
         token_source: &str,
         mtp_model: Option<String>,
         mtp_n_predict: Option<usize>,
@@ -1419,10 +1419,12 @@ impl Runner {
             supported && !no_paged_attn && !no_kv_cache,
         )
         .map_err(PyApiErr::from)?;
+        let prefix_cache_n = mistralrs_core::PrefixCacheCapacity::from(prefix_cache_n);
         let cache_config = cache_config
             .map(|config| config.with_serving_capacity(max_seqs))
             .transpose()?
             .map(|config| config.with_recurrent_prefix_capacity(prefix_cache_n));
+        let prefix_cache_n = prefix_cache_n.requested();
         let mtp_config = mtp_model.map(|model| MtpConfig::new(model, mtp_n_predict));
         let mtp_runtime = MtpRuntimeConfig::new(prefix_cache_n);
         let cache_config = reserve_external_mtp_memory_with_runtime(
