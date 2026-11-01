@@ -438,7 +438,8 @@ impl GgufWeightSource {
                 len,
             } => self
                 .materialize_binding(input, device)?
-                .narrow(*dim, *start, *len),
+                .narrow(*dim, *start, *len)?
+                .force_contiguous(),
             GgufTensorBinding::Concat { inputs, dim } => {
                 let tensors = inputs
                     .iter()

@@ -9,6 +9,8 @@ mod generation_config;
 mod gguf_tokenizer;
 pub(crate) mod idefics3_bindings;
 mod lfm2_vl_bindings;
+mod lfm3_audio_bindings;
+pub(crate) mod lfm3_audio_config;
 mod lfm3_vl_bindings;
 pub(crate) mod lfm3_vl_config;
 pub(crate) mod llama4_bindings;

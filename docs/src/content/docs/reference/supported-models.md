@@ -65,6 +65,8 @@ The `Architecture` column is the `config.json` `architectures` value. Per-family
 | `LlavaForConditionalGeneration` | LLaVA 1.5 | <details><summary><code>llava-hf/llava-1.5-7b-hf</code></summary><code>mistralrs run -m llava-hf/llava-1.5-7b-hf</code></details> |
 | `Lfm2VlForConditionalGeneration` | LFM2-VL, LFM2.5-VL | <details><summary><code>LiquidAI/LFM2.5-VL-1.6B</code> (1.6B), <code>LiquidAI/LFM2.5-VL-450M</code> (450M)</summary><code>mistralrs run -m LiquidAI/LFM2.5-VL-1.6B</code><br><code>mistralrs run -m LiquidAI/LFM2.5-VL-450M</code></details> |
 | `Lfm3VlForConditionalGeneration` | LFM3-VL | <details><summary><code>LiquidAI/LFM3-VL-2B</code></summary><code>mistralrs run -m LiquidAI/LFM3-VL-2B</code></details> |
+| `Lfm3AudioForConditionalGeneration` | LFM3-Audio | <details><summary><code>LiquidAI/LFM3-Audio-2B</code></summary><code>mistralrs run -m LiquidAI/LFM3-Audio-2B</code></details> |
+| `Lfm3OmniForConditionalGeneration` | LFM3-Omni | <details><summary><code>LiquidAI/LFM3-Omni-2B</code></summary><code>mistralrs run -m LiquidAI/LFM3-Omni-2B</code></details> |
 | `MllamaForConditionalGeneration` | Llama 3.2 Vision | <details><summary><code>meta-llama/Llama-3.2-11B-Vision-Instruct</code></summary><code>mistralrs run -m meta-llama/Llama-3.2-11B-Vision-Instruct</code></details> |
 | `Qwen2VLForConditionalGeneration` | Qwen2-VL | <details><summary><code>Qwen/Qwen2-VL-7B-Instruct</code></summary><code>mistralrs run -m Qwen/Qwen2-VL-7B-Instruct</code></details> |
 | `Idefics3ForConditionalGeneration` | Idefics3, SmolVLM | <details><summary><code>HuggingFaceM4/Idefics3-8B-Llama3</code></summary><code>mistralrs run -m HuggingFaceM4/Idefics3-8B-Llama3</code></details> |

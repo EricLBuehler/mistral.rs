@@ -5,12 +5,12 @@ use serde_json::{json, Value as JsonValue};
 
 use super::{
     arch_registry::{GgufSynthesisInputs, SynthesizedGguf},
-    lfm3_vl_bindings::build_lfm3_vl_bindings,
+    lfm3_audio_config::{prepare_lfm3_audio_config, prepare_lfm3_omni_config},
     multimodal_binding_utils::{
         metadata_string, metadata_usize, validate_architecture, validate_projector, TensorInventory,
     },
+    multimodal_vision_registry::resolve_native_multimodal_gguf,
     normal_config::{synthesize_normal_config_value, validate_lfm3_metadata},
-    normal_registry::RopePairing,
 };
 use crate::{
     pipeline::sanitize_quantized_weight_source_config, vision_models::lfm3_vl::Config,
@@ -28,7 +28,23 @@ const TOKENS_KEY: &str = "tokenizer.ggml.tokens";
 const BILINEAR: usize = 2;
 const BICUBIC: usize = 3;
 
-pub(crate) fn synthesize_lfm3_vl(inputs: &GgufSynthesisInputs<'_>) -> Result<SynthesizedGguf> {
+pub(crate) fn synthesize_lfm3_multimodal(
+    inputs: &GgufSynthesisInputs<'_>,
+) -> Result<SynthesizedGguf> {
+    let resolved = resolve_native_multimodal_gguf(inputs.archive, inputs.dtype)?
+        .context("LFM3 GGUF has no supported multimodal projector")?;
+    let config = match resolved.loader_type {
+        MultimodalLoaderType::Lfm3Vl => {
+            prepare_lfm3_vl_config(inputs.external_config, inputs.archive)?
+        }
+        MultimodalLoaderType::Lfm3Audio => {
+            prepare_lfm3_audio_config(inputs.external_config, inputs.archive)?
+        }
+        MultimodalLoaderType::Lfm3Omni => {
+            prepare_lfm3_omni_config(inputs.external_config, inputs.archive)?
+        }
+        _ => bail!("LFM3 GGUF has an incompatible multimodal projector"),
+    };
     let mut processor_config = inputs
         .processor_config
         .map(std::fs::read_to_string)
@@ -37,16 +53,21 @@ pub(crate) fn synthesize_lfm3_vl(inputs: &GgufSynthesisInputs<'_>) -> Result<Syn
         .preprocessor_config
         .map(std::fs::read_to_string)
         .transpose()?;
-    if processor_config.is_none() && preprocessor_config.is_none() {
+    if matches!(
+        resolved.loader_type,
+        MultimodalLoaderType::Lfm3Vl | MultimodalLoaderType::Lfm3Omni
+    ) && processor_config.is_none()
+        && preprocessor_config.is_none()
+    {
         processor_config = Some(lfm3_vl_processor_config(inputs.archive)?);
     }
     Ok(SynthesizedGguf {
-        config: prepare_lfm3_vl_config(inputs.external_config, inputs.archive)?,
-        bindings: build_lfm3_vl_bindings(inputs.archive)?,
-        loader_type: MultimodalLoaderType::Lfm3Vl,
+        config,
+        bindings: resolved.bindings,
+        loader_type: resolved.loader_type,
         processor_config,
         preprocessor_config,
-        rope_pairing: RopePairing::HalfSplit,
+        rope_pairing: resolved.rope_pairing,
     })
 }
 
@@ -210,7 +231,7 @@ pub(crate) fn lfm3_vl_processor_config(archive: &GgufArchive) -> Result<String> 
     }))?)
 }
 
-fn metadata_f64(archive: &GgufArchive, key: &str) -> Result<f64> {
+pub(super) fn metadata_f64(archive: &GgufArchive, key: &str) -> Result<f64> {
     match archive.metadata_value(key) {
         Some(Value::F32(value)) => Ok(f64::from(*value)),
         Some(Value::F64(value)) => Ok(*value),
@@ -235,7 +256,7 @@ fn rgb_array(archive: &GgufArchive, key: &str) -> Result<[f64; 3]> {
         .map_err(|_| anyhow::anyhow!("GGUF metadata `{key}` must contain three channels"))
 }
 
-fn token_id(archive: &GgufArchive, token: &str) -> Result<usize> {
+pub(super) fn token_id(archive: &GgufArchive, token: &str) -> Result<usize> {
     let Some(Value::Array(tokens)) = archive.metadata_value(TOKENS_KEY) else {
         bail!("GGUF metadata `{TOKENS_KEY}` must contain the vocabulary");
     };

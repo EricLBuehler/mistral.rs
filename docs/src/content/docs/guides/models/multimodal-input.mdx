@@ -91,7 +91,9 @@ let response = model.send_chat_request(messages).await?;
 
 ## Content parts and URL forms
 
-Three part types carry media: `image_url`, `audio_url`, and `video_url`, each wrapping a `{"url": ...}` object. URLs accept three forms:
+Images and videos use `image_url` and `video_url` parts. WAV and MP3 audio can use standard `input_audio` parts with base64 `data` and `format`, as shown below. The `audio_url` extension accepts URLs and additional audio formats.
+
+URL parts wrap a `{"url": ...}` object and accept three forms:
 
 - `file:///absolute/path`: local files the server process can read.
 - `http(s)://...`: fetched over the network at request time.
@@ -128,23 +130,25 @@ Non-GIF formats require FFmpeg on the server; install steps and troubleshooting 
 
 The engine decodes the file into sampled frames and feeds them through the model's vision path. Per-request frame-sampling controls are not currently exposed.
 
-Qwen3-VL, Gemma 4, and the native Muse Glimmer safetensors checkpoint accept video; see the [supported models reference](/reference/supported-models/) for per-model modality support. [Full example](/examples/server/gemma4-video/).
+Qwen3-VL, Gemma 4, LFM3-VL, LFM3-Omni, and the native Muse Glimmer safetensors checkpoint accept video; see the [supported models reference](/reference/supported-models/) for per-model modality support. Video soundtracks are not extracted automatically; send audio separately when the model supports it. [Full example](/examples/server/lfm3-omni/).
 
 ## Audio
 
-Audio support is model-specific: Gemma 4, Gemma 3n, Phi 4 Multimodal, MiniCPM-O, and Voxtral accept `audio_url` parts (Voxtral is the dedicated audio-understanding model; see [speech models](/guides/models/use-speech-models/)).
+Audio support is model-specific: Gemma 4, Gemma 3n, Phi 4 Multimodal, MiniCPM-O, Voxtral, LFM3-Audio, and LFM3-Omni accept audio input. HTTP and the native Python SDK accept standard WAV/MP3 content parts:
 
 ```json
 {
   "role": "user",
   "content": [
-    {"type": "audio_url", "audio_url": {"url": "file:///clip.wav"}},
+    {"type": "input_audio", "input_audio": {"data": "<base64 file bytes>", "format": "wav"}},
     {"type": "text", "text": "Transcribe this."}
   ]
 }
 ```
 
-WAV, MP3, FLAC, and OGG decode natively. Convert other formats with FFmpeg first. [Full example](/examples/python/phi4mm-audio/).
+Use `format: "wav"` or `"mp3"`; `data` is the encoded file without a data-URL prefix. For local paths, network URLs, or other decodable formats, use `{"type":"audio_url","audio_url":{"url":"file:///clip.wav"}}`. WAV, MP3, FLAC, and OGG decode natively. Convert other formats with FFmpeg first. Request and file limits are in [HTTP API semantics](/reference/http-api/#audio-requests-and-history).
+
+Rust accepts decoded `AudioInput` through `MultimodalMessages::add_audio_message`. LFM3-Audio and LFM3-Omni can also return speech; see [speech models](/guides/models/use-speech-models/), the [Python example](/examples/python/lfm3-audio/), and the [HTTP example](/examples/server/lfm3-audio/).
 
 ## In-memory images from Python
 

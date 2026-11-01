@@ -167,6 +167,7 @@ macro_rules! handle_pipeline_forward_error {
                             stop_sequence: None,
                             index: seq.get_response_index(),
                             message: ResponseMessage {
+                                audio: None,
                                 content: Some(res),
                                 role: "assistant".to_string(),
                                 tool_calls: None,

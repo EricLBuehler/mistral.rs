@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use anyhow::{bail, Result};
+use candle_core::DType;
 use mistralrs_quant::{GgufArchive, GgufBindingMap};
 
 use crate::MultimodalLoaderType;
@@ -8,7 +9,7 @@ use crate::MultimodalLoaderType;
 use super::{
     gemma3_bindings::synthesize_gemma3_text,
     gemma3_config::ensure_gemma3_vision_config,
-    lfm3_vl_config::synthesize_lfm3_vl,
+    lfm3_vl_config::synthesize_lfm3_multimodal,
     multimodal_bindings::build_gemma4_bindings,
     multimodal_vision_registry::{resolve_native_multimodal_gguf, NativeMultimodalGguf},
     muse_glimmer_bindings::normalize_muse_glimmer_config,
@@ -23,6 +24,7 @@ use super::{
 /// Inputs for an architecture that builds its own config and bindings from the GGUF.
 pub(crate) struct GgufSynthesisInputs<'a> {
     pub archive: &'a GgufArchive,
+    pub dtype: DType,
     pub external_config: Option<&'a str>,
     pub processor_config: Option<&'a Path>,
     pub preprocessor_config: Option<&'a Path>,
@@ -39,7 +41,7 @@ pub(crate) struct SynthesizedGguf {
 }
 
 pub(crate) type SynthesizeFn = fn(&GgufSynthesisInputs<'_>) -> Result<SynthesizedGguf>;
-pub(crate) type ResolveMultimodalFn = fn(&GgufArchive) -> Result<NativeMultimodalGguf>;
+pub(crate) type ResolveMultimodalFn = fn(&GgufArchive, DType) -> Result<NativeMultimodalGguf>;
 
 /// How a GGUF without a projector is loaded.
 #[derive(Clone, Copy)]
@@ -115,11 +117,12 @@ impl GgufArchSpec {
         &self,
         archive: &GgufArchive,
         architecture: &str,
+        dtype: DType,
     ) -> Result<NativeMultimodalGguf> {
         match self.multimodal {
-            GgufMultimodalRoute::Resolve(resolve) => resolve(archive),
+            GgufMultimodalRoute::Resolve(resolve) => resolve(archive, dtype),
             GgufMultimodalRoute::ProjectorRegistry | GgufMultimodalRoute::Synthesized(_) => {
-                let Some(resolved) = resolve_native_multimodal_gguf(archive)? else {
+                let Some(resolved) = resolve_native_multimodal_gguf(archive, dtype)? else {
                     bail!(
                         "multimodal GGUF architecture `{architecture}` is not supported by the native multimodal loader"
                     );
@@ -134,7 +137,7 @@ const DEFAULT_SPEC: GgufArchSpec = GgufArchSpec::new(&[]);
 
 static ARCH_SPECS: &[GgufArchSpec] = &[
     GgufArchSpec::new(&["lfm3"])
-        .multimodal(GgufMultimodalRoute::Synthesized(synthesize_lfm3_vl))
+        .multimodal(GgufMultimodalRoute::Synthesized(synthesize_lfm3_multimodal))
         .infer_multimodal_assets(false),
     GgufArchSpec::new(&[qwen4exp::ARCHITECTURE])
         .text(GgufTextRoute::Synthesized(synthesize_qwen4exp))
@@ -168,7 +171,7 @@ pub(crate) fn arch_spec(architecture: &str) -> &'static GgufArchSpec {
         .unwrap_or(&DEFAULT_SPEC)
 }
 
-fn resolve_gemma4(archive: &GgufArchive) -> Result<NativeMultimodalGguf> {
+fn resolve_gemma4(archive: &GgufArchive, _dtype: DType) -> Result<NativeMultimodalGguf> {
     Ok(NativeMultimodalGguf {
         loader_type: MultimodalLoaderType::Gemma4,
         bindings: build_gemma4_bindings(archive)?,
@@ -176,7 +179,7 @@ fn resolve_gemma4(archive: &GgufArchive) -> Result<NativeMultimodalGguf> {
     })
 }
 
-fn resolve_qwen_multimodal(archive: &GgufArchive) -> Result<NativeMultimodalGguf> {
+fn resolve_qwen_multimodal(archive: &GgufArchive, _dtype: DType) -> Result<NativeMultimodalGguf> {
     Ok(NativeMultimodalGguf {
         loader_type: qwen_multimodal_loader_type(archive)?,
         bindings: build_qwen_multimodal_bindings(archive)?,

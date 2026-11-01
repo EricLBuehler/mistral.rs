@@ -28,6 +28,10 @@ Loaded dynamic LoRA aliases receive stable qualified model-card IDs from `GET /v
 
 ### Implemented with deviation
 
+- `modalities`, `audio`: models with chat speech output, such as [LFM3-Omni](/guides/models/model-family-notes/#lfm3-omni), support `["audio"]` or `["text", "audio"]` and formats `wav`, `pcm16`, `mp3`, `flac`, `opus`, and `aac`. Compressed formats require FFmpeg on the server's PATH. Use `voice: "default"` or omit it; OpenAI's named voices and custom voice IDs are not supported. Streaming requires PCM16 and emits base64 `delta.audio.data` chunks during synthesis, with about 0.96 seconds of audio per regular chunk and a final shorter tail. Non-streaming output is in `message.audio.data`. Audio output cannot be combined with tools, constrained decoding, custom logits processors, or logprobs.
+- `messages[].content[]` audio input: standard `{"type":"input_audio","input_audio":{"data":"<base64>","format":"wav"}}` parts are supported for WAV and MP3. The `audio_url` content part remains a mistral.rs extension for URLs, data URLs, and additional decodable audio formats.
+- Assistant `audio.id` references: the HTTP server caches the completed response transcript for up to one hour in a bounded, in-memory cache. A later assistant message with `audio: {"id":"..."}` restores that transcript as text context; it does not restore the original speech codes or voice. `expires_at` is a Unix timestamp; eviction or a server restart can invalidate an ID sooner. Unknown or expired IDs return an error. Audio-only responses obtain `transcript` through an ASR pass; mixed text/audio responses use their generated text.
+
 - `tool_choice`: `"auto"`, `"none"`, `"required"`, Chat Completions specific function objects (`{"type":"function","function":{"name":"..."}}`), Responses-style specific function objects (`{"type":"function","name":"..."}`), and `{"type":"allowed_tools","mode":"auto"|"required","tools":[{"type":"function","name":"..."}]}` work for function tools. `"required"` rejects requests with no available tools.
 - `tools[*].function.strict`: accepted on function tools. When `true`, mistral.rs constrains generated tool arguments to the tool's `parameters` JSON Schema. See [tool calling](/guides/agents/tool-calling-basics/).
 - `tools[*].type="code_interpreter"`: accepted as the OpenAI-compatible opt-in for the built-in Python executor. The server must be started with code execution enabled. The only supported container form is `{"type":"auto"}`. Container ids, `container.file_ids`, `container.memory_limit`, and OpenAI container lifecycle endpoints are not supported.
@@ -49,7 +53,7 @@ Accepted alongside the base Chat Completions fields. Several are mistral.rs exte
 - `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`: DRY sampling parameters.
 - `grammar`: llguidance constraints beyond JSON schemas.
 - `reasoning_effort`: `off`, `low`, `medium`, `high`, or `xhigh`. `none` is accepted as an alias for `off`. Values are trimmed and case-insensitive.
-- `enable_thinking`: legacy boolean toggle. If both controls are omitted, mistral.rs enables thinking and leaves the effort unspecified. An explicit positive effort enables thinking; `off` disables it. Contradictory pairs such as `reasoning_effort: "off"` with `enable_thinking: true` return a validation error.
+- `enable_thinking`: legacy boolean toggle. If both controls are omitted, mistral.rs enables thinking for text output and disables it for speech output, leaving the effort unspecified. An explicit positive effort enables thinking; `off` disables it. Contradictory pairs such as `reasoning_effort: "off"` with `enable_thinking: true` return a validation error.
 
 The selected effort is passed to the chat template as both `reasoning_effort` and the compatibility name `reasoning_strength`. The template determines how each tier affects the model; it may treat positive tiers alike or ignore controls it does not use. The Python SDK uses the same values and defaults.
 - `web_search_options`: search tool configuration (de facto OpenAI field, not yet universal).
@@ -171,13 +175,20 @@ OpenAI's `size` string (e.g. `"1024x1024"`) is not supported. Use the `height` a
 
 ### `/v1/audio/speech` (TTS)
 
-- `model`, `input`: supported.
-- `response_format`: only `wav` and `pcm` are accepted; `mp3`, `opus`, `aac`, `flac` return a validation error.
-- `voice`, `instructions`, `speed`: ignored.
+- `model`, `input`: supported by dedicated speech models and chat models with speech output, including LFM3-Audio and LFM3-Omni.
+- `response_format`: `mp3` (default), `opus`, `aac`, `flac`, `wav`, and `pcm`. Compressed output requires FFmpeg; WAV and PCM at the default speed use native encoders. `pcm` is signed 16-bit little-endian audio.
+- `voice`: `"default"` or omitted. Other voices are rejected.
+- `instructions`: added to the synthesis prompt for chat speech models. This guides the loaded checkpoint; it does not select an OpenAI voice. Dedicated speech models such as Dia reject nonempty instructions.
+- `speed`: `0.25` to `4.0`, default `1.0`. Non-default speed uses FFmpeg's pitch-preserving tempo filter.
+- `stream_format="audio"` (default) returns a completed binary audio file. Chat speech models also accept `"sse"`: `response_format="pcm"` at speed `1.0` emits audio during generation; other formats or speed adjustments wait for the complete waveform before emitting an encoded audio event. SSE payloads use `speech.audio.delta` with base64 `audio`, followed by `speech.audio.done` with `usage.input_tokens`, `output_tokens`, and `total_tokens`. Dedicated speech models such as Dia reject SSE.
 
 ### `/v1/audio/transcriptions` and `/v1/audio/translations`
 
-Not exposed as dedicated endpoints. Voxtral and similar STT models go through `/v1/chat/completions` with audio content parts. See [speech models guide](/guides/models/use-speech-models/).
+Both endpoints accept multipart `file` and `model` fields and route to a loaded model with audio input support. Transcriptions return the spoken text; translations request English output. Model language coverage still applies.
+
+`response_format="json"` (default) returns `{"text":"..."}`; `"text"` returns plain text. `prompt` provides spelling and vocabulary context, and `temperature` accepts values from `0` to `1`. Transcriptions also accept `language` and `stream=true`. Streamed transcription requires JSON format and emits SSE payloads with `type="transcript.text.delta"` and a `delta`, followed by `type="transcript.text.done"` and the complete `text`. Translations do not accept a stream parameter. Timestamp, diarization, subtitle, verbose JSON, and logprob options return explicit validation errors.
+
+See the [dedicated audio endpoint example](/examples/server/lfm3-audio-endpoints/) and [speech models guide](/guides/models/use-speech-models/). The OpenAI Realtime API and live microphone sessions are not implemented.
 
 ## Moderation
 

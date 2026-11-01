@@ -751,8 +751,10 @@ impl GGUFLoader {
         let external_config = read_external_config(paths)?;
         let processor_config_path = paths.get_processor_config().clone();
         let preprocessor_config_path = paths.get_preprocessor_config().clone();
+        let internal_dtype = dtype.try_into_dtype(&[device])?;
         let synthesized = synthesize(&GgufSynthesisInputs {
             archive: &archive,
+            dtype: internal_dtype,
             external_config: external_config.as_deref(),
             processor_config: processor_config_path.as_deref(),
             preprocessor_config: preprocessor_config_path.as_deref(),
@@ -767,7 +769,6 @@ impl GGUFLoader {
             rope_pairing,
             &loader_type.to_string(),
         )?;
-        let internal_dtype = dtype.try_into_dtype(&[device])?;
         let source = Arc::new(mistralrs_quant::GgufWeightSource::new(
             archive.clone(),
             &bindings,
@@ -871,11 +872,12 @@ impl GGUFLoader {
             );
         }
 
+        let internal_dtype = dtype.try_into_dtype(&[device])?;
         let NativeMultimodalGguf {
             loader_type,
             bindings,
             rope_pairing,
-        } = spec.resolve_multimodal(&archive, &architecture)?;
+        } = spec.resolve_multimodal(&archive, &architecture, internal_dtype)?;
         validate_native_dynamic_lora(self.dynamic_lora.as_ref(), rope_pairing, &architecture)?;
         if paths.get_config_filename().as_os_str().is_empty() {
             bail!(
@@ -891,7 +893,6 @@ impl GGUFLoader {
         if let Some(validate) = spec.validate_multimodal_config {
             validate(&config)?;
         }
-        let internal_dtype = dtype.try_into_dtype(&[device])?;
         let source = Arc::new(mistralrs_quant::GgufWeightSource::new(
             archive.clone(),
             &bindings,

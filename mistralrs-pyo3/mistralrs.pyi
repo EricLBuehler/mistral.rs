@@ -147,8 +147,19 @@ class ChatCompletionRequest:
 
     `reasoning_effort` accepts `off`, `low`, `medium`, `high`, and `xhigh`; `none`
     aliases `off`. Values are trimmed and case-insensitive. If both reasoning controls
-    are omitted, thinking is enabled with no selected effort. Contradictory
+    are omitted, thinking is enabled for text output and disabled for speech output,
+    with no selected effort. Contradictory
     `enable_thinking` and `reasoning_effort` values raise `ValueError`.
+
+    Audio input content parts accept `{"type": "input_audio", "input_audio":
+    {"data": "<base64>", "format": "wav"}}` for WAV or MP3 clips. Other decodable
+    formats can use the `audio_url` extension. For models with speech output,
+    `modalities` selects audio or text plus audio, and `audio` accepts `format`
+    (`wav`, `pcm16`, `mp3`, `flac`, `opus`, or `aac`) and optional `voice="default"`.
+    Compressed output requires FFmpeg. Streaming requires PCM16 and returns
+    incremental `delta.audio.data` chunks. HTTP `audio.id` history replay is not
+    available through the native SDK.
+    Text sampling controls do not configure LFM3's separate speech-code sampler.
     """
 
     messages: (
@@ -198,6 +209,8 @@ class ChatCompletionRequest:
     input_files: list[InputFile] | None = None
     ignore_eos: bool = False
     adapter: str | LoraAdapterGeneration | None = field(default=None, kw_only=True)
+    modalities: list[Literal["text", "audio"]] | None = field(default=None, kw_only=True)
+    audio: dict[str, str] | None = field(default=None, kw_only=True)
 
 @dataclass
 class CompletionRequest:
@@ -284,6 +297,8 @@ class MultimodalArchitecture(Enum):
     LLaVA = "llava"
     Lfm2Vl = "lfm2vl"
     Lfm3Vl = "lfm3vl"
+    Lfm3Audio = "lfm3audio"
+    Lfm3Omni = "lfm3omni"
     VLlama = "vllama"
     Qwen2VL = "qwen2vl"
     Idefics3 = "idefics3"
@@ -821,7 +836,13 @@ class Runner:
         self, prompt: str, model_id: str | None = None
     ) -> SpeechGenerationResponse:
         """
-        Generate audio given a (model specific) prompt. PCM and sampling rate as well as the number of channels is returned.
+        Generate speech with a dedicated speech model such as Dia or a chat speech
+        model such as LFM3-Audio or LFM3-Omni. Returns PCM samples, sample rate, and
+        channel count. LFM3 uses audio-only synthesis with its default voice.
+
+        Use send_chat_completion_request with modalities and audio for custom chat
+        prompts, mixed text/speech output, encoded formats, or PCM16 streaming.
+        HTTP instructions, speed, and audio.id history are not options on this helper.
 
         Args:
             prompt: The audio generation prompt.
@@ -1170,11 +1191,19 @@ class ToolCallResponse:
     function: CalledFunction
 
 @dataclass
+class ChatAudioResponse:
+    id: str | None = None
+    data: str | None = None
+    expires_at: int | None = None
+    transcript: str | None = None
+
+@dataclass
 class ResponseMessage:
     content: str | None
     role: str
     tool_calls: list[ToolCallResponse] | None
     reasoning_content: str | None = None
+    audio: ChatAudioResponse | None = None
 
 @dataclass
 class TopLogprob:
@@ -1229,6 +1258,7 @@ class Delta:
     role: str
     tool_calls: list[ToolCallResponse] | None = None
     reasoning_content: str | None = None
+    audio: ChatAudioResponse | None = None
 
 @dataclass
 class ChunkChoice:

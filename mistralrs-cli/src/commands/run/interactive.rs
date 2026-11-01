@@ -283,6 +283,7 @@ async fn oneshot_text(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, text: String) 
     let (tx, mut rx) = channel(10_000);
     let session_id = (do_code_exec || do_shell).then(|| uuid::Uuid::new_v4().to_string());
     let req = Request::Normal(Box::new(NormalRequest {
+        audio_output: None,
         id: mistralrs.next_request_id(),
         queued_at: None,
         messages: request_messages,
@@ -466,6 +467,7 @@ async fn oneshot_multimodal(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, input: O
     let (tx, mut rx) = channel(10_000);
     let session_id = (do_code_exec || do_shell).then(|| uuid::Uuid::new_v4().to_string());
     let req = Request::Normal(Box::new(NormalRequest {
+        audio_output: None,
         id: mistralrs.next_request_id(),
         queued_at: None,
         messages: request_messages,
@@ -966,6 +968,7 @@ async fn text_interactive_mode(
 
         let (tx, mut rx) = channel(10_000);
         let req = Request::Normal(Box::new(NormalRequest {
+            audio_output: None,
             id: mistralrs.next_request_id(),
             queued_at: None,
             messages: request_messages,
@@ -1752,6 +1755,7 @@ async fn multimodal_interactive_mode(
 
         let (tx, mut rx) = channel(10_000);
         let req = Request::Normal(Box::new(NormalRequest {
+            audio_output: None,
             id: mistralrs.next_request_id(),
             queued_at: None,
             messages: request_messages,
@@ -1913,6 +1917,7 @@ async fn diffusion_interactive_mode(
 
         let (tx, mut rx) = channel(10_000);
         let req = Request::Normal(Box::new(NormalRequest {
+            audio_output: None,
             id: 0,
             queued_at: None,
             messages: RequestMessage::ImageGeneration {
@@ -2038,6 +2043,7 @@ async fn speech_interactive_mode(
 
         let (tx, mut rx) = channel(10_000);
         let req = Request::Normal(Box::new(NormalRequest {
+            audio_output: None,
             id: 0,
             queued_at: None,
             messages: RequestMessage::SpeechGeneration {

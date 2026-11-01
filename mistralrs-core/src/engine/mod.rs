@@ -76,6 +76,7 @@ pub use agentic_loop::DEFAULT_MAX_TOOL_ROUNDS;
 pub(crate) mod agentic_session;
 mod file_tools;
 mod logger;
+pub(crate) mod speech;
 mod tool_dispatch;
 
 const PAGED_RECURRENT_PREFIX_VALIDATION_METRIC: &str =
@@ -815,6 +816,7 @@ impl Engine {
             if let Err(err) = pipeline.release_speculative_sequences(&finished_sequence_ids) {
                 tracing::error!("Failed to release speculative sequence state: {err}");
             }
+            pipeline.release_generation_sequences(&finished_sequence_ids);
             if !recurrent_release_errors.is_empty() {
                 tracing::error!(
                     "Failed to release recurrent state for finished sequences: {}",
