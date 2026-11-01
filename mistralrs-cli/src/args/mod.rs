@@ -199,11 +199,16 @@ pub enum Command {
         emit_config: Option<PathBuf>,
     },
 
-    /// Authenticate with Hugging Face Hub
-    Login {
-        /// Provide token directly (non-interactive)
-        #[arg(long)]
-        token: Option<String>,
+    /// Download the files needed to run a model without loading it
+    Download {
+        #[command(subcommand)]
+        model_type: Option<ModelType>,
+
+        #[command(flatten)]
+        default_model: DefaultModelOptions,
+
+        #[command(flatten)]
+        options: DownloadOptions,
     },
 
     /// Manage the Hugging Face model cache
@@ -259,7 +264,7 @@ pub enum Command {
 
     /// Update or migrate an install using the installer
     Update {
-        /// Install a specific release tag instead of the latest (e.g. v0.9.5)
+        /// Install a specific release tag instead of the latest (e.g. v0.10.0)
         #[arg(long)]
         tag: Option<String>,
     },
@@ -578,6 +583,21 @@ pub enum ModelType {
         #[command(flatten)]
         cache: CacheOptions,
     },
+}
+
+#[derive(clap::Args, Clone, Default)]
+pub struct DownloadOptions {
+    /// Hugging Face revision to download (defaults to main)
+    #[arg(long, global = true)]
+    pub revision: Option<String>,
+
+    /// Path to a MatFormer configuration describing available slices
+    #[arg(long, global = true)]
+    pub matformer_config_path: Option<PathBuf>,
+
+    /// MatFormer slice to select
+    #[arg(long, global = true, requires = "matformer_config_path")]
+    pub matformer_slice_name: Option<String>,
 }
 
 /// Global options that apply to all commands

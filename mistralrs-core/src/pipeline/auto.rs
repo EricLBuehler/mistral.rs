@@ -1,6 +1,8 @@
+use super::hf::HubRepo;
 use super::hf::{
     build_api_with_cache, hf_access_error, remote_issue_from_api_error, RemoteAccessIssue,
 };
+use super::loaders::ModelDownload;
 use super::{
     DiffusionLoaderBuilder, DiffusionLoaderType, EmbeddingLoaderBuilder, EmbeddingLoaderType,
     EmbeddingSpecificConfig, Loader, ModelKind, ModelPaths, MultimodalLoaderBuilder,
@@ -15,10 +17,7 @@ use crate::{
 };
 use anyhow::Result;
 use candle_core::Device;
-use hf_hub::{
-    api::sync::{ApiError, ApiRepo},
-    Cache, Repo, RepoType,
-};
+use hf_hub::HFError;
 use serde::Deserialize;
 use std::io;
 use std::path::Path;
@@ -249,11 +248,11 @@ fn supports_dynamic_lora(detected: &Detected) -> bool {
 
 impl AutoLoader {
     fn try_get_file(
-        api: &ApiRepo,
+        api: &HubRepo,
         model_id: &Path,
         file: &str,
         revision: &str,
-    ) -> std::result::Result<Option<PathBuf>, ApiError> {
+    ) -> std::result::Result<Option<PathBuf>, HFError> {
         crate::pipeline::hf::try_get_file(api, model_id, file, revision)
     }
 
@@ -316,18 +315,12 @@ impl AutoLoader {
         token_source: &TokenSource,
         silent: bool,
     ) -> Result<ConfigArtifacts> {
-        let cache = self
-            .hf_cache_path
-            .clone()
-            .map(Cache::new)
-            .unwrap_or_default();
-        let api = build_api_with_cache(token_source, !silent, Some(cache))?;
+        if let Some(cache) = self.hf_cache_path.as_ref() {
+            crate::GLOBAL_HF_CACHE.get_or_init(|| cache.clone());
+        }
+        let api = build_api_with_cache(token_source, !silent, self.hf_cache_path.clone())?;
         let revision = revision.unwrap_or_else(|| "main".to_string());
-        let api = api.repo(Repo::with_revision(
-            self.model_id.clone(),
-            RepoType::Model,
-            revision.clone(),
-        ));
+        let api = api.repo(self.model_id.clone(), revision.clone());
         let model_id = Path::new(&self.model_id);
         let mut remote_access_issue = None;
         let contents = match Self::try_get_file(&api, model_id, "config.json", &revision) {
@@ -377,7 +370,7 @@ impl AutoLoader {
         }
     }
 
-    fn fetch_sentence_transformers_config(api: &ApiRepo, model_id: &Path, revision: &str) -> bool {
+    fn fetch_sentence_transformers_config(api: &HubRepo, model_id: &Path, revision: &str) -> bool {
         match crate::pipeline::hf::try_get_file(
             api,
             model_id,
@@ -559,6 +552,23 @@ fn device_map_for_detected(mapper: DeviceMapSetting, detected: &Detected) -> Dev
 }
 
 impl Loader for AutoLoader {
+    fn download_model_from_hf(
+        &self,
+        revision: Option<String>,
+        token_source: TokenSource,
+        silent: bool,
+    ) -> Result<ModelDownload> {
+        let _progress_guard = ProgressScopeGuard::new(silent);
+        let config = self.read_config_from_hf(revision.clone(), &token_source, silent)?;
+        self.ensure_loader(self.detect(&config)?)?;
+        self.loader
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .download_model_from_hf(revision, token_source, silent)
+    }
+
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_hf(
         &self,
@@ -642,6 +652,35 @@ impl Loader for AutoLoader {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn download_auto_detects_from_metadata_without_loading_tensors() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path();
+        std::fs::write(
+            root.join("config.json"),
+            r#"{"architectures":["LlamaForCausalLM"]}"#,
+        )?;
+        std::fs::write(root.join("model.safetensors"), b"not model weights")?;
+        std::fs::write(root.join("tokenizer.json"), b"not a tokenizer")?;
+        let loader = AutoLoaderBuilder::new(
+            NormalSpecificConfig::default(),
+            MultimodalSpecificConfig::default(),
+            EmbeddingSpecificConfig::default(),
+            None,
+            None,
+            root.display().to_string(),
+            false,
+            None,
+        )
+        .build();
+        let files = loader
+            .download_model_from_hf(None, TokenSource::None, true)?
+            .files();
+        assert_eq!(files.len(), 3);
+        assert!(files.contains(&root.join("model.safetensors")));
+        Ok(())
+    }
 
     fn detector() -> AutoLoader {
         AutoLoader {

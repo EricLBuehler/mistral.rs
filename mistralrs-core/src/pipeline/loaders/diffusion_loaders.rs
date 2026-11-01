@@ -7,7 +7,7 @@ use std::{
 use anyhow::{Context, Result};
 use candle_core::{Device, Tensor};
 
-use hf_hub::api::sync::ApiRepo;
+use crate::pipeline::hf::HubRepo;
 use mistralrs_quant::ShardedVarBuilder;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::pyclass;
@@ -21,7 +21,7 @@ use crate::{
     diffusion_models::{
         flux::{
             self,
-            stepper::{FluxStepper, FluxStepperConfig},
+            stepper::{FluxAuxiliaryPaths, FluxStepper, FluxStepperConfig, FluxStepperLoadContext},
         },
         DiffusionGenerationParams,
     },
@@ -44,14 +44,14 @@ pub trait DiffusionModelLoader: Send + Sync {
     /// If the model is being loaded with `load_model_from_hf` (so manual paths not provided), this will be called.
     fn get_model_paths(
         &self,
-        api: &ApiRepo,
+        api: &HubRepo,
         model_id: &Path,
         revision: &str,
     ) -> Result<Vec<PathBuf>>;
     /// If the model is being loaded with `load_model_from_hf` (so manual paths not provided), this will be called.
     fn get_config_filenames(
         &self,
-        api: &ApiRepo,
+        api: &HubRepo,
         model_id: &Path,
         revision: &str,
     ) -> Result<Vec<PathBuf>>;
@@ -64,6 +64,7 @@ pub trait DiffusionModelLoader: Send + Sync {
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
         silent: bool,
+        auxiliary_paths: &FluxAuxiliaryPaths,
     ) -> Result<Box<dyn DiffusionModel + Send + Sync>>;
 }
 
@@ -121,12 +122,20 @@ impl DiffusionLoaderType {
 pub struct DiffusionModelPathsInner {
     pub config_filenames: Vec<PathBuf>,
     pub filenames: Vec<PathBuf>,
+    pub auxiliary_paths: FluxAuxiliaryPaths,
 }
 
 #[derive(Clone, Debug)]
 pub struct DiffusionModelPaths(pub DiffusionModelPathsInner);
 
 impl ModelPaths for DiffusionModelPaths {
+    fn files(&self) -> Vec<PathBuf> {
+        let mut files = self.0.filenames.clone();
+        files.extend(self.0.config_filenames.iter().cloned());
+        files.extend(self.0.auxiliary_paths.files());
+        files
+    }
+
     fn get_config_filename(&self) -> &PathBuf {
         unreachable!("Use `std::any::Any`.")
     }
@@ -171,7 +180,7 @@ pub struct FluxLoader {
 impl DiffusionModelLoader for FluxLoader {
     fn get_model_paths(
         &self,
-        api: &ApiRepo,
+        api: &HubRepo,
         model_id: &Path,
         revision: &str,
     ) -> Result<Vec<PathBuf>> {
@@ -188,7 +197,7 @@ impl DiffusionModelLoader for FluxLoader {
     }
     fn get_config_filenames(
         &self,
-        api: &ApiRepo,
+        api: &HubRepo,
         model_id: &Path,
         revision: &str,
     ) -> Result<Vec<PathBuf>> {
@@ -208,6 +217,7 @@ impl DiffusionModelLoader for FluxLoader {
         normal_loading_metadata: NormalLoadingMetadata,
         _attention_mechanism: AttentionImplementation,
         silent: bool,
+        auxiliary_paths: &FluxAuxiliaryPaths,
     ) -> Result<Box<dyn DiffusionModel + Send + Sync>> {
         let (vae_cfg, vae_vb) = (configs.remove(1), vbs.remove(1));
         let (flux_cfg, flux_vb) = (configs.remove(0), vbs.remove(0));
@@ -227,10 +237,13 @@ impl DiffusionModelLoader for FluxLoader {
             FluxStepperConfig::default_for_guidance(flux_cfg.guidance_embeds),
             (flux_vb, &flux_cfg),
             (vae_vb, &vae_cfg),
-            flux_dtype,
-            &normal_loading_metadata.real_device,
-            silent,
-            self.offload,
+            FluxStepperLoadContext {
+                dtype: flux_dtype,
+                device: &normal_loading_metadata.real_device,
+                silent,
+                offloaded: self.offload,
+                paths: auxiliary_paths,
+            },
         )?))
     }
 }

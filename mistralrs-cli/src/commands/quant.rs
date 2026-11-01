@@ -20,7 +20,6 @@ use mistralrs_quant::UqffReport;
 
 use super::uqff::read_existing_uqff_report;
 
-const DEFAULT_REVISION: &str = "main";
 const UQFF_REPO_ORG: &str = "mistralrs-community";
 const UQFF_REPO_SUFFIX: &str = "-UQFF";
 const UQFF_REPO_SUFFIX_LOWER: &str = "-uqff";
@@ -33,31 +32,35 @@ pub struct ResolvedQuant {
     pub in_situ_quant: Option<String>,
 }
 
+pub(crate) struct QuantContext<'a> {
+    pub token_source: &'a TokenSource,
+    pub model_selected: &'a ModelSelected,
+    pub revision: &'a str,
+}
+
 pub async fn resolve_quant(
     raw: &str,
     model_id: &str,
-    token_source: &TokenSource,
-    model_selected: &ModelSelected,
+    context: QuantContext<'_>,
     force_cpu: bool,
 ) -> Result<ResolvedQuant> {
     let lowered = raw.trim().to_lowercase();
     if lowered == "auto" {
-        return resolve_auto(model_id, token_source, model_selected, force_cpu).await;
+        return resolve_auto(model_id, context, force_cpu).await;
     }
-    resolve_explicit(&lowered, model_id, token_source).await
+    resolve_explicit(&lowered, model_id, context.token_source, context.revision).await
 }
 
 async fn resolve_auto(
     model_id: &str,
-    token_source: &TokenSource,
-    model_selected: &ModelSelected,
+    context: QuantContext<'_>,
     force_cpu: bool,
 ) -> Result<ResolvedQuant> {
     debug!("quant: auto, probing hardware via `tune`");
     let result = auto_tune(AutoTuneRequest {
-        model: model_selected.clone(),
-        token_source: token_source.clone(),
-        hf_revision: None,
+        model: context.model_selected.clone(),
+        token_source: context.token_source.clone(),
+        hf_revision: Some(context.revision.to_string()),
         force_cpu,
         profile: TuneProfile::Balanced,
         requested_isq: None,
@@ -74,21 +77,21 @@ async fn resolve_auto(
         result.backend,
         result.total_vram_bytes as f64 / 1e9,
     );
-    resolve_explicit(&isq_name, model_id, token_source).await
+    resolve_explicit(&isq_name, model_id, context.token_source, context.revision).await
 }
 
 async fn resolve_explicit(
     raw: &str,
     model_id: &str,
     token_source: &TokenSource,
+    revision: &str,
 ) -> Result<ResolvedQuant> {
     parse_isq_value(raw, None)
         .map_err(|e| anyhow!("`--quant {raw}` is not a recognized quant level: {e}"))?;
 
-    let selected_files = selected_repo_files(model_id, token_source)?;
+    let selected_files = selected_repo_files(model_id, token_source, revision)?;
     if let Some(files) = &selected_files {
-        let report =
-            read_existing_uqff_report(model_id, DEFAULT_REVISION, files, token_source).await?;
+        let report = read_existing_uqff_report(model_id, revision, files, token_source).await?;
         if let Some(resolved) = resolve_selected_uqff(raw, model_id, files, report.as_ref())? {
             return Ok(resolved);
         }
@@ -107,13 +110,12 @@ async fn resolve_explicit(
 
     let uqff_repo = sibling_uqff_repo(model_id);
     debug!("quant: probing prebuilt UQFF at `{uqff_repo}`");
-    let Some(files) = probe_hf_repo_files(&uqff_repo, DEFAULT_REVISION, token_source) else {
+    let Some(files) = probe_hf_repo_files(&uqff_repo, revision, token_source) else {
         debug!("quant: no UQFF repo at `{uqff_repo}` (or unreachable)");
         info!("quant: --quant {raw} -> ISQ {raw}");
         return Ok(fallback_isq(raw));
     };
-    let report =
-        read_existing_uqff_report(&uqff_repo, DEFAULT_REVISION, &files, token_source).await?;
+    let report = read_existing_uqff_report(&uqff_repo, revision, &files, token_source).await?;
 
     let Some(shorthand) = resolve_uqff_quant(raw, &files, report.as_ref())? else {
         let available: Vec<&String> = files.iter().filter(|f| f.ends_with(".uqff")).collect();
@@ -139,16 +141,16 @@ fn sibling_uqff_repo(model_id: &str) -> String {
     format!("{UQFF_REPO_ORG}/{base}{UQFF_REPO_SUFFIX}")
 }
 
-fn selected_repo_files(model_id: &str, token_source: &TokenSource) -> Result<Option<Vec<String>>> {
+fn selected_repo_files(
+    model_id: &str,
+    token_source: &TokenSource,
+    revision: &str,
+) -> Result<Option<Vec<String>>> {
     let path = Path::new(model_id);
     if path.exists() {
         return Ok(Some(local_model_files(path)?));
     }
-    Ok(probe_hf_repo_files(
-        model_id,
-        DEFAULT_REVISION,
-        token_source,
-    ))
+    Ok(probe_hf_repo_files(model_id, revision, token_source))
 }
 
 fn local_model_files(model_path: &Path) -> Result<Vec<String>> {

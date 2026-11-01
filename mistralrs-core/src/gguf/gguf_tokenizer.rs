@@ -748,9 +748,9 @@ mod tests {
         gemma4_tokenizer, validate_external_gguf_tokenizer, BpePreTokenizerKind, PropsGGUF,
         SENTENCEPIECE_UNDERLINE,
     };
+    use crate::{pipeline::hf::build_api, TokenSource};
     use anyhow::Result;
     use candle_core::quantized::gguf_file::Value;
-    use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
     use std::collections::HashMap;
     use tokenizers::{OffsetReferential, OffsetType, PreTokenizedString, PreTokenizer, Tokenizer};
 
@@ -767,24 +767,16 @@ mod tests {
     fn get_gguf_tokenizer(tokenizer: TokenizerType) -> Result<Tokenizer> {
         match tokenizer {
             TokenizerType::Llama => {
-                let api = ApiBuilder::new().with_progress(true).build().unwrap();
-                let api = api.repo(Repo::with_revision(
-                    "EricB/mistralrs_tests".to_string(),
-                    RepoType::Model,
-                    "main".to_string(),
-                ));
+                let api = build_api(&TokenSource::CacheToken, true).unwrap();
+                let api = api.repo("EricB/mistralrs_tests".to_string(), "main".to_string());
 
                 let filename = api.get("llama_gguf_tokenizer.json").unwrap();
                 let tokenizer = Tokenizer::from_file(filename).expect("Valid tokenizer");
                 Ok(tokenizer)
             }
             TokenizerType::Gpt2 => {
-                let api = ApiBuilder::new().with_progress(true).build().unwrap();
-                let api = api.repo(Repo::with_revision(
-                    "EricB/mistralrs_tests".to_string(),
-                    RepoType::Model,
-                    "main".to_string(),
-                ));
+                let api = build_api(&TokenSource::CacheToken, true).unwrap();
+                let api = api.repo("EricB/mistralrs_tests".to_string(), "main".to_string());
 
                 let filename = api.get("gpt2_gguf_tokenizer.json").unwrap();
                 let tokenizer = Tokenizer::from_file(filename).expect("Valid tokenizer");
@@ -797,23 +789,15 @@ mod tests {
     fn get_hf_tokenizer(tokenizer: TokenizerType) -> Result<Tokenizer> {
         match tokenizer {
             TokenizerType::Llama => {
-                let api = ApiBuilder::new().with_progress(true).build().unwrap();
-                let api = api.repo(Repo::with_revision(
-                    "EricB/mistralrs_tests".to_string(),
-                    RepoType::Model,
-                    "main".to_string(),
-                ));
+                let api = build_api(&TokenSource::CacheToken, true).unwrap();
+                let api = api.repo("EricB/mistralrs_tests".to_string(), "main".to_string());
 
                 let tokenizer_filename = api.get("tokenizer.json").unwrap();
                 Ok(Tokenizer::from_file(tokenizer_filename).unwrap())
             }
             TokenizerType::Gpt2 => {
-                let api = ApiBuilder::new().with_progress(true).build().unwrap();
-                let api = api.repo(Repo::with_revision(
-                    "EricB/mistralrs_tests".to_string(),
-                    RepoType::Model,
-                    "main".to_string(),
-                ));
+                let api = build_api(&TokenSource::CacheToken, true).unwrap();
+                let api = api.repo("EricB/mistralrs_tests".to_string(), "main".to_string());
 
                 let tokenizer_filename = api.get("tokenizer_gpt2.json").unwrap();
                 Ok(Tokenizer::from_file(tokenizer_filename).unwrap())

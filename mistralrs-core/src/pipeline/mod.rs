@@ -79,14 +79,14 @@ pub use loaders::{
     HunYuanDenseV1Loader, HunYuanMoEV1Loader, Idefics2Loader, Idefics3Loader, LLaVALoader,
     LLaVANextLoader, Lfm2Loader, Lfm2VlLoader, Lfm3AudioLoader, Lfm3D1Loader, Lfm3Loader,
     Lfm3OmniLoader, Lfm3VlLoader, LlamaLoader, Loader, LocalModelPaths, MiniCpmOLoader,
-    Mistral3Loader, MistralLoader, MixtralLoader, ModelKind, ModelPaths, MultimodalLoaderType,
-    MultimodalModel, MultimodalModelLoader, MuseGlimmerLoader, NormalLoaderType,
-    NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader,
-    Phi3_5MoELoader, Phi4MMLoader, PrettyName, QuantizationKind, Qwen2Loader, Qwen2VLLoader,
-    Qwen2_5VLLoader, Qwen3EmbeddingLoader, Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader,
-    Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader, Qwen3_5TextLoader,
-    Qwen4ExpLoader, SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader, VLlamaLoader,
-    VoxtralLoader,
+    Mistral3Loader, MistralLoader, MixtralLoader, ModelDownload, ModelKind, ModelPaths,
+    MultimodalLoaderType, MultimodalModel, MultimodalModelLoader, MuseGlimmerLoader,
+    NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader,
+    Phi3Loader, Phi3VLoader, Phi3_5MoELoader, Phi4MMLoader, PrettyName, QuantizationKind,
+    Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader, Qwen3EmbeddingLoader, Qwen3Loader, Qwen3MoELoader,
+    Qwen3NextLoader, Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader,
+    Qwen3_5TextLoader, Qwen4ExpLoader, SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader,
+    VLlamaLoader, VoxtralLoader,
 };
 pub use loaders::{LayerResource, ResourceSource};
 #[allow(clippy::too_many_arguments)]

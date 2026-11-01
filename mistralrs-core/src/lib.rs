@@ -7,7 +7,6 @@ pub use engine::{
     EngineInstruction, IntervalLogger, SearchEmbeddingModel, DEFAULT_MAX_TOOL_ROUNDS,
     ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP,
 };
-use hf_hub::Cache;
 pub use lora::Ordering;
 pub use pipeline::CalibrationStatus;
 pub use pipeline::ModelCategory;
@@ -195,8 +194,8 @@ pub use pipeline::{
     EmbeddingLoaderType, EmbeddingModelPaths, EmbeddingSpecificConfig, GGMLLoader,
     GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig,
     GemmaLoader, HfConfigOverrides, Idefics2Loader, IsqOrganization, LLaVALoader, LLaVANextLoader,
-    LlamaLoader, Loader, LocalModelPaths, MistralLoader, MixtralLoader, Modalities, ModelKind,
-    ModelPaths, MultimodalLoader, MultimodalLoaderBuilder, MultimodalLoaderType,
+    LlamaLoader, Loader, LocalModelPaths, MistralLoader, MixtralLoader, Modalities, ModelDownload,
+    ModelKind, ModelPaths, MultimodalLoader, MultimodalLoaderBuilder, MultimodalLoaderType,
     MultimodalPromptPrefixer, MultimodalSpecificConfig, NormalLoader, NormalLoaderBuilder,
     NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader,
     ResolvedLoraAdapter, SpeechLoader, SpeechPipeline, Starcoder2Loader, SupportedModality,
@@ -251,11 +250,11 @@ pub use llguidance;
 
 /// `true` if `MISTRALRS_DEBUG=1`
 pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);
-pub static GLOBAL_HF_CACHE: OnceLock<Cache> = OnceLock::new();
+pub static GLOBAL_HF_CACHE: OnceLock<PathBuf> = OnceLock::new();
 
 /// Set the process-wide Hugging Face cache path before model discovery.
 pub fn set_hf_cache_path(path: impl Into<PathBuf>) {
-    GLOBAL_HF_CACHE.get_or_init(|| Cache::new(path.into()));
+    GLOBAL_HF_CACHE.get_or_init(|| path.into());
 }
 
 pub const DEFAULT_PREFIX_CACHE_N: usize = 16;

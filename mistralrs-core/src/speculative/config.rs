@@ -3,8 +3,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::pipeline::hf::HubRepo;
 use candle_core::{DType, Device};
-use hf_hub::{api::sync::ApiRepo, Repo, RepoType};
 
 use crate::{
     paged_attention::PagedAttentionConfig,
@@ -220,13 +220,9 @@ pub fn reserve_external_mtp_memory_with_runtime(
     ))
 }
 
-fn build_hf_api(id: &str, revision: &str) -> candle_core::Result<ApiRepo> {
+fn build_hf_api(id: &str, revision: &str) -> candle_core::Result<HubRepo> {
     let api = build_api(&TokenSource::CacheToken, true).map_err(candle_core::Error::msg)?;
-    Ok(api.repo(Repo::with_revision(
-        id.to_string(),
-        RepoType::Model,
-        revision.to_string(),
-    )))
+    Ok(api.repo(id.to_string(), revision.to_string()))
 }
 
 fn resolve_hf_mtp_path(id: &str) -> candle_core::Result<PathBuf> {

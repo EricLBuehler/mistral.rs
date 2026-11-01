@@ -1,3 +1,4 @@
+use super::loaders::ModelDownload;
 use super::loaders::{DiffusionModelPaths, DiffusionModelPathsInner};
 use super::{
     AnyMoePipelineMixin, Cache, CacheManagerMixin, DiffusionLoaderType, DiffusionModel,
@@ -15,13 +16,11 @@ use crate::sequence::Sequence;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
 use crate::utils::{
     progress::{new_multi_progress, ProgressScopeGuard},
-    tokens::get_token,
     varbuilder_utils::from_mmaped_safetensors,
 };
 use crate::{DeviceMapSetting, PagedAttentionConfig, Pipeline, TryIntoDType};
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
-use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use image::{DynamicImage, RgbImage};
 use mistralrs_quant::log::once_log_info;
 use mistralrs_quant::IsqType;
@@ -76,6 +75,33 @@ impl DiffusionLoaderBuilder {
 }
 
 impl Loader for DiffusionLoader {
+    fn download_model_from_hf(
+        &self,
+        revision: Option<String>,
+        token_source: TokenSource,
+        silent: bool,
+    ) -> Result<ModelDownload> {
+        let _progress_guard = ProgressScopeGuard::new(silent);
+        let paths: anyhow::Result<Box<dyn ModelPaths>> = {
+            let api = crate::pipeline::hf::build_api(&token_source, !silent)?;
+            let revision = revision.unwrap_or("main".to_string());
+            let repo = api.repo(self.model_id.clone(), revision.clone());
+            let model_id = std::path::Path::new(&self.model_id);
+            let filenames = self.inner.get_model_paths(&repo, model_id, &revision)?;
+            let config_filenames = self
+                .inner
+                .get_config_filenames(&repo, model_id, &revision)?;
+            let auxiliary_paths =
+                crate::diffusion_models::flux::stepper::download_auxiliary_files(&api)?;
+            Ok(Box::new(DiffusionModelPaths(DiffusionModelPathsInner {
+                config_filenames,
+                filenames,
+                auxiliary_paths,
+            })))
+        };
+        Ok(ModelDownload::new(paths?))
+    }
+
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_hf(
         &self,
@@ -88,28 +114,9 @@ impl Loader for DiffusionLoader {
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let _progress_guard = ProgressScopeGuard::new(silent);
-        let paths: anyhow::Result<Box<dyn ModelPaths>> = {
-            let api = ApiBuilder::from_env()
-                .with_progress(!silent)
-                .with_token(get_token(&token_source)?)
-                .build()?;
-            let revision = revision.unwrap_or("main".to_string());
-            let api = api.repo(Repo::with_revision(
-                self.model_id.clone(),
-                RepoType::Model,
-                revision.clone(),
-            ));
-            let model_id = std::path::Path::new(&self.model_id);
-            let filenames = self.inner.get_model_paths(&api, model_id, &revision)?;
-            let config_filenames = self.inner.get_config_filenames(&api, model_id, &revision)?;
-            Ok(Box::new(DiffusionModelPaths(DiffusionModelPathsInner {
-                config_filenames,
-                filenames,
-            })))
-        };
+        let download = self.download_model_from_hf(revision, token_source, silent)?;
         self.load_model_from_path(
-            paths?.as_ref(),
+            download.paths.as_ref(),
             dtype,
             device,
             silent,
@@ -221,6 +228,7 @@ impl Loader for DiffusionLoader {
                     },
                     attention_mechanism,
                     silent,
+                    &paths.auxiliary_paths,
                 )?
             }
             _ => unreachable!(),

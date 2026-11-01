@@ -4,9 +4,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::pipeline::hf::HubRepo;
 use anyhow::Result;
 use either::Either;
-use hf_hub::{api::sync::ApiRepo, Repo, RepoType};
 use regex_automata::meta::Regex;
 use serde_json::Value;
 use tracing::{debug, info, trace, warn};
@@ -46,6 +46,7 @@ pub struct ResolvedLoraAdapter {
 #[derive(Clone, Debug)]
 pub enum AdapterPaths {
     XLora {
+        metadata_paths: Vec<PathBuf>,
         adapter_configs: Option<Vec<((String, String), LoraConfig)>>,
         adapter_safetensors: Option<Vec<(String, PathBuf)>>,
         classifier_path: Option<PathBuf>,
@@ -76,6 +77,7 @@ pub(crate) fn get_adapter_paths(
     options: AdapterPathOptions<'_>,
     token_source: &TokenSource,
     base_revision: String,
+    revision_model_id: &str,
 ) -> Result<AdapterPaths> {
     let AdapterPathOptions {
         xlora_model_id,
@@ -85,14 +87,13 @@ pub(crate) fn get_adapter_paths(
     } = options;
     match (lora_adapters, xlora_model_id, xlora_order) {
         (None, Some(xlora_id), Some(xlora_order)) => {
+            let revision =
+                super::hf::model_source_revision(revision_model_id, &base_revision, xlora_id);
+            let mut metadata_paths = Vec::new();
             let api = build_api(token_source, true).map_err(candle_core::Error::msg)?;
-            let api = api.repo(Repo::with_revision(
-                xlora_id.clone(),
-                RepoType::Model,
-                base_revision.clone(),
-            ));
+            let api = api.repo(xlora_id.clone(), revision.to_string());
             let model_id = Path::new(&xlora_id);
-            let dir_list = api_dir_list!(api, model_id, true, &base_revision).collect::<Vec<_>>();
+            let dir_list = api_dir_list!(api, model_id, true, revision).collect::<Vec<_>>();
             // Get the path for the xlora classifier
             let xlora_classifier = &dir_list
                 .clone()
@@ -107,12 +108,7 @@ pub(crate) fn get_adapter_paths(
 
             let classifier_path = xlora_classifier
                 .map(|xlora_classifier| -> candle_core::Result<_> {
-                    Ok(api_get_file!(
-                        api,
-                        xlora_classifier,
-                        model_id,
-                        &base_revision
-                    ))
+                    Ok(api_get_file!(api, xlora_classifier, model_id, revision))
                 })
                 .transpose()?;
 
@@ -133,11 +129,12 @@ pub(crate) fn get_adapter_paths(
                 if xlora_configs.len() != 1 {
                     warn!("Selecting config: `{}`", config_path);
                 }
-                let config_path = api_get_file!(api, config_path, model_id, &base_revision);
-                let conf = fs::read_to_string(config_path)?;
+                let config_path = api_get_file!(api, config_path, model_id, revision);
+                let conf = fs::read_to_string(&config_path)?;
                 let deser: Result<XLoraConfig, serde_json::Error> = serde_json::from_str(&conf);
                 match deser {
                     Ok(conf) => {
+                        metadata_paths.push(config_path);
                         xlora_config = Some(conf);
                         break;
                     }
@@ -179,12 +176,10 @@ pub(crate) fn get_adapter_paths(
             let mut adapters_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
             for (file, name) in adapter_files {
                 if let Some(paths) = adapters_paths.get_mut(&name) {
-                    paths.push(api_get_file!(api, &file, model_id, &base_revision));
+                    paths.push(api_get_file!(api, &file, model_id, revision));
                 } else {
-                    adapters_paths.insert(
-                        name,
-                        vec![api_get_file!(api, &file, model_id, &base_revision)],
-                    );
+                    adapters_paths
+                        .insert(name, vec![api_get_file!(api, &file, model_id, revision)]);
                 }
             }
 
@@ -202,6 +197,7 @@ pub(crate) fn get_adapter_paths(
                         } else {
                             let conf = fs::read_to_string(path)?;
                             let lora_config: LoraConfig = serde_json::from_str(&conf)?;
+                            metadata_paths.push(path.clone());
                             adapters_configs
                                 .push((((i + 1).to_string(), name.clone()), lora_config));
                         }
@@ -233,9 +229,17 @@ pub(crate) fn get_adapter_paths(
                 if let Some(preload_adapters) = &xlora_order.preload_adapters {
                     let mut output = HashMap::new();
                     for adapter in preload_adapters {
+                        let revision = super::hf::model_source_revision(
+                            revision_model_id,
+                            &base_revision,
+                            &adapter.adapter_model_id,
+                        );
+                        let api = build_api(token_source, true)?
+                            .repo(adapter.adapter_model_id.clone(), revision);
+                        let model_id = Path::new(&adapter.adapter_model_id);
                         // Get the names and remote paths of the files associated with this adapter
                         let adapter_files =
-                            api_dir_list!(api, &adapter.adapter_model_id, true, &base_revision)
+                            api_dir_list!(api, &adapter.adapter_model_id, true, revision)
                                 .filter_map(|f| {
                                     if f.contains(&adapter.name) {
                                         Some((f, adapter.name.clone()))
@@ -251,11 +255,11 @@ pub(crate) fn get_adapter_paths(
                         let mut adapters_paths: HashMap<String, Vec<PathBuf>> = HashMap::new();
                         for (file, name) in adapter_files {
                             if let Some(paths) = adapters_paths.get_mut(&name) {
-                                paths.push(api_get_file!(api, &file, model_id, &base_revision));
+                                paths.push(api_get_file!(api, &file, model_id, revision));
                             } else {
                                 adapters_paths.insert(
                                     name,
-                                    vec![api_get_file!(api, &file, model_id, &base_revision)],
+                                    vec![api_get_file!(api, &file, model_id, revision)],
                                 );
                             }
                         }
@@ -273,6 +277,7 @@ pub(crate) fn get_adapter_paths(
                             } else {
                                 let conf = fs::read_to_string(path)?;
                                 let lora_config: LoraConfig = serde_json::from_str(&conf)?;
+                                metadata_paths.push(path.clone());
                                 config = Some(lora_config);
                             }
                         }
@@ -289,6 +294,7 @@ pub(crate) fn get_adapter_paths(
             };
 
             Ok(AdapterPaths::XLora {
+                metadata_paths,
                 adapter_configs: Some(adapters_configs),
                 adapter_safetensors: Some(adapters_safetensors),
                 classifier_path,
@@ -303,6 +309,13 @@ pub(crate) fn get_adapter_paths(
             for adapter in adapters {
                 let alias = adapter.alias.trim();
                 let source = adapter.source.trim();
+                let revision = adapter
+                    .revision
+                    .as_deref()
+                    .map(str::trim)
+                    .unwrap_or_else(|| {
+                        super::hf::model_source_revision(revision_model_id, &base_revision, source)
+                    });
                 if alias.is_empty() {
                     anyhow::bail!("LoRA adapter alias must not be empty");
                 }
@@ -312,7 +325,7 @@ pub(crate) fn get_adapter_paths(
                         adapter.alias
                     );
                 }
-                if adapter.revision().is_empty() {
+                if revision.is_empty() {
                     anyhow::bail!(
                         "LoRA adapter revision for alias `{}` must not be empty",
                         adapter.alias
@@ -334,35 +347,29 @@ pub(crate) fn get_adapter_paths(
                 }
                 info!(
                     "Loading LoRA adapter `{}` from `{}` at revision `{}`",
-                    alias,
-                    source,
-                    adapter.revision()
+                    alias, source, revision
                 );
 
                 let api = build_api(token_source, true).map_err(candle_core::Error::msg)?;
-                let api = api.repo(Repo::with_revision(
-                    source.to_string(),
-                    RepoType::Model,
-                    adapter.revision().to_string(),
-                ));
+                let api = api.repo(source.to_string(), revision.to_string());
 
                 let adapter_path_buf = std::path::Path::new(source);
                 let config_path = crate::pipeline::hf::get_file(
                     &api,
                     adapter_path_buf,
                     "adapter_config.json",
-                    adapter.revision(),
+                    revision,
                 )?;
                 let weights_path = crate::pipeline::hf::get_file(
                     &api,
                     adapter_path_buf,
                     "adapter_model.safetensors",
-                    adapter.revision(),
+                    revision,
                 )?;
                 lora_adapter_paths.push(ResolvedLoraAdapter {
                     alias: alias.to_string(),
                     source: source.to_string(),
-                    revision: (!adapter_path_buf.exists()).then(|| adapter.revision().to_string()),
+                    revision: (!adapter_path_buf.exists()).then(|| revision.to_string()),
                     config_path,
                     weights_path,
                 });
@@ -382,7 +389,7 @@ pub fn get_model_paths(
     token_source: &TokenSource,
     quantized_model_id: Option<&String>,
     quantized_filename: Option<&Vec<String>>,
-    api: &ApiRepo,
+    api: &HubRepo,
     model_id: &Path,
     loading_from_uqff: bool,
 ) -> Result<Vec<PathBuf>> {
@@ -393,11 +400,7 @@ pub fn get_model_paths(
 
             for name in names {
                 let qapi = build_api(token_source, true).map_err(candle_core::Error::msg)?;
-                let qapi = qapi.repo(Repo::with_revision(
-                    id.to_string(),
-                    RepoType::Model,
-                    revision.clone(),
-                ));
+                let qapi = qapi.repo(id.to_string(), revision.clone());
                 let model_id = Path::new(&id);
                 files.push(api_get_file!(qapi, name, model_id, &revision));
             }
@@ -411,11 +414,17 @@ pub fn get_model_paths(
 
             let mut filenames = vec![];
             let repo_files = api_dir_list!(api, model_id, true, &revision).collect::<Vec<_>>();
-            let safetensors = if repo_files.iter().any(|file| file == SAFETENSOR_INDEX) {
+            let safetensors = if loading_from_uqff
+                && repo_files
+                    .iter()
+                    .any(|file| file == UQFF_RESIDUAL_SAFETENSORS)
+            {
+                vec![UQFF_RESIDUAL_SAFETENSORS.to_string()]
+            } else if repo_files.iter().any(|file| file == SAFETENSOR_INDEX) {
                 let index_path = api_get_file!(api, SAFETENSOR_INDEX, model_id, &revision);
                 parse_safetensor_index(&fs::read_to_string(index_path)?)?
             } else {
-                repo_files
+                let files = repo_files
                     .iter()
                     .filter(|file| file.split('/').next() != Some(AUDIO_TOKENIZER_DIRECTORY))
                     .filter(|file| {
@@ -424,17 +433,14 @@ pub fn get_model_paths(
                             || consolidated_safetensor_match.is_match(file)
                     })
                     .cloned()
-                    .collect::<Vec<_>>()
+                    .collect::<Vec<_>>();
+                validate_safetensor_shards(&files)?;
+                files
             };
             let pickles = repo_files
                 .iter()
                 .filter(|file| pickle_match.is_match(file))
                 .filter(|x| x.ends_with(".pth") || x.ends_with(".pt") || x.ends_with(".bin"))
-                .cloned()
-                .collect::<Vec<_>>();
-            let uqff_residual = repo_files
-                .iter()
-                .filter(|file| file.as_str() == UQFF_RESIDUAL_SAFETENSORS)
                 .cloned()
                 .collect::<Vec<_>>();
             let mut files = if !safetensors.is_empty() {
@@ -443,8 +449,6 @@ pub fn get_model_paths(
             } else if !pickles.is_empty() {
                 // Fall back to pickle
                 pickles
-            } else if !uqff_residual.is_empty() && loading_from_uqff {
-                uqff_residual
             } else {
                 anyhow::bail!("Expected file with extension one of .safetensors, .pth, .pt, .bin.");
             };
@@ -486,6 +490,42 @@ fn append_unique_paths(files: &mut Vec<String>, auxiliary_files: Vec<String>) {
             files.push(file);
         }
     }
+}
+
+fn validate_safetensor_shards(files: &[String]) -> Result<()> {
+    let mut checkpoints: HashMap<&str, (usize, HashSet<usize>)> = HashMap::new();
+    for file in files {
+        let (directory, filename) = file.rsplit_once('/').unwrap_or((".", file));
+        let Some((shard, total)) = filename
+            .strip_prefix("model-")
+            .and_then(|name| name.strip_suffix(".safetensors"))
+            .and_then(|name| name.split_once("-of-"))
+        else {
+            continue;
+        };
+        let shard = shard.parse::<usize>()?;
+        let total = total.parse::<usize>()?;
+        anyhow::ensure!(
+            shard > 0 && shard <= total,
+            "Invalid safetensors shard numbering in `{file}`"
+        );
+        let (expected, present) = checkpoints
+            .entry(directory)
+            .or_insert((total, HashSet::new()));
+        anyhow::ensure!(
+            *expected == total,
+            "Inconsistent safetensors shard counts in `{directory}`"
+        );
+        present.insert(shard);
+    }
+    for (directory, (expected, present)) in checkpoints {
+        anyhow::ensure!(
+            present.len() == expected,
+            "Incomplete safetensors checkpoint in `{directory}`: found {} of {expected} shards. Download all checkpoint shards before loading.",
+            present.len()
+        );
+    }
+    Ok(())
 }
 
 fn parse_safetensor_index(contents: &str) -> Result<Vec<String>> {
@@ -754,6 +794,38 @@ mod tests {
     use super::{get_chat_template, parse_safetensor_index, AdapterPaths};
 
     #[test]
+    fn download_rejects_incomplete_numbered_safetensor_shards() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        for filename in [
+            "config.json",
+            "tokenizer.json",
+            "model-00001-of-00002.safetensors",
+        ] {
+            std::fs::write(dir.path().join(filename), b"invalid model data")?;
+        }
+        let api = super::build_api(&crate::TokenSource::None, false)?.repo("local/test", "main");
+        let discover = || {
+            super::get_model_paths(
+                "main".to_string(),
+                &crate::TokenSource::None,
+                None,
+                None,
+                &api,
+                dir.path(),
+                false,
+            )
+        };
+        let error = discover().unwrap_err();
+        assert!(error.to_string().contains("found 1 of 2 shards"));
+        std::fs::write(
+            dir.path().join("model-00002-of-00002.safetensors"),
+            b"invalid model data",
+        )?;
+        assert_eq!(discover()?.len(), 2);
+        Ok(())
+    }
+
+    #[test]
     fn local_sharded_model_includes_nested_audio_codec() -> anyhow::Result<()> {
         let dir = tempfile::tempdir()?;
         std::fs::create_dir(dir.path().join(super::AUDIO_TOKENIZER_DIRECTORY))?;
@@ -763,8 +835,7 @@ mod tests {
             dir.path().join(super::SAFETENSOR_INDEX),
             r#"{"weight_map":{"model.weight":"text-shard.safetensors"}}"#,
         )?;
-        let api = super::build_api(&crate::TokenSource::None, false)?
-            .repo(hf_hub::Repo::model("local/test".to_string()));
+        let api = super::build_api(&crate::TokenSource::None, false)?.repo("local/test", "main");
         let paths = super::get_model_paths(
             "main".to_string(),
             &crate::TokenSource::None,
