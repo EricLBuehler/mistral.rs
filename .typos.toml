@@ -92,3 +92,19 @@ shll = "shll"
 "smem_optin" = "smem_optin"
 "DEFAULT_SMEM_OPTIN" = "DEFAULT_SMEM_OPTIN"
 "SMALL_SMEM_OPTIN_BYTES" = "SMALL_SMEM_OPTIN_BYTES"
+
+[type.lfm3-d1-parsing]
+extend-glob = ["parsing.rs"]
+
+# Multilingual month names and ordinal suffixes.
+[type.lfm3-d1-parsing.extend-words]
+januar = "januar"
+februar = "februar"
+marz = "marz"
+juni = "juni"
+juli = "juli"
+aout = "aout"
+oktober = "oktober"
+decembre = "decembre"
+dezember = "dezember"
+nd = "nd"
