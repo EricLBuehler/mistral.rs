@@ -4,7 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content="Fast, flexible LLM inference." />
-    <meta name="theme-color" content="#070605" />
+    <meta name="theme-color" content="#121110" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://mistralrs.dev/" />
     <meta property="og:site_name" content="mistral.rs" />
@@ -73,15 +74,28 @@
 
           <div class="examples">
             <p class="examples-intro">Once installed, start a chat.</p>
-            <div class="model-command">
-              <code>mistralrs serve -m Qwen/Qwen3-4B --quant 4</code>
+            <div class="install-card model-card">
+              <div class="command-row">
+                <span class="prompt" aria-hidden="true">$</span>
+                <code>mistralrs serve -m Qwen/Qwen3-4B --quant 4</code>
+                <button
+                  class="copy-button"
+                  type="button"
+                  data-copy="mistralrs serve -m Qwen/Qwen3-4B --quant 4"
+                  aria-label="Copy the serve command"
+                >Copy</button>
+              </div>
             </div>
-            <p class="source-install">When ready, open <a href="http://localhost:1234/ui">localhost:1234/ui</a>. <a href="https://docs.mistralrs.dev/quickstart/">Quickstart</a></p>
+            <p class="source-install">When it's ready, open <a href="http://localhost:1234/ui">localhost:1234/ui</a>.</p>
+          </div>
+
+          <div class="hero-actions">
+            <a class="button button-primary" href="https://docs.mistralrs.dev/quickstart/">Get started</a>
+            <a class="button" href="https://docs.mistralrs.dev/">Read the docs</a>
           </div>
 
           <nav class="hero-meta" aria-label="Project links">
             <a href="https://docs.mistralrs.dev/reference/supported-models/">50+ model architectures</a>
-            <a href="https://docs.mistralrs.dev/">Docs</a>
             <a href="/blog/">Blog</a>
             <a href="https://github.com/EricLBuehler/mistral.rs">GitHub</a>
           </nav>

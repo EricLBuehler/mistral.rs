@@ -1,17 +1,40 @@
 :root {
-  --background: #070605;
-  --surface: #0d0b0a;
-  --surface-raised: #15110f;
+  --background: #121110;
+  --surface: #1a1816;
+  --surface-raised: #292623;
   --foreground: #f8f6f3;
-  --muted: #8f8781;
-  --muted-strong: #bbb2ab;
-  --line: #28211d;
-  --line-strong: #413229;
-  --accent: #e8772e;
-  --accent-soft: #ffa56b;
+  --code: #e6e2de;
+  --muted: #948f89;
+  --muted-strong: #c7c4c1;
+  --line: #292623;
+  --line-strong: #3e3b37;
+  --accent: #f0884a;
+  --accent-soft: #ffb07f;
+  --fill: #b8481a;
+  --on-fill: #ffffff;
+  --radius: 6px;
   --page-width: 820px;
+  --font-ui: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
   --font-terminal: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono",
     "DejaVu Sans Mono", monospace;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --background: #ffffff;
+    --surface: #f9f7f6;
+    --surface-raised: #f2f0ee;
+    --foreground: #1c1a17;
+    --code: #1c1a17;
+    --muted: #605c57;
+    --muted-strong: #3f3b37;
+    --line: #e6e2de;
+    --line-strong: #c7c4c1;
+    --accent: #b4461a;
+    --accent-soft: #b4461a;
+    --fill: #b4461a;
+  }
 }
 
 * {
@@ -19,7 +42,7 @@
 }
 
 html {
-  color-scheme: dark;
+  color-scheme: light dark;
 }
 
 body {
@@ -27,9 +50,15 @@ body {
   overflow-x: hidden;
   background: var(--background);
   color: var(--foreground);
+  font-family: var(--font-ui);
+  text-rendering: optimizeLegibility;
+}
+
+code,
+.prompt,
+.hero h1 {
   font-family: var(--font-terminal);
   font-variant-ligatures: none;
-  text-rendering: optimizeLegibility;
 }
 
 a {
@@ -104,8 +133,12 @@ button {
   margin-top: 52px;
   overflow: hidden;
   border: 1px solid var(--line-strong);
-  border-radius: 10px;
+  border-radius: var(--radius);
   background: var(--surface);
+}
+
+.install-card.model-card {
+  margin-top: 0;
 }
 
 .platform-tabs {
@@ -153,7 +186,7 @@ button {
   min-width: 0;
   overflow-x: auto;
   padding: 20px 0;
-  color: #ded8d3;
+  color: var(--code);
   font-size: 15px;
   text-align: left;
   white-space: nowrap;
@@ -209,23 +242,42 @@ button {
   white-space: nowrap;
 }
 
-.model-command {
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
-  min-height: 62px;
+.hero-actions {
+  margin-top: 36px;
   display: flex;
-  align-items: center;
+  flex-wrap: wrap;
   justify-content: center;
+  gap: 12px;
 }
 
-.model-command code {
-  min-width: 0;
-  overflow-x: auto;
-  padding: 20px 0;
-  color: var(--muted-strong);
-  font-size: 14px;
-  white-space: nowrap;
-  scrollbar-width: none;
+.button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 18px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  color: var(--foreground);
+  font-size: 15px;
+  font-weight: 550;
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+
+.button:hover,
+.button:focus-visible {
+  border-color: var(--muted);
+}
+
+.button-primary {
+  border-color: var(--fill);
+  background: var(--fill);
+  color: var(--on-fill);
+}
+
+.button-primary:hover,
+.button-primary:focus-visible {
+  border-color: var(--fill);
+  background: color-mix(in srgb, var(--fill) 88%, var(--foreground));
 }
 
 .hero-meta {
@@ -285,20 +337,17 @@ button {
     gap: 8px;
   }
 
-  .command-row code,
-  .model-command code {
+  .command-row code {
     font-size: 12px;
     scrollbar-color: var(--line-strong) transparent;
     scrollbar-width: thin;
   }
 
-  .command-row code::-webkit-scrollbar,
-  .model-command code::-webkit-scrollbar {
+  .command-row code::-webkit-scrollbar {
     height: 4px;
   }
 
-  .command-row code::-webkit-scrollbar-thumb,
-  .model-command code::-webkit-scrollbar-thumb {
+  .command-row code::-webkit-scrollbar-thumb {
     border-radius: 999px;
     background: var(--line-strong);
   }
@@ -357,8 +406,7 @@ button {
     gap: 6px;
   }
 
-  .command-row code,
-  .model-command code {
+  .command-row code {
     font-size: 11px;
   }
 

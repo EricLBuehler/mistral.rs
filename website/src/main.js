@@ -12,7 +12,6 @@ const panel = document.querySelector("#install-command");
 const command = panel.querySelector("code");
 const copyButton = panel.querySelector(".copy-button");
 let platform = "unix";
-let copyResetTimer;
 
 function selectPlatform(nextPlatform, moveFocus = false) {
   platform = nextPlatform;
@@ -53,11 +52,17 @@ for (const [index, tab] of tabs.entries()) {
   });
 }
 
-copyButton.addEventListener("click", async () => {
-  const copied = await copyText(commands[platform]);
-  copyButton.textContent = copied ? "Copied" : "Copy failed";
-  window.clearTimeout(copyResetTimer);
-  copyResetTimer = window.setTimeout(() => {
-    copyButton.textContent = "Copy";
+async function copyWithFeedback(button, text) {
+  const copied = await copyText(text);
+  button.textContent = copied ? "Copied" : "Copy failed";
+  window.clearTimeout(button.resetTimer);
+  button.resetTimer = window.setTimeout(() => {
+    button.textContent = "Copy";
   }, COPY_RESET_MS);
-});
+}
+
+copyButton.addEventListener("click", () => copyWithFeedback(copyButton, commands[platform]));
+
+for (const button of document.querySelectorAll(".copy-button[data-copy]")) {
+  button.addEventListener("click", () => copyWithFeedback(button, button.dataset.copy));
+}
