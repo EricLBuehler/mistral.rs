@@ -8,6 +8,7 @@ use crate::MultimodalLoaderType;
 use super::{
     gemma3_bindings::synthesize_gemma3_text,
     gemma3_config::ensure_gemma3_vision_config,
+    lfm3_vl_config::synthesize_lfm3_vl,
     multimodal_bindings::build_gemma4_bindings,
     multimodal_vision_registry::{resolve_native_multimodal_gguf, NativeMultimodalGguf},
     muse_glimmer_bindings::normalize_muse_glimmer_config,
@@ -23,6 +24,7 @@ use super::{
 pub(crate) struct GgufSynthesisInputs<'a> {
     pub archive: &'a GgufArchive,
     pub external_config: Option<&'a str>,
+    pub processor_config: Option<&'a Path>,
     pub preprocessor_config: Option<&'a Path>,
 }
 
@@ -31,6 +33,7 @@ pub(crate) struct SynthesizedGguf {
     pub config: String,
     pub bindings: GgufBindingMap,
     pub loader_type: MultimodalLoaderType,
+    pub processor_config: Option<String>,
     pub preprocessor_config: Option<String>,
     pub rope_pairing: RopePairing,
 }
@@ -58,6 +61,7 @@ pub(crate) struct GgufArchSpec {
     architectures: &'static [&'static str],
     pub text: GgufTextRoute,
     pub multimodal: GgufMultimodalRoute,
+    pub infer_multimodal_assets: bool,
     pub validate_multimodal_config: Option<fn(&str) -> Result<()>>,
     pub normalize_multimodal_config: Option<fn(&MultimodalLoaderType, &str) -> Result<String>>,
 }
@@ -68,6 +72,7 @@ impl GgufArchSpec {
             architectures,
             text: GgufTextRoute::NormalRegistry,
             multimodal: GgufMultimodalRoute::ProjectorRegistry,
+            infer_multimodal_assets: true,
             validate_multimodal_config: None,
             normalize_multimodal_config: None,
         }
@@ -85,6 +90,11 @@ impl GgufArchSpec {
 
     const fn validate_multimodal_config(mut self, validate: fn(&str) -> Result<()>) -> Self {
         self.validate_multimodal_config = Some(validate);
+        self
+    }
+
+    const fn infer_multimodal_assets(mut self, infer: bool) -> Self {
+        self.infer_multimodal_assets = infer;
         self
     }
 
@@ -123,6 +133,9 @@ impl GgufArchSpec {
 const DEFAULT_SPEC: GgufArchSpec = GgufArchSpec::new(&[]);
 
 static ARCH_SPECS: &[GgufArchSpec] = &[
+    GgufArchSpec::new(&["lfm3"])
+        .multimodal(GgufMultimodalRoute::Synthesized(synthesize_lfm3_vl))
+        .infer_multimodal_assets(false),
     GgufArchSpec::new(&[qwen4exp::ARCHITECTURE])
         .text(GgufTextRoute::Synthesized(synthesize_qwen4exp))
         .multimodal(GgufMultimodalRoute::Synthesized(synthesize_qwen4exp)),

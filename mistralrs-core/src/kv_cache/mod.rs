@@ -1267,13 +1267,9 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                                 v.current_seq_len = tk.current_seq_len;
                                 v.capacity_seq_len = tk.current_seq_len;
                             }
-                            (KvCache::Rotating { k: tk, .. }, KvCache::Rotating { k, v }) => {
-                                k.all_data = Some(batched_k);
-                                k.current_seq_len = tk.current_seq_len;
-                                k.capacity_seq_len = tk.current_seq_len;
-                                v.all_data = Some(batched_v);
-                                v.current_seq_len = tk.current_seq_len;
-                                v.capacity_seq_len = tk.current_seq_len;
+                            (KvCache::Rotating { k: tk, v: tv }, KvCache::Rotating { k, v }) => {
+                                k.replace_retained_data(batched_k, tk.current_seq_len);
+                                v.replace_retained_data(batched_v, tv.current_seq_len);
                             }
                             _ => {}
                         }
@@ -1329,15 +1325,11 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for HybridCa
                                     v.capacity_seq_len = src_k.current_seq_len;
                                 }
                                 (
-                                    KvCache::Rotating { k: src_k, .. },
+                                    KvCache::Rotating { k: src_k, v: src_v },
                                     KvCache::Rotating { k, v },
                                 ) => {
-                                    k.all_data = Some(seq_k);
-                                    k.current_seq_len = src_k.current_seq_len;
-                                    k.capacity_seq_len = src_k.current_seq_len;
-                                    v.all_data = Some(seq_v);
-                                    v.current_seq_len = src_k.current_seq_len;
-                                    v.capacity_seq_len = src_k.current_seq_len;
+                                    k.replace_retained_data(seq_k, src_k.current_seq_len);
+                                    v.replace_retained_data(seq_v, src_v.current_seq_len);
                                 }
                                 _ => {}
                             }
@@ -1502,8 +1494,6 @@ fn try_kv_append_rotating_metal(
 ) -> Result<Option<(Tensor, Tensor)>> {
     use candle_core::{backend::BackendStorage, Storage};
 
-    // Decode steady-state only: window is already full, one new token at a time.
-    // Anything else falls back so the existing shift-based code handles it.
     if kc.dim != 2 || vc.dim != 2 {
         return Ok(None);
     }
@@ -1524,15 +1514,17 @@ fn try_kv_append_rotating_metal(
     if b != 1 || src_seq != 1 {
         return Ok(None);
     }
-    // Window must be allocated and already full so we can use the buffer as a
-    // circular window without breaking shared-KV / prefill paths.
     if kc.all_data.is_none() || vc.all_data.is_none() {
         return Ok(None);
     }
     if kc.current_seq_len < kc.max_seq_len || vc.current_seq_len < vc.max_seq_len {
         return Ok(None);
     }
-    if kc.current_seq_len != vc.current_seq_len {
+    if kc.current_seq_len != vc.current_seq_len
+        || kc.write_pos != vc.write_pos
+        || kc.capacity_seq_len != vc.capacity_seq_len
+        || kc.write_pos + src_seq > kc.capacity_seq_len
+    {
         return Ok(None);
     }
     let k_dst = kc.all_data.as_ref().unwrap().clone();
@@ -1540,21 +1532,22 @@ fn try_kv_append_rotating_metal(
     if !k_dst.is_contiguous() || !v_dst.is_contiguous() {
         return Ok(None);
     }
-    let max_seq = kc.max_seq_len;
-    if k_dst.dims4()? != (b, n_kv, max_seq, head_dim) {
+    let capacity = kc.capacity_seq_len;
+    if k_dst.dims4()? != (b, n_kv, capacity, head_dim) || k_dst.shape() != v_dst.shape() {
         return Ok(None);
     }
 
-    // Write the new token to slot (current_seq_len) % max_seq, overwriting the
-    // oldest entry. The attention math is order-invariant (RoPE is in K), and
-    // the returned buffer is just the full window.
-    let slot = kc.current_seq_len % max_seq;
+    // Snapshots and prefill continuations require chronological retained windows.
+    let slot = kc.write_pos;
 
     {
         let (k_src_s, k_src_l) = k_src.storage_and_layout();
         let (v_src_s, v_src_l) = v_src.storage_and_layout();
-        let (k_dst_s, _) = k_dst.storage_and_layout();
-        let (v_dst_s, _) = v_dst.storage_and_layout();
+        let (k_dst_s, k_dst_l) = k_dst.storage_and_layout();
+        let (v_dst_s, v_dst_l) = v_dst.storage_and_layout();
+        if k_dst_l.start_offset() != 0 || v_dst_l.start_offset() != 0 {
+            return Ok(None);
+        }
         let (
             Storage::Metal(k_src_m),
             Storage::Metal(v_src_m),
@@ -1583,7 +1576,7 @@ fn try_kv_append_rotating_metal(
             head_dim,
             n_kv,
             src_seq,
-            max_seq,
+            capacity,
             slot,
         )
         .map_err(candle_core::Error::wrap)?;
@@ -1591,15 +1584,56 @@ fn try_kv_append_rotating_metal(
 
     kc.current_seq_len += src_seq;
     vc.current_seq_len += src_seq;
-    kc.last_append_result = Some(k_dst.clone());
-    vc.last_append_result = Some(v_dst.clone());
-    Ok(Some((k_dst, v_dst)))
+    kc.write_pos += src_seq;
+    vc.write_pos += src_seq;
+    let k = kc.current_data()?.unwrap();
+    let v = vc.current_data()?.unwrap();
+    kc.last_append_result = Some(k.clone());
+    vc.last_append_result = Some(v.clone());
+    Ok(Some((k, v)))
 }
 
 #[cfg(test)]
 mod mask_intent_tests {
     use super::*;
     use candle_core::{DType, Device};
+
+    #[test]
+    #[cfg(feature = "metal")]
+    fn rotating_metal_decode_preserves_snapshot_and_chunk_order() -> Result<()> {
+        let device = Device::new_metal(0)?;
+        for dtype in [DType::F32, DType::F16, DType::BF16] {
+            let values = |start: u16, end: u16| -> Result<Tensor> {
+                Tensor::arange(u32::from(start), u32::from(end), &device)?
+                    .to_dtype(dtype)?
+                    .reshape((1, 1, usize::from(end - start), 1))
+            };
+            let read = |value: &Tensor| -> Result<Vec<f32>> {
+                value.to_dtype(DType::F32)?.flatten_all()?.to_vec1()
+            };
+            let mut cache = KvCache::new_rotating(2, 4, 4);
+            let prefill = values(0, 7)?;
+            cache.append(&prefill, &prefill)?;
+            for token in [7, 8] {
+                let next = values(token, token + 1)?;
+                let (k, v) = cache.append(&next, &next)?;
+                let expected = ((token - 3)..=token).map(f32::from).collect::<Vec<_>>();
+                assert_eq!(read(&k)?, expected);
+                assert_eq!(read(&v)?, expected);
+            }
+            let KvCacheSnapshot::Rotating { k, v } = cache.snapshot()? else {
+                unreachable!()
+            };
+            assert_eq!(read(k.retained.as_ref().unwrap())?, vec![5., 6., 7., 8.]);
+            assert_eq!(read(v.retained.as_ref().unwrap())?, vec![5., 6., 7., 8.]);
+            let chunk = values(9, 11)?;
+            let (k, v) = cache.append(&chunk, &chunk)?;
+            assert_eq!(read(&k)?, vec![5., 6., 7., 8., 9., 10.]);
+            assert_eq!(read(&v)?, vec![5., 6., 7., 8., 9., 10.]);
+            assert_eq!(read(&cache.k()?.unwrap())?, vec![7., 8., 9., 10.]);
+        }
+        Ok(())
+    }
 
     #[test]
     fn sliding_cache_keeps_structured_mask_after_truncation() -> Result<()> {

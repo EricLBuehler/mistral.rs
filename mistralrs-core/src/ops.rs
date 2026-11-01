@@ -2,6 +2,14 @@ use std::sync::Arc;
 
 use candle_core::{shape::Dim, DType, Result, Tensor, D};
 
+pub(crate) fn rms_norm(input: &Tensor, weight: &Tensor, eps: f32) -> Result<Tensor> {
+    if input.device().is_cpu() && matches!(input.dtype(), DType::F16 | DType::BF16) {
+        mistralrs_quant::cpu_rms_norm(input, weight, eps)
+    } else {
+        candle_nn::ops::rms_norm(&input.contiguous()?, weight, eps)
+    }
+}
+
 #[cfg(feature = "cuda")]
 use crate::cuda::ffi;
 use crate::layers::Activation;

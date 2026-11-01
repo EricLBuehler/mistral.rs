@@ -12,6 +12,8 @@ mistralrs_metal_compile::metal_source_set! {
         "fused_glu",
         "hqq_dequantize",
         "hqq_bitpack",
+        "lfm3_conv",
+        "lfm3_spatial_conv",
         "moe",
         "mxfp4",
         "quantized",

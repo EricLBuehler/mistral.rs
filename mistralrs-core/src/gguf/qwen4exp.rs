@@ -108,6 +108,7 @@ pub(crate) fn synthesize_qwen4exp(inputs: &GgufSynthesisInputs<'_>) -> Result<Sy
         config,
         bindings,
         loader_type: MultimodalLoaderType::Qwen4Exp,
+        processor_config: None,
         preprocessor_config,
         rope_pairing: RopePairing::HalfSplit,
     })

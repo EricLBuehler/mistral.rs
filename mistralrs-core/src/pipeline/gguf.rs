@@ -749,10 +749,12 @@ impl GGUFLoader {
             paged_attn_config,
         } = args;
         let external_config = read_external_config(paths)?;
+        let processor_config_path = paths.get_processor_config().clone();
         let preprocessor_config_path = paths.get_preprocessor_config().clone();
         let synthesized = synthesize(&GgufSynthesisInputs {
             archive: &archive,
             external_config: external_config.as_deref(),
+            processor_config: processor_config_path.as_deref(),
             preprocessor_config: preprocessor_config_path.as_deref(),
         })?;
         let rope_pairing = synthesized.rope_pairing;
@@ -790,7 +792,7 @@ impl GGUFLoader {
             bos_token: tokenizer.conversion.bos,
             eos_token: tokenizer.conversion.eos,
             unk_token: tokenizer.conversion.unk,
-            processor_config: None,
+            processor_config: synthesized.processor_config,
             preprocessor_config,
             source_weight_files: paths
                 .get_weight_filenames()
@@ -974,6 +976,13 @@ impl GGUFLoader {
         }
 
         let model_archive = mistralrs_quant::GgufArchive::open(paths.get_weight_filenames())?;
+        if matches!(
+            model_archive.metadata_value("general.architecture"),
+            Some(candle_core::quantized::gguf_file::Value::String(architecture))
+                if !arch_spec(architecture).infer_multimodal_assets
+        ) {
+            return Ok(None);
+        }
         let synthesizes_config = matches!(
             model_archive.metadata_value("general.architecture"),
             Some(candle_core::quantized::gguf_file::Value::String(architecture))
@@ -1697,6 +1706,7 @@ mod tests {
             ("idefics3", MultimodalLoaderType::Idefics3),
             ("llama4", MultimodalLoaderType::Llama4),
             ("lfm2", MultimodalLoaderType::Lfm2Vl),
+            ("lfm3", MultimodalLoaderType::Lfm3Vl),
             ("mistral3", MultimodalLoaderType::Mistral3),
             ("muse-glimmer", MultimodalLoaderType::MuseGlimmer),
             ("qwen2vl", MultimodalLoaderType::Qwen2VL),

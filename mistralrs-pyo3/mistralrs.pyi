@@ -268,6 +268,7 @@ class Architecture(Enum):
     GptOss = "gptoss"
     Qwen3Next = "qwen3next"
     Lfm2 = "lfm2"
+    Lfm3 = "lfm3"
     Lfm2Moe = "lfm2_moe"
 
 @dataclass
@@ -282,6 +283,7 @@ class MultimodalArchitecture(Enum):
     LLaVANext = "llava-next"
     LLaVA = "llava"
     Lfm2Vl = "lfm2vl"
+    Lfm3Vl = "lfm3vl"
     VLlama = "vllama"
     Qwen2VL = "qwen2vl"
     Idefics3 = "idefics3"

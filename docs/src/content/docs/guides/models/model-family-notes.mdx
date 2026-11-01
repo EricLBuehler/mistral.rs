@@ -188,6 +188,46 @@ LiquidAI LFM2 and LFM2.5 dense and MoE checkpoints are supported. LFM2-VL and LF
 
 The official repos ship `chat_template.jinja`, including the Liquid tool-call format. It is auto-detected like other model-native tool-call formats.
 
+## LFM3 and LFM3-VL
+
+`LiquidAI/LFM3-1.7B` supports text generation. `LiquidAI/LFM3-VL-2B` accepts text, images, and video. Both load automatically from their Hugging Face configurations and use the checkpoint's chat template.
+
+Use the same commands with CPU, Metal, or CUDA builds; see [backend setup](/developer/from-source/). Add `--cpu` to force CPU execution and `--isq q4k` to quantize the weights during loading:
+
+```bash
+mistralrs run -m LiquidAI/LFM3-1.7B
+mistralrs run -m LiquidAI/LFM3-1.7B --cpu --isq q4k
+```
+
+LFM3-VL accepts local media paths or URLs with a one-shot prompt:
+
+```bash
+mistralrs run -m LiquidAI/LFM3-VL-2B --isq q4k --image photo.jpg -i "Describe this image."
+mistralrs run -m LiquidAI/LFM3-VL-2B --isq q4k --video clip.mp4 -i "Describe what happens in order."
+```
+
+Non-GIF video requires [FFmpeg on PATH](/guides/models/video-setup/). Animated GIFs are decoded natively. The video processor samples at 2 FPS, with a minimum of 4 and a maximum of 768 frames.
+
+Both models support [paged attention and chunked prefill](/guides/perf/paged-attention/). LFM3-VL also caches image and video embeddings for repeated media. Its in-situ quantization covers the language model and multimodal projector; the vision encoder remains unquantized.
+
+The official [LFM3 GGUF](https://huggingface.co/LiquidAI/LFM3-1.7B-GGUF) and [LFM3-VL GGUF](https://huggingface.co/LiquidAI/LFM3-VL-2B-GGUF) repositories are also supported. `--quant` selects a published GGUF variant. LFM3-VL uses the matching companion projector for image and video input, with its configuration and media preprocessing reconstructed from the GGUF files:
+
+```bash
+mistralrs run -m LiquidAI/LFM3-1.7B-GGUF --quant 4
+mistralrs run -m LiquidAI/LFM3-VL-2B-GGUF --quant 4 \
+  --image photo.jpg -i "Describe this image."
+```
+
+Local files also load with `-f /path/model.gguf` when an unambiguous companion projector is stored beside the model; `--mmproj` selects a projector explicitly. See [Run GGUF models](/guides/models/run-gguf/) for details.
+
+To serve LFM3-VL through the OpenAI-compatible API:
+
+```bash
+mistralrs serve -p 1234 -m LiquidAI/LFM3-VL-2B --isq q4k
+```
+
+Python SDK examples: [text](/examples/python/lfm3/), [images](/examples/python/lfm3-vl/), and [video](/examples/python/lfm3-vl-video/). HTTP examples: [text](/examples/server/lfm3/), [images](/examples/server/lfm3-vl/), and [video](/examples/server/lfm3-vl-video/).
+
 ## Gemma
 
 Gemma repos are gated: accept the license on the Hugging Face model page, then authenticate with `mistralrs login`.

@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 #[derive(Deserialize, Debug, Clone, Default)]
 #[allow(dead_code)]
 pub struct PreProcessorConfig {
-    // Populated from video_preprocessor_config.json when the repo ships one; never deserialized from this file.
+    // Separate video_preprocessor_config.json overrides the nested processor section.
     #[serde(skip)]
     pub(crate) video: Option<Box<PreProcessorConfig>>,
     pub(crate) do_convert_rgb: Option<bool>,
@@ -36,6 +36,8 @@ pub struct PreProcessorConfig {
     pub(crate) patch_size: Option<usize>,
     pub(crate) merge_size: Option<usize>,
     pub(crate) temporal_patch_size: Option<usize>,
+    pub(crate) cap_pixels_per_frame: Option<bool>,
+    pub(crate) max_video_tokens: Option<usize>,
     pub(crate) max_slice_nums: Option<usize>,
     pub(crate) scale_resolution: Option<usize>,
     pub(crate) image_feature_size: Option<usize>,
@@ -102,7 +104,11 @@ impl PreProcessorConfig {
 
         if let Some(obj) = value.as_object() {
             for (key, value) in obj {
-                if key != "image_processor" && key != "feature_extractor" && !value.is_null() {
+                if key != "image_processor"
+                    && key != "video_processor"
+                    && key != "feature_extractor"
+                    && !value.is_null()
+                {
                     merged.insert(key.clone(), value.clone());
                 }
             }
@@ -116,7 +122,13 @@ impl PreProcessorConfig {
             }
         }
 
-        serde_json::from_value(Value::Object(merged))
+        let mut config: Self = serde_json::from_value(Value::Object(merged))?;
+        config.video = value
+            .get("video_processor")
+            .filter(|value| value.is_object())
+            .map(|value| serde_json::from_value(value.clone()).map(Box::new))
+            .transpose()?;
+        Ok(config)
     }
 
     fn merge_processor_section(target: &mut Map<String, Value>, source: &Map<String, Value>) {
@@ -207,5 +219,17 @@ mod tests {
                 .copied(),
             Some(224)
         );
+    }
+    #[test]
+    fn parses_separate_image_and_video_budgets() {
+        let config = PreProcessorConfig::from_processor_config_json(r#"{
+            "image_processor": {"patch_size":16,"size":{"shortest_edge":65536,"longest_edge":16777216}},
+            "video_processor": {"patch_size":16,"size":{"shortest_edge":4096,"longest_edge":25165824},"cap_pixels_per_frame":false}
+        }"#).unwrap();
+        assert_eq!(config.size.as_ref().unwrap()["shortest_edge"], 65536);
+        let video = config.video.unwrap();
+        assert_eq!(video.size.as_ref().unwrap()["shortest_edge"], 4096);
+        assert_eq!(video.size.as_ref().unwrap()["longest_edge"], 25165824);
+        assert_eq!(video.cap_pixels_per_frame, Some(false));
     }
 }

@@ -31,6 +31,7 @@ pub(crate) fn synthesize_gemma3_text(inputs: &GgufSynthesisInputs<'_>) -> Result
         bindings: build_gemma3_text_bindings(archive, use_language_model_prefix)?,
         config,
         loader_type: MultimodalLoaderType::Gemma3,
+        processor_config: None,
         preprocessor_config: None,
         rope_pairing: RopePairing::HalfSplit,
     })
