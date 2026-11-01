@@ -7,7 +7,7 @@ use crate::{
     request::{DetokenizationRequest, NormalRequest, TokenizationRequest},
     sequence::SeqStepType,
     tools::{ToolCallFormat, ToolCallState, ToolChoice},
-    ModelCategory, RequestMessage, Response,
+    ContextLengthExceeded, ModelCategory, RequestMessage, Response,
 };
 use candle_core::Tensor;
 use either::Either;
@@ -517,10 +517,13 @@ impl Engine {
             return;
         }
 
+        let max_model_len = get_mut_arcmutex!(self.pipeline)
+            .get_metadata()
+            .max_model_len;
         if matches!(
             get_mut_arcmutex!(self.pipeline).category(),
             ModelCategory::Text | ModelCategory::Multimodal { .. } | ModelCategory::Embedding
-        ) && prompt_tokens.len() > get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len
+        ) && prompt_tokens.len() > max_model_len
         {
             // text/vision => truncate from start
             // embedding => truncate from end
@@ -528,9 +531,10 @@ impl Engine {
             if !truncate_sequence {
                 request
                     .response
-                    .send(Response::ValidationError(
-                        format!("Prompt sequence length is greater than {}, perhaps consider using `truncate_sequence`?", get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len).into(),
-                    ))
+                    .send(Response::ValidationError(Box::new(ContextLengthExceeded {
+                        prompt_tokens: prompt_tokens.len(),
+                        max_model_len,
+                    })))
                     .await
                     .unwrap_or_else(|_| warn!("Receiver disconnected"));
                 return;
@@ -539,21 +543,20 @@ impl Engine {
                 ModelCategory::Text | ModelCategory::Multimodal { .. }
             ) {
                 let prompt_len = prompt_tokens.len();
-                let max_len = get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len;
-                let currently_over = prompt_len - max_len;
+                let currently_over = prompt_len - max_model_len;
 
                 // Reserve space for generation tokens
-                // If user specified max_len (generation length), reserve that many tokens (capped to max_len)
+                // If user specified max_len (generation length), reserve that many tokens (capped to max_model_len)
                 // Otherwise, reserve just 1 token minimum to allow at least some generation
                 let sampling_max = if let Some(sampling_max) = request.sampling_params.max_len {
-                    sampling_max.min(max_len)
+                    sampling_max.min(max_model_len)
                 } else {
                     1
                 };
 
-                // Calculate how many prompt tokens to keep: max_len - sampling_max
+                // Calculate how many prompt tokens to keep: max_model_len - sampling_max
                 // This ensures we have room for generation
-                let tokens_to_keep = max_len.saturating_sub(sampling_max);
+                let tokens_to_keep = max_model_len.saturating_sub(sampling_max);
 
                 // Safely calculate slice start position - keep the end of the prompt
                 let slice_start = prompt_len.saturating_sub(tokens_to_keep);
@@ -561,11 +564,9 @@ impl Engine {
                 prompt_tokens = prompt_tokens[slice_start..].to_vec();
                 warn!("Prompt for request {} was {currently_over} tokens over the model maximum length. The first {slice_start} tokens were truncated to make space for generation.", request.id);
             } else {
-                let prompt_len = prompt_tokens.len();
-                let max_len = get_mut_arcmutex!(self.pipeline).get_metadata().max_seq_len;
-                let currently_over = prompt_len - max_len;
+                let currently_over = prompt_tokens.len() - max_model_len;
 
-                prompt_tokens = prompt_tokens[..max_len].to_vec();
+                prompt_tokens = prompt_tokens[..max_model_len].to_vec();
                 warn!("Prompt for request {} was {currently_over} tokens over the model maximum length. The last {currently_over} tokens were truncated to make space for generation.", request.id);
             }
         }

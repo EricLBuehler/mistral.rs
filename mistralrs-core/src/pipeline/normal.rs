@@ -157,6 +157,7 @@ pub(crate) struct NormalPipelineBuildArgs<'a> {
     pub source_weight_files: Vec<PathBuf>,
     pub source_weight_source: Option<Arc<dyn mistralrs_quant::QuantizedWeightSource>>,
     pub dynamic_lora: Option<Arc<DynamicLoraRuntime>>,
+    pub max_model_len: Option<usize>,
 }
 
 pub(crate) fn build_normal_pipeline(
@@ -184,6 +185,7 @@ pub(crate) fn build_normal_pipeline(
         source_weight_files,
         source_weight_source,
         dynamic_lora,
+        max_model_len,
     } = args;
 
     let model_metadata =
@@ -288,7 +290,16 @@ pub(crate) fn build_normal_pipeline(
         (None, None)
     };
 
-    let max_seq_len = model.max_seq_len();
+    let max_model_len = super::resolve_max_model_len(
+        model.max_seq_len(),
+        max_model_len,
+        cache_config.as_ref().zip(
+            paged_attn_config
+                .as_ref()
+                .map(PagedAttentionConfig::memory_goal),
+        ),
+        silent,
+    )?;
     let generation_defaults = generation_config
         .as_ref()
         .and_then(GenerationConfig::generation_defaults);
@@ -313,7 +324,7 @@ pub(crate) fn build_normal_pipeline(
         }),
         model_id,
         metadata: Arc::new(GeneralMetadata {
-            max_seq_len,
+            max_model_len,
             llg_factory: Some(llg_factory),
             no_kv_cache,
             no_prefix_cache: is_xlora,
@@ -670,6 +681,8 @@ impl Loader for NormalLoader {
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
+        paged_attn_config =
+            paged_attn_config.map(|paged| paged.with_max_model_len(self.config.max_model_len));
         let config = match self.prepared_source.as_ref() {
             Some(source) => source.config.clone(),
             None => super::loaders::load_model_config(
@@ -1589,6 +1602,7 @@ impl Loader for NormalLoader {
             source_weight_files,
             source_weight_source: weight_source,
             dynamic_lora,
+            max_model_len: self.config.max_model_len,
         })
     }
 

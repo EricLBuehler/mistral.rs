@@ -7,7 +7,8 @@ use axum::{
     response::IntoResponse,
 };
 use mistralrs_core::{
-    LoraAdapterError, MistralRsError, Request, Response, ServiceUnavailableError,
+    ContextLengthExceeded, LoraAdapterError, MistralRsError, Request, Response,
+    ServiceUnavailableError,
 };
 use serde::Serialize;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
@@ -22,6 +23,8 @@ use crate::types::SharedMistralRsState;
 pub const DEFAULT_CHANNEL_BUFFER_SIZE: usize = 10_000;
 
 pub(crate) const INTERNAL_ERROR_MESSAGE: &str = "Internal server error.";
+// OpenAI's code for prompts over the context window; Codex and other clients match on it.
+pub(crate) const CONTEXT_LENGTH_EXCEEDED_CODE: &str = "context_length_exceeded";
 pub(crate) const MODEL_ERROR_MESSAGE: &str = "The model failed to process the request.";
 pub(crate) const SERVICE_UNAVAILABLE_MESSAGE: &str = "The service is temporarily unavailable.";
 
@@ -137,6 +140,14 @@ impl ApiError {
         }
         if let Some(error) = find_error::<MistralRsError>(error) {
             return Self::from_mistralrs_error(error);
+        }
+        if let Some(error) = find_error::<ContextLengthExceeded>(error) {
+            return Self::new(
+                ApiErrorKind::InvalidRequest,
+                error.to_string(),
+                Some(CONTEXT_LENGTH_EXCEEDED_CODE),
+                None,
+            );
         }
         if find_error::<ServiceUnavailableError>(error).is_some() {
             return Self::new(
@@ -302,7 +313,7 @@ impl std::fmt::Display for ApiError {
 
 impl std::error::Error for ApiError {}
 
-fn find_error<'a, E: std::error::Error + 'static>(
+pub(crate) fn find_error<'a, E: std::error::Error + 'static>(
     mut error: &'a (dyn std::error::Error + 'static),
 ) -> Option<&'a E> {
     loop {
@@ -474,6 +485,25 @@ where
 mod tests {
     use super::*;
     use axum::body::to_bytes;
+
+    #[tokio::test]
+    async fn context_overflow_uses_openai_code_and_wording() {
+        let error = ContextLengthExceeded {
+            prompt_tokens: 9000,
+            max_model_len: 8192,
+        };
+        let response = openai_error_from_error(&error, ApiErrorKind::InvalidRequest);
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(body["error"]["code"], CONTEXT_LENGTH_EXCEEDED_CODE);
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+        assert!(body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("This model's maximum context length is 8192 tokens."));
+    }
 
     #[test]
     fn request_model_override_only_preserves_routed_aliases() {

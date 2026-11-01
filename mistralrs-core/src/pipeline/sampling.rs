@@ -194,7 +194,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     eos_tok: Option<&[u32]>,
     use_prefix_cacher: bool,
 ) -> Result<()> {
-    let is_done = seq.is_done(logprobs.token, eos_tok, this.get_metadata().max_seq_len);
+    let is_done = seq.is_done(logprobs.token, eos_tok, this.get_metadata().max_model_len);
     let metadata = this.get_metadata();
     let tok_env = metadata.tok_env().ok_or(candle_core::Error::Msg(
         "`finish_or_add_toks_to_seq` requires the pipeline to have a token trie".to_string(),
@@ -849,7 +849,7 @@ async fn sample_and_add_toks_inner(
     let use_async_pool = seqs_len > 1;
     let metadata = this.get_metadata();
     let llg_factory = metadata.llg_factory.clone();
-    let max_model_len = metadata.max_seq_len;
+    let max_model_len = metadata.max_model_len;
     let eos_toks = metadata.eos_tok.clone();
 
     let sampled_vec = match try_sample_batch_cuda(&logits, seqs, &rng)? {
@@ -1157,7 +1157,8 @@ fn one_token_stays_within_limits(
     sequence_len: usize,
     max_model_len: usize,
 ) -> bool {
-    generated_len.saturating_add(1) < max_generation_len && sequence_len < max_model_len
+    generated_len.saturating_add(1) < max_generation_len
+        && sequence_len.saturating_add(1) < max_model_len
 }
 
 #[cfg(any(feature = "cuda", test))]
@@ -1188,7 +1189,7 @@ pub(crate) fn cuda_token_batch_will_finish(
         token_ids,
         commit_rows,
         &metadata.eos_tok,
-        metadata.max_seq_len,
+        metadata.max_model_len,
         disable_eos_stop,
     )
 }
@@ -2021,7 +2022,14 @@ mod tests {
     fn lookahead_stops_before_known_length_boundaries() {
         assert!(one_token_stays_within_limits(4, 8, 12, 16));
         assert!(!one_token_stays_within_limits(7, 8, 12, 16));
-        assert!(!one_token_stays_within_limits(4, 8, 16, 16));
+        assert!(!one_token_stays_within_limits(4, 8, 15, 16));
+    }
+
+    #[test]
+    fn model_length_stop_keeps_prompt_plus_output_within_limit() {
+        let seq = terminal_test_sequence(vec![], None, false);
+        assert_eq!(seq.is_done(7, None, 5), None);
+        assert_eq!(seq.is_done(7, None, 4), Some(StopReason::ModelLength(4)));
     }
 
     #[test]

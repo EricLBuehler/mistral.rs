@@ -2282,7 +2282,7 @@ impl Runner {
         self.runner.find_file(&file_id).map(|f| (*f).clone())
     }
 
-    /// Return the maximum supported sequence length for the requested model, if available.
+    /// Most tokens (prompt plus output) one request may use, if available.
     #[pyo3(signature = (model_id = None))]
     fn max_sequence_length(&self, model_id: Option<String>) -> PyApiResult<Option<usize>> {
         self.runner

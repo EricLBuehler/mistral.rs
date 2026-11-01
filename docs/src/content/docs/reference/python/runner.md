@@ -311,8 +311,8 @@ Detokenize some tokens, returning text.
 max_sequence_length(model_id: str | None = None) -> int | None
 ```
 
-Return the maximum supported sequence length for the current or specified model, or None when
-the concept does not apply (such as diffusion or speech models).
+Return the most tokens (prompt plus output) one request may use on the current or specified
+model, or None when the concept does not apply (such as diffusion or speech models).
 
 **Parameters**
 

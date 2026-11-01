@@ -142,6 +142,13 @@ pub struct CacheConfig {
     pub kv_cache_group_ids: Vec<u32>,
 }
 
+impl CacheConfig {
+    /// Most tokens one sequence can hold; block 0 is reserved, as in `KVCacheManager::num_usable_blocks`.
+    pub fn usable_tokens(&self) -> usize {
+        self.num_gpu_blocks.saturating_sub(1) * self.block_size
+    }
+}
+
 pub type KVCache = (Tensor, Tensor);
 
 pub struct CacheEngine {

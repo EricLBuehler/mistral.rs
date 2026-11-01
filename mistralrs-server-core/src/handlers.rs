@@ -63,6 +63,7 @@ pub async fn models(State(state): ExtractedMistralRsState) -> Response {
             parent: None,
             adapter_generation: None,
             status: None,
+            max_model_len: state.max_sequence_length(None).ok().flatten(),
             tools_available: None,
             mcp_tools_count: None,
             mcp_servers_connected: None,
@@ -89,6 +90,11 @@ pub async fn models(State(state): ExtractedMistralRsState) -> Response {
             } else {
                 (None, None, None)
             };
+        let max_model_len = if status == CoreModelStatus::Loaded {
+            state.max_sequence_length(Some(&model_id)).ok().flatten()
+        } else {
+            None
+        };
 
         model_objects.push(ModelObject {
             root: Some(model_id.clone()),
@@ -99,6 +105,7 @@ pub async fn models(State(state): ExtractedMistralRsState) -> Response {
             parent: None,
             adapter_generation: None,
             status: Some(status.to_string()),
+            max_model_len,
             tools_available,
             mcp_tools_count,
             mcp_servers_connected,
@@ -110,6 +117,10 @@ pub async fn models(State(state): ExtractedMistralRsState) -> Response {
         Err(error) => return openai_error_from_error(&error, ApiErrorKind::Internal),
     };
     for adapter_model in adapter_models {
+        let max_model_len = state
+            .max_sequence_length(Some(&adapter_model.parent))
+            .ok()
+            .flatten();
         model_objects.push(ModelObject {
             root: Some(adapter_model.adapter.alias.clone()),
             id: adapter_model.id,
@@ -119,6 +130,7 @@ pub async fn models(State(state): ExtractedMistralRsState) -> Response {
             parent: Some(adapter_model.parent),
             adapter_generation: Some(adapter_model.adapter.generation.to_string()),
             status: Some(CoreModelStatus::Loaded.to_string()),
+            max_model_len,
             tools_available: None,
             mcp_tools_count: None,
             mcp_servers_connected: None,

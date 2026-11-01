@@ -1174,13 +1174,12 @@ impl Model {
             .map_err(|e| SdkError::Inference(e.into()))
     }
 
-    /// Returns the maximum supported sequence length for this model, if applicable.
+    /// Most tokens (prompt plus output) one request may use, if applicable.
     pub fn max_sequence_length(&self) -> crate::error::Result<Option<usize>> {
         self.max_sequence_length_with_model(None)
     }
 
-    /// Returns the maximum supported sequence length for a specific model, if applicable.
-    /// If `model_id` is `None`, returns for the default model.
+    /// Like [`Self::max_sequence_length`] for a specific model; `None` means the default model.
     pub fn max_sequence_length_with_model(
         &self,
         model_id: Option<&str>,

@@ -163,7 +163,7 @@ pub async fn run_bench(
     if let Some(max_seq_len) = mistralrs
         .config(None)
         .map_err(anyhow::Error::msg)?
-        .max_seq_len
+        .max_model_len
     {
         let longest_ttft = prompt_lens
             .iter()

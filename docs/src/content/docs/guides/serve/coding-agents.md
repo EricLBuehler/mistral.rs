@@ -28,6 +28,8 @@ Check that the server is reachable:
 curl http://localhost:1234/v1/models
 ```
 
+Each model in the response has a `max_model_len`: the most tokens one request can use, counting prompt and output. Both agents need it below. Coding agents want at least 64k; if yours is lower, see [context length](/guides/perf/paged-attention/#context-length).
+
 For Codex and Claude Code, let the coding agent own normal file edits, shell
 commands, and repository inspection. Enable mistral.rs server-side agent tools
 only when you deliberately want web search or Python code execution to happen
@@ -56,6 +58,8 @@ request_max_retries = 1
 stream_max_retries = 0
 stream_idle_timeout_ms = 300000
 ```
+
+Set `model_context_window` to the server's `max_model_len` so Codex compacts before it runs out of room.
 
 With `model_provider` set at the top level, plain `codex` uses the local server.
 To keep mistral.rs as a switchable alternative instead, move the `model` and
@@ -99,9 +103,9 @@ and Claude Code's background and planning calls all use the single loaded
 mistral.rs model. If you serve several models, map each Claude Code default to
 the local model id you want for that role.
 
-Set `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to the loaded model's actual context
-window. This avoids Claude Code guessing from an unfamiliar local model id and
-keeps its compaction threshold within the server limit.
+Set `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to the server's `max_model_len`. Claude
+Code can't guess the window from a local model id, and this keeps its
+compaction threshold inside the server limit.
 
 Every variable above is documented in the
 [Claude Code environment variables reference](https://code.claude.com/docs/en/env-vars).
@@ -130,7 +134,8 @@ Copyable config snippets live in `examples/server/`:
 | Codex returns 404 | Include `/v1` in the Codex provider `base_url`. |
 | Claude Code returns 404 | Remove `/v1` from `ANTHROPIC_BASE_URL`. |
 | The client requests an Anthropic model id | Use `default`, or map Claude Code default model env vars to your local ids. |
-| Claude Code warns that the model context window is unknown | Set `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to the loaded model's context window. |
+| Claude Code warns that the model context window is unknown | Set `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to `max_model_len` from `GET /v1/models`. |
+| The agent reports that the prompt is too long | The conversation outgrew `max_model_len`. Lower the agent's context setting to match, or give the server a [longer context](/guides/perf/paged-attention/#context-length). |
 | A remote server accepts any key | Put authentication in a reverse proxy. mistral.rs does not validate compatibility API keys. |
 | Claude Code sends beta fields your proxy rejects | Set `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` in Claude Code. |
 | Long streams time out | Raise Codex `stream_idle_timeout_ms` or Claude Code `API_TIMEOUT_MS`. |

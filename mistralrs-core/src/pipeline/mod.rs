@@ -1448,7 +1448,8 @@ pub struct Modalities {
 }
 
 pub struct GeneralMetadata {
-    pub max_seq_len: usize,
+    /// Prompt-plus-output token limit per request, from `resolve_max_model_len`.
+    pub max_model_len: usize,
     /// Only None if it doesn't make sense for the model
     pub llg_factory: Option<Arc<llguidance::ParserFactory>>,
     pub no_kv_cache: bool,
@@ -1483,6 +1484,57 @@ impl GeneralMetadata {
     pub fn tok_env(&self) -> Option<TokEnv> {
         self.llg_factory.as_ref().map(|f| f.tok_env().clone())
     }
+}
+
+/// Caps each request at the model's context, the paged KV capacity, and the requested `max_model_len`.
+pub(crate) fn resolve_max_model_len(
+    model_max: usize,
+    requested: Option<usize>,
+    paged: Option<(&CacheConfig, MemoryGoal)>,
+    silent: bool,
+) -> anyhow::Result<usize> {
+    if let Some(requested) = requested.filter(|&len| len > model_max) {
+        anyhow::bail!(
+            "max_model_len {requested} exceeds the model's context length of {model_max} tokens"
+        );
+    }
+    let kv = paged.map(|(cache, goal)| (cache.usable_tokens(), goal));
+    if let (Some(requested), Some((kv_tokens, goal))) = (requested, kv) {
+        if requested > kv_tokens {
+            let remedy = match goal {
+                MemoryGoal::KvBytes(_) | MemoryGoal::KvTokens(_) => "raise --kv-cache",
+                MemoryGoal::Utilization(_) => {
+                    "raise --gpu-memory-utilization, use a smaller --quant, or use --pa-cache-type f8e4m3"
+                }
+                MemoryGoal::Auto => "use a smaller --quant or --pa-cache-type f8e4m3",
+            };
+            anyhow::bail!(
+                "max_model_len {requested} does not fit in the KV cache, which holds {kv_tokens} tokens. Lower max_model_len or {remedy}."
+            );
+        }
+    }
+    let kv_tokens = kv.map(|(tokens, _)| tokens);
+    let limit = requested
+        .unwrap_or(model_max)
+        .min(kv_tokens.unwrap_or(usize::MAX));
+    if silent {
+        return Ok(limit);
+    }
+    let kv_summary = kv_tokens.map_or(String::new(), |kv| {
+        let requests = kv / limit;
+        let plural = if requests == 1 { "" } else { "s" };
+        format!(" KV cache: {kv} tokens, room for {requests} full-length request{plural} at once.")
+    });
+    if requested.is_some() {
+        tracing::info!("Context: up to {limit} tokens per request (max_model_len).{kv_summary}");
+    } else if limit < model_max {
+        tracing::warn!(
+            "Context: up to {limit} tokens per request (model supports {model_max}; limited by KV cache memory).{kv_summary}"
+        );
+    } else {
+        tracing::info!("Context: up to {limit} tokens per request.{kv_summary}");
+    }
+    Ok(limit)
 }
 
 #[derive(Clone, Copy)]
@@ -2612,7 +2664,7 @@ pub trait Pipeline:
                     && sampling::can_submit_cuda_token_batch_seqs(input_seqs)
                     && sampling::can_launch_one_token_lookahead(
                         input_seqs,
-                        self.get_metadata().max_seq_len,
+                        self.get_metadata().max_model_len,
                     );
                 #[cfg(feature = "cuda")]
                 let mut batched_cuda_decode = None;
@@ -3269,6 +3321,56 @@ mod tests {
     use candle_core::{Device, DeviceLocation, Tensor};
     use either::Either;
     use indexmap::IndexMap;
+
+    fn cache_with_blocks(num_gpu_blocks: usize) -> crate::paged_attention::CacheConfig {
+        crate::paged_attention::CacheConfig {
+            block_size: 32,
+            num_gpu_blocks,
+            cache_type: crate::paged_attention::PagedCacheType::Auto,
+            kv_cache_group_ids: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn max_model_len_is_the_tightest_limit() -> anyhow::Result<()> {
+        use super::{resolve_max_model_len, MemoryGoal};
+        let small_cache = cache_with_blocks(33);
+        let auto = Some((&small_cache, MemoryGoal::Auto));
+        assert_eq!(resolve_max_model_len(4096, None, None, true)?, 4096);
+        assert_eq!(resolve_max_model_len(4096, Some(1000), None, true)?, 1000);
+        assert_eq!(resolve_max_model_len(4096, None, auto, true)?, 1024);
+        assert_eq!(resolve_max_model_len(512, None, auto, true)?, 512);
+        assert_eq!(resolve_max_model_len(4096, Some(1024), auto, true)?, 1024);
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_max_model_len_must_fit_model_and_cache() {
+        use super::{resolve_max_model_len, MemoryGoal};
+        let small_cache = cache_with_blocks(33);
+        assert!(resolve_max_model_len(4096, Some(8192), None, true)
+            .unwrap_err()
+            .to_string()
+            .contains("context length of 4096"));
+        let auto = resolve_max_model_len(
+            4096,
+            Some(2048),
+            Some((&small_cache, MemoryGoal::Auto)),
+            true,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(auto.contains("holds 1024 tokens") && auto.contains("--pa-cache-type"));
+        let explicit = resolve_max_model_len(
+            4096,
+            Some(2048),
+            Some((&small_cache, MemoryGoal::KvTokens(1024))),
+            true,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(explicit.contains("raise --kv-cache"));
+    }
 
     fn prompt_chunk(start: usize, end: usize) -> PromptChunkPlan {
         PromptChunkPlan {
