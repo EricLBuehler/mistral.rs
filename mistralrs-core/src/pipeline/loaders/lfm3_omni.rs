@@ -45,12 +45,6 @@ impl MultimodalPromptPrefixer for Lfm3OmniPrefixer {
     }
 }
 
-fn vision_config(config: &str) -> Result<String> {
-    Ok(serde_json::to_string(
-        &serde_json::from_str::<Config>(config)?.vision,
-    )?)
-}
-
 impl MultimodalModelLoader for Lfm3OmniLoader {
     fn runtime_config<'a>(
         &self,
@@ -151,7 +145,7 @@ impl DeviceMappedModelLoader for Lfm3OmniLoader {
         config: &str,
         params: &AutoDeviceMapParams,
     ) -> Result<usize> {
-        Lfm3VlLoader.mapped_max_act_size_elems(&vision_config(config)?, params)
+        Lfm3VlLoader.mapped_max_act_size_elems(config, params)
     }
     fn non_mapped_max_act_size_elems(
         &self,
@@ -171,12 +165,8 @@ impl DeviceMappedModelLoader for Lfm3OmniLoader {
         device: &Device,
     ) -> Result<usize> {
         let cfg: Config = serde_json::from_str(config)?;
-        let (vision_peak, vision_retained) = Lfm3VlLoader::encoder_activation_memory_bytes(
-            &vision_config(config)?,
-            params,
-            dtype,
-            device,
-        )?;
+        let (vision_peak, vision_retained) =
+            Lfm3VlLoader::encoder_activation_memory_bytes(config, params, dtype, device)?;
         let audio = AudioMemoryEstimate::new(
             &cfg.speech.audio_encoder_config,
             cfg.vision.text_config.hidden_size,
@@ -207,20 +197,15 @@ impl DeviceMappedModelLoader for Lfm3OmniLoader {
         matformer: Option<&MatformerSliceConfig>,
     ) -> Result<usize> {
         let cfg: Config = serde_json::from_str(config)?;
-        let audio = cfg.speech.audio_encoder_config.parameter_count();
-        let input = cfg.speech.audio_encoder_config.hidden_size;
-        let output = cfg.vision.text_config.hidden_size;
-        let projector = 2 * input + input * output + output * output + 2 * output;
         Ok(Lfm3VlLoader.non_mapped_size_in_bytes(
-            &vision_config(config)?,
+            config,
             dtype,
             weight_pack_factor,
             quantization,
             matformer,
-        )? + (audio + projector + cfg.output_parameter_count()) * dtype.size_in_bytes()
-            + cfg.speech.codec_config.stft_win_length
-                * (DType::F32.size_in_bytes()
-                    - dtype.size_in_bytes().min(DType::F32.size_in_bytes())))
+        )? + cfg
+            .speech
+            .weight_size_in_bytes(cfg.vision.text_config.hidden_size, dtype))
     }
     fn layer_sizes_in_bytes(
         &self,

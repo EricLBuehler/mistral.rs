@@ -14,7 +14,8 @@ Start the server:
 
 Run `python examples/server/lfm3_omni.py --audio question.wav --image photo.jpg`.
 Each media flag is optional; use --prompt for a text-only request.
-Media files are read locally and sent as base64 data URLs.
+WAV/MP3 audio uses standard input_audio parts. Other formats use the audio_url extension.
+Images and video are read locally and sent as base64 data URLs.
 Video needs FFmpeg unless it is a GIF. Supply its soundtrack with --audio.
 Add --speech-out answer.wav for text and speech, or --audio-only for speech alone.
 --max-tokens counts both text tokens and speech frames (default: 1024).
@@ -29,7 +30,8 @@ Start the server:
 
 Run `python examples/server/lfm3_omni.py --audio question.wav --image photo.jpg`.
 Each media flag is optional; use --prompt for a text-only request.
-Media files are read locally and sent as base64 data URLs.
+WAV/MP3 audio uses standard input_audio parts. Other formats use the audio_url extension.
+Images and video are read locally and sent as base64 data URLs.
 Video needs FFmpeg unless it is a GIF. Supply its soundtrack with --audio.
 Add --speech-out answer.wav for text and speech, or --audio-only for speech alone.
 --max-tokens counts both text tokens and speech frames (default: 1024).
@@ -82,7 +84,18 @@ for kind, path in [("image", args.image), ("video", args.video), ("audio", args.
         key = f"{kind}_url"
         mime_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         data = base64.b64encode(path.read_bytes()).decode("ascii")
-        content.append({"type": key, key: {"url": f"data:{mime_type};base64,{data}"}})
+        audio_format = path.suffix.lower().removeprefix(".")
+        if kind == "audio" and audio_format in {"wav", "mp3"}:
+            content.append(
+                {
+                    "type": "input_audio",
+                    "input_audio": {"data": data, "format": audio_format},
+                }
+            )
+        else:
+            content.append(
+                {"type": key, key: {"url": f"data:{mime_type};base64,{data}"}}
+            )
 content.append({"type": "text", "text": args.prompt})
 
 client = OpenAI(api_key="foobar", base_url=args.base_url)

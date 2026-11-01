@@ -7,7 +7,7 @@ pub(crate) mod inputs_processor;
 pub(crate) mod memory;
 
 #[cfg(test)]
-pub(crate) mod tests;
+mod tests;
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -33,7 +33,7 @@ use crate::{
 };
 
 use audio::{AudioEncoder, AudioProjector};
-use codec::LiquidCodec;
+use codec::{CodecStream, LiquidCodec};
 pub(crate) use config::Config;
 use config::SpeechConfig;
 use generation::{AudioSampling, DepthDecoder, GenerationMarkers, GenerationMode, GenerationState};
@@ -46,6 +46,22 @@ struct SequenceGeneration {
     state: GenerationState,
     frames: Vec<Vec<u32>>,
     code_history: BTreeMap<usize, Vec<u32>>,
+    audio_id: String,
+    stream: Option<CodecStream>,
+}
+
+impl SequenceGeneration {
+    fn codes(&self, device: &Device) -> Result<Tensor> {
+        let frames = self.frames.len();
+        let books = self.frames[0].len();
+        Tensor::from_vec(
+            self.frames.iter().flatten().copied().collect::<Vec<_>>(),
+            (1, frames, books),
+            device,
+        )?
+        .transpose(1, 2)?
+        .contiguous()
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -418,8 +434,12 @@ impl MultimodalModel for Lfm3OmniModel {
                 .codes
                 .iter()
                 .enumerate()
-                .map(|(book, &code)| code + (book * self.codebook_size) as u32)
-                .collect::<Vec<_>>();
+                .map(|(book, &code)| {
+                    u32::try_from(book * self.codebook_size)
+                        .map(|offset| code + offset)
+                        .map_err(candle_core::Error::wrap)
+                })
+                .collect::<Result<Vec<_>>>()?;
             let ids = Tensor::from_slice(&codes, (1, codes.len()), self.device())?;
             let embedding = self
                 .codebook_embedding
@@ -514,6 +534,8 @@ impl MultimodalModel for Lfm3OmniModel {
                 ),
                 frames: Vec::new(),
                 code_history: BTreeMap::new(),
+                audio_id: format!("audio_{}", uuid::Uuid::new_v4().simple()),
+                stream: None,
             });
         if generation.state.is_audio() {
             let mut codes = self.depth_decoder.sample_frame(
@@ -588,29 +610,62 @@ impl MultimodalModel for Lfm3OmniModel {
             cache.hidden.remove(seq.id());
             cache.sequences.remove(seq.id())
         };
-        if let (Some(output), Some(generation)) = (seq.audio_output(), generation) {
+        if let (Some(output), Some(mut generation)) = (seq.audio_output(), generation) {
             let samples = if generation.frames.is_empty() {
                 Vec::new()
             } else {
-                let frames = generation.frames.len();
-                let books = generation.frames[0].len();
-                let codes = Tensor::from_vec(
-                    generation.frames.into_iter().flatten().collect::<Vec<_>>(),
-                    (1, frames, books),
-                    self.device(),
-                )?
-                .transpose(1, 2)?
-                .contiguous()?;
-                self.codec.decode(&codes)?.flatten_all()?.to_vec1::<f32>()?
+                let codes = generation.codes(self.device())?;
+                let samples = if let Some(stream) = &mut generation.stream {
+                    self.codec.decode_stream(&codes, stream, true)?
+                } else {
+                    self.codec.decode(&codes)?
+                };
+                samples.flatten_all()?.to_vec1::<f32>()?
             };
-            let audio = crate::ChatAudioResponse::from_pcm(
+            let mut audio = crate::ChatAudioResponse::from_pcm(
                 &samples,
                 self.codec.sample_rate(),
                 output.format,
             )
             .map_err(candle_core::Error::msg)?;
+            audio.id = Some(generation.audio_id);
             seq.set_generated_audio(audio);
         }
+        Ok(())
+    }
+
+    fn prepare_streaming_response(&self, seq: &mut crate::sequence::Sequence) -> Result<()> {
+        if !seq
+            .audio_output()
+            .is_some_and(|output| output.format == crate::ChatAudioFormat::Pcm16)
+        {
+            return Ok(());
+        }
+        let mut cache = self
+            .generation
+            .lock()
+            .expect("Omni generation cache poisoned");
+        let Some(generation) = cache.sequences.get_mut(seq.id()) else {
+            return Ok(());
+        };
+        let stream = generation.stream.get_or_insert_with(CodecStream::default);
+        if !stream.is_ready(generation.frames.len()) {
+            return Ok(());
+        }
+        let codes = generation.codes(self.device())?;
+        let samples = self
+            .codec
+            .decode_stream(&codes, generation.stream.as_mut().unwrap(), false)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        let mut audio = crate::ChatAudioResponse::from_pcm(
+            &samples,
+            self.codec.sample_rate(),
+            crate::ChatAudioFormat::Pcm16,
+        )
+        .map_err(candle_core::Error::msg)?;
+        audio.id = Some(generation.audio_id.clone());
+        seq.set_generated_audio(audio);
         Ok(())
     }
 

@@ -3,6 +3,7 @@ LiquidAI LFM3-Omni text and speech answers from audio, images, and video with th
 
 Run `python examples/python/lfm3_omni.py --audio question.wav --image photo.jpg`.
 Each media flag is optional; use --prompt for a text-only request.
+WAV/MP3 audio uses standard input_audio parts; other formats use the audio_url extension.
 Video needs FFmpeg unless it is a GIF. Supply its soundtrack with --audio.
 Add --speech-out answer.wav for text and speech, or --audio-only for speech alone.
 --max-tokens counts both text tokens and speech frames (default: 1024).
@@ -51,7 +52,19 @@ content = []
 for kind, path in [("image", args.image), ("video", args.video), ("audio", args.audio)]:
     if path is not None:
         key = f"{kind}_url"
-        content.append({"type": key, key: {"url": path.resolve().as_uri()}})
+        audio_format = path.suffix.lower().removeprefix(".")
+        if kind == "audio" and audio_format in {"wav", "mp3"}:
+            content.append(
+                {
+                    "type": "input_audio",
+                    "input_audio": {
+                        "data": base64.b64encode(path.read_bytes()).decode("ascii"),
+                        "format": audio_format,
+                    },
+                }
+            )
+        else:
+            content.append({"type": key, key: {"url": path.resolve().as_uri()}})
 content.append({"type": "text", "text": args.prompt})
 
 runner = Runner(

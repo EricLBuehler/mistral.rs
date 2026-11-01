@@ -274,18 +274,8 @@ impl DeviceMappedModelLoader for Lfm3AudioLoader {
                 text.hidden_size * text.vocab_size / head_pack
             }
             + text.hidden_size;
-        let speech = &cfg.speech;
-        let input = speech.audio_encoder_config.hidden_size;
-        let output = text.hidden_size;
-        let projector = 2 * input + input * output + output * output + 2 * output;
-        Ok((language
-            + speech.audio_encoder_config.parameter_count()
-            + projector
-            + speech.output_parameter_count(output))
-            * dtype.size_in_bytes()
-            + speech.codec_config.stft_win_length
-                * (DType::F32.size_in_bytes()
-                    - dtype.size_in_bytes().min(DType::F32.size_in_bytes())))
+        Ok(language * dtype.size_in_bytes()
+            + cfg.speech.weight_size_in_bytes(text.hidden_size, dtype))
     }
 
     fn layer_sizes_in_bytes(

@@ -23,8 +23,10 @@ use crate::{
 
 use super::audio_processing::AudioProcessor;
 
-const AUDIO_TOKEN: &str = "<|audio|>";
-const AUDIO_OUT_TOKEN: &str = "<|audio_out|>";
+pub(crate) const AUDIO_TOKEN: &str = "<|audio|>";
+pub(crate) const AUDIO_OUT_TOKEN: &str = "<|audio_out|>";
+pub(crate) const AUDIO_START_TOKEN: &str = "<|audio_start|>";
+pub(crate) const MIXED_START_TOKEN: &str = "<|mixed_start|>";
 const IMAGE_TOKEN: &str = "<|image|>";
 const VIDEO_TOKEN: &str = "<|video|>";
 const AUDIO_DELIMITER_TOKENS: usize = 2;
@@ -61,6 +63,8 @@ impl Lfm3OmniProcessor {
 }
 
 impl Processor for Lfm3OmniProcessor {
+    // Processor returns Arc<dyn InputsProcessor>, whose trait does not require Send or Sync.
+    #[allow(clippy::arc_with_non_send_sync)]
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
         Arc::new(Lfm3OmniInputsProcessor {
             vision: self.vision.inputs_processor(),
@@ -221,8 +225,8 @@ impl MediaTokens {
             video: id(VIDEO_TOKEN)?,
             start: id(GridProcessor::VISION_START)?,
             end: id(GridProcessor::VISION_END)?,
-            audio_start: id("<|audio_start|>")?,
-            mixed_start: id("<|mixed_start|>")?,
+            audio_start: id(AUDIO_START_TOKEN)?,
+            mixed_start: id(MIXED_START_TOKEN)?,
         })
     }
 }

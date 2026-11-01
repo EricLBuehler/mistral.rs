@@ -15,6 +15,11 @@ use crate::{
         __path_resolve_agent_approval, ApprovalDecision, ApprovalDecisionRequest,
         ApprovalDecisionResponse,
     },
+    audio_transcription::{
+        __path_audio_transcriptions, __path_audio_translations, AudioTranscriptionRequest,
+        AudioTranscriptionResponse, AudioTranslationRequest, TranscriptionResponseFormat,
+        TranscriptionStreamEvent,
+    },
     chat_completion::__path_chatcompletions,
     completions::__path_completions,
     embeddings::__path_embeddings,
@@ -39,21 +44,21 @@ use crate::{
     },
     metrics::__path_metrics,
     openai::{
-        AdapterGenerationSelection, AdapterSelection, AudioResponseFormat, ChatCompletionRequest,
-        CompletionRequest, EmbeddingData, EmbeddingEncodingFormat, EmbeddingInput,
-        EmbeddingRequest, EmbeddingResponse, EmbeddingUsage, EmbeddingVector, FunctionCalled,
-        Grammar, ImageGenerationRequest, JsonSchemaResponseFormat, Message, MessageContent,
-        MessageInnerContent, ModelObject, ModelObjects, OpenAiCodeInterpreterAutoContainer,
-        OpenAiCodeInterpreterContainer, OpenAiCodeInterpreterContainerType,
-        OpenAiCodeInterpreterTool, OpenAiCodeInterpreterToolType, OpenAiFunctionToolType,
-        OpenAiResponsesFunctionTool, OpenAiShellEnvironment, OpenAiShellSkill, OpenAiShellTool,
-        OpenAiShellToolType, OpenAiTool, OpenAiWebSearchTool, OpenAiWebSearchToolType,
-        OpenAiWebSearchUserLocation, ResponseFormat, ResponsesAnnotation, ResponsesChunk,
-        ResponsesContent, ResponsesCreateRequest, ResponsesDelta, ResponsesDeltaContent,
-        ResponsesDeltaOutput, ResponsesError, ResponsesIncompleteDetails,
-        ResponsesInputTokensDetails, ResponsesMessages, ResponsesObject, ResponsesOutput,
-        ResponsesOutputTokensDetails, ResponsesUsage, SpeechGenerationRequest, StopTokens,
-        ToolCall,
+        AdapterGenerationSelection, AdapterSelection, AudioResponseFormat, ChatAudioReference,
+        ChatCompletionRequest, CompletionRequest, EmbeddingData, EmbeddingEncodingFormat,
+        EmbeddingInput, EmbeddingRequest, EmbeddingResponse, EmbeddingUsage, EmbeddingVector,
+        FunctionCalled, Grammar, ImageGenerationRequest, JsonSchemaResponseFormat, Message,
+        MessageContent, MessageInnerContent, ModelObject, ModelObjects,
+        OpenAiCodeInterpreterAutoContainer, OpenAiCodeInterpreterContainer,
+        OpenAiCodeInterpreterContainerType, OpenAiCodeInterpreterTool,
+        OpenAiCodeInterpreterToolType, OpenAiFunctionToolType, OpenAiResponsesFunctionTool,
+        OpenAiShellEnvironment, OpenAiShellSkill, OpenAiShellTool, OpenAiShellToolType, OpenAiTool,
+        OpenAiWebSearchTool, OpenAiWebSearchToolType, OpenAiWebSearchUserLocation, ResponseFormat,
+        ResponsesAnnotation, ResponsesChunk, ResponsesContent, ResponsesCreateRequest,
+        ResponsesDelta, ResponsesDeltaContent, ResponsesDeltaOutput, ResponsesError,
+        ResponsesIncompleteDetails, ResponsesInputTokensDetails, ResponsesMessages,
+        ResponsesObject, ResponsesOutput, ResponsesOutputTokensDetails, ResponsesUsage,
+        SpeechGenerationRequest, StopTokens, ToolCall,
     },
     responses::{
         __path_cancel_response, __path_create_response, __path_delete_response, __path_get_response,
@@ -65,7 +70,9 @@ use crate::{
         AnthropicSkillVersionListObject, AnthropicSkillVersionObject, SkillListObject,
         SkillListQuery, SkillObject, SkillVersionObject,
     },
-    speech_generation::__path_speech_generation,
+    speech_generation::{
+        __path_speech_generation, SpeechAudioFile, SpeechStreamEvent, SpeechTokenUsage,
+    },
 };
 use mistralrs_core::{
     ApproximateUserLocation, CalibrationStatus, Function, ImageGenerationResponseFormat,
@@ -116,7 +123,7 @@ use mistralrs_core::{
 pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
     #[derive(OpenApi)]
     #[openapi(
-        paths(models, health, chatcompletions, anthropic_messages, anthropic_count_tokens, completions, embeddings, re_isq, calibration_start, calibration_status, calibration_apply, image_generation, speech_generation, create_response, get_response, delete_response, cancel_response, upload_skill, list_skills, upload_skill_version, list_skill_versions, load_lora_adapter, unload_lora_adapter, list_lora_adapters, unload_model, reload_model, get_model_status, tune_model, system_info, system_doctor, get_session, put_session, delete_session, list_files, upload_file, get_file, get_file_content, delete_file, list_container_files, get_container_file, get_container_file_content, resolve_agent_approval, metrics),
+        paths(models, health, chatcompletions, anthropic_messages, anthropic_count_tokens, completions, embeddings, re_isq, calibration_start, calibration_status, calibration_apply, image_generation, speech_generation, audio_transcriptions, audio_translations, create_response, get_response, delete_response, cancel_response, upload_skill, list_skills, upload_skill_version, list_skill_versions, load_lora_adapter, unload_lora_adapter, list_lora_adapters, unload_model, reload_model, get_model_status, tune_model, system_info, system_doctor, get_session, put_session, delete_session, list_files, upload_file, get_file, get_file_content, delete_file, list_container_files, get_container_file, get_container_file_content, resolve_agent_approval, metrics),
         components(schemas(
             ApprovalDecision,
             ApprovalDecisionRequest,
@@ -223,6 +230,15 @@ pub fn get_openapi_doc(base_path: Option<&str>) -> utoipa::openapi::OpenApi {
             SkillVersionObject,
             SourceMeta,
             SpeechGenerationRequest,
+            SpeechAudioFile,
+            SpeechStreamEvent,
+            SpeechTokenUsage,
+            AudioTranscriptionRequest,
+            ChatAudioReference,
+            AudioTranslationRequest,
+            AudioTranscriptionResponse,
+            TranscriptionResponseFormat,
+            TranscriptionStreamEvent,
             StopTokens,
             Tool,
             ToolCall,
@@ -291,7 +307,7 @@ mod tests {
         let schemas = &value["components"]["schemas"];
         assert_eq!(
             schemas["ChatAudioFormat"]["enum"],
-            serde_json::json!(["wav", "pcm16"])
+            serde_json::json!(["wav", "pcm16", "mp3", "flac", "opus", "aac"])
         );
         for name in [
             "ChatCompletionRequest",
@@ -309,6 +325,99 @@ mod tests {
         assert!(schemas["ChatAudioResponse"]["properties"]
             .get("data")
             .is_some());
+        assert!(schemas["ChatAudioReference"]["properties"]
+            .get("id")
+            .is_some());
+        for route in [
+            "/v1/audio/speech",
+            "/v1/audio/transcriptions",
+            "/v1/audio/translations",
+        ] {
+            assert!(value["paths"][route].get("post").is_some());
+        }
+        assert!(schemas["AudioTranscriptionRequest"]["properties"]
+            .get("stream")
+            .is_some());
+        assert!(schemas["AudioTranslationRequest"]["properties"]
+            .get("language")
+            .is_none());
+    }
+
+    #[test]
+    fn audio_routes_describe_binary_text_and_streaming_contracts() {
+        let document = serde_json::to_value(get_openapi_doc(None)).unwrap();
+        let schemas = &document["components"]["schemas"];
+        let speech = &document["paths"]["/v1/audio/speech"]["post"]["responses"]["200"]["content"];
+        for mime in [
+            "audio/mpeg",
+            "audio/ogg",
+            "audio/aac",
+            "audio/flac",
+            "audio/wav",
+            "audio/pcm",
+        ] {
+            assert_eq!(
+                speech[mime]["schema"]["$ref"],
+                "#/components/schemas/SpeechAudioFile"
+            );
+        }
+        assert_eq!(schemas["SpeechAudioFile"]["type"], "string");
+        assert_eq!(schemas["SpeechAudioFile"]["format"], "binary");
+        assert_eq!(
+            speech["text/event-stream"]["schema"]["$ref"],
+            "#/components/schemas/SpeechStreamEvent"
+        );
+        for route in ["/v1/audio/transcriptions", "/v1/audio/translations"] {
+            let content = &document["paths"][route]["post"]["responses"]["200"]["content"];
+            assert_eq!(
+                content["application/json"]["schema"]["$ref"],
+                "#/components/schemas/AudioTranscriptionResponse"
+            );
+            assert_eq!(content["text/plain"]["schema"]["type"], "string");
+            assert_eq!(
+                content.get("text/event-stream").is_some(),
+                route.ends_with("transcriptions")
+            );
+        }
+        for (name, events) in [
+            (
+                "SpeechStreamEvent",
+                [
+                    ("speech.audio.delta", "audio"),
+                    ("speech.audio.done", "usage"),
+                ],
+            ),
+            (
+                "TranscriptionStreamEvent",
+                [
+                    ("transcript.text.delta", "delta"),
+                    ("transcript.text.done", "text"),
+                ],
+            ),
+        ] {
+            let variants = schemas[name]["oneOf"]
+                .as_array()
+                .expect("tagged event union");
+            for (event, field) in events {
+                let variant = variants
+                    .iter()
+                    .find(|variant| {
+                        variant["properties"]["type"]["enum"] == serde_json::json!([event])
+                    })
+                    .expect("event type");
+                let required = variant["required"]
+                    .as_array()
+                    .expect("required event fields");
+                assert!(required.contains(&serde_json::json!("type")));
+                assert!(required.contains(&serde_json::json!(field)));
+            }
+        }
+        for field in ["input_tokens", "output_tokens", "total_tokens"] {
+            assert!(schemas["SpeechTokenUsage"]["required"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!(field)));
+        }
     }
 
     #[test]

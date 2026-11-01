@@ -18,17 +18,13 @@ use crate::{
             audio_processing::AudioProcessor,
             inputs_processor::{
                 process_audio_items, AudioInputLayout, AudioPlaceholderStyle, Lfm3OmniSpecificArgs,
+                AUDIO_OUT_TOKEN, AUDIO_START_TOKEN, AUDIO_TOKEN, MIXED_START_TOKEN,
             },
         },
         qwen2vl::validated_mm_features,
         ModelInputs,
     },
 };
-
-const AUDIO_TOKEN: &str = "<|audio|>";
-const AUDIO_OUT_TOKEN: &str = "<|audio_out|>";
-const AUDIO_START_TOKEN: &str = "<|audio_start|>";
-const MIXED_START_TOKEN: &str = "<|mixed_start|>";
 
 pub(crate) struct Lfm3AudioProcessor;
 
@@ -81,11 +77,16 @@ impl AudioTokens {
     }
 }
 
+struct ExpandedAudioClips {
+    tokens: Vec<u32>,
+    ranges: Vec<(usize, usize)>,
+}
+
 fn expand_audio_clips(
     tokens: &[u32],
     audio: &AudioTokens,
     lengths: &[usize],
-) -> Result<(Vec<u32>, Vec<(usize, usize)>)> {
+) -> Result<ExpandedAudioClips> {
     if tokens.contains(&audio.output) {
         return Err(InputsProcessorValidationError(
             "LFM3-Audio speech history with <|audio_out|> requires audio codes and is not supported".into(),
@@ -111,7 +112,10 @@ fn expand_audio_clips(
             expanded.push(token);
         }
     }
-    Ok((expanded, ranges))
+    Ok(ExpandedAudioClips {
+        tokens: expanded,
+        ranges,
+    })
 }
 
 impl InputsProcessor for Lfm3AudioInputsProcessor {
@@ -146,7 +150,10 @@ impl InputsProcessor for Lfm3AudioInputsProcessor {
                 .iter()
                 .map(AudioProcessor::num_tokens_for_audio)
                 .collect::<Result<Vec<_>>>()?;
-            let (mut expanded, ranges) = expand_audio_clips(seq.get_toks(), &audio, &lengths)?;
+            let ExpandedAudioClips {
+                tokens: mut expanded,
+                ranges,
+            } = expand_audio_clips(seq.get_toks(), &audio, &lengths)?;
             if let Some(output) = seq.audio_output() {
                 let marker = match output.mode {
                     crate::ChatAudioMode::Audio => audio.audio_start,

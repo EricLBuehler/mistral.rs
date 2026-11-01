@@ -47,14 +47,29 @@ impl Config {
             dtype,
         )
     }
-
-    pub(crate) fn output_parameter_count(&self) -> usize {
-        self.speech
-            .output_parameter_count(self.vision.text_config.hidden_size)
-    }
 }
 
 impl SpeechConfig {
+    pub(crate) fn weight_size_in_bytes(
+        &self,
+        text_hidden: usize,
+        dtype: candle_core::DType,
+    ) -> usize {
+        let input = self.audio_encoder_config.hidden_size;
+        let projector =
+            2 * input + input * text_hidden + text_hidden * text_hidden + 2 * text_hidden;
+        let parameters = self.audio_encoder_config.parameter_count()
+            + projector
+            + self.output_parameter_count(text_hidden);
+        let tensor_bytes = dtype.size_in_bytes();
+        // The codec's synthesis window remains float32 when model weights use a smaller dtype.
+        parameters * tensor_bytes
+            + self.codec_config.stft_win_length
+                * candle_core::DType::F32
+                    .size_in_bytes()
+                    .saturating_sub(tensor_bytes)
+    }
+
     pub(crate) fn output_activation_memory(
         &self,
         frames: usize,
@@ -86,7 +101,7 @@ impl SpeechConfig {
         }
     }
 
-    pub(crate) fn output_parameter_count(&self, text_hidden: usize) -> usize {
+    fn output_parameter_count(&self, text_hidden: usize) -> usize {
         self.depth_config
             .depth_parameter_count(text_hidden, self.num_codebooks, self.codebook_size)
             + self.num_codebooks * self.codebook_size * text_hidden

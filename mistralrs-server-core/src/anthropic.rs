@@ -890,6 +890,7 @@ fn append_anthropic_blocks(
             (!text_parts.is_empty()).then(|| MessageContent::from_text(text_parts.join("\n")));
         let tool_calls = (!tool_calls.is_empty()).then_some(tool_calls);
         out.push(Message {
+            audio: None,
             content,
             role,
             name: None,
@@ -971,6 +972,7 @@ fn flush_user_content(
     };
 
     out.push(Message {
+        audio: None,
         content: Some(content),
         role: role.to_string(),
         name: None,
@@ -982,6 +984,7 @@ fn flush_user_content(
 
 fn message_with_text(role: impl Into<String>, text: String) -> Message {
     Message {
+        audio: None,
         content: Some(MessageContent::from_text(text)),
         role: role.into(),
         name: None,
@@ -1033,6 +1036,7 @@ fn tool_result_message_from_block(block: AnthropicContentBlock) -> Result<Messag
         .context("Anthropic tool_result content block requires `tool_use_id`.")?;
 
     Ok(Message {
+        audio: None,
         content: Some(MessageContent::from_text(content_value_to_text(
             block.content,
         ))),

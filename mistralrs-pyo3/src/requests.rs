@@ -6,7 +6,7 @@ use pyo3::{
     exceptions::{PyTypeError, PyValueError},
     pyclass, pymethods,
     types::{PyAnyMethods, PyList, PyString},
-    Bound, Py, PyAny, PyErr, PyRef, PyResult, Python,
+    Bound, Py, PyAny, PyRef, PyResult, Python,
 };
 
 use crate::code_execution::{parse_agent_permission, parse_permission, ShellSkillMount};
@@ -290,21 +290,16 @@ fn convert_token(value: i64) -> PyResult<u32> {
     }
 }
 
+pub(crate) type PythonContentPart = HashMap<String, Either<String, HashMap<String, String>>>;
+pub(crate) type PythonChatMessage = HashMap<String, Either<String, Vec<PythonContentPart>>>;
+pub(crate) type PythonChatMessages = Either<Vec<PythonChatMessage>, String>;
+
 #[pyclass]
 #[derive(Debug)]
 /// An OpenAI API compatible chat completion request.
 pub struct ChatCompletionRequest {
     pub(crate) audio_output: Option<mistralrs_core::ChatAudioRequest>,
-    #[allow(clippy::type_complexity)]
-    pub(crate) messages: Either<
-        Vec<
-            HashMap<
-                String,
-                Either<String, Vec<HashMap<String, Either<String, HashMap<String, String>>>>>,
-            >,
-        >,
-        String,
-    >,
+    pub(crate) messages: PythonChatMessages,
     pub(crate) _model: String,
     pub(crate) adapter: Option<AdapterSelection>,
     pub(crate) logit_bias: Option<HashMap<u32, f32>>,
@@ -448,50 +443,11 @@ impl ChatCompletionRequest {
         modalities: Option<Vec<String>>,
         audio: Option<HashMap<String, String>>,
     ) -> PyResult<Self> {
-        let messages = Python::with_gil(|py| {
+        let messages = Python::with_gil(|py| -> PyResult<PythonChatMessages> {
             if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
-                let mut messages_vec = Vec::new();
-                for message in messages {
-                    messages_vec.push(message.extract::<HashMap<
-                        String,
-                        Either<
-                            String,
-                            Vec<HashMap<String, Either<String, HashMap<String, String>>>>,
-                        >,
-                    >>()?);
-                }
-                Ok::<
-                    Either<
-                        Vec<
-                            HashMap<
-                                String,
-                                Either<
-                                    String,
-                                    Vec<HashMap<String, Either<String, HashMap<String, String>>>>,
-                                >,
-                            >,
-                        >,
-                        String,
-                    >,
-                    PyErr,
-                >(Either::Left(messages_vec))
+                Ok(Either::Left(messages.extract::<Vec<PythonChatMessage>>()?))
             } else if let Ok(messages) = messages.bind(py).downcast_exact::<PyString>() {
-                let prompt = messages.extract::<String>()?;
-                Ok::<
-                    Either<
-                        Vec<
-                            HashMap<
-                                String,
-                                Either<
-                                    String,
-                                    Vec<HashMap<String, Either<String, HashMap<String, String>>>>,
-                                >,
-                            >,
-                        >,
-                        String,
-                    >,
-                    PyErr,
-                >(Either::Right(prompt))
+                Ok(Either::Right(messages.extract::<String>()?))
             } else {
                 Err(PyTypeError::new_err("Expected a string or list of dicts."))
             }

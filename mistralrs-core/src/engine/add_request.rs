@@ -173,6 +173,28 @@ impl Engine {
             },
             None => None,
         };
+        let adapt_speech = if matches!(request.messages, RequestMessage::SpeechGeneration { .. }) {
+            let pipeline = get_mut_arcmutex!(self.pipeline);
+            matches!(
+                pipeline.category(),
+                ModelCategory::Text | ModelCategory::Multimodal { .. }
+            ) && pipeline
+                .get_metadata()
+                .modalities
+                .output
+                .contains(&crate::SupportedModality::Audio)
+        } else {
+            false
+        };
+        if adapt_speech {
+            if request.is_streaming || request.sampling_params.n_choices != 1 {
+                let _ = request.response.send(Response::ValidationError(
+                    "Speech generation requires one non-streaming choice; use chat audio for streaming".into(),
+                )).await;
+                return;
+            }
+            super::speech::adapt_request(&mut request);
+        }
         let is_chat = matches!(
             request.messages,
             RequestMessage::Chat { .. } | RequestMessage::MultimodalChat { .. }
@@ -217,6 +239,13 @@ impl Engine {
                     .unwrap_or_else(|_| warn!("Receiver disconnected"));
                 return;
             }
+        }
+        if let Err(error) = crate::audio_output::prepare_response(&mut request) {
+            let _ = request
+                .response
+                .send(Response::ValidationError(error.into()))
+                .await;
+            return;
         }
         let echo_prompt = matches!(
             request.messages,

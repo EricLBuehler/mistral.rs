@@ -54,6 +54,23 @@ pub enum ChatAudioMode {
 pub enum ChatAudioFormat {
     Wav,
     Pcm16,
+    Mp3,
+    Flac,
+    Opus,
+    Aac,
+}
+
+impl ChatAudioFormat {
+    pub fn content_type(self) -> &'static str {
+        match self {
+            Self::Wav => "audio/wav",
+            Self::Pcm16 => "audio/pcm",
+            Self::Mp3 => "audio/mpeg",
+            Self::Flac => "audio/flac",
+            Self::Opus => "audio/ogg; codecs=opus",
+            Self::Aac => "audio/aac",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -193,6 +210,29 @@ mod chat_audio_tests {
             ChatAudioRequest::from_modalities(Some(&["audio".into()]), Some(&config), false)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn compressed_audio_formats_are_accepted_for_non_streaming_requests() -> anyhow::Result<()> {
+        for format in ["mp3", "flac", "opus", "aac"] {
+            let config: ChatAudioConfig = serde_json::from_value(serde_json::json!({
+                "format": format,
+                "voice": "default",
+            }))?;
+            assert!(ChatAudioRequest::from_modalities(
+                Some(&["audio".into()]),
+                Some(&config),
+                false,
+            )?
+            .is_some());
+            assert!(ChatAudioRequest::from_modalities(
+                Some(&["audio".into()]),
+                Some(&config),
+                true,
+            )
+            .is_err());
+        }
+        Ok(())
     }
 }
 

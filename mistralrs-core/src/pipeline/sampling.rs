@@ -283,6 +283,8 @@ pub(crate) async fn finish_or_add_toks_to_seq(
     if is_done.is_some() {
         this.finalize_response(seq)?;
         seq.flush_stop_pending_bytes();
+    } else if seq.get_mut_group().is_streaming {
+        this.prepare_streaming_response(seq)?;
     }
 
     // Handle streaming requests
@@ -323,7 +325,14 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 Ok(Some(seq.get_final_delta()))
             } else {
                 seq.get_delta()
-            };
+            }
+            .map(|delta| {
+                if seq.generated_audio().is_some() {
+                    Some(delta.unwrap_or_default())
+                } else {
+                    delta
+                }
+            });
             if let Some(mut delta) = crate::handle_seq_error_stateaware_ok!(delta_result, seq) {
                 if seq.get_mut_group().is_chat {
                     let has_external_reasoning_parser = seq.reasoning_mode().is_some();
@@ -426,9 +435,11 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                             }
                         }
                         let generated_audio = seq.take_generated_audio().map(|mut audio| {
-                            if seq.audio_output().is_some_and(|output| {
-                                output.mode == crate::ChatAudioMode::TextAudio
-                            }) {
+                            if is_done.is_some()
+                                && seq.audio_output().is_some_and(|output| {
+                                    output.mode == crate::ChatAudioMode::TextAudio
+                                })
+                            {
                                 audio.transcript = if seq.has_reasoning_state() {
                                     Some(seq.get_response_content().unwrap_or_default())
                                 } else {

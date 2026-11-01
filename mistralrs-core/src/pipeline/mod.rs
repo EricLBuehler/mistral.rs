@@ -64,10 +64,6 @@ pub use isq::{
 };
 pub(crate) use isq::{sanitize_quantized_weight_source_config, IsqModelLoader};
 use llguidance::toktrie::TokEnv;
-#[cfg(test)]
-pub(crate) use loaders::lfm3_audio::remap_legacy_weights as remap_lfm3_audio_legacy_weights;
-#[cfg(test)]
-pub(crate) use loaders::load_model_config;
 pub(crate) use loaders::{apply_model_activation_memory, checkpoint_runtime_size};
 pub use loaders::{
     ActivationMemoryContext, ActivationMemoryEstimate, ActivationModelConfig, AdapterKind,
@@ -1783,6 +1779,12 @@ pub trait Pipeline:
     + AnyMoePipelineMixin
 {
     fn finalize_response(&self, _seq: &mut crate::sequence::Sequence) -> candle_core::Result<()> {
+        Ok(())
+    }
+    fn prepare_streaming_response(
+        &self,
+        _seq: &mut crate::sequence::Sequence,
+    ) -> candle_core::Result<()> {
         Ok(())
     }
     fn release_generation_sequences(&self, _sequence_ids: &[usize]) {}

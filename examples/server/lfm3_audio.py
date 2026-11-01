@@ -7,7 +7,8 @@ Start the server:
 Run `python examples/server/lfm3_audio.py --task asr --audio speech.wav`.
 Use `--task tts --prompt "Hello."` for speech, or `--task chat --audio question.wav`.
 TTS and chat save WAV to --speech-out (answer.wav by default).
-This example sends offline clips; output is buffered, with no live microphone API.
+WAV/MP3 audio uses standard input_audio parts; other formats use the audio_url extension.
+This example uses non-streaming chat requests. PCM16 chat streaming is also supported.
 --max-tokens counts both text tokens and speech frames (default: 1024).
 Increase it for longer speech.
 """
@@ -58,9 +59,21 @@ content = []
 if args.audio is not None:
     mime_type = mimetypes.guess_type(args.audio.name)[0] or "application/octet-stream"
     data = base64.b64encode(args.audio.read_bytes()).decode("ascii")
-    content.append(
-        {"type": "audio_url", "audio_url": {"url": f"data:{mime_type};base64,{data}"}}
-    )
+    audio_format = args.audio.suffix.lower().removeprefix(".")
+    if audio_format in {"wav", "mp3"}:
+        content.append(
+            {
+                "type": "input_audio",
+                "input_audio": {"data": data, "format": audio_format},
+            }
+        )
+    else:
+        content.append(
+            {
+                "type": "audio_url",
+                "audio_url": {"url": f"data:{mime_type};base64,{data}"},
+            }
+        )
 if args.prompt is not None or args.audio is None:
     content.append({"type": "text", "text": args.prompt or "Hello."})
 messages = [{"role": "system", "content": system}, {"role": "user", "content": content}]

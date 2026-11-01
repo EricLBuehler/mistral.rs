@@ -549,6 +549,21 @@ fn insert_reasoning_content(output: &mut IndexMap<String, MessageContent>, messa
     }
 }
 
+fn input_audio_url(part: &HashMap<String, MessageInnerContent>) -> Result<String> {
+    let audio = part
+        .get("input_audio")
+        .context("Audio content must have an input_audio object")?
+        .as_ref()
+        .right()
+        .context("input_audio must be an object")?;
+    mistralrs_core::input_audio_data_url(
+        audio.get("data").context("input_audio.data is required")?,
+        audio
+            .get("format")
+            .context("input_audio.format is required")?,
+    )
+}
+
 pub struct ChatCompletionParseContext {
     pub state: SharedMistralRsState,
     pub tx: Sender<Response>,
@@ -582,6 +597,7 @@ pub async fn parse_request(
 
     // Validate that the requested model matches the loaded model
     validate_model_name(&oairequest.model, state.clone())?;
+    let model = (oairequest.model != "default").then_some(oairequest.model.as_str());
 
     let audio_output = mistralrs_core::ChatAudioRequest::from_modalities(
         oairequest.modalities.as_deref(),
@@ -589,7 +605,6 @@ pub async fn parse_request(
         oairequest.stream.unwrap_or(false),
     )?;
     if audio_output.is_some() {
-        let model = (oairequest.model != "default").then_some(oairequest.model.as_str());
         let config = state.config(model).map_err(anyhow::Error::msg)?;
         anyhow::ensure!(
             matches!(
@@ -652,6 +667,10 @@ pub async fn parse_request(
             let mut audio_urls = Vec::new();
             let mut video_urls = Vec::new();
             for message in req_messages {
+                anyhow::ensure!(
+                    message.audio.is_none(),
+                    "audio.id requires the server audio history store; resend the assistant transcript as content"
+                );
                 let content = match message.content.as_deref() {
                     Some(content) => content.clone(),
                     None => {
@@ -800,6 +819,11 @@ pub async fn parse_request(
                                             .clone(),
                                     });
                                 }
+                                Some(MessageInnerContent(Either::Left(x))) if x == "input_audio" => {
+                                    items.push(ContentPart::Audio {
+                                        audio_url: input_audio_url(image_message)?,
+                                    });
+                                }
                                 Some(MessageInnerContent(Either::Left(x))) if x == "video_url" => {
                                     items.push(ContentPart::Video {
                                         video_url: image_message
@@ -837,7 +861,7 @@ pub async fn parse_request(
                                     }
                                     items.push(ContentPart::File { spec });
                                 }
-                                _ => anyhow::bail!("Expected array content sub-content to be one of `text`, `image_url`, `audio_url`, `video_url`, or `file`.")
+                                _ => anyhow::bail!("Expected array content sub-content to be one of `text`, `image_url`, `input_audio`, `audio_url`, `video_url`, or `file`.")
                             }
                         }
 
@@ -892,7 +916,7 @@ pub async fn parse_request(
                             || !video_urls_iter.is_empty()
                         {
                             if let Ok(ModelCategory::Multimodal { prefixer, .. }) =
-                                state.get_model_category(None)
+                                state.get_model_category(model)
                             {
                                 let mut prefixed = text_content;
 
@@ -990,7 +1014,7 @@ pub async fn parse_request(
                 }
 
                 // Parse videos
-                let video_sampling = match state.get_model_category(None) {
+                let video_sampling = match state.get_model_category(model) {
                     Ok(ModelCategory::Multimodal { video_sampling, .. }) => Some(video_sampling),
                     _ => None,
                 };
@@ -1142,6 +1166,7 @@ pub async fn chatcompletions(
     State(state): ExtractedMistralRsState,
     Extension(agentic_defaults): Extension<AgenticDefaults>,
     Extension(skill_store): Extension<Arc<SkillStore>>,
+    history: Option<Extension<Arc<crate::audio_history::AudioHistoryStore>>>,
     stream_outcome: Option<Extension<StreamOutcomeHandle>>,
     payload: Result<Json<ChatCompletionRequest>, JsonRejection>,
 ) -> ChatCompletionResponder {
@@ -1162,6 +1187,21 @@ pub async fn chatcompletions(
         return ChatCompletionResponder::ValidationError(Box::new(error));
     }
     let model_override = request_model_override(requested_model, &oairequest.model);
+
+    let history = history.map(|Extension(store)| store);
+    if let Some(store) = &history {
+        if let Err(error) = store.resolve_messages(&mut oairequest.messages) {
+            return handle_completion_validation_error(state, error.into());
+        }
+    }
+    let audio_options =
+        oairequest
+            .audio
+            .as_ref()
+            .map(|audio| crate::audio_history::AudioResponseOptions {
+                format: audio.format,
+                choices: oairequest.n_choices,
+            });
 
     // Apply server-level default for max_tool_rounds (per-request value takes priority)
     oairequest.max_tool_rounds = oairequest
@@ -1224,6 +1264,10 @@ pub async fn chatcompletions(
 
     if let Err(e) = send_request_with_model(&state, request, model_id.as_deref()).await {
         return handle_error(state, e.into());
+    }
+
+    if let (Some(store), Some(options)) = (history, audio_options) {
+        rx = crate::audio_history::decorate_responses(rx, state.clone(), model_id, options, store);
     }
 
     if is_streaming {
@@ -1389,6 +1433,29 @@ pub fn match_responses(state: SharedMistralRsState, response: Response) -> ChatC
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn openai_input_audio_content_is_normalized_and_validated() -> Result<()> {
+        let data = STANDARD.encode(b"audio");
+        for (format, mime) in [("wav", "audio/wav"), ("mp3", "audio/mpeg")] {
+            let part = serde_json::from_value(json!({
+                "type":"input_audio", "input_audio":{"data":data,"format":format}
+            }))?;
+            assert_eq!(
+                input_audio_url(&part)?,
+                format!("data:{mime};base64,{data}")
+            );
+        }
+        for payload in [
+            json!({"type":"input_audio"}),
+            json!({"type":"input_audio","input_audio":{"data":data}}),
+            json!({"type":"input_audio","input_audio":{"data":"bad!","format":"wav"}}),
+            json!({"type":"input_audio","input_audio":{"data":data,"format":"pcm16"}}),
+        ] {
+            assert!(input_audio_url(&serde_json::from_value(payload)?).is_err());
+        }
+        Ok(())
+    }
 
     #[test]
     fn reasoning_controls_normalize_http_values() {

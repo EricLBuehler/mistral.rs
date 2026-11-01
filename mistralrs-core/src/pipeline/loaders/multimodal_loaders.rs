@@ -213,6 +213,12 @@ pub trait MultimodalModel:
     fn finalize_response(&self, _seq: &mut crate::sequence::Sequence) -> candle_core::Result<()> {
         Ok(())
     }
+    fn prepare_streaming_response(
+        &self,
+        _seq: &mut crate::sequence::Sequence,
+    ) -> candle_core::Result<()> {
+        Ok(())
+    }
     fn release_generation_sequences(&self, _sequence_ids: &[usize]) {}
     fn response_token_is_hidden(&self, _token: u32) -> bool {
         false

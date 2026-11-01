@@ -77,7 +77,7 @@ pub(crate) fn normalize_config(value: &mut Value) -> Result<()> {
             steps > 0 && steps <= codebooks,
             "LFM3-Audio maskgit_steps must be between 1 and num_codebooks"
         );
-        let mut schedule = vec![codebooks / steps; steps as usize];
+        let mut schedule = vec![codebooks / steps; usize::try_from(steps)?];
         *schedule.last_mut().unwrap() += codebooks % steps;
         object.insert("maskgit_schedule".to_string(), json!(schedule));
     }

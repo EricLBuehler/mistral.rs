@@ -22,7 +22,7 @@ const CODEC_CONV_WIDTH: usize = 7;
 const CODEC_NORM_EPS: f64 = 1e-5;
 const CODEC_ROPE_THETA: f64 = 1_000_000.0;
 const CODEC_ATTENTION_LAYERS: [usize; 3] = [2, 4, 6];
-const CODEC_DECODE_CHUNK_FRAMES: usize = 32;
+pub(crate) const CODEC_DECODE_CHUNK_FRAMES: usize = 12;
 const DECODER_HIDDEN_BUFFERS: usize = 16;
 const DECODER_INTERMEDIATE_BUFFERS: usize = 3;
 const ATTENTION_FLOAT32_BUFFERS: usize = 2;
@@ -126,6 +126,92 @@ pub(crate) struct LiquidCodec {
     window: Tensor,
 }
 
+#[derive(Default)]
+pub(crate) struct CodecStream {
+    frames: usize,
+    synthesis: Vec<InverseStftStream>,
+}
+
+impl CodecStream {
+    pub(crate) fn is_ready(&self, frames: usize) -> bool {
+        frames >= self.frames + CODEC_DECODE_CHUNK_FRAMES
+    }
+}
+
+struct InverseStftStream {
+    audio: Vec<f32>,
+    envelope: Vec<f32>,
+    skip: usize,
+}
+
+impl InverseStftStream {
+    fn new(config: &CodecConfig) -> Self {
+        Self {
+            audio: vec![0.0; config.stft_win_length],
+            envelope: vec![0.0; config.stft_win_length],
+            skip: (config.stft_win_length - config.stft_hop_length) / 2,
+        }
+    }
+
+    fn take_samples(&mut self, count: usize, output: &mut Vec<f32>) {
+        for i in 0..count {
+            if self.skip > 0 {
+                self.skip -= 1;
+            } else {
+                output.push(self.audio[i] / self.envelope[i]);
+            }
+        }
+        self.audio.copy_within(count.., 0);
+        self.envelope.copy_within(count.., 0);
+        let retained = self.audio.len() - count;
+        self.audio[retained..].fill(0.0);
+        self.envelope[retained..].fill(0.0);
+    }
+
+    fn push(
+        &mut self,
+        spectrum: &[Vec<f32>],
+        config: &CodecConfig,
+        window: &[f32],
+        output: &mut Vec<f32>,
+    ) {
+        let n_fft = config.stft_n_fft;
+        #[allow(clippy::cast_precision_loss)]
+        let fft_scale = n_fft as f32;
+        let bins = n_fft / 2 + 1;
+        let mut planner = FftPlanner::<f32>::new();
+        let fft = planner.plan_fft_inverse(n_fft);
+        for values in spectrum {
+            let mut complex = vec![Complex32::new(0.0, 0.0); n_fft];
+            for k in 0..bins {
+                complex[k] = Complex32::from_polar(values[k].exp(), values[bins + k]);
+            }
+            complex[0].im = 0.0;
+            if n_fft.is_multiple_of(2) {
+                complex[n_fft / 2].im = 0.0;
+            }
+            for k in 1..n_fft.div_ceil(2) {
+                complex[n_fft - k] = complex[k].conj();
+            }
+            fft.process(&mut complex);
+            for (i, (&window, value)) in window.iter().zip(&complex).enumerate() {
+                self.audio[i] += value.re / fft_scale * window;
+                self.envelope[i] += window * window;
+            }
+            // Future spectra cannot change this hop; the overlap remains buffered until later frames or finalization.
+            self.take_samples(config.stft_hop_length, output);
+        }
+    }
+
+    fn finish(&mut self, config: &CodecConfig, output: &mut Vec<f32>) {
+        let trim = (config.stft_win_length - config.stft_hop_length) / 2;
+        self.take_samples(
+            config.stft_win_length - config.stft_hop_length - trim,
+            output,
+        );
+    }
+}
+
 impl LiquidCodec {
     pub(crate) fn new(config: CodecConfig, vb: ShardedVarBuilder) -> Result<Self> {
         if config.stft_win_length != config.stft_n_fft
@@ -190,6 +276,15 @@ impl LiquidCodec {
     }
 
     pub(crate) fn decode(&self, codes: &Tensor) -> Result<Tensor> {
+        self.decode_stream(codes, &mut CodecStream::default(), true)
+    }
+
+    pub(crate) fn decode_stream(
+        &self,
+        codes: &Tensor,
+        stream: &mut CodecStream,
+        finalize: bool,
+    ) -> Result<Tensor> {
         let (batch, books, frames) = codes.dims3()?;
         if books != self.config.n_q {
             candle_core::bail!(
@@ -200,6 +295,45 @@ impl LiquidCodec {
         if frames == 0 {
             return Tensor::zeros((batch, 0), DType::F32, &Device::Cpu);
         }
+        if stream.synthesis.is_empty() {
+            stream.synthesis = (0..batch)
+                .map(|_| InverseStftStream::new(&self.config))
+                .collect();
+        }
+        let window = self.window.to_device(&Device::Cpu)?.to_vec1::<f32>()?;
+        let mut output = vec![Vec::new(); batch];
+        while stream.frames < frames {
+            let start = stream.frames;
+            if !finalize && frames - start < CODEC_DECODE_CHUNK_FRAMES {
+                break;
+            }
+            let end = (start + CODEC_DECODE_CHUNK_FRAMES).min(frames);
+            // Both response modes use identical block shapes and causal context, including the final partial block.
+            let context = start.saturating_sub(self.config.context_frames());
+            let embeddings = self.decode_embeddings(&codes.narrow(2, context, end - context)?)?;
+            let spectrum = self.synthesize_chunk(&embeddings, start - context, end - start)?;
+            for ((synthesis, spectrum), output) in
+                stream.synthesis.iter_mut().zip(spectrum).zip(&mut output)
+            {
+                synthesis.push(&spectrum, &self.config, &window, output);
+            }
+            stream.frames = end;
+        }
+        if finalize {
+            for (synthesis, output) in stream.synthesis.iter_mut().zip(&mut output) {
+                synthesis.finish(&self.config, output);
+            }
+        }
+        let samples = output[0].len();
+        Tensor::from_vec(
+            output.into_iter().flatten().collect::<Vec<_>>(),
+            (batch, samples),
+            &Device::Cpu,
+        )
+    }
+
+    fn decode_embeddings(&self, codes: &Tensor) -> Result<Tensor> {
+        let (batch, books, frames) = codes.dims3()?;
         let codes = codes
             .to_device(&Device::Cpu)?
             .to_dtype(DType::U32)?
@@ -215,46 +349,27 @@ impl LiquidCodec {
         if let Some(project) = &self.project_out {
             latents = project.forward(&latents)?;
         }
-        let embeddings = self.from_quantizer.forward(&latents)?;
-        let spectrum = self.synthesize(&embeddings, CODEC_DECODE_CHUNK_FRAMES)?;
-        let window = self.window.to_device(&Device::Cpu)?.to_vec1::<f32>()?;
-        let values = inverse_stft(&spectrum, &self.config, &window)?;
-        Tensor::from_vec(
-            values,
-            (
-                batch,
-                frames * self.config.stft_frame_stack * self.config.stft_hop_length,
-            ),
-            &Device::Cpu,
-        )
+        self.from_quantizer.forward(&latents)
     }
 
-    fn synthesize(&self, embeddings: &Tensor, chunk_frames: usize) -> Result<Vec<Vec<Vec<f32>>>> {
-        let (batch, frames, _) = embeddings.dims3()?;
+    fn synthesize_chunk(
+        &self,
+        embeddings: &Tensor,
+        skip: usize,
+        frames: usize,
+    ) -> Result<Vec<Vec<Vec<f32>>>> {
+        let (batch, count, _) = embeddings.dims3()?;
         let stack = self.config.stft_frame_stack;
-        let mut spectrum = vec![Vec::with_capacity(frames * stack); batch];
-        for start in (0..frames).step_by(chunk_frames) {
-            let end = (start + chunk_frames).min(frames);
-            // Summed causal receptive fields make the retained chunk independent of earlier input.
-            let context = start.saturating_sub(self.config.context_frames());
-            let count = end - context;
-            let upsampled = embeddings
-                .narrow(1, context, count)?
-                .unsqueeze(2)?
-                .broadcast_as((batch, count, stack, self.config.encoder_dim))?
-                .reshape((batch, count * stack, self.config.encoder_dim))?;
-            let states = self.decoder.forward(&upsampled)?;
-            let chunk = self
-                .spectrum
-                .forward(&states.narrow(1, (start - context) * stack, (end - start) * stack)?)?
-                .to_device(&Device::Cpu)?
-                .to_dtype(DType::F32)?
-                .to_vec3::<f32>()?;
-            for (output, chunk) in spectrum.iter_mut().zip(chunk) {
-                output.extend(chunk);
-            }
-        }
-        Ok(spectrum)
+        let upsampled = embeddings
+            .unsqueeze(2)?
+            .broadcast_as((batch, count, stack, self.config.encoder_dim))?
+            .reshape((batch, count * stack, self.config.encoder_dim))?;
+        let states = self.decoder.forward(&upsampled)?;
+        self.spectrum
+            .forward(&states.narrow(1, skip * stack, frames * stack)?)?
+            .to_device(&Device::Cpu)?
+            .to_dtype(DType::F32)?
+            .to_vec3::<f32>()
     }
 }
 
@@ -271,7 +386,9 @@ fn decode_fsq(codes: &[Vec<Vec<u32>>], levels: &[u32]) -> Result<Vec<f32>> {
                 let mut basis = 1;
                 for &level in levels {
                     let half = level / 2;
-                    result.push(((code / basis % level) as f32 - half as f32) / half as f32);
+                    #[allow(clippy::cast_precision_loss)]
+                    let normalized = ((code / basis % level) as f32 - half as f32) / half as f32;
+                    result.push(normalized);
                     basis *= level;
                 }
             }
@@ -280,12 +397,15 @@ fn decode_fsq(codes: &[Vec<Vec<u32>>], levels: &[u32]) -> Result<Vec<f32>> {
     Ok(result)
 }
 
+#[cfg(test)]
 fn inverse_stft(
     spectrum: &[Vec<Vec<f32>>],
     config: &CodecConfig,
     window: &[f32],
 ) -> Result<Vec<f32>> {
     let n_fft = config.stft_n_fft;
+    #[allow(clippy::cast_precision_loss)]
+    let fft_scale = n_fft as f32;
     let bins = n_fft / 2 + 1;
     let frames = spectrum[0].len();
     let full_len = (frames - 1) * config.stft_hop_length + config.stft_win_length;
@@ -307,15 +427,15 @@ fn inverse_stft(
                 complex[k] = Complex32::from_polar(values[k].exp(), values[bins + k]);
             }
             complex[0].im = 0.0;
-            if n_fft % 2 == 0 {
+            if n_fft.is_multiple_of(2) {
                 complex[n_fft / 2].im = 0.0;
             }
-            for k in 1..(n_fft + 1) / 2 {
+            for k in 1..n_fft.div_ceil(2) {
                 complex[n_fft - k] = complex[k].conj();
             }
             fft.process(&mut complex);
             for (i, value) in complex.iter().enumerate() {
-                audio[frame * config.stft_hop_length + i] += value.re / n_fft as f32 * window[i];
+                audio[frame * config.stft_hop_length + i] += value.re / fft_scale * window[i];
             }
         }
         result.extend((trim..full_len - trim).map(|i| audio[i] / envelope[i]));
@@ -340,6 +460,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::cast_precision_loss)]
     fn inverse_stft_matches_constant_waveform() -> Result<()> {
         let config = CodecConfig {
             encoder_dim: 1,
@@ -371,62 +492,49 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires downloaded Omni checkpoint and PyTorch parity tensors"]
-    fn codec_matches_reference() -> anyhow::Result<()> {
-        let directory = std::path::PathBuf::from(std::env::var("MISTRALRS_LFM3_OMNI_CHECKPOINT")?)
-            .join("audio_tokenizer");
-        let fixture = std::env::var("MISTRALRS_LFM3_OMNI_REFERENCE")?;
-        let config: CodecConfig =
-            serde_json::from_slice(&std::fs::read(directory.join("config.json"))?)?;
-        let vb = unsafe {
-            mistralrs_quant::ShardedSafeTensors::sharded(
-                &[directory.join("model.safetensors")],
-                DType::F32,
-                &Device::Cpu,
-                None,
-                std::sync::Arc::new(|_| true),
-            )?
+    #[allow(clippy::cast_precision_loss)]
+    fn streaming_inverse_stft_preserves_overlap_and_final_tail() -> Result<()> {
+        let config = CodecConfig {
+            encoder_dim: 1,
+            stft_n_fft: 16,
+            stft_hop_length: 4,
+            stft_win_length: 16,
+            stft_frame_stack: 1,
+            quantizer_dim: 1,
+            fsq_levels: vec![2],
+            n_q: 1,
+            decoder_window: 1,
+            sampling_rate: 24_000,
         };
-        let parameter_count = config.parameter_count();
-        let model = LiquidCodec::new(config, vb)?;
-        assert_eq!(
-            model
-                .residual_tensors()
-                .iter()
-                .map(|(_, tensor)| tensor.elem_count())
-                .sum::<usize>(),
-            parameter_count
-        );
-        let fixture = candle_core::safetensors::load(fixture, &Device::Cpu)?;
-        let output = model.decode(&fixture["codec_codes"])?;
-        let error = (&output - &fixture["codec_pcm"])?
-            .abs()?
-            .max_all()?
-            .to_scalar::<f32>()?;
-        assert!(error < 2e-4, "maximum codec sample error: {error}");
-        let frames = 2 * CODEC_DECODE_CHUNK_FRAMES + 3;
-        let embeddings = (Tensor::arange(
-            0u32,
-            (frames * model.config.encoder_dim) as u32,
-            &Device::Cpu,
-        )?
-        .to_dtype(DType::F32)?
-        .sin()?
-            * 0.2)?
-            .reshape((1, frames, model.config.encoder_dim))?;
-        let full = model.synthesize(&embeddings, frames)?;
-        let chunked = model.synthesize(&embeddings, CODEC_DECODE_CHUNK_FRAMES)?;
-        let error = full
-            .into_iter()
-            .flatten()
-            .flatten()
-            .zip(chunked.into_iter().flatten().flatten())
-            .map(|(full, chunked)| (full - chunked).abs())
-            .fold(0.0f32, f32::max);
-        assert!(
-            error < 2e-4,
-            "maximum chunked codec spectrum error: {error}"
-        );
+        let window = (0..config.stft_win_length)
+            .map(|i| {
+                0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / config.stft_win_length as f32).cos()
+            })
+            .collect::<Vec<_>>();
+        let spectrum = (0..11)
+            .map(|frame| {
+                (0..18)
+                    .map(|bin| ((frame * 18 + bin) as f32 * 0.17).sin())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        let expected = inverse_stft(std::slice::from_ref(&spectrum), &config, &window)?;
+        let trim = (config.stft_win_length - config.stft_hop_length) / 2;
+        for first_chunk in [1, 3, 8] {
+            let mut stream = InverseStftStream::new(&config);
+            let mut output = Vec::new();
+            stream.push(&spectrum[..first_chunk], &config, &window, &mut output);
+            assert_eq!(
+                output.len(),
+                (first_chunk * config.stft_hop_length).saturating_sub(trim)
+            );
+            assert_eq!(output, expected[..output.len()]);
+            stream.push(&spectrum[first_chunk..], &config, &window, &mut output);
+            assert_eq!(output.len(), spectrum.len() * config.stft_hop_length - trim);
+            assert_eq!(output, expected[..output.len()]);
+            stream.finish(&config, &mut output);
+            assert_eq!(output, expected);
+        }
         Ok(())
     }
 }

@@ -13,10 +13,6 @@ use crate::{sampler::TopLogprob, tools::ToolCallResponse};
 
 pub const SYSTEM_FINGERPRINT: &str = "local";
 
-const PCM16_MAX: f32 = i16::MAX as f32;
-const PCM16_MIN: f32 = i16::MIN as f32;
-const PCM16_SCALE: f32 = 32768.0;
-
 macro_rules! generate_repr {
     ($t:ident) => {
         #[cfg(feature = "pyo3_macros")]
@@ -52,84 +48,18 @@ impl ChatAudioResponse {
         sample_rate: u32,
         format: crate::ChatAudioFormat,
     ) -> anyhow::Result<Self> {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
         Ok(Self {
-            data: Some(encode_chat_audio(samples, sample_rate, format)?),
+            data: Some(STANDARD.encode(crate::encode_audio_pcm(samples, sample_rate, 1, format)?)),
             ..Default::default()
         })
     }
 }
 
-fn encode_chat_audio(
-    samples: &[f32],
-    sample_rate: u32,
-    format: crate::ChatAudioFormat,
-) -> anyhow::Result<String> {
-    use base64::{engine::general_purpose::STANDARD, Engine};
-
-    let pcm = samples
-        .iter()
-        .map(|sample| (sample * PCM16_SCALE).round().clamp(PCM16_MIN, PCM16_MAX) as i16)
-        .collect::<Vec<_>>();
-    let bytes = match format {
-        crate::ChatAudioFormat::Pcm16 => {
-            pcm.iter().flat_map(|sample| sample.to_le_bytes()).collect()
-        }
-        crate::ChatAudioFormat::Wav => {
-            let mut buffer = std::io::Cursor::new(Vec::new());
-            let mut writer = hound::WavWriter::new(
-                &mut buffer,
-                hound::WavSpec {
-                    channels: 1,
-                    sample_rate,
-                    bits_per_sample: 16,
-                    sample_format: hound::SampleFormat::Int,
-                },
-            )?;
-            for sample in pcm {
-                writer.write_sample(sample)?;
-            }
-            writer.finalize()?;
-            buffer.into_inner()
-        }
-    };
-    Ok(STANDARD.encode(bytes))
-}
-
 #[cfg(test)]
 mod chat_audio_tests {
     use super::*;
-    use base64::{engine::general_purpose::STANDARD, Engine};
-
-    #[test]
-    fn pcm16_is_little_endian_and_clips_at_integer_limits() -> anyhow::Result<()> {
-        let response = ChatAudioResponse::from_pcm(
-            &[-2., -1., 0., 0.5, 1., 2.],
-            24_000,
-            crate::ChatAudioFormat::Pcm16,
-        )?;
-        let bytes = STANDARD.decode(response.data.unwrap())?;
-        let samples = bytes
-            .chunks_exact(2)
-            .map(|bytes| i16::from_le_bytes([bytes[0], bytes[1]]))
-            .collect::<Vec<_>>();
-        assert_eq!(samples, [i16::MIN, i16::MIN, 0, 16_384, i16::MAX, i16::MAX]);
-        Ok(())
-    }
-
-    #[test]
-    fn wav_response_has_playable_mono_pcm_header() -> anyhow::Result<()> {
-        let response =
-            ChatAudioResponse::from_pcm(&[0., 0.5, -0.5], 24_000, crate::ChatAudioFormat::Wav)?;
-        let bytes = STANDARD.decode(response.data.unwrap())?;
-        let mut wav = hound::WavReader::new(std::io::Cursor::new(bytes))?;
-        assert_eq!(wav.spec().sample_rate, 24_000);
-        assert_eq!(wav.spec().channels, 1);
-        assert_eq!(
-            wav.samples::<i16>().collect::<Result<Vec<_>, _>>()?,
-            [0, 16_384, -16_384]
-        );
-        Ok(())
-    }
 
     #[test]
     fn text_messages_omit_audio_fields() -> anyhow::Result<()> {

@@ -3225,6 +3225,12 @@ impl Pipeline for MultimodalPipeline {
     fn finalize_response(&self, seq: &mut crate::sequence::Sequence) -> candle_core::Result<()> {
         self.model.finalize_response(seq)
     }
+    fn prepare_streaming_response(
+        &self,
+        seq: &mut crate::sequence::Sequence,
+    ) -> candle_core::Result<()> {
+        self.model.prepare_streaming_response(seq)
+    }
     fn release_generation_sequences(&self, sequence_ids: &[usize]) {
         self.model.release_generation_sequences(sequence_ids);
     }

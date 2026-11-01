@@ -197,20 +197,29 @@ impl Attention {
     fn rotate(&self, xs: &Tensor, float32_rope: bool) -> Result<Tensor> {
         let seq = xs.dim(2)?;
         let half = self.head_dim / 2;
-        let rotated = (self.rope.partial_rotary_factor * self.head_dim as f64) as usize / 2;
-        let frequencies = (0..half)
-            .map(|index| {
-                if index < rotated {
-                    (self.rope.rope_theta as f32).powf(-((2 * index) as f32) / self.head_dim as f32)
-                } else {
-                    0.0
-                }
-            })
-            .collect::<Vec<_>>();
+        // RoPE follows the reference's integer rotary dimension and float32 frequency calculation.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+        let frequencies = {
+            let rotated = (self.rope.partial_rotary_factor * self.head_dim as f64) as usize / 2;
+            (0..half)
+                .map(|index| {
+                    if index < rotated {
+                        (self.rope.rope_theta as f32)
+                            .powf(-((2 * index) as f32) / self.head_dim as f32)
+                    } else {
+                        0.0
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
         let frequencies = Tensor::from_vec(frequencies, (1, half), xs.device())?;
-        let positions = Tensor::arange(0u32, seq as u32, xs.device())?
-            .to_dtype(DType::F32)?
-            .reshape((seq, 1))?;
+        let positions = Tensor::arange(
+            0u32,
+            u32::try_from(seq).map_err(candle_core::Error::wrap)?,
+            xs.device(),
+        )?
+        .to_dtype(DType::F32)?
+        .reshape((seq, 1))?;
         let angles = positions.matmul(&frequencies)?;
         let angles = Tensor::cat(&[&angles, &angles], 1)?.reshape((1, 1, seq, self.head_dim))?;
         let cos = angles.cos()?;
@@ -267,6 +276,8 @@ impl Attention {
         } else {
             AttentionMask::Bidirectional
         };
+        #[allow(clippy::cast_precision_loss)]
+        let softmax_scale = 1.0 / (self.head_dim as f32).sqrt();
         let result = Sdpa
             .run_attention(
                 &query,
@@ -278,7 +289,7 @@ impl Attention {
                     n_kv_groups: self.heads / self.kv_heads,
                     sliding_window: self.window,
                     softcap: None,
-                    softmax_scale: 1.0 / (self.head_dim as f32).sqrt(),
+                    softmax_scale,
                     sinks: None,
                 },
             )?
@@ -693,7 +704,7 @@ fn sample_logits<R: Rng + ?Sized>(
     let mut ranked = scores.iter().copied().enumerate().collect::<Vec<_>>();
     ranked.sort_unstable_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
     if config.temperature == 0.0 {
-        return Ok(ranked[0].0 as u32);
+        return u32::try_from(ranked[0].0).map_err(candle_core::Error::wrap);
     }
     if let Some(k) = config.top_k.filter(|&k| k > 0) {
         let threshold = ranked[k.min(ranked.len()) - 1].1;
@@ -708,10 +719,10 @@ fn sample_logits<R: Rng + ?Sized>(
     for ((token, _), probability) in ranked.iter().zip(probabilities) {
         draw -= probability;
         if draw <= 0.0 {
-            return Ok(*token as u32);
+            return u32::try_from(*token).map_err(candle_core::Error::wrap);
         }
     }
-    Ok(ranked.last().unwrap().0 as u32)
+    u32::try_from(ranked.last().unwrap().0).map_err(candle_core::Error::wrap)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -854,56 +865,6 @@ mod tests {
             0
         );
         assert_eq!(sample_logits(&[-1.0, -1.5], &config, &[0], &mut rng)?, 1);
-        Ok(())
-    }
-
-    #[test]
-    #[ignore = "requires downloaded Omni checkpoint and PyTorch parity tensors"]
-    fn depth_decoder_matches_reference() -> anyhow::Result<()> {
-        let directory = std::path::PathBuf::from(std::env::var("MISTRALRS_LFM3_OMNI_CHECKPOINT")?);
-        let fixture = std::env::var("MISTRALRS_LFM3_OMNI_REFERENCE")?;
-        let config: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(directory.join("config.json"))?)?;
-        let depth: DepthConfig = serde_json::from_value(config["depth_config"].clone())?;
-        let vb = unsafe {
-            mistralrs_quant::ShardedSafeTensors::sharded(
-                &[directory.join("model.safetensors")],
-                DType::F32,
-                &Device::Cpu,
-                None,
-                std::sync::Arc::new(|_| true),
-            )?
-        };
-        let decoder = DepthDecoder::new(
-            &depth,
-            config["text_config"]["hidden_size"].as_u64().unwrap() as usize,
-            config["num_codebooks"].as_u64().unwrap() as usize,
-            config["codebook_size"].as_u64().unwrap() as usize,
-            vb.pp("model").pp("depth_decoder"),
-        )?;
-        assert_eq!(
-            decoder
-                .residual_tensors()
-                .iter()
-                .map(|(_, tensor)| tensor.elem_count())
-                .sum::<usize>(),
-            depth.depth_parameter_count(
-                config["text_config"]["hidden_size"].as_u64().unwrap() as usize,
-                config["num_codebooks"].as_u64().unwrap() as usize,
-                config["codebook_size"].as_u64().unwrap() as usize,
-            )
-        );
-        let fixture = candle_core::safetensors::load(fixture, &Device::Cpu)?;
-        let logits = decoder.forward(
-            &fixture["depth_hidden"],
-            &fixture["depth_codes"].to_dtype(DType::U32)?,
-            &fixture["depth_mask"].to_dtype(DType::U8)?,
-        )?;
-        let error = (&logits - &fixture["depth_logits"])?
-            .abs()?
-            .max_all()?
-            .to_scalar::<f32>()?;
-        assert!(error < 2e-4, "maximum depth logit error: {error}");
         Ok(())
     }
 }

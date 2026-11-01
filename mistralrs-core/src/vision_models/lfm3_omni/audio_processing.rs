@@ -29,6 +29,7 @@ pub(crate) struct AudioProcessor {
 }
 
 impl AudioProcessor {
+    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
     pub(crate) fn new() -> Self {
         let max_mel = SLANEY_LOG_START_MEL
             + (f64::from(SAMPLE_RATE) / 2.0 / SLANEY_LOG_START_HZ).ln()
@@ -147,8 +148,8 @@ mod tests {
 
     #[test]
     fn log_mel_matches_torch_frontend() -> Result<()> {
-        let samples = (0..960)
-            .map(|index| ((index % 17) as f32 - 8.0) / 8.0)
+        let samples = (0u16..960)
+            .map(|index| (f32::from(index % 17) - 8.0) / 8.0)
             .collect::<Vec<_>>();
         let features = AudioProcessor::new().process_samples(&samples, &Device::Cpu)?;
         let actual = features.squeeze(0)?.to_vec2::<f32>()?;
