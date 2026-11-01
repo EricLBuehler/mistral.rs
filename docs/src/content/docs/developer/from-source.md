@@ -7,7 +7,7 @@ This guide is for working from a local checkout, such as making changes to mistr
 
 ## Platform prerequisites
 
-A source build needs Rust 1.94+ ([rustup](https://rustup.rs)) plus, per platform:
+A source build needs Rust 1.95+ ([rustup](https://rustup.rs)) plus, per platform:
 
 - **Linux CUDA:**
   - An NVIDIA driver that supports the target CUDA version (check with `nvidia-smi`).

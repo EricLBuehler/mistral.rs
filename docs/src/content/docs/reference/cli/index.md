@@ -18,7 +18,7 @@ sidebar:
 | [`mistralrs uqff`](/reference/cli/uqff/) | Inspect, report, or verify UQFF artifacts |
 | [`mistralrs doctor`](/reference/cli/doctor/) | Run system diagnostics and environment checks |
 | [`mistralrs tune`](/reference/cli/tune/) | Recommend a quantization level and device mapping that fit your hardware |
-| [`mistralrs login`](/reference/cli/login/) | Authenticate with Hugging Face Hub |
+| [`mistralrs download`](/reference/cli/download/) | Download the files needed to run a model without loading it |
 | [`mistralrs cache`](/reference/cli/cache/) | Manage the Hugging Face model cache |
 | [`mistralrs bench`](/reference/cli/bench/) | Run performance benchmarks for base or LoRA model generation |
 | [`mistralrs from-config`](/reference/cli/from-config/) | Run from a full TOML configuration file |

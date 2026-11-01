@@ -26,10 +26,17 @@ pub(crate) fn get_token(source: &TokenSource) -> Result<Option<String>> {
         TokenSource::EnvVar(envvar) => env::var(envvar).ok().or_else(|| skip_token(envvar)),
         TokenSource::Path(path) => fs::read_to_string(path).ok().or_else(|| skip_token(path)),
         TokenSource::CacheToken => {
-            // Respect HF_TOKEN / HF_HUB_TOKEN environment variables first.
+            if crate::pipeline::hf::env_flag("HF_HUB_DISABLE_IMPLICIT_TOKEN") {
+                return Ok(None);
+            }
             let env_token = env::var("HF_TOKEN")
                 .ok()
-                .or_else(|| env::var("HF_HUB_TOKEN").ok());
+                .filter(|token| !token.trim().is_empty())
+                .or_else(|| {
+                    env::var("HF_HUB_TOKEN")
+                        .ok()
+                        .filter(|token| !token.trim().is_empty())
+                });
             if let Some(token) = env_token {
                 Some(token)
             } else {
@@ -44,5 +51,7 @@ pub(crate) fn get_token(source: &TokenSource) -> Result<Option<String>> {
         TokenSource::None => None,
     };
 
-    Ok(token.map(|s| s.trim().to_string()))
+    Ok(token
+        .map(|s| s.trim().to_string())
+        .filter(|token| !token.is_empty()))
 }

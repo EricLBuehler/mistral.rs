@@ -199,11 +199,20 @@ pub enum Command {
         emit_config: Option<PathBuf>,
     },
 
-    /// Authenticate with Hugging Face Hub
-    Login {
-        /// Provide token directly (non-interactive)
-        #[arg(long)]
-        token: Option<String>,
+    /// Download the files needed to run a model without loading it
+    #[command(
+        long_about = "Download the files needed to run a model without loading it or initializing a GPU.\n\nUse an explicit --quant level; --quant auto is not supported. In-situ quantization happens when the model is loaded."
+    )]
+    Download {
+        #[command(subcommand)]
+        model_type: Option<ModelType>,
+
+        #[command(flatten)]
+        default_model: DefaultModelOptions,
+
+        /// Hugging Face revision to download (defaults to main)
+        #[arg(long, global = true)]
+        revision: Option<String>,
     },
 
     /// Manage the Hugging Face model cache

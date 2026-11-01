@@ -1,4 +1,5 @@
 use super::llg::build_llg_factory;
+use super::loaders::ModelDownload;
 use super::{
     get_model_paths, text_models_inputs_processor::ModelInputs, AdapterKind, CacheManager,
     GeneralMetadata, Loader, ModelKind, ModelPaths, PrettyName, QuantizationKind, TokenSource,
@@ -56,7 +57,6 @@ use crate::{
 use anyhow::{bail, Context, Result};
 use candle_core::{Device, Tensor};
 use either::Either;
-use hf_hub::{Repo, RepoType};
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
@@ -1051,11 +1051,7 @@ impl GGUFLoader {
                 return Ok(None);
             }
         };
-        let api = api.repo(Repo::with_revision(
-            inferred_model_id.clone(),
-            RepoType::Model,
-            revision.to_string(),
-        ));
+        let api = api.repo(inferred_model_id.clone(), revision.to_string());
         let model_id = Path::new(&inferred_model_id);
         let files = match list_repo_files(&api, model_id, true, revision) {
             Ok(files) => files,
@@ -1135,26 +1131,16 @@ impl GGUFLoader {
 }
 
 impl Loader for GGUFLoader {
-    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
-    fn load_model_from_hf(
+    fn download_model_from_hf(
         &self,
         revision: Option<String>,
         token_source: TokenSource,
-        dtype: &dyn TryIntoDType,
-        device: &Device,
         silent: bool,
-        mapper: DeviceMapSetting,
-        in_situ_quant: Option<IsqType>,
-        paged_attn_config: Option<PagedAttentionConfig>,
-    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+    ) -> Result<ModelDownload> {
         let _progress_guard = ProgressScopeGuard::new(silent);
-        let cache = self
-            .config
-            .hf_cache_path
-            .clone()
-            .map(hf_hub::Cache::new)
-            .unwrap_or_default();
-        GLOBAL_HF_CACHE.get_or_init(|| cache);
+        if let Some(cache) = self.config.hf_cache_path.as_ref() {
+            GLOBAL_HF_CACHE.get_or_init(|| cache.clone());
+        }
         let revision = revision.unwrap_or_else(|| "main".to_string());
         if self.mmproj_filenames.as_ref().is_some_and(|filenames| {
             filenames.is_empty() || filenames.iter().any(|filename| filename.trim().is_empty())
@@ -1175,7 +1161,7 @@ impl Loader for GGUFLoader {
             silent,
             true
         );
-        let paths = paths?;
+        let mut download = ModelDownload::new(paths?);
         if let Some(mmproj_filenames) = self.mmproj_filenames.as_ref() {
             let mmproj_paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths_gguf!(
                 LocalModelPaths,
@@ -1187,20 +1173,36 @@ impl Loader for GGUFLoader {
                 silent,
                 false
             );
-            let mmproj_paths = mmproj_paths?;
-            let inferred_paths = self.infer_multimodal_asset_paths(
-                paths.as_ref(),
-                mmproj_paths.get_weight_filenames(),
+            download.projector_paths = mmproj_paths?.get_weight_filenames().to_vec();
+            if let Some(paths) = self.infer_multimodal_asset_paths(
+                download.paths.as_ref(),
+                &download.projector_paths,
                 &token_source,
                 silent,
-            )?;
-            let paths = inferred_paths
-                .as_ref()
-                .map(|paths| paths as &dyn ModelPaths)
-                .unwrap_or(paths.as_ref());
+            )? {
+                download.paths = Box::new(paths);
+            }
+        }
+        Ok(download)
+    }
+
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
+    fn load_model_from_hf(
+        &self,
+        revision: Option<String>,
+        token_source: TokenSource,
+        dtype: &dyn TryIntoDType,
+        device: &Device,
+        silent: bool,
+        mapper: DeviceMapSetting,
+        in_situ_quant: Option<IsqType>,
+        paged_attn_config: Option<PagedAttentionConfig>,
+    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let download = self.download_model_from_hf(revision, token_source, silent)?;
+        if !download.projector_paths.is_empty() {
             return self.load_native_multimodal(NativeMultimodalLoadArgs {
-                paths,
-                mmproj_paths: mmproj_paths.get_weight_filenames(),
+                paths: download.paths.as_ref(),
+                mmproj_paths: &download.projector_paths,
                 dtype,
                 device,
                 silent,
@@ -1209,9 +1211,8 @@ impl Loader for GGUFLoader {
                 paged_attn_config,
             });
         }
-
         self.load_model_from_path(
-            paths.as_ref(),
+            download.paths.as_ref(),
             dtype,
             device,
             silent,
@@ -1671,6 +1672,7 @@ pub(crate) fn needs_d1_calibration(config_path: &Path) -> Result<bool> {
 
 #[cfg(test)]
 mod tests {
+
     use super::{
         arch_spec, preferred_hf_config, prepare_native_multimodal_config,
         resolve_tokenizer_candidate, validate_legacy_gguf_adapter_qk_layout,

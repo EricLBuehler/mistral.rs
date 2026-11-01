@@ -19,8 +19,8 @@ use clap_complete::generate;
 
 use args::{resolve_model_type, resolve_quantize_model_type, CacheCommand, Cli, Command};
 use commands::{
-    run_bench, run_cache_delete, run_cache_list, run_doctor, run_from_config, run_interactive,
-    run_login, run_quantize, run_server, run_tune, run_uninstall, run_update, run_uqff,
+    run_bench, run_cache_delete, run_cache_list, run_doctor, run_download, run_from_config,
+    run_interactive, run_quantize, run_server, run_tune, run_uninstall, run_update, run_uqff,
     BenchRunConfig,
 };
 use mistralrs_core::{initialize_mistralrs_logging, LogVerbosity};
@@ -134,8 +134,13 @@ async fn main() -> Result<()> {
             run_tune(model_type, cli.global, profile, json, emit_config).await?;
         }
 
-        Command::Login { token } => {
-            run_login(token)?;
+        Command::Download {
+            model_type,
+            default_model,
+            revision,
+        } => {
+            let model_type = resolve_model_type(model_type, default_model)?;
+            run_download(model_type, cli.global, revision).await?;
         }
 
         Command::Cache { cmd } => match cmd {

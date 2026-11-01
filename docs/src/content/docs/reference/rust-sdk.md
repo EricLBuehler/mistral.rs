@@ -165,3 +165,9 @@ async fn detokenize(&self, tokens: Vec<u32>, skip_special_tokens: bool) -> Resul
 ## Decision requests
 
 Use `Model::send_decision_request(DecisionRequest)` with d1 models. `DecisionQuestion` and `DecisionAnswer` are typed enums; requests carry arbitrary JSON state, named questions, and optional `DecisionMedia` values. `send_decision_request_with_model(request, Some(model_id))` selects a loaded model. See [decision request semantics](/reference/decisions/) and the [Rust example](/examples/rust/models/lfm3-d1/).
+
+## Custom model loaders
+
+In `mistralrs-core` 0.10, custom implementations of `Loader` must implement `download_model_from_hf(revision, token_source, silent) -> Result<ModelDownload>`. It prepares local model paths without loading tensors or initializing a GPU. The default `load_model_from_hf` calls this method, then `load_model_from_path`. `ModelDownload::files()` lists the selected assets. Downloading is blocking; use `tokio::task::spawn_blocking` from async code.
+
+`GLOBAL_HF_CACHE` now stores `OnceLock<PathBuf>` instead of `OnceLock<hf_hub::Cache>`. Call `mistralrs_core::set_hf_cache_path(path)` before creating loaders to configure the cache.

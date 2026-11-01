@@ -1,4 +1,5 @@
 use super::llg::build_llg_factory;
+use super::loaders::ModelDownload;
 use super::{
     get_model_paths, paged_attention_memory_reservations, reserve_recurrent_serving_capacity,
     text_models_inputs_processor::ModelInputs, AdapterKind, CacheManager, DecodeGraphPrecaptureCtx,
@@ -72,8 +73,8 @@ use crate::pipeline::text_models_inputs_processor::InputMetadata;
 #[cfg(feature = "cuda")]
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::pipeline::{
-    get_chat_template, hf::build_api, Modalities, ModelForwardContext, RecurrentBatchKind,
-    RecurrentMetadata, SupportedModality,
+    get_chat_template, Modalities, ModelForwardContext, RecurrentBatchKind, RecurrentMetadata,
+    SupportedModality,
 };
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManagerV2;
@@ -86,15 +87,13 @@ use crate::utils::{
 };
 use crate::xlora_models::NonGranularState;
 use crate::{
-    api_dir_list, api_get_file, get_mut_arcmutex, get_paths, get_uqff_paths, lora_model_loader,
-    normal_model_loader, xlora_model_loader, DeviceMapSetting, DynamicLoraRuntime, LoraAdapterSpec,
-    LoraRuntimeConfig, PagedAttentionConfig, Pipeline, Topology, TryIntoDType, GLOBAL_HF_CACHE,
+    get_mut_arcmutex, get_paths, get_uqff_paths, lora_model_loader, normal_model_loader,
+    xlora_model_loader, DeviceMapSetting, DynamicLoraRuntime, LoraAdapterSpec, LoraRuntimeConfig,
+    PagedAttentionConfig, Pipeline, Topology, TryIntoDType, GLOBAL_HF_CACHE,
 };
 use anyhow::{Context, Result};
 use candle_core::{DType, Device, Tensor, Var};
 use either::Either;
-use hf_hub::Cache;
-use hf_hub::{Repo, RepoType};
 use mistralrs_quant::log::once_log_info;
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
@@ -603,25 +602,16 @@ impl NormalLoaderBuilder {
 }
 
 impl Loader for NormalLoader {
-    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
-    fn load_model_from_hf(
+    fn download_model_from_hf(
         &self,
         revision: Option<String>,
         token_source: TokenSource,
-        dtype: &dyn TryIntoDType,
-        device: &Device,
         silent: bool,
-        mapper: DeviceMapSetting,
-        in_situ_quant: Option<IsqType>,
-        paged_attn_config: Option<PagedAttentionConfig>,
-    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+    ) -> Result<ModelDownload> {
         let _progress_guard = ProgressScopeGuard::new(silent);
-        let cache = self
-            .hf_cache_path
-            .clone()
-            .map(Cache::new)
-            .unwrap_or_default();
-        GLOBAL_HF_CACHE.get_or_init(|| cache);
+        if let Some(cache) = self.hf_cache_path.as_ref() {
+            GLOBAL_HF_CACHE.get_or_init(|| cache.clone());
+        }
 
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
             LocalModelPaths,
@@ -647,15 +637,11 @@ impl Loader for NormalLoader {
         if let Some(from_uqff) = self.config.from_uqff.clone() {
             *self.from_uqff.write().unwrap() = Some(get_uqff_paths!(&from_uqff, self, silent));
         }
-        self.load_model_from_path(
-            paths?.as_ref(),
-            dtype,
-            device,
-            silent,
-            mapper,
-            in_situ_quant,
-            paged_attn_config,
-        )
+        let mut download = ModelDownload::new(paths?);
+        if let Some(paths) = self.from_uqff.read().unwrap().as_ref() {
+            download.additional_files.extend(paths.iter().cloned());
+        }
+        Ok(download)
     }
 
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
@@ -2862,23 +2848,14 @@ impl AnyMoePipelineMixin for NormalPipeline {
         // Precompile regex here
         let regex = Regex::new(match_regex).map_err(candle_core::Error::msg)?;
         for model_id in model_ids {
-            let model_id_str = &model_id;
-            let model_id = Path::new(&model_id);
-
-            let api = build_api(token, !silent).map_err(candle_core::Error::msg)?;
-            let revision = revision.clone().unwrap_or("main".to_string());
-            let api = api.repo(Repo::with_revision(
-                model_id_str.clone(),
-                RepoType::Model,
-                revision.clone(),
-            ));
-
-            let mut filenames = vec![];
-            for rfilename in api_dir_list!(api, model_id, true, &revision)
-                .filter(|x| x.ends_with(".safetensors"))
-            {
-                filenames.push(api_get_file!(api, &rfilename, model_id, &revision));
-            }
+            let filenames = super::amoe::download_expert_files(
+                &self.model_id,
+                &model_id,
+                token,
+                revision.as_deref().unwrap_or("main"),
+                silent,
+            )
+            .map_err(candle_core::Error::msg)?;
 
             let regex = regex.clone();
             let match_regex_clone = match_regex.to_string();
@@ -2911,23 +2888,14 @@ impl AnyMoePipelineMixin for NormalPipeline {
         }
 
         let gate_vb = if let Some(gate_model_id) = gate_model_id {
-            let model_id_str = &gate_model_id;
-            let model_id = Path::new(&gate_model_id);
-
-            let api = build_api(token, !silent).map_err(candle_core::Error::msg)?;
-            let revision = revision.clone().unwrap_or("main".to_string());
-            let api = api.repo(Repo::with_revision(
-                model_id_str.clone(),
-                RepoType::Model,
-                revision.clone(),
-            ));
-
-            let mut gate_filenames = vec![];
-            for rfilename in api_dir_list!(api, model_id, true, &revision)
-                .filter(|x| x.ends_with(".safetensors"))
-            {
-                gate_filenames.push(api_get_file!(api, &rfilename, model_id, &revision));
-            }
+            let gate_filenames = super::amoe::download_expert_files(
+                &self.model_id,
+                &gate_model_id,
+                token,
+                revision.as_deref().unwrap_or("main"),
+                silent,
+            )
+            .map_err(candle_core::Error::msg)?;
             assert_eq!(
                 gate_filenames.len(),
                 1,
@@ -2987,6 +2955,46 @@ fn exact_weight_source_sizes(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn download_selects_uqff_shards_and_residual_without_loading_tensors() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path();
+        for filename in [
+            "q8_0-0.uqff",
+            "q8_0-1.uqff",
+            "q4_0-0.uqff",
+            "residual.safetensors",
+            "model.safetensors",
+        ] {
+            std::fs::write(root.join(filename), b"not a tensor file")?;
+        }
+        std::fs::write(root.join("config.json"), b"{}")?;
+        std::fs::write(root.join("tokenizer.json"), b"not a tokenizer")?;
+        let loader = super::NormalLoaderBuilder::new(
+            super::NormalSpecificConfig {
+                from_uqff: Some(vec![PathBuf::from("q8_0-0.uqff")]),
+                ..Default::default()
+            },
+            None,
+            None,
+            Some(root.display().to_string()),
+            false,
+            None,
+        )
+        .build(Some(super::NormalLoaderType::Llama))?;
+        let download = loader.download_model_from_hf(None, crate::TokenSource::None, true)?;
+        assert_eq!(
+            download.paths.get_weight_filenames(),
+            &[root.join("residual.safetensors")]
+        );
+        let files = download.files();
+        assert!(files.contains(&root.join("q8_0-0.uqff")));
+        assert!(files.contains(&root.join("q8_0-1.uqff")));
+        assert!(!files.contains(&root.join("q4_0-0.uqff")));
+        assert!(!files.contains(&root.join("model.safetensors")));
+        Ok(())
+    }
+
     use super::{exact_weight_source_sizes, normal_model_requires_uniform_prompt_batch};
     use crate::pipeline::finish_dynamic_lora_runtime;
     use crate::pipeline::{

@@ -61,8 +61,7 @@ pub use embedding_loaders::{
 };
 
 pub use diffusion_loaders::{
-    DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, DiffusionModelPaths,
-    DiffusionModelPathsInner, FluxLoader,
+    DiffusionLoaderType, DiffusionModel, DiffusionModelLoader, FluxLoader,
 };
 
 use crate::{
@@ -75,6 +74,17 @@ use super::{paths::AdapterPaths, Pipeline};
 pub(crate) const QK_ROPE_LAYOUT_CONFIG_KEY: &str = "_mistralrs_qk_rope_layout";
 const LEGACY_MODEL_OPT_CONFIG: &str = "hf_quant_config.json";
 const LFM3_CODEC_CONFIG: &str = "audio_tokenizer/config.json";
+const MODEL_COMPANION_FILES: &[&str] = &[
+    "model.safetensors.index.json",
+    "tokenizer_config.json",
+    "hf_quant_config.json",
+    "calibration.json",
+    "audio_tokenizer/config.json",
+    "audio_tokenizer/model.safetensors.index.json",
+    "modules.json",
+    "config_sentence_transformers.json",
+    mistralrs_quant::UQFF_REPORT_JSON,
+];
 /// Set on the model config JSON when the checkpoint's built-in MTP head should be loaded.
 pub const MTP_CONFIG_KEY: &str = "_mistralrs_mtp";
 
@@ -307,6 +317,63 @@ pub(crate) fn validate_lora_qk_rope_layout(config: &str, has_adapter: bool) -> R
 /// `ModelPaths` abstracts the mechanism to get all necessary files for running a model. For
 /// example `LocalModelPaths` implements `ModelPaths` when all files are in the local file system.
 pub trait ModelPaths: AsAny + Debug + Send + Sync {
+    fn files(&self) -> Vec<PathBuf> {
+        let mut files = self.get_weight_filenames().to_vec();
+        files.extend([
+            self.get_config_filename().clone(),
+            self.get_tokenizer_filename().clone(),
+        ]);
+        files.extend(self.get_template_filename().iter().cloned());
+        files.extend(self.get_gen_conf_filename().cloned());
+        files.extend(self.get_preprocessor_config().iter().cloned());
+        files.extend(self.get_video_preprocessor_config().cloned());
+        files.extend(self.get_processor_config().iter().cloned());
+        files.extend(self.get_chat_template_explicit().iter().cloned());
+        match self.get_adapter_paths() {
+            AdapterPaths::Lora(adapters) => {
+                for adapter in adapters {
+                    files.extend([adapter.config_path.clone(), adapter.weights_path.clone()]);
+                }
+            }
+            AdapterPaths::XLora {
+                metadata_paths,
+                adapter_safetensors,
+                classifier_path,
+                lora_preload_adapter_info,
+                ..
+            } => {
+                files.extend(metadata_paths.iter().cloned());
+                if let Some(adapters) = adapter_safetensors {
+                    files.extend(adapters.iter().map(|(_, path)| path.clone()));
+                }
+                files.extend(classifier_path.iter().cloned());
+                if let Some(adapters) = lora_preload_adapter_info {
+                    files.extend(adapters.values().map(|(path, _)| path.clone()));
+                }
+            }
+            AdapterPaths::None => {}
+        }
+        for module in self.get_modules().unwrap_or_default() {
+            match module {
+                EmbeddingModulePaths::Pooling { config, .. } => files.push(config.clone()),
+                EmbeddingModulePaths::Dense { config, model, .. } => {
+                    files.extend([config.clone(), model.clone()]);
+                }
+                _ => {}
+            }
+        }
+        if let Some(parent) = self.get_config_filename().parent() {
+            files.extend(
+                MODEL_COMPANION_FILES
+                    .iter()
+                    .map(|filename| parent.join(filename))
+                    .filter(|path| path.is_file()),
+            );
+        }
+        files.retain(|path| !path.as_os_str().is_empty());
+        files
+    }
+
     /// Model weights files (multiple files supported).
     fn get_weight_filenames(&self) -> &[PathBuf];
 
@@ -1194,6 +1261,32 @@ pub trait DeviceMappedModelLoader {
     }
 }
 
+#[derive(Debug)]
+pub struct ModelDownload {
+    pub paths: Box<dyn ModelPaths>,
+    pub projector_paths: Vec<PathBuf>,
+    pub additional_files: Vec<PathBuf>,
+}
+
+impl ModelDownload {
+    pub fn new(paths: Box<dyn ModelPaths>) -> Self {
+        Self {
+            paths,
+            projector_paths: Vec::new(),
+            additional_files: Vec::new(),
+        }
+    }
+
+    pub fn files(&self) -> Vec<PathBuf> {
+        let mut files = self.paths.files();
+        files.extend(self.projector_paths.iter().cloned());
+        files.extend(self.additional_files.iter().cloned());
+        files.sort();
+        files.dedup();
+        files
+    }
+}
+
 /// The `Loader` trait abstracts the loading process. The primary entrypoint is the
 /// `load_model` method.
 ///
@@ -1215,6 +1308,14 @@ pub trait DeviceMappedModelLoader {
 /// ).unwrap();
 /// ```
 pub trait Loader: Send + Sync {
+    /// Resolve and download inference assets without loading tensors or initializing a device.
+    fn download_model_from_hf(
+        &self,
+        revision: Option<String>,
+        token_source: TokenSource,
+        silent: bool,
+    ) -> Result<ModelDownload>;
+
     /// If `revision` is None, then it defaults to `main`.
     /// If `dtype` is None, then it defaults to the model default (usually BF16).
     /// If model is not found on HF, will attempt to resolve locally.
@@ -1229,7 +1330,18 @@ pub trait Loader: Send + Sync {
         mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
         paged_attn_config: Option<PagedAttentionConfig>,
-    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>>;
+    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let download = self.download_model_from_hf(revision, token_source, silent)?;
+        self.load_model_from_path(
+            download.paths.as_ref(),
+            dtype,
+            device,
+            silent,
+            mapper,
+            in_situ_quant,
+            paged_attn_config,
+        )
+    }
 
     /// Load a model from the specified paths.
     /// Also initializes `DEBUG`.

@@ -20,7 +20,7 @@ param([hashtable]$InstallerArguments)
 $ErrorActionPreference = 'Stop'
 
 function Initialize-Installer([hashtable]$Options = @{}) {
-    $script:RequiredRustVersion = [version]'1.94.0'
+    $script:RequiredRustVersion = [version]'1.95.0'
     $script:Repository = 'https://github.com/EricLBuehler/mistral.rs'
     $script:PollMilliseconds = 100
     $script:OutputBufferSize = 8192

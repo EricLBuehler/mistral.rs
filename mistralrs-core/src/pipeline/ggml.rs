@@ -1,4 +1,5 @@
 use super::llg::build_llg_factory;
+use super::loaders::ModelDownload;
 use super::{
     get_model_paths, text_models_inputs_processor::ModelInputs, AdapterKind, CacheManager,
     GeneralMetadata, Loader, ModelKind, ModelPaths, QuantizationKind, TokenSource,
@@ -30,7 +31,6 @@ use crate::{models::quantized_llama::ModelWeights as QLlama, xlora_models::XLora
 use anyhow::Result;
 use candle_core::quantized::ggml_file;
 use candle_core::{Device, Tensor};
-use hf_hub::{Repo, RepoType};
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
@@ -235,6 +235,32 @@ impl GGMLLoader {
 }
 
 impl Loader for GGMLLoader {
+    fn download_model_from_hf(
+        &self,
+        revision: Option<String>,
+        token_source: TokenSource,
+        silent: bool,
+    ) -> Result<ModelDownload> {
+        let _progress_guard = ProgressScopeGuard::new(silent);
+        let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
+            LocalModelPaths,
+            &token_source,
+            revision,
+            self,
+            self.quantized_model_id,
+            Some(vec![self.quantized_filename.as_ref().unwrap().clone()]),
+            silent,
+            false,
+            crate::pipeline::AdapterPathOptions {
+                xlora_model_id: self.xlora_model_id.as_ref(),
+                lora_adapters: None,
+                xlora_order: self.xlora_order.as_ref(),
+                xlora_preload: crate::pipeline::XLoraPreload::Load,
+            }
+        );
+        Ok(ModelDownload::new(paths?))
+    }
+
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_path(
         &self,
@@ -405,46 +431,6 @@ impl Loader for GGMLLoader {
             }),
             generation_defaults,
         })))
-    }
-
-    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
-    fn load_model_from_hf(
-        &self,
-        revision: Option<String>,
-        token_source: TokenSource,
-        dtype: &dyn TryIntoDType,
-        device: &Device,
-        silent: bool,
-        mapper: DeviceMapSetting,
-        in_situ_quant: Option<IsqType>,
-        paged_attn_config: Option<PagedAttentionConfig>,
-    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let _progress_guard = ProgressScopeGuard::new(silent);
-        let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
-            LocalModelPaths,
-            &token_source,
-            revision,
-            self,
-            self.quantized_model_id,
-            Some(vec![self.quantized_filename.as_ref().unwrap().clone()]),
-            silent,
-            false,
-            crate::pipeline::AdapterPathOptions {
-                xlora_model_id: self.xlora_model_id.as_ref(),
-                lora_adapters: None,
-                xlora_order: self.xlora_order.as_ref(),
-                xlora_preload: crate::pipeline::XLoraPreload::Load,
-            }
-        );
-        self.load_model_from_path(
-            paths?.as_ref(),
-            dtype,
-            device,
-            silent,
-            mapper,
-            in_situ_quant,
-            paged_attn_config,
-        )
     }
 
     fn get_id(&self) -> String {

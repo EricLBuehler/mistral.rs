@@ -141,7 +141,7 @@ elif command == "mv":
         os.kill(os.getppid(), signal.SIGINT)
     sys.exit(result.returncode)
 elif command == "rustc":
-    print("rustc 1.94.0")
+    print("rustc 1.95.0")
 elif command == "nvcc" and os.environ.get("INSTALL_TEST_CUDA_TOOLKIT") == "1":
     print("Cuda compilation tools, release 13.1, V13.1.123")
 elif command == "cargo" and os.environ.get("INSTALL_TEST_ALLOW_BUILD") == "1":

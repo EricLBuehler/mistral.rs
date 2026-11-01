@@ -115,7 +115,7 @@ pub async fn run_bench(
     let model_id = get_model_id(&model_type);
     // Convert args and load model
     let matformer = runtime.matformer_selection();
-    apply_quant_resolution(&mut model_type, &global.token_source, &matformer).await?;
+    apply_quant_resolution(&mut model_type, &global.token_source, &matformer, None).await?;
     let model_selected = convert_to_model_selected(&model_type, &matformer)?;
     let (max_model_len, hf_config_overrides) = extract_hf_config_settings(&model_type);
 

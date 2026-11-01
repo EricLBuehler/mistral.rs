@@ -1,4 +1,4 @@
-use super::loaders::{DiffusionModelPaths, DiffusionModelPathsInner};
+use super::loaders::ModelDownload;
 use super::{
     AnyMoePipelineMixin, Cache, CacheManagerMixin, DiffusionLoaderType, DiffusionModel,
     DiffusionModelLoader, EitherCache, FluxLoader, ForwardInputsResult, GeneralMetadata,
@@ -12,23 +12,17 @@ use crate::paged_attention::AttentionImplementation;
 use crate::pipeline::{ChatTemplate, Modalities, SupportedModality};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
-use crate::utils::varbuilder_utils::DeviceForLoadTensor;
-use crate::utils::{
-    progress::{new_multi_progress, ProgressScopeGuard},
-    tokens::get_token,
-    varbuilder_utils::from_mmaped_safetensors,
-};
+use crate::utils::progress::{new_multi_progress, ProgressScopeGuard};
 use crate::{DeviceMapSetting, PagedAttentionConfig, Pipeline, TryIntoDType};
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
-use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use image::{DynamicImage, RgbImage};
 use mistralrs_quant::log::once_log_info;
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
+use std::env;
 use std::sync::Arc;
-use std::{env, io};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::warn;
@@ -76,47 +70,20 @@ impl DiffusionLoaderBuilder {
 }
 
 impl Loader for DiffusionLoader {
-    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
-    fn load_model_from_hf(
+    fn download_model_from_hf(
         &self,
         revision: Option<String>,
         token_source: TokenSource,
-        dtype: &dyn TryIntoDType,
-        device: &Device,
         silent: bool,
-        mapper: DeviceMapSetting,
-        in_situ_quant: Option<IsqType>,
-        paged_attn_config: Option<PagedAttentionConfig>,
-    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+    ) -> Result<ModelDownload> {
         let _progress_guard = ProgressScopeGuard::new(silent);
-        let paths: anyhow::Result<Box<dyn ModelPaths>> = {
-            let api = ApiBuilder::from_env()
-                .with_progress(!silent)
-                .with_token(get_token(&token_source)?)
-                .build()?;
-            let revision = revision.unwrap_or("main".to_string());
-            let api = api.repo(Repo::with_revision(
-                self.model_id.clone(),
-                RepoType::Model,
-                revision.clone(),
-            ));
-            let model_id = std::path::Path::new(&self.model_id);
-            let filenames = self.inner.get_model_paths(&api, model_id, &revision)?;
-            let config_filenames = self.inner.get_config_filenames(&api, model_id, &revision)?;
-            Ok(Box::new(DiffusionModelPaths(DiffusionModelPathsInner {
-                config_filenames,
-                filenames,
-            })))
-        };
-        self.load_model_from_path(
-            paths?.as_ref(),
-            dtype,
-            device,
-            silent,
-            mapper,
-            in_situ_quant,
-            paged_attn_config,
-        )
+        let api = crate::pipeline::hf::build_api(&token_source, !silent)?;
+        let revision = revision.as_deref().unwrap_or("main");
+        Ok(ModelDownload::new(self.inner.download_model_paths(
+            &api,
+            &self.model_id,
+            revision,
+        )?))
     }
 
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
@@ -131,11 +98,6 @@ impl Loader for DiffusionLoader {
         mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
-        let paths = &paths
-            .as_any()
-            .downcast_ref::<DiffusionModelPaths>()
-            .expect("Path downcast failed.")
-            .0;
 
         if matches!(mapper, DeviceMapSetting::Map(_)) {
             anyhow::bail!("Device mapping is not supported for diffusion models.")
@@ -154,12 +116,6 @@ impl Loader for DiffusionLoader {
         if crate::using_flash_attn() {
             once_log_info("FlashAttention is enabled.");
         }
-
-        let configs = paths
-            .config_filenames
-            .iter()
-            .map(std::fs::read_to_string)
-            .collect::<io::Result<Vec<_>>>()?;
 
         #[cfg(feature = "cuda")]
         if let Device::Cuda(dev) = &device {
@@ -187,42 +143,20 @@ impl Loader for DiffusionLoader {
         };
 
         let model = match self.kind {
-            ModelKind::Normal => {
-                let vbs = paths
-                    .filenames
-                    .iter()
-                    .zip(self.inner.force_cpu_vb())
-                    .map(|(path, force_cpu)| {
-                        let dev = if force_cpu { &Device::Cpu } else { device };
-                        from_mmaped_safetensors(
-                            vec![path.clone()],
-                            Vec::new(),
-                            Some(dtype),
-                            dev,
-                            vec![None],
-                            silent,
-                            None,
-                            |_| true,
-                            Arc::new(|_| DeviceForLoadTensor::Base),
-                        )
-                    })
-                    .collect::<candle_core::Result<Vec<_>>>()?;
-
-                self.inner.load(
-                    configs,
-                    vbs,
-                    crate::pipeline::NormalLoadingMetadata {
-                        mapper,
-                        loading_isq: false,
-                        real_device: device.clone(),
-                        multi_progress: Arc::new(new_multi_progress()),
-                        matformer_slicing_config: None,
-                        rope_pairing: None,
-                    },
-                    attention_mechanism,
-                    silent,
-                )?
-            }
+            ModelKind::Normal => self.inner.load(
+                paths,
+                dtype,
+                crate::pipeline::NormalLoadingMetadata {
+                    mapper,
+                    loading_isq: false,
+                    real_device: device.clone(),
+                    multi_progress: Arc::new(new_multi_progress()),
+                    matformer_slicing_config: None,
+                    rope_pairing: None,
+                },
+                attention_mechanism,
+                silent,
+            )?,
             _ => unreachable!(),
         };
 
