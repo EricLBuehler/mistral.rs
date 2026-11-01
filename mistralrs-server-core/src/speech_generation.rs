@@ -36,6 +36,8 @@ use crate::{
 
 const MIN_SPEECH_SPEED: f64 = 0.25;
 const MAX_SPEECH_SPEED: f64 = 4.0;
+const SPEECH_TRUNCATED_ERROR: &str =
+    "Speech generation reached the model context limit before finishing";
 
 #[derive(ToSchema)]
 #[schema(value_type = String, format = Binary)]
@@ -380,8 +382,8 @@ async fn match_response_with_options(
         }
         Response::ValidationError(e) => SpeechGenerationResponder::ValidationError(e),
         Response::ImageGeneration(_) => unreachable!(),
-        Response::CompletionModelError(m, _) => {
-            MistralRs::maybe_log_error(state, &ModelErrorMessage(m));
+        Response::CompletionModelError(message, _) | Response::ModelError(message, _) => {
+            MistralRs::maybe_log_error(state, &ModelErrorMessage(message));
             SpeechGenerationResponder::InternalError(Box::new(ApiError::model_error()))
         }
         Response::CompletionDone(_) => unreachable!(),
@@ -389,16 +391,18 @@ async fn match_response_with_options(
         Response::Chunk(_) => unreachable!(),
         Response::Done(response) => {
             let usage = response.usage;
-            let decoded = tokio::task::spawn_blocking(move || -> Result<_> {
-                let choice = response
-                    .choices
-                    .into_iter()
-                    .next()
-                    .context("Model returned no speech choice")?;
-                anyhow::ensure!(
-                    choice.finish_reason != "length",
-                    "Speech generation reached the model context limit before finishing"
+            let Some(choice) = response.choices.into_iter().next() else {
+                return handle_error(
+                    state,
+                    anyhow::anyhow!("Model returned no speech choice").into(),
                 );
+            };
+            if choice.finish_reason == "length" {
+                return SpeechGenerationResponder::ValidationError(Box::new(
+                    ApiError::invalid_request(SPEECH_TRUNCATED_ERROR),
+                ));
+            }
+            let decoded = tokio::task::spawn_blocking(move || -> Result<_> {
                 let encoded = choice
                     .message
                     .audio
@@ -426,10 +430,6 @@ async fn match_response_with_options(
                 Ok(response) => response,
                 Err(error) => handle_error(state, error.into()),
             }
-        }
-        Response::ModelError(message, _) => {
-            MistralRs::maybe_log_error(state, &ModelErrorMessage(message));
-            SpeechGenerationResponder::InternalError(Box::new(ApiError::model_error()))
         }
         Response::Speech {
             pcm,
@@ -530,7 +530,9 @@ fn speech_stream(rx: Receiver<Response>, state: SharedMistralRsState) -> axum::r
                             if let Some(reason) = choice.finish_reason {
                                 finished = true;
                                 let event = if reason == "length" {
-                                    openai_error_event(ApiError::invalid_request("Speech generation reached the model context limit before finishing"))
+                                    openai_error_event(ApiError::invalid_request(
+                                        SPEECH_TRUNCATED_ERROR,
+                                    ))
                                 } else if let Some(usage) = &chunk.usage {
                                     speech_done(usage)
                                 } else {

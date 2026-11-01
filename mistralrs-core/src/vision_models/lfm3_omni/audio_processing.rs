@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use candle_core::{Device, Tensor};
 use mistralrs_audio::AudioInput;
@@ -24,8 +26,8 @@ const MAX_RESAMPLE_RATIO: f64 = 2.0;
 
 #[derive(Clone)]
 pub(crate) struct AudioProcessor {
-    window: Vec<f32>,
-    filters: Vec<Vec<f32>>,
+    window: Arc<[f32]>,
+    filters: Arc<[Vec<f32>]>,
 }
 
 impl AudioProcessor {
@@ -59,13 +61,16 @@ impl AudioProcessor {
                     })
                     .collect()
             })
-            .collect();
+            .collect::<Vec<Vec<_>>>();
         let window = (0..FFT_SIZE)
             .map(|index| {
                 0.5 * (1.0 - (std::f32::consts::TAU * index as f32 / FFT_SIZE as f32).cos())
             })
-            .collect();
-        Self { window, filters }
+            .collect::<Vec<_>>();
+        Self {
+            window: window.into(),
+            filters: filters.into(),
+        }
     }
 
     pub(crate) fn num_encoder_tokens(num_frames: usize) -> usize {

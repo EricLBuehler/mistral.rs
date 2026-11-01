@@ -36,14 +36,7 @@ const VIDEO_SAMPLING: crate::VideoFrameSampling = crate::VideoFrameSampling::Fps
 pub struct Lfm3OmniLoader;
 struct Lfm3OmniPrefixer;
 
-impl MultimodalPromptPrefixer for Lfm3OmniPrefixer {
-    fn prefix_image(&self, _indexes: Vec<usize>, prompt: &str) -> String {
-        prompt.to_owned()
-    }
-    fn prefix_audio(&self, _indexes: Vec<usize>, prompt: &str) -> String {
-        prompt.to_owned()
-    }
-}
+impl MultimodalPromptPrefixer for Lfm3OmniPrefixer {}
 
 impl MultimodalModelLoader for Lfm3OmniLoader {
     fn runtime_config<'a>(

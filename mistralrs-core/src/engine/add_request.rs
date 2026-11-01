@@ -173,7 +173,8 @@ impl Engine {
             },
             None => None,
         };
-        let adapt_speech = if matches!(request.messages, RequestMessage::SpeechGeneration { .. }) {
+        let speech_request = matches!(request.messages, RequestMessage::SpeechGeneration { .. });
+        let supports_chat_audio = if speech_request || request.audio_output.is_some() {
             let pipeline = get_mut_arcmutex!(self.pipeline);
             matches!(
                 pipeline.category(),
@@ -186,7 +187,7 @@ impl Engine {
         } else {
             false
         };
-        if adapt_speech {
+        if speech_request && supports_chat_audio {
             if request.is_streaming || request.sampling_params.n_choices != 1 {
                 let _ = request.response.send(Response::ValidationError(
                     "Speech generation requires one non-streaming choice; use chat audio for streaming".into(),
@@ -200,18 +201,7 @@ impl Engine {
             RequestMessage::Chat { .. } | RequestMessage::MultimodalChat { .. }
         );
         if let Some(audio) = request.audio_output {
-            let supports_audio = {
-                let pipeline = get_mut_arcmutex!(self.pipeline);
-                matches!(
-                    pipeline.category(),
-                    ModelCategory::Text | ModelCategory::Multimodal { .. }
-                ) && pipeline
-                    .get_metadata()
-                    .modalities
-                    .output
-                    .contains(&crate::SupportedModality::Audio)
-            };
-            let error = if !is_chat || !supports_audio {
+            let error = if !is_chat || !supports_chat_audio {
                 Some("The requested model does not support chat audio output")
             } else if request.return_logprobs || request.return_raw_logits {
                 Some("Audio output does not support logprobs or raw logits")

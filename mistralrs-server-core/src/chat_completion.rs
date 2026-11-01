@@ -44,8 +44,8 @@ use crate::{
     openai::{
         normalize_chat_completion_tools, normalize_responses_tools, validate_openai_tool_choice,
         ChatCompletionChunkResponseBody, ChatCompletionRequest, ChatCompletionResponseBody,
-        Grammar, JsonSchemaResponseFormat, Message, MessageInnerContent, OpenAiToolSurface,
-        ResponseFormat,
+        Grammar, JsonSchemaResponseFormat, Message, MessageContent as OpenAiMessageContent,
+        MessageInnerContent, OpenAiToolSurface, ResponseFormat,
     },
     skills::SkillStore,
     streaming::{
@@ -549,6 +549,27 @@ fn insert_reasoning_content(output: &mut IndexMap<String, MessageContent>, messa
     }
 }
 
+fn normalize_text_content(content: OpenAiMessageContent) -> Result<OpenAiMessageContent> {
+    let Either::Right(parts) = content.deref() else {
+        return Ok(content);
+    };
+    if parts.len() != 1
+        || !parts[0]
+            .get("type")
+            .is_none_or(|kind| matches!(kind.deref(), Either::Left(kind) if kind == "text"))
+    {
+        return Ok(content);
+    }
+    let text = parts[0]
+        .get("text")
+        .context("Expected `text` key in input message.")?
+        .as_ref()
+        .left()
+        .context("Input message `text` must be a string.")?
+        .clone();
+    Ok(OpenAiMessageContent::from_text(text))
+}
+
 fn input_audio_url(part: &HashMap<String, MessageInnerContent>) -> Result<String> {
     let audio = part
         .get("input_audio")
@@ -671,18 +692,18 @@ pub async fn parse_request(
                     message.audio.is_none(),
                     "audio.id requires the server audio history store; resend the assistant transcript as content"
                 );
-                let content = match message.content.as_deref() {
-                    Some(content) => content.clone(),
+                let content = match &message.content {
+                    Some(content) => normalize_text_content(content.clone())?,
                     None => {
                         // Templates render tool_calls themselves; HF treats a missing content as empty text
                         message.tool_calls.as_ref().context(
                             "No content was provided, expected tool calls to be provided.",
                         )?;
-                        Either::Left(String::new())
+                        OpenAiMessageContent::from_text(String::new())
                     }
                 };
 
-                match &content {
+                match content.deref() {
                     Either::Left(content) => {
                         let mut message_map: IndexMap<
                             String,
@@ -743,31 +764,9 @@ pub async fn parse_request(
                         messages.push(message_map);
                     }
                     Either::Right(image_messages) => {
-                        // If there is only one message, it is possible a text message
-                        // found when rig is used as client. In this case, we need to check if
-                        // the message is a text message or an image message.
-                        if image_messages.len() == 1 && !image_messages[0].contains_key("type") {
-                            if !image_messages[0].contains_key("text") {
-                                anyhow::bail!("Expected `text` key in input message.");
-                            }
-                            let content = match image_messages[0]["text"].deref() {
-                                Either::Left(left) => left.to_string(),
-                                Either::Right(right) => format!("{right:?}"),
-                            };
-                            let mut message_map: IndexMap<
-                                String,
-                                Either<String, Vec<IndexMap<String, Value>>>,
-                            > = IndexMap::new();
-                            message_map
-                                .insert("role".to_string(), Either::Left(message.role.clone()));
-                            message_map.insert("content".to_string(), Either::Left(content));
-                            insert_reasoning_content(&mut message_map, &message);
-                            messages.push(message_map);
-                            continue;
-                        }
                         if message.role != "user" {
                             anyhow::bail!(
-                                "Role for an image message must be `user`, but it is {}",
+                                "Role for a media message must be `user`, but it is {}",
                                 message.role
                             );
                         }
@@ -1433,6 +1432,26 @@ pub fn match_responses(state: SharedMistralRsState, response: Response) -> ChatC
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn single_text_parts_use_the_plain_text_message_path() -> Result<()> {
+        for part in [
+            json!({"type": "text", "text": "hello"}),
+            json!({"text": "hello"}),
+        ] {
+            let content = normalize_text_content(serde_json::from_value(json!([part]))?)?;
+            assert!(matches!(content.deref(), Either::Left(text) if text == "hello"));
+        }
+        let media = serde_json::from_value(json!([{
+            "type": "input_audio", "input_audio": {"data": "YWJj", "format": "wav"}
+        }]))?;
+        assert!(normalize_text_content(media)?.is_right());
+        let invalid = serde_json::from_value(json!([{
+            "type": "text", "text": {"value": "hello"}
+        }]))?;
+        assert!(normalize_text_content(invalid).is_err());
+        Ok(())
+    }
 
     #[test]
     fn openai_input_audio_content_is_normalized_and_validated() -> Result<()> {

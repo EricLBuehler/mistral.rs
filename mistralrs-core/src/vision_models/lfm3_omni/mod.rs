@@ -51,13 +51,13 @@ struct SequenceGeneration {
 }
 
 impl SequenceGeneration {
-    fn codes(&self, device: &Device) -> Result<Tensor> {
+    fn codes(&self) -> Result<Tensor> {
         let frames = self.frames.len();
         let books = self.frames[0].len();
         Tensor::from_vec(
             self.frames.iter().flatten().copied().collect::<Vec<_>>(),
             (1, frames, books),
-            device,
+            &Device::Cpu,
         )?
         .transpose(1, 2)?
         .contiguous()
@@ -614,7 +614,7 @@ impl MultimodalModel for Lfm3OmniModel {
             let samples = if generation.frames.is_empty() {
                 Vec::new()
             } else {
-                let codes = generation.codes(self.device())?;
+                let codes = generation.codes()?;
                 let samples = if let Some(stream) = &mut generation.stream {
                     self.codec.decode_stream(&codes, stream, true)?
                 } else {
@@ -652,7 +652,7 @@ impl MultimodalModel for Lfm3OmniModel {
         if !stream.is_ready(generation.frames.len()) {
             return Ok(());
         }
-        let codes = generation.codes(self.device())?;
+        let codes = generation.codes()?;
         let samples = self
             .codec
             .decode_stream(&codes, generation.stream.as_mut().unwrap(), false)?

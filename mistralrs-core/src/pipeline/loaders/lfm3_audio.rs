@@ -44,15 +44,7 @@ const LEGACY_PREFIXES: [(&str, &str); 11] = [
 pub struct Lfm3AudioLoader;
 struct Lfm3AudioPrefixer;
 
-impl MultimodalPromptPrefixer for Lfm3AudioPrefixer {
-    fn prefix_image(&self, _indexes: Vec<usize>, prompt: &str) -> String {
-        prompt.to_owned()
-    }
-
-    fn prefix_audio(&self, _indexes: Vec<usize>, prompt: &str) -> String {
-        prompt.to_owned()
-    }
-}
+impl MultimodalPromptPrefixer for Lfm3AudioPrefixer {}
 
 fn canonical_name(name: &str) -> Option<String> {
     if name == "mask_embedding" {
@@ -64,7 +56,7 @@ fn canonical_name(name: &str) -> Option<String> {
     })
 }
 
-pub(crate) fn remap_legacy_weights(vb: ShardedVarBuilder) -> ShardedVarBuilder {
+fn remap_legacy_weights(vb: ShardedVarBuilder) -> ShardedVarBuilder {
     if vb.contains_tensor("model.language_model.embed_tokens.weight")
         || !vb.contains_tensor("lfm.model.embed_tokens.weight")
     {

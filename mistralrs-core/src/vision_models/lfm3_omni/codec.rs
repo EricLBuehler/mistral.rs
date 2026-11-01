@@ -22,7 +22,7 @@ const CODEC_CONV_WIDTH: usize = 7;
 const CODEC_NORM_EPS: f64 = 1e-5;
 const CODEC_ROPE_THETA: f64 = 1_000_000.0;
 const CODEC_ATTENTION_LAYERS: [usize; 3] = [2, 4, 6];
-pub(crate) const CODEC_DECODE_CHUNK_FRAMES: usize = 12;
+const CODEC_DECODE_CHUNK_FRAMES: usize = 12;
 const DECODER_HIDDEN_BUFFERS: usize = 16;
 const DECODER_INTERMEDIATE_BUFFERS: usize = 3;
 const ATTENTION_FLOAT32_BUFFERS: usize = 2;
@@ -181,8 +181,9 @@ impl InverseStftStream {
         let bins = n_fft / 2 + 1;
         let mut planner = FftPlanner::<f32>::new();
         let fft = planner.plan_fft_inverse(n_fft);
+        let mut scratch = vec![Complex32::default(); fft.get_inplace_scratch_len()];
+        let mut complex = vec![Complex32::default(); n_fft];
         for values in spectrum {
-            let mut complex = vec![Complex32::new(0.0, 0.0); n_fft];
             for k in 0..bins {
                 complex[k] = Complex32::from_polar(values[k].exp(), values[bins + k]);
             }
@@ -193,7 +194,7 @@ impl InverseStftStream {
             for k in 1..n_fft.div_ceil(2) {
                 complex[n_fft - k] = complex[k].conj();
             }
-            fft.process(&mut complex);
+            fft.process_with_scratch(&mut complex, &mut scratch);
             for (i, (&window, value)) in window.iter().zip(&complex).enumerate() {
                 self.audio[i] += value.re / fft_scale * window;
                 self.envelope[i] += window * window;

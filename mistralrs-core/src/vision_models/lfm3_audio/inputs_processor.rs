@@ -26,18 +26,22 @@ use crate::{
     },
 };
 
-pub(crate) struct Lfm3AudioProcessor;
+pub(crate) struct Lfm3AudioProcessor {
+    audio: AudioProcessor,
+}
 
 impl Lfm3AudioProcessor {
     pub(crate) fn new() -> Self {
-        Self
+        Self {
+            audio: AudioProcessor::new(),
+        }
     }
 }
 
 impl Processor for Lfm3AudioProcessor {
     fn inputs_processor(&self) -> Arc<dyn InputsProcessor> {
         Arc::new(Lfm3AudioInputsProcessor {
-            audio: AudioProcessor::new(),
+            audio: self.audio.clone(),
         })
     }
 

@@ -2,7 +2,7 @@ use std::{process::Output, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{mpsc, Semaphore, SemaphorePermit};
 
 use crate::{ChatAudioFormat, NormalRequest, Response};
 
@@ -25,15 +25,16 @@ pub(crate) fn prepare_response(request: &mut NormalRequest) -> Result<()> {
     if matches!(output.format, ChatAudioFormat::Wav | ChatAudioFormat::Pcm16) {
         return Ok(());
     }
-    let permit = PENDING_ENCODINGS
-        .try_acquire()
-        .context("Audio encoding queue is full; retry after an earlier request finishes")?;
+    let permit = Arc::new(
+        PENDING_ENCODINGS
+            .try_acquire()
+            .context("Audio encoding queue is full; retry after an earlier request finishes")?,
+    );
     let format = output.format;
     output.format = ChatAudioFormat::Wav;
     let (tx, mut rx) = mpsc::channel(AUDIO_RESPONSE_BUFFER);
     let target = std::mem::replace(&mut request.response, tx);
     tokio::spawn(async move {
-        let _permit = permit;
         loop {
             let Some(response) = (tokio::select! {
                 _ = target.closed() => return,
@@ -50,7 +51,7 @@ pub(crate) fn prepare_response(request: &mut NormalRequest) -> Result<()> {
             );
             let response = tokio::select! {
                 _ = target.closed() => return,
-                result = encode_response(response, format) => match result {
+                result = encode_response(response, format, permit.clone()) => match result {
                     Ok(response) => response,
                     Err(error) => {
                         let _ = target.send(Response::InternalError(error.into())).await;
@@ -66,7 +67,11 @@ pub(crate) fn prepare_response(request: &mut NormalRequest) -> Result<()> {
     Ok(())
 }
 
-async fn encode_response(mut response: Response, format: ChatAudioFormat) -> Result<Response> {
+async fn encode_response(
+    mut response: Response,
+    format: ChatAudioFormat,
+    permit: Arc<SemaphorePermit<'static>>,
+) -> Result<Response> {
     if let Response::Done(completion) = &mut response {
         for choice in &mut completion.choices {
             let Some(audio) = &mut choice.message.audio else {
@@ -75,9 +80,13 @@ async fn encode_response(mut response: Response, format: ChatAudioFormat) -> Res
             let Some(wav) = audio.data.take() else {
                 continue;
             };
-            let decoded =
-                tokio::task::spawn_blocking(move || decode_generated_wav(&STANDARD.decode(wav)?))
-                    .await??;
+            // Blocking decodes retain their queue slot after the response task is cancelled.
+            let permit = permit.clone();
+            let decoded = tokio::task::spawn_blocking(move || {
+                let _permit = permit;
+                decode_generated_wav(&STANDARD.decode(wav)?)
+            })
+            .await??;
             let encoded = encode_audio_pcm_with_speed_async(
                 Arc::new(decoded.samples),
                 decoded.sample_rate,

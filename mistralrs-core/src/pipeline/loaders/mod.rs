@@ -1437,7 +1437,7 @@ mod auto_device_map_quantization_tests {
 }
 
 mod lfm3;
-pub(crate) mod lfm3_audio;
+mod lfm3_audio;
 mod lfm3_omni;
 mod lfm3_vl;
 pub use lfm3::Lfm3Loader;

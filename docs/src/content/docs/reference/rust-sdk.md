@@ -44,7 +44,7 @@ let audio = response.choices[0].message.audio.as_ref();
 
 `ChatAudioMode::Audio` requests speech alone; `TextAudio` requests text and speech. `message.audio.data` contains base64 file bytes. Formats are `Wav`, `Pcm16`, `Mp3`, `Flac`, `Opus`, and `Aac`; compressed formats require FFmpeg. For `stream_chat_request`, choose `Pcm16` and concatenate decoded `choices[].delta.audio.data` bytes, including the final tail. LFM3 PCM is mono, signed 16-bit little-endian at 24 kHz.
 
-The native SDK does not provide the HTTP server's transcript cache or `audio.id` history lookup. Preserve assistant text explicitly for later turns. Speech output cannot be combined with tools, constrained decoding, custom logits processors, or logprobs. See [model-specific speech sampling and limits](/guides/models/model-family-notes/#lfm3-omni).
+The native SDK does not provide the HTTP server's transcript cache or `audio.id` history lookup. Preserve assistant text explicitly for later turns. See [speech sampling and limits](/guides/models/model-family-notes/#lfm3-speech-input-and-output) for model defaults and incompatible request options.
 
 ## Reasoning
 

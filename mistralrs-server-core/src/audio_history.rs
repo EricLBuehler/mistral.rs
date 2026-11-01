@@ -461,7 +461,7 @@ async fn decode_spool(
     if matches!(format, ChatAudioFormat::Pcm16 | ChatAudioFormat::Wav) {
         return tokio::task::spawn_blocking(move || {
             let _permit = permit;
-            decode_spool_file(spool, format)
+            decode_audio_file(spool.file, format)
         })
         .await?;
     }
@@ -491,25 +491,23 @@ async fn decode_spool(
     );
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        decode_spool_file(
-            AudioSpool {
-                file: output,
-                len: 0,
-            },
-            ChatAudioFormat::Pcm16,
-        )
+        decode_audio_file(output, ChatAudioFormat::Pcm16)
     })
     .await?
 }
 
-fn decode_spool_file(mut spool: AudioSpool, format: ChatAudioFormat) -> Result<AudioInput> {
-    spool.file.rewind()?;
+fn decode_audio_file(
+    mut file: tempfile::NamedTempFile,
+    format: ChatAudioFormat,
+) -> Result<AudioInput> {
+    file.rewind()?;
+    let len = usize::try_from(file.as_file().metadata()?.len())?;
     anyhow::ensure!(
-        spool.file.as_file().metadata()?.len() <= MAX_INPUT_AUDIO_BYTES as u64,
+        len <= MAX_INPUT_AUDIO_BYTES,
         "Decoded audio exceeds the {MAX_INPUT_AUDIO_BYTES} byte transcript limit"
     );
     if format == ChatAudioFormat::Wav {
-        let mut reader = hound::WavReader::new(spool.file.as_file_mut())?;
+        let mut reader = hound::WavReader::new(BufReader::new(file.as_file_mut()))?;
         let spec = reader.spec();
         anyhow::ensure!(
             spec.bits_per_sample == 16 && spec.sample_format == hound::SampleFormat::Int,
@@ -529,12 +527,11 @@ fn decode_spool_file(mut spool: AudioSpool, format: ChatAudioFormat) -> Result<A
             channels: spec.channels,
         });
     }
-    let len = usize::try_from(spool.file.as_file().metadata()?.len())?;
     anyhow::ensure!(
         len.is_multiple_of(PCM_SAMPLE_BYTES),
         "Generated PCM16 has an incomplete sample"
     );
-    let mut reader = BufReader::new(spool.file.as_file_mut());
+    let mut reader = BufReader::new(file.as_file_mut());
     let mut samples = Vec::with_capacity(len / PCM_SAMPLE_BYTES);
     let mut bytes = [0; PCM_READ_BUFFER_BYTES];
     let mut remaining = len;
@@ -755,7 +752,7 @@ mod tests {
         capture.add_audio(&mut second).await;
         assert_eq!(first.id, second.id);
         assert_eq!(captured_bytes(&capture)?, [1, 2, 3, 4]);
-        let audio = decode_spool_file(capture.spool.take().unwrap(), ChatAudioFormat::Pcm16)?;
+        let audio = decode_audio_file(capture.spool.take().unwrap().file, ChatAudioFormat::Pcm16)?;
         assert_eq!(audio.sample_rate, PCM_SAMPLE_RATE);
         assert_eq!(audio.channels, PCM_CHANNELS);
         assert_eq!(audio.samples, [513.0 / PCM_SCALE, 1027.0 / PCM_SCALE]);
@@ -780,7 +777,7 @@ mod tests {
         file.as_file()
             .set_len((MAX_INPUT_AUDIO_BYTES + PCM_SAMPLE_BYTES) as u64)?;
         let path = file.path().to_path_buf();
-        let result = decode_spool_file(AudioSpool { file, len: 0 }, ChatAudioFormat::Pcm16);
+        let result = decode_audio_file(file, ChatAudioFormat::Pcm16);
         assert!(result.unwrap_err().to_string().contains("transcript limit"));
         assert!(!path.exists());
         Ok(())
@@ -821,7 +818,7 @@ mod tests {
         )?;
         let spool = AudioSpool::append(None, &STANDARD.encode(wav), MAX_INPUT_AUDIO_BYTES)?;
         let path = spool.file.path().to_path_buf();
-        let audio = decode_spool_file(spool, ChatAudioFormat::Wav)?;
+        let audio = decode_audio_file(spool.file, ChatAudioFormat::Wav)?;
         assert_eq!(audio.samples, samples);
         assert!(!path.exists());
         Ok(())
