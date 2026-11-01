@@ -316,7 +316,10 @@ impl Lfm3OmniModel {
                 audio_vb.pp("audio_projector"),
             )?,
             backbone,
-            audio_sampling: model_config.sampling,
+            audio_sampling: config
+                .audio_sampling
+                .clone()
+                .unwrap_or(model_config.sampling),
             logits_mask,
         })
     }
