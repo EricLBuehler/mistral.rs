@@ -191,6 +191,19 @@ impl DecisionPrompt {
         tokenizer: &'a Tokenizer,
         config: &'a DecisionConfig,
     ) -> Result<impl Iterator<Item = Result<Self>> + 'a> {
+        if !config.d1_calibration_complete {
+            for (name, question) in &request.questions {
+                ensure!(
+                    matches!(
+                        question,
+                        DecisionQuestion::Noul { .. }
+                            | DecisionQuestion::Choice { multiple: false, .. }
+                            | DecisionQuestion::Score { .. }
+                    ),
+                    "Decision question `{name}` requires full calibration. Standalone d1 GGUF supports only noul, single choice, and score. Load with --tok-model-id LiquidAI/d1-2B (or LiquidAI/d1-Omni-2B for Omni) to enable the full decision API."
+                );
+            }
+        }
         request.validate()?;
         config.d1_calibration.validate()?;
         ensure!(

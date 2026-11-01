@@ -6,6 +6,7 @@ use serde_json::{json, Value as JsonValue};
 use super::{
     arch_registry::{GgufSynthesisInputs, SynthesizedGguf},
     lfm3_audio_config::{prepare_lfm3_audio_config, prepare_lfm3_omni_config},
+    lfm3_d1_config::prepare_lfm3_d1_config,
     multimodal_binding_utils::{
         metadata_string, metadata_usize, validate_architecture, validate_projector, TensorInventory,
     },
@@ -33,6 +34,16 @@ pub(crate) fn synthesize_lfm3_multimodal(
 ) -> Result<SynthesizedGguf> {
     let resolved = resolve_native_multimodal_gguf(inputs.archive, inputs.dtype)?
         .context("LFM3 GGUF has no supported multimodal projector")?;
+    if let Some(external) = inputs.external_config {
+        let config: JsonValue = serde_json::from_str(external)?;
+        let is_decision = config["architectures"]
+            .as_array()
+            .is_some_and(|architectures| architectures.iter().any(|name| name == "D1Model"));
+        ensure!(
+            !is_decision || resolved.loader_type == MultimodalLoaderType::Lfm3D1,
+            "D1Model configuration requires an LFM3 GGUF with d1 decision metadata"
+        );
+    }
     let config = match resolved.loader_type {
         MultimodalLoaderType::Lfm3Vl => {
             prepare_lfm3_vl_config(inputs.external_config, inputs.archive)?
@@ -42,6 +53,9 @@ pub(crate) fn synthesize_lfm3_multimodal(
         }
         MultimodalLoaderType::Lfm3Omni => {
             prepare_lfm3_omni_config(inputs.external_config, inputs.archive)?
+        }
+        MultimodalLoaderType::Lfm3D1 => {
+            prepare_lfm3_d1_config(inputs.external_config, inputs.archive)?
         }
         _ => bail!("LFM3 GGUF has an incompatible multimodal projector"),
     };
@@ -55,7 +69,9 @@ pub(crate) fn synthesize_lfm3_multimodal(
         .transpose()?;
     if matches!(
         resolved.loader_type,
-        MultimodalLoaderType::Lfm3Vl | MultimodalLoaderType::Lfm3Omni
+        MultimodalLoaderType::Lfm3Vl
+            | MultimodalLoaderType::Lfm3Omni
+            | MultimodalLoaderType::Lfm3D1
     ) && processor_config.is_none()
         && preprocessor_config.is_none()
     {

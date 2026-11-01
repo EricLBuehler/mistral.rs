@@ -146,7 +146,7 @@ fn speech_config(archive: &GgufArchive) -> Result<Value> {
         Value::Null
     };
     Ok(json!({
-        "audio_encoder_config": encoder_config(archive, &inventory)?,
+        "audio_encoder_config": audio_encoder_config(archive, &inventory)?,
         "depth_config": depth_config(archive, &inventory)?,
         "codec_config": {
             "encoder_dim": CODEC_HIDDEN, "quantizer_dim": CODEC_QUANTIZER_DIM, "fsq_levels": CODEC_FSQ_LEVELS, "n_q": CODEBOOKS,
@@ -165,7 +165,10 @@ fn speech_config(archive: &GgufArchive) -> Result<Value> {
     }))
 }
 
-fn encoder_config(archive: &GgufArchive, inventory: &TensorInventory<'_>) -> Result<Value> {
+pub(super) fn audio_encoder_config(
+    archive: &GgufArchive,
+    inventory: &TensorInventory<'_>,
+) -> Result<Value> {
     let hidden = metadata_usize(archive, "clip.audio.embedding_length")?;
     let num_layers = metadata_usize(archive, "clip.audio.block_count")?;
     let layers = inventory.require_layers("a.blk.", "LFM3-Audio")?;

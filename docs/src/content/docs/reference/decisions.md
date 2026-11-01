@@ -25,6 +25,14 @@ curl http://localhost:1234/v1/systemone \
 
 The request accepts `model`, `state`, `questions`, `images`, `media`, and `set_size`. `state` can be any JSON value, including `null`; question names become keys in the response's `answers` object. The response also contains `model` and `usage.input_tokens` / `usage.output_tokens`. `input_tokens` counts the expanded input across question groups, including repeated state. `output_tokens` is always zero because decision inference generates no tokens. Generation controls such as `temperature`, `max_tokens`, and `stream` are not accepted.
 
+GGUF uses the same request API:
+
+```bash
+mistralrs serve -p 1234 -m LiquidAI/d1-Omni-2B-GGUF --quant 8
+```
+
+The CLI selects the companion projector automatically. Standalone GGUF supports `noul`, single-selection `choice`, and `score`. The remaining question types and multiple-selection choice require the matching original configuration and calibration, supplied with `--tok-model-id LiquidAI/d1-Omni-2B` for this model. See the [d1 model notes](/guides/models/model-family-notes/#d1-and-d1-omni) for d1-2B and local loading.
+
 ## Question types
 
 Every question has `type` and `instructions`. Instructions are a string, or an audio content part when using d1-Omni.
@@ -83,5 +91,7 @@ print(response.to_dict())
 ```
 
 Pass `model_id=` to select another loaded model. Question dictionaries with the HTTP shape are also accepted. Answer attributes depend on their `type`; optional attributes for that type return `None` when absent. `to_dict()` preserves the wire representation, including omitted fields. Python `images` and `media` accept URLs, data URLs, or local `file://` URLs.
+
+For GGUF, use Rust's `GgufModelBuilder` with `with_mmproj_files`, or Python's `Which.GGUF` with `mmproj_filename`, to select the companion projector. Optionally set `with_tok_model_id` or `tok_model_id` to the matching original model or a local config/calibration directory to enable the full decision API. `send_decision_request` is unchanged. See [GGUF SDK loading](/guides/models/run-gguf/#multimodal-gguf).
 
 Runnable examples: [HTTP](/examples/server/lfm3-d1/), [Python](/examples/python/lfm3-d1/), and [Rust](/examples/rust/models/lfm3-d1/).

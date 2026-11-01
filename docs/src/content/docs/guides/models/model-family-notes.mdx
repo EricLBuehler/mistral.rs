@@ -287,7 +287,22 @@ mistralrs serve -p 1234 -m LiquidAI/d1-Omni-2B
 python examples/server/lfm3_d1.py
 ```
 
-d1-2B accepts text, images, and video. d1-Omni also accepts audio, including spoken question instructions. Both support safetensors, ISQ, and UQFF. d1 GGUF is not supported. Global attention reads the state and packed questions using the checkpoint's set mask; sliding attention and convolutions remain causal. Decision inference does not use paged attention or autoregressive decoding.
+d1-2B accepts text, images, and video. d1-Omni also accepts audio, including spoken question instructions. Both support safetensors, ISQ, UQFF, and GGUF. Global attention reads the state and packed questions using the checkpoint's set mask; sliding attention and convolutions remain causal. Decision inference does not use paged attention or autoregressive decoding.
+
+Standalone GGUF supports `noul`, single-selection `choice`, and `score` questions using embedded metadata. No original model assets are required, and the CLI selects the companion projector automatically:
+
+```bash
+mistralrs serve -p 1234 -m LiquidAI/d1-2B-GGUF --quant 8
+mistralrs serve -p 1234 -m LiquidAI/d1-Omni-2B-GGUF --quant 8
+```
+
+To also enable text, number, and date extraction, multiple choice, estimates, and boxes, load the matching original configuration and calibration with `--tok-model-id`:
+
+```bash
+mistralrs serve -p 1234 -m LiquidAI/d1-Omni-2B-GGUF --quant 8 --tok-model-id LiquidAI/d1-Omni-2B
+```
+
+Use `LiquidAI/d1-2B` for the d1-2B GGUF, or a local directory containing matching `config.json` and `calibration.json`. Local GGUF loading requires the companion projector beside the model or supplied with `--mmproj`. See [Run GGUF models](/guides/models/run-gguf/) for file selection.
 
 See [decision requests](/reference/decisions/) for question types and response semantics, and the [HTTP](/examples/server/lfm3-d1/), [Python](/examples/python/lfm3-d1/), and [Rust](/examples/rust/models/lfm3-d1/) examples.
 

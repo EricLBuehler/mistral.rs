@@ -9,7 +9,10 @@ use super::{
     gemma3n_bindings::build_gemma3n_bindings,
     idefics3_bindings::build_idefics3_bindings,
     lfm2_vl_bindings::build_lfm2_vl_bindings,
-    lfm3_audio_bindings::{build_lfm3_audio_bindings, build_lfm3_omni_bindings},
+    lfm3_audio_bindings::{
+        build_lfm3_audio_bindings, build_lfm3_audio_input_bindings, build_lfm3_omni_bindings,
+    },
+    lfm3_d1_config::decision_model_type,
     lfm3_vl_bindings::build_lfm3_vl_bindings,
     llama4_bindings::build_llama4_bindings,
     mistral3_bindings::build_mistral3_bindings,
@@ -29,6 +32,7 @@ pub(crate) enum NativeMultimodalGgufFamily {
     Lfm3Vl,
     Lfm3Audio,
     Lfm3Omni,
+    Lfm3D1,
     MuseGlimmer,
 }
 
@@ -44,12 +48,16 @@ pub(crate) fn resolve_native_multimodal_gguf(
 ) -> Result<Option<NativeMultimodalGguf>> {
     let architecture = metadata_string(archive, "general.architecture")?
         .ok_or_else(|| anyhow::anyhow!("GGUF metadata `general.architecture` is required"))?;
-    let Some(family) = family_from_names(
-        architecture,
-        projector_type(archive)?,
-        metadata_string(archive, "clip.audio.projector_type")?,
-    )?
-    else {
+    let family = if decision_model_type(archive.metadata())?.is_some() {
+        Some(NativeMultimodalGgufFamily::Lfm3D1)
+    } else {
+        family_from_names(
+            architecture,
+            projector_type(archive)?,
+            metadata_string(archive, "clip.audio.projector_type")?,
+        )?
+    };
+    let Some(family) = family else {
         return Ok(None);
     };
     Ok(Some(NativeMultimodalGguf {
@@ -71,6 +79,7 @@ impl NativeMultimodalGgufFamily {
             Self::Lfm3Vl => MultimodalLoaderType::Lfm3Vl,
             Self::Lfm3Audio => MultimodalLoaderType::Lfm3Audio,
             Self::Lfm3Omni => MultimodalLoaderType::Lfm3Omni,
+            Self::Lfm3D1 => MultimodalLoaderType::Lfm3D1,
             Self::MuseGlimmer => MultimodalLoaderType::MuseGlimmer,
         }
     }
@@ -82,7 +91,8 @@ impl NativeMultimodalGgufFamily {
             | Self::Lfm2Vl
             | Self::Lfm3Vl
             | Self::Lfm3Audio
-            | Self::Lfm3Omni => RopePairing::HalfSplit,
+            | Self::Lfm3Omni
+            | Self::Lfm3D1 => RopePairing::HalfSplit,
             Self::Idefics3 | Self::Mistral3 | Self::Llama4 | Self::MuseGlimmer => {
                 RopePairing::Adjacent
             }
@@ -100,6 +110,14 @@ impl NativeMultimodalGgufFamily {
             Self::Lfm3Vl => build_lfm3_vl_bindings(archive, dtype),
             Self::Lfm3Audio => build_lfm3_audio_bindings(archive, dtype),
             Self::Lfm3Omni => build_lfm3_omni_bindings(archive, dtype),
+            Self::Lfm3D1 => {
+                let bindings = build_lfm3_vl_bindings(archive, dtype)?;
+                if decision_model_type(archive.metadata())? == Some("lfm3_omni") {
+                    build_lfm3_audio_input_bindings(archive, bindings, dtype)
+                } else {
+                    Ok(bindings)
+                }
+            }
             Self::MuseGlimmer => build_muse_glimmer_bindings(archive),
         }
     }

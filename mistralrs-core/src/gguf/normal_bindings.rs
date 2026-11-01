@@ -1091,12 +1091,20 @@ mod tests {
             .map(|(source, _)| (*source, &weight))
             .collect::<Vec<_>>();
         tensors.push(("blk.1.shortconv.conv.weight", &convolution));
-        for causal in [true, false] {
-            let metadata = [
+        for (causal, decision_type) in [
+            (true, None),
+            (false, None),
+            (false, Some("lfm3-d1")),
+            (false, Some("lfm3-d1-omni")),
+        ] {
+            let mut metadata = vec![
                 ("general.architecture", Value::String("lfm3".to_string())),
                 ("lfm3.block_count", Value::U32(2)),
                 ("lfm3.attention.causal", Value::Bool(causal)),
             ];
+            if let Some(kind) = decision_type {
+                metadata.push(("lfm3.decision.type", Value::String(kind.to_string())));
+            }
             let metadata = metadata
                 .iter()
                 .map(|(key, value)| (*key, value))
@@ -1110,7 +1118,7 @@ mod tests {
                 &NormalLoaderType::Lfm3,
                 CanonicalGgufArchitecture::Lfm3,
             );
-            if !causal {
+            if !causal && decision_type.is_none() {
                 assert!(result.unwrap_err().to_string().contains("noncausal"));
                 continue;
             }
