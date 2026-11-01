@@ -229,6 +229,13 @@ export default defineConfig({
         },
       ],
       customCss: ['./src/styles/custom.css'],
+      components: {
+        SiteTitle: './src/components/SiteTitle.astro',
+      },
+      expressiveCode: {
+        themes: ['vitesse-dark', 'vitesse-light'],
+        useStarlightUiThemeColors: true,
+      },
     }),
   ],
 });
