@@ -4,14 +4,17 @@ use mistralrs_quant::GgufArchive;
 use serde_json::{json, Value as JsonValue};
 
 use super::{
+    arch_registry::{GgufSynthesisInputs, SynthesizedGguf},
+    lfm3_audio_config::{prepare_lfm3_audio_config, prepare_lfm3_omni_config},
     multimodal_binding_utils::{
         metadata_string, metadata_usize, validate_architecture, validate_projector, TensorInventory,
     },
+    multimodal_vision_registry::resolve_native_multimodal_gguf,
     normal_config::{synthesize_normal_config_value, validate_lfm3_metadata},
 };
 use crate::{
     pipeline::sanitize_quantized_weight_source_config, vision_models::lfm3_vl::Config,
-    NormalLoaderType,
+    MultimodalLoaderType, NormalLoaderType,
 };
 
 // llama.cpp's conversion/lfm3.py enforces these format constants instead of writing metadata.
@@ -24,6 +27,49 @@ const SECOND_TEMPORAL_PATCH: &str = "v.patch_embd.weight.1";
 const TOKENS_KEY: &str = "tokenizer.ggml.tokens";
 const BILINEAR: usize = 2;
 const BICUBIC: usize = 3;
+
+pub(crate) fn synthesize_lfm3_multimodal(
+    inputs: &GgufSynthesisInputs<'_>,
+) -> Result<SynthesizedGguf> {
+    let resolved = resolve_native_multimodal_gguf(inputs.archive, inputs.dtype)?
+        .context("LFM3 GGUF has no supported multimodal projector")?;
+    let config = match resolved.loader_type {
+        MultimodalLoaderType::Lfm3Vl => {
+            prepare_lfm3_vl_config(inputs.external_config, inputs.archive)?
+        }
+        MultimodalLoaderType::Lfm3Audio => {
+            prepare_lfm3_audio_config(inputs.external_config, inputs.archive)?
+        }
+        MultimodalLoaderType::Lfm3Omni => {
+            prepare_lfm3_omni_config(inputs.external_config, inputs.archive)?
+        }
+        _ => bail!("LFM3 GGUF has an incompatible multimodal projector"),
+    };
+    let mut processor_config = inputs
+        .processor_config
+        .map(std::fs::read_to_string)
+        .transpose()?;
+    let preprocessor_config = inputs
+        .preprocessor_config
+        .map(std::fs::read_to_string)
+        .transpose()?;
+    if matches!(
+        resolved.loader_type,
+        MultimodalLoaderType::Lfm3Vl | MultimodalLoaderType::Lfm3Omni
+    ) && processor_config.is_none()
+        && preprocessor_config.is_none()
+    {
+        processor_config = Some(lfm3_vl_processor_config(inputs.archive)?);
+    }
+    Ok(SynthesizedGguf {
+        config,
+        bindings: resolved.bindings,
+        loader_type: resolved.loader_type,
+        processor_config,
+        preprocessor_config,
+        rope_pairing: resolved.rope_pairing,
+    })
+}
 
 pub(crate) fn prepare_lfm3_vl_config(
     external_config: Option<&str>,

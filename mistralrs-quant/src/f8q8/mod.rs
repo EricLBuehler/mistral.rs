@@ -340,9 +340,9 @@ impl QuantMethod for F8Q8Linear {
         self.dequantize(DType::F32)
     }
 
-    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
+    fn embedding_forward(&self, ids: &Tensor, out: crate::EmbeddingOutput) -> Result<Tensor> {
         Self::ensure_supported_device(ids.device())?;
-        self.dequantize_rows(ids)
+        crate::embedding::finish_rows(self.dequantize_rows(ids)?, out)
     }
 
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
@@ -572,7 +572,9 @@ mod tests {
         let weight = Tensor::from_slice(&data, (5, 37), &Device::Cpu).unwrap();
         let linear = F8Q8Linear::from_weight(&weight, None).unwrap();
         let ids = Tensor::new(&[[4u32, 1], [3, 1]], &Device::Cpu).unwrap();
-        let actual = linear.embedding_forward_raw(&ids).unwrap();
+        let actual = linear
+            .embedding_forward(&ids, candle_core::DType::F32.into())
+            .unwrap();
         let expected = linear
             .dequantize(DType::F32)
             .unwrap()

@@ -3,8 +3,8 @@
 use anyhow::Result;
 use comfy_table::{presets::UTF8_FULL, Cell, Color, ContentArrangement, Table};
 use mistralrs_core::{
-    initialize_logging, AdapterSelection, Constraint, NormalRequest, Request, RequestMessage,
-    Response, SamplingParams,
+    initialize_logging, AdapterSelection, Constraint, NormalRequest, PrefixCacheCapacity, Request,
+    RequestMessage, Response, SamplingParams,
 };
 use mistralrs_server_core::mistralrs_for_server_builder::MistralRsForServerBuilder;
 use std::{
@@ -135,7 +135,7 @@ pub async fn run_bench(
         .with_no_kv_cache(runtime.no_kv_cache)
         .with_token_source(global.token_source)
         .with_interactive_mode(false)
-        .with_prefix_cache_n(0) // Disable prefix cache for benchmarking
+        .with_prefix_cache_n(PrefixCacheCapacity::DISABLED)
         .with_disable_eos_stop(true) // Always generate exactly gen_len tokens
         .with_mtp_config_optional(runtime.mtp_config())
         .with_max_model_len_optional(max_model_len)

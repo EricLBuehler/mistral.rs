@@ -6,6 +6,7 @@ mod embedding_loaders;
 mod multimodal_loaders;
 mod normal_loaders;
 mod qwen_vision_memory;
+mod resources;
 pub(crate) use activation_memory::{
     apply_model_activation_memory, estimate_model_activation_memory,
     reserve_model_activation_memory,
@@ -16,6 +17,10 @@ pub use activation_memory::{
 pub use auto_device_map::AutoDeviceMapParams;
 use auto_device_map::NonMappedSubModel;
 pub(crate) use checkpoint_inventory::{checkpoint_device_map_sizes, checkpoint_runtime_size};
+pub(crate) use resources::add_resource_bytes;
+#[cfg(any(feature = "cuda", test))]
+pub use resources::HostBacking;
+pub use resources::{CheckpointTensors, LayerResource, ResourceSource};
 
 use std::{
     fmt::{self, Debug},
@@ -631,6 +636,10 @@ pub struct QuantizationConfigShim {
 }
 
 impl QuantizationConfigShim {
+    pub fn get_quantization_config(config: &str) -> Result<Option<QuantizedConfig>> {
+        Ok(serde_json::from_str::<Self>(config)?.quantization_config)
+    }
+
     pub fn get_quant_config_pack_factor(config: &str, dtype: DType) -> Result<usize> {
         let QuantizationConfigShim {
             quantization_config,
@@ -648,19 +657,43 @@ impl QuantizationConfigShim {
 pub struct AutoDeviceMapQuantization<'a> {
     source: AutoDeviceMapQuantizationSource<'a>,
     topology: Option<&'a Topology>,
+    checkpoint: Option<&'a CheckpointTensors<'a>>,
+    source_quantization: Option<&'a QuantizedConfig>,
 }
 
 #[derive(Clone, Copy)]
 enum AutoDeviceMapQuantizationSource<'a> {
     Isq(Option<IsqType>),
     WeightSource(&'a dyn QuantizedWeightSource),
+    Checkpoint(&'a QuantizedConfig),
 }
 
 impl<'a> AutoDeviceMapQuantization<'a> {
+    pub fn checkpoint(
+        config: Option<&'a QuantizedConfig>,
+        topology: Option<&'a Topology>,
+    ) -> Option<Self> {
+        match config {
+            Some(
+                config @ (QuantizedConfig::Fp8 { .. }
+                | QuantizedConfig::CompressedTensors { .. }
+                | QuantizedConfig::ModelOpt { .. }),
+            ) => Some(Self {
+                source: AutoDeviceMapQuantizationSource::Checkpoint(config),
+                topology,
+                checkpoint: None,
+                source_quantization: Some(config),
+            }),
+            _ => topology.map(|topology| Self::isq(None, Some(topology))),
+        }
+    }
+
     pub fn isq(isq: Option<IsqType>, topology: Option<&'a Topology>) -> Self {
         Self {
             source: AutoDeviceMapQuantizationSource::Isq(isq),
             topology,
+            checkpoint: None,
+            source_quantization: None,
         }
     }
 
@@ -668,6 +701,8 @@ impl<'a> AutoDeviceMapQuantization<'a> {
         Self {
             source: AutoDeviceMapQuantizationSource::WeightSource(source),
             topology: None,
+            checkpoint: None,
+            source_quantization: None,
         }
     }
 
@@ -678,7 +713,25 @@ impl<'a> AutoDeviceMapQuantization<'a> {
         Self {
             source: AutoDeviceMapQuantizationSource::WeightSource(source),
             topology,
+            checkpoint: None,
+            source_quantization: None,
         }
+    }
+
+    pub fn with_checkpoint(mut self, checkpoint: &'a CheckpointTensors<'a>) -> Self {
+        self.checkpoint = Some(checkpoint);
+        self
+    }
+
+    pub fn with_source_quantization(mut self, config: Option<&'a QuantizedConfig>) -> Self {
+        self.source_quantization = config;
+        self
+    }
+
+    pub(crate) fn checkpoint_contains(&self, name: &str) -> bool {
+        self.checkpoint
+            .is_some_and(|checkpoint| checkpoint.contains(name))
+            || matches!(self.source, AutoDeviceMapQuantizationSource::WeightSource(source) if source.contains(name))
     }
 
     pub fn uqff(source: &'a dyn QuantizedWeightSource) -> Self {
@@ -702,6 +755,173 @@ impl<'a> AutoDeviceMapQuantization<'a> {
         fallback: usize,
     ) -> Result<usize> {
         self.pack_factor_for_candidates(&[name], dtype, fallback, true)
+    }
+
+    pub fn tensor_size_in_bytes(
+        &self,
+        name: &str,
+        shape: &[usize],
+        dtype: DType,
+        fallback: usize,
+        promote_default: bool,
+    ) -> Result<usize> {
+        self.tensor_size_in_bytes_for_candidates(&[name], shape, dtype, fallback, promote_default)
+    }
+
+    pub(crate) fn tensor_size_in_bytes_for_candidates(
+        &self,
+        names: &[&str],
+        shape: &[usize],
+        dtype: DType,
+        fallback: usize,
+        promote_default: bool,
+    ) -> Result<usize> {
+        if let Some(ty) = self.topology_isq_for_candidates(names) {
+            return Ok(mistralrs_quant::estimate_isq_weight_bytes(shape, dtype, ty));
+        }
+        if let AutoDeviceMapQuantizationSource::Checkpoint(config) = self.source {
+            for name in names {
+                let prefix = name.strip_suffix(".weight").unwrap_or(name);
+                if let Some(spec) = config.resolve_checkpoint(prefix)? {
+                    return Ok(spec.size_in_bytes(shape)?);
+                }
+            }
+            return Ok(shape.iter().product::<usize>() * dtype.size_in_bytes());
+        }
+        if let AutoDeviceMapQuantizationSource::Isq(Some(default)) = self.source {
+            let ty = if promote_default {
+                default.promote_for_sensitive_tensor()
+            } else {
+                default
+            };
+            return Ok(mistralrs_quant::estimate_isq_weight_bytes(shape, dtype, ty));
+        }
+        let factor = self.pack_factor_for_candidates(names, dtype, fallback, promote_default)?;
+        Ok(shape.iter().product::<usize>() * dtype.size_in_bytes() / factor)
+    }
+
+    pub(crate) fn expert_weights_size_in_bytes(
+        &self,
+        prefix: &str,
+        [experts, hidden, intermediate]: [usize; 3],
+        dtype: DType,
+        fallback: usize,
+    ) -> Result<usize> {
+        let keys = mistralrs_quant::QuantizedExpertKeys::new(prefix);
+        let stacked_names = [keys.gate, keys.up, keys.down].map(|name| format!("{name}.weight"));
+        let per_expert_names = crate::moe::ExpertProjNames::KNOWN
+            .into_iter()
+            .find(|names| self.checkpoint_contains(&format!("{prefix}.0.{}.weight", names.gate)));
+        let source_names = if self.checkpoint_contains(&stacked_names[0]) {
+            stacked_names.clone()
+        } else if let Some(names) = per_expert_names {
+            [names.gate, names.up, names.down].map(|name| format!("{prefix}.0.{name}.weight"))
+        } else if matches!(
+            self.source,
+            AutoDeviceMapQuantizationSource::Checkpoint(
+                QuantizedConfig::ModelOpt { .. } | QuantizedConfig::CompressedTensors { .. }
+            )
+        ) {
+            ["gate_proj", "up_proj", "down_proj"].map(|name| format!("{prefix}.0.{name}.weight"))
+        } else {
+            ["gate_up_proj", "gate_up_proj", "down_proj"]
+                .map(|name| format!("{prefix}.{name}.weight"))
+        };
+        let prequantized = match self.source_quantization {
+            None => false,
+            Some(QuantizedConfig::Fp8 { .. }) if self.checkpoint.is_some() => {
+                self.checkpoint_contains(&format!("{prefix}.gate_up_proj.weight_scale_inv"))
+                    || crate::moe::ExpertProjNames::KNOWN.iter().any(|names| {
+                        self.checkpoint_contains(&format!(
+                            "{prefix}.0.{}.weight_scale_inv",
+                            names.gate
+                        ))
+                    })
+            }
+            Some(_) => true,
+        };
+        let shapes = [
+            [experts, intermediate, hidden],
+            [experts, intermediate, hidden],
+            [experts, hidden, intermediate],
+        ];
+        source_names.iter().zip(shapes).zip(stacked_names).try_fold(
+            0,
+            |total, ((source_name, shape), stacked_name)| {
+                // Prequantized experts apply ISQ after stacking; dense checkpoints match their source names.
+                let bytes = if matches!(self.source, AutoDeviceMapQuantizationSource::Checkpoint(_))
+                {
+                    if let Some(ty) = self.topology_isq_for_candidates(&[&stacked_name]) {
+                        mistralrs_quant::estimate_isq_weight_bytes(&shape, dtype, ty)
+                    } else {
+                        Self {
+                            topology: None,
+                            ..*self
+                        }
+                        .tensor_size_in_bytes(
+                            source_name,
+                            &shape,
+                            dtype,
+                            fallback,
+                            false,
+                        )?
+                    }
+                } else {
+                    let name = if prequantized {
+                        &stacked_name
+                    } else {
+                        source_name
+                    };
+                    self.tensor_size_in_bytes(name, &shape, dtype, fallback, false)?
+                };
+                Ok(total + bytes)
+            },
+        )
+    }
+
+    pub(crate) fn embedding_size_in_bytes_for_candidates(
+        &self,
+        names: &[&str],
+        shape: &[usize],
+        dtype: DType,
+        fallback: usize,
+    ) -> Result<usize> {
+        if matches!(self.source, AutoDeviceMapQuantizationSource::Checkpoint(_))
+            && self.topology_isq_for_candidates(names).is_none()
+        {
+            return Ok(shape.iter().product::<usize>() * dtype.size_in_bytes());
+        }
+        self.tensor_size_in_bytes_for_candidates(names, shape, dtype, fallback, true)
+    }
+
+    fn embedding_pack_factor_for_candidates(
+        &self,
+        names: &[&str],
+        dtype: DType,
+        fallback: usize,
+    ) -> Result<usize> {
+        if matches!(self.source, AutoDeviceMapQuantizationSource::Checkpoint(_))
+            && self.topology_isq_for_candidates(names).is_none()
+        {
+            return Ok(1);
+        }
+        self.pack_factor_for_candidates(names, dtype, fallback, true)
+    }
+
+    fn topology_isq_for_candidates(&self, names: &[&str]) -> Option<IsqType> {
+        names.iter().find_map(|name| {
+            let topology = self.topology?;
+            topology
+                .patterns
+                .iter()
+                .rev()
+                .find(|(pattern, entry)| {
+                    (entry.isq.is_some() || entry.device.is_some()) && pattern.is_match(name)
+                })
+                .map(|(_, entry)| entry)
+                .or_else(|| topology.layer_for(mistralrs_quant::layer_index_from_prefix(name)?))
+                .and_then(|entry| entry.isq)
+        })
     }
 
     pub fn conservative_pack_factor(&self, dtype: DType, fallback: usize) -> usize {
@@ -731,12 +951,20 @@ impl<'a> AutoDeviceMapQuantization<'a> {
         fallback: usize,
         promote_default: bool,
     ) -> Result<usize> {
-        let topology_ty = names.iter().find_map(|name| {
-            self.topology
-                .and_then(|topology| topology.match_for_name(name))
-                .and_then(|topology| topology.isq)
-        });
+        let topology_ty = self.topology_isq_for_candidates(names);
         match self.source {
+            AutoDeviceMapQuantizationSource::Checkpoint(config) => {
+                if let Some(ty) = topology_ty {
+                    return Ok(ty.pack_factor(dtype));
+                }
+                for name in names {
+                    let prefix = name.strip_suffix(".weight").unwrap_or(name);
+                    if let Some(spec) = config.resolve_checkpoint(prefix)? {
+                        return Ok(spec.pack_factor(dtype));
+                    }
+                }
+                Ok(1)
+            }
             AutoDeviceMapQuantizationSource::WeightSource(source) => {
                 if let Some(ty) = topology_ty {
                     return Ok(ty.pack_factor(dtype));
@@ -785,8 +1013,9 @@ fn tied_promoted_tensor_pack_factor(
     quantization.map_or(Ok(fallback), |quantization| match quantization.source {
         AutoDeviceMapQuantizationSource::WeightSource(_) => quantization
             .pack_factor_for_candidates(&[embedding_name, legacy_head_name], dtype, fallback, true),
-        AutoDeviceMapQuantizationSource::Isq(_) => {
-            quantization.promoted_pack_factor_for(embedding_name, dtype, fallback)
+        AutoDeviceMapQuantizationSource::Isq(_)
+        | AutoDeviceMapQuantizationSource::Checkpoint(_) => {
+            quantization.embedding_pack_factor_for_candidates(&[embedding_name], dtype, fallback)
         }
     })
 }
@@ -802,7 +1031,9 @@ fn language_model_pack_factors(
     let embedding = if tied {
         tied_promoted_tensor_pack_factor(quantization, embedding_name, head_name, dtype, fallback)?
     } else {
-        promoted_tensor_pack_factor(quantization, embedding_name, dtype, fallback)?
+        quantization.map_or(Ok(fallback), |quantization| {
+            quantization.embedding_pack_factor_for_candidates(&[embedding_name], dtype, fallback)
+        })?
     };
     let head = promoted_tensor_pack_factor(quantization, head_name, dtype, fallback)?;
     Ok((embedding, head))
@@ -827,7 +1058,7 @@ fn language_model_pack_factors_with_aliases(
             candidates.extend_from_slice(head_names);
             quantization.pack_factor_for_candidates(&candidates, dtype, fallback, true)
         } else {
-            quantization.pack_factor_for_candidates(embedding_names, dtype, fallback, true)
+            quantization.embedding_pack_factor_for_candidates(embedding_names, dtype, fallback)
         }
     })?;
     let head = quantization.map_or(Ok(fallback), |quantization| {
@@ -881,6 +1112,16 @@ pub trait DeviceMappedModelLoader {
         weight_pack_factor: usize,
         matformer_config: Option<&MatformerSliceConfig>,
     ) -> Result<Vec<usize>>;
+    fn layer_sizes_in_bytes_with_quantization(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _quantization: Option<&AutoDeviceMapQuantization<'_>>,
+        matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        self.layer_sizes_in_bytes(config, dtype, weight_pack_factor, matformer_config)
+    }
     fn non_mapped_sub_models(&self) -> Option<Vec<NonMappedSubModel>> {
         None
     }
@@ -892,8 +1133,11 @@ pub trait DeviceMappedModelLoader {
     }
     fn num_layers(&self, config: &str) -> Result<usize>;
 
-    /// Device bytes a layer holds outside its weight bindings, as `(layer, bytes)`.
-    fn unbound_layer_bytes(&self, _config: &str) -> Result<Vec<(usize, usize)>> {
+    fn layer_resources(
+        &self,
+        _config: &str,
+        _source: ResourceSource<'_>,
+    ) -> Result<Vec<LayerResource>> {
         Ok(Vec::new())
     }
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>>;
@@ -922,7 +1166,7 @@ pub trait DeviceMappedModelLoader {
     where
         Self: Sized,
     {
-        auto_device_map::get_device_layers(
+        super::get_device_layers_for_loader(
             self,
             config,
             num_layers,
@@ -934,6 +1178,7 @@ pub trait DeviceMappedModelLoader {
             params,
             paged_attn_config,
         )
+        .map(|(mapping, _)| mapping)
     }
 }
 
@@ -1414,6 +1659,131 @@ mod auto_device_map_quantization_tests {
             checkpoint.conservative_moqe_pack_factor(dtype, 1, IsqType::Q2K),
             1
         );
+        Ok(())
+    }
+
+    #[test]
+    fn expert_sizing_uses_prepared_separate_projection_names() -> Result<()> {
+        use candle_core::{
+            quantized::{gguf_file, GgmlDType, QTensor},
+            Tensor,
+        };
+        use mistralrs_quant::{GgufArchive, GgufBindingMap, GgufTensorBinding, GgufWeightSource};
+
+        const PREFIX: &str = "model.layers.0.mlp.experts";
+        const EXPERTS: usize = 2;
+        const WIDTH: usize = 256;
+        const DENSE_BYTES: usize = EXPERTS * WIDTH * WIDTH * 2;
+        const Q8_BYTES: usize = EXPERTS * WIDTH * WIDTH / 32 * 34;
+        let mut bindings = GgufBindingMap::new();
+        let mut tensors = Vec::new();
+        for (projection, stored, dtype) in [
+            ("gate_proj", "blk.0.ffn_gate_exps.weight", GgmlDType::Q4_0),
+            ("up_proj", "blk.0.ffn_up_exps.weight", GgmlDType::Q4_0),
+            ("down_proj", "blk.0.ffn_down_exps.weight", GgmlDType::Q8_0),
+        ] {
+            let tensor = Tensor::ones((EXPERTS, WIDTH, WIDTH), DType::F32, &Device::Cpu)?;
+            tensors.push((stored, QTensor::quantize(&tensor, dtype)?));
+            bindings.insert(
+                format!("{PREFIX}.{projection}.weight"),
+                GgufTensorBinding::tensor(stored),
+            );
+        }
+        let mut file = tempfile::NamedTempFile::new()?;
+        gguf_file::write(
+            file.as_file_mut(),
+            &[],
+            &tensors
+                .iter()
+                .map(|(name, tensor)| (*name, tensor))
+                .collect::<Vec<_>>(),
+        )?;
+        let source = GgufWeightSource::new(
+            Arc::new(GgufArchive::open_file(file.path())?),
+            &bindings,
+            DType::BF16,
+        )?;
+        let topology = Topology::from_str(
+            r"'/^model\.layers\.0\.mlp\.experts\.gate_proj\.weight$/':
+  isq: Q8_0
+",
+        )?;
+        for topology in [None, Some(&topology)] {
+            let sizing = AutoDeviceMapQuantization::weight_source_with_topology(&source, topology);
+            let gate_bytes = if topology.is_some() {
+                Q8_BYTES
+            } else {
+                DENSE_BYTES / 3
+            };
+            assert_eq!(
+                sizing.expert_weights_size_in_bytes(
+                    PREFIX,
+                    [EXPERTS, WIDTH, WIDTH],
+                    DType::BF16,
+                    1
+                )?,
+                gate_bytes + DENSE_BYTES / 3 + DENSE_BYTES,
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn expert_sizing_accounts_for_separate_checkpoint_projections() -> Result<()> {
+        const PREFIX: &str = "model.layers.0.mlp.experts";
+        const EXPERTS: usize = 2;
+        const WIDTH: usize = 256;
+        const DENSE_BYTES: usize = EXPERTS * WIDTH * WIDTH * 2;
+        const NVFP4_BYTES: usize =
+            EXPERTS * (WIDTH * WIDTH / 2 + WIDTH * WIDTH / 16 + WIDTH * 4 + 4);
+        let config: QuantizedConfig = serde_json::from_value(serde_json::json!({
+            "quant_method": "modelopt", "quant_algo": "NVFP4", "group_size": 16,
+            "exclude_modules": ["model.layers.0.mlp.experts.*.up_proj"]
+        }))?;
+        let sizing = AutoDeviceMapQuantization::checkpoint(Some(&config), None).unwrap();
+        assert_eq!(
+            sizing.expert_weights_size_in_bytes(PREFIX, [EXPERTS, WIDTH, WIDTH], DType::BF16, 1)?,
+            2 * NVFP4_BYTES + DENSE_BYTES,
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn checkpoint_sizing_accounts_for_mixed_weights_and_runtime_scales() -> Result<()> {
+        let config: QuantizedConfig = serde_json::from_value(serde_json::json!({
+            "quant_method": "modelopt",
+            "quant_algo": "MIXED_PRECISION",
+            "quantized_layers": {
+                "model.layers.0.mlp.experts": {"quant_algo": "NVFP4", "weight_scale_encoding": "csf"},
+                "model.layers.0.self_attn.q_proj": {"quant_algo": "MXFP8", "group_size": 32},
+                "model.layers.0.self_attn.k_proj": {"quant_algo": "FP8_PER_CHANNEL_PER_TOKEN"}
+            }
+        }))?;
+        let sizing = AutoDeviceMapQuantization::checkpoint(Some(&config), None).unwrap();
+        for (name, shape, expected) in [
+            (
+                "model.layers.0.mlp.experts.gate_up_proj.weight",
+                vec![3, 4, 32],
+                3 * (64 + 8 + 16 + 4),
+            ),
+            (
+                "model.layers.0.self_attn.q_proj.weight",
+                vec![4, 32],
+                128 + 4,
+            ),
+            (
+                "model.layers.0.self_attn.k_proj.weight",
+                vec![4, 32],
+                128 + 16,
+            ),
+            ("model.layers.0.mlp.gate.weight", vec![4, 32], 256),
+        ] {
+            assert_eq!(
+                sizing.tensor_size_in_bytes(name, &shape, DType::BF16, 1, false)?,
+                expected,
+                "{name}"
+            );
+        }
         Ok(())
     }
 }

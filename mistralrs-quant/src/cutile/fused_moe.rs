@@ -1,14 +1,13 @@
 //! The fused MoE grouped-GEMM cuTile kernel (bf16), its host-side launch (`cutile_grouped_gemm`), and its JIT warmup.
 #![allow(clippy::too_many_arguments, clippy::missing_safety_doc)]
 
-use candle_core::cuda::cudarc::driver::CudaSlice;
+use candle_core::cuda::cudarc::driver::{CudaSlice, DevicePtr};
 use candle_core::{CudaDevice, DType, Device, Result, Storage, Tensor};
 use cutile::cuda_async::device_buffer::DevicePointer;
 use cutile::cuda_async::device_operation::DeviceOp;
 use cutile::cuda_core::sys::CUdeviceptr;
 use cutile::tile_kernel::TileKernel;
 use half::bf16;
-use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
@@ -21,7 +20,7 @@ use super::tune::{
     buckets_from_breakpoints, cutile_error, tune, Bucket, Prepared, Space, TuneMode, TuneRequest,
     TuneRouting, TunedTable, HOT_ROUTING_TOKENS, TUNE_WEIGHT_SETS,
 };
-use super::warmup::CutileKernel;
+use super::warmup::{CutileKernel, WarmupProgress};
 use super::{catch_cutile_panic, context, get_default_config, MoeShapeKey, MoeTileConfig};
 
 #[cutile::module]
@@ -422,7 +421,7 @@ pub fn cutile_grouped_gemm(
     sorted_token_ids: &CudaSlice<i32>,
     expert_ids: &CudaSlice<i32>,
     num_tokens_post_pad: &CudaSlice<i32>,
-    topk_weights: Option<&CudaSlice<f32>>,
+    topk_weights: Option<&dyn DevicePtr<f32>>,
     em: usize,
     num_valid_tokens: usize,
     top_k: usize,
@@ -453,7 +452,7 @@ fn cutile_grouped_gemm_inner(
     sorted_token_ids: &CudaSlice<i32>,
     expert_ids: &CudaSlice<i32>,
     num_tokens_post_pad: &CudaSlice<i32>,
-    topk_weights: Option<&CudaSlice<f32>>,
+    topk_weights: Option<&dyn DevicePtr<f32>>,
     em: usize,
     num_valid_tokens: usize,
     top_k: usize,
@@ -493,7 +492,7 @@ fn cutile_grouped_gemm_inner(
     let tw_guard;
     let tw_addr = match topk_weights {
         Some(tw) => {
-            let (addr, guard) = slice_ptr_on_stream(tw, 0, &stream);
+            let (addr, guard) = tw.device_ptr(&stream);
             tw_guard = Some(guard);
             addr
         }
@@ -713,7 +712,7 @@ pub(super) struct MoeAlign {
 impl MoeAlign {
     pub(super) fn build(
         dev: &CudaDevice,
-        topk_ids: &CudaSlice<u32>,
+        topk_ids: &impl DevicePtr<u32>,
         m: usize,
         num_experts: usize,
         top_k: usize,
@@ -794,7 +793,7 @@ impl Bf16Tuner {
         let (experts, top_k) = (sets[0].num_experts, sets[0].top_k);
         let ops = self.operands(m)?;
         if !ops.align.contains_key(&cfg.bm) {
-            let align = MoeAlign::build(&dev, &ops.topk_ids, m, experts, top_k, cfg.bm)?;
+            let align = MoeAlign::build(&dev, ops.topk_ids.as_ref(), m, experts, top_k, cfg.bm)?;
             ops.align.insert(cfg.bm, Arc::new(align));
         }
         let align = ops.align[&cfg.bm].clone();
@@ -826,7 +825,7 @@ impl Bf16Tuner {
                 &align.sids,
                 &align.eids,
                 &align.ntpp,
-                Some(&tw),
+                Some(tw.as_ref()),
                 align.em,
                 num_valid,
                 1,
@@ -922,7 +921,7 @@ pub(super) fn warmup_token_counts_for(
     reps
 }
 
-fn warmup_moe_kernels_uncached(dev: &CudaDevice) -> Result<()> {
+fn warmup_moe_kernels_uncached(dev: &CudaDevice, silent: bool) -> Result<()> {
     let shapes: Vec<Vec<MoeWarmupEntry>> = MOE_SHAPES
         .get_or_init(|| Mutex::new(Vec::new()))
         .lock()
@@ -959,27 +958,22 @@ fn warmup_moe_kernels_uncached(dev: &CudaDevice) -> Result<()> {
         })
         .collect();
     let total: usize = plan.iter().map(|(_, ms)| ms.len()).sum();
-    tracing::info!("Warming {total} cuTile MoE kernels.");
-    let bar = ProgressBar::new(total as u64);
-    bar.set_style(
-        ProgressStyle::default_bar()
-            .template("[{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} warming cuTile MoE kernels ({eta})")
-            .unwrap()
-            .progress_chars("#>-"),
-    );
+    tracing::info!("Warming {total} cuTile MoE variants.");
+    let progress = WarmupProgress::new("MoE variants", total, silent);
     for (entry, ms) in &plan {
         for &m in ms {
-            if let Err(err) = warmup_shape(dev, entry, m) {
+            if let Err(err) = progress.run(
+                format!("hidden={} inter={} rows={m}", entry.hidden, entry.inter),
+                || warmup_shape(dev, entry, m),
+            ) {
                 tracing::warn!(
                     "cuTile MoE warmup failed (hidden={} inter={} m={m}): {err}",
                     entry.hidden,
                     entry.inter
                 );
             }
-            bar.inc(1);
         }
     }
-    bar.finish_and_clear();
     Ok(())
 }
 
@@ -1041,7 +1035,7 @@ pub struct FusedMoeKernel;
 pub static FUSED_MOE: FusedMoeKernel = FusedMoeKernel;
 
 impl CutileKernel for FusedMoeKernel {
-    fn warm(&self, dev: &CudaDevice) -> Result<()> {
-        warmup_moe_kernels_uncached(dev)
+    fn warm(&self, dev: &CudaDevice, silent: bool) -> Result<()> {
+        warmup_moe_kernels_uncached(dev, silent)
     }
 }

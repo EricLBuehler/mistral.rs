@@ -163,7 +163,7 @@ pub fn quantize_expert_stack_with_bias(
     }
     if !ty.supports_stacked_gather() {
         candle_core::bail!(
-            "Cannot quantize stacked expert weights to {ty}: that target does not support stacked expert gather. Use a Q*K/Q*_0/Q*_1 target, AFQ, or omit ISQ."
+            "Cannot quantize stacked expert weights to {ty}: that target does not support stacked expert gather."
         );
     }
     if candle_core::quantized::GgmlDType::try_from(ty).is_ok() {
@@ -261,11 +261,27 @@ fn get_fallback(dtype: GgmlDType) -> QuantizationBehavior {
     }
 }
 
-/// Check if the tensor can be quantized with the given dtype.
-fn can_quantize(tensor: &Tensor, dtype: GgmlDType) -> bool {
-    let dims = tensor.shape().dims();
-    // The tensor must not be empty and the last dimension must be a multiple of the block size.
-    !dims.is_empty() && dims[dims.len() - 1].is_multiple_of(dtype.block_size())
+pub(crate) fn get_quantization_behaviour_for_shape(
+    shape: &[usize],
+    dtype: GgmlDType,
+) -> QuantizationBehavior {
+    if dtype == GgmlDType::F32 {
+        return QuantizationBehavior::Skip;
+    }
+
+    if shape
+        .last()
+        .is_some_and(|dim| dim.is_multiple_of(dtype.block_size()))
+    {
+        return QuantizationBehavior::Quantize(dtype);
+    }
+    let fallback = get_fallback(dtype);
+    match fallback {
+        QuantizationBehavior::Skip => fallback,
+        QuantizationBehavior::Quantize(new_dtype) => {
+            get_quantization_behaviour_for_shape(shape, new_dtype)
+        }
+    }
 }
 
 /// Check if we should quantize the tensor and if so, with which dtype.
@@ -273,18 +289,7 @@ pub(crate) fn get_quantization_behaviour(
     tensor: &Tensor,
     dtype: GgmlDType,
 ) -> QuantizationBehavior {
-    if dtype == GgmlDType::F32 {
-        return QuantizationBehavior::Skip;
-    }
-
-    if can_quantize(tensor, dtype) {
-        return QuantizationBehavior::Quantize(dtype);
-    }
-    let fallback = get_fallback(dtype);
-    match fallback {
-        QuantizationBehavior::Skip => fallback,
-        QuantizationBehavior::Quantize(new_dtype) => get_quantization_behaviour(tensor, new_dtype),
-    }
+    get_quantization_behaviour_for_shape(tensor.dims(), dtype)
 }
 
 pub(crate) fn warn_skip_quantization(
@@ -346,7 +351,7 @@ macro_rules! generate_isq {
         // Quantize from a CPU copy: byte extraction from a device-resident QTensor races
         // in-flight device work, and quantization is CPU-bound anyway.
         let cpu_src = $tensor.to_device(&candle_core::Device::Cpu)?;
-        let initial = candle_core::quantized::QTensor::quantize(&cpu_src, dtype)?;
+        let initial = $crate::gguf::quantize::quantize_cpu(&cpu_src, dtype, None)?;
         let data = initial.data()?;
 
         let _acquired_quantize_guard = $guard.acquire(&$device);
@@ -392,9 +397,9 @@ macro_rules! generate_isq_imatrix {
             dtype,
             GgmlDType::Q2K | GgmlDType::Q3K | GgmlDType::Q4K | GgmlDType::Q5K | GgmlDType::Q6K
         ) {
-            candle_core::quantized::QTensor::quantize_imatrix(&cpu_src, &$imatrix, dtype)?
+            $crate::gguf::quantize::quantize_cpu(&cpu_src, dtype, Some(&$imatrix))?
         } else {
-            candle_core::quantized::QTensor::quantize(&cpu_src, dtype)?
+            $crate::gguf::quantize::quantize_cpu(&cpu_src, dtype, None)?
         };
         let data = initial.data()?;
 

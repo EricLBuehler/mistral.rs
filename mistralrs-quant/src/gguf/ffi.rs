@@ -1,12 +1,63 @@
-//! FFI bindings for indexed MoE CUDA kernels.
-//!
-//! These bindings allow Rust code to call the optimized CUDA kernels
-//! for indexed MoE forward pass with GGUF quantized weights.
+//! CUDA bindings for GGUF projections and indexed expert operations.
 
 #![allow(dead_code)]
 #![allow(improper_ctypes)]
 
 use std::ffi::c_void;
+
+#[repr(C)]
+pub struct MixedMmvqArgs {
+    pub quant_weight: *const c_void,
+    pub quant_input: *const c_void,
+    pub dense_weight: *const c_void,
+    pub input: *const c_void,
+    pub quant_output: *mut c_void,
+    pub dense_output: *mut c_void,
+    pub columns: i32,
+    pub quant_rows: i32,
+    pub dense_rows: i32,
+    pub prefetch: i32,
+}
+
+extern "C" {
+    pub fn launch_mmvq_gguf_dense_pair(
+        args: MixedMmvqArgs,
+        format: i32,
+        dtype: i32,
+        stream: *mut c_void,
+    );
+}
+
+#[repr(C)]
+pub struct MoeDecodeArgs {
+    pub weights: *const c_void,
+    pub up: *const c_void,
+    pub input: *const c_void,
+    pub indices: *const u32,
+    pub routing: *const f32,
+    pub output: *mut f32,
+    pub rows: i32,
+    pub columns: i32,
+    pub topk: i32,
+    pub input_stride: i32,
+    pub activation: i32,
+}
+
+#[repr(C)]
+pub struct CompactMmqArgs {
+    pub weight: *const c_void,
+    pub activations: *const c_void,
+    pub ids_dst: *const i32,
+    pub expert_bounds: *const i32,
+    pub output: *mut f32,
+    pub input_cols: i32,
+    pub output_rows: i32,
+    pub assignments: i32,
+    pub output_stride: i32,
+    pub quant_type: i32,
+    pub experts: i32,
+    pub wide_columns: i32,
+}
 
 macro_rules! declare_mmvq_fused_qkv {
     ($fn_name:ident) => {
@@ -82,6 +133,25 @@ macro_rules! declare_mmvq_fused_glu {
 }
 
 extern "C" {
+    pub fn launch_gguf_moe_staged(
+        args: *const MoeDecodeArgs,
+        format: i32,
+        gate: bool,
+        stream: *mut c_void,
+    ) -> bool;
+
+    pub fn launch_mmq_gguf_compact_prepare(
+        bounds: *const i32,
+        workspace: *mut c_void,
+        experts: i32,
+        wide_columns: i32,
+        stream: *mut c_void,
+    );
+    pub fn launch_mmq_gguf_compact(
+        args: *const CompactMmqArgs,
+        workspace: *mut c_void,
+        stream: *mut c_void,
+    );
     /// Launch Q8_1 quantization kernel
     /// Quantizes f32 input to Q8_1 format for use with quantized matmul kernels.
     pub fn launch_quantize_q8_1(
@@ -523,10 +593,6 @@ extern "C" {
     );
 
     // ============== Fused MoE decode kernels ==============
-
-    // Fused gate+up+activation+multiply launchers
-    // All share the same signature: (gate_weights, up_weights, inputs_q8_1,
-    //   indices, outputs, n, k, batch, topk, k_padded, act_type, stream)
 
     pub fn launch_moe_gemv_fused_gate_up_q8_0_q8_1(
         gate_weights: *const c_void,
@@ -1802,4 +1868,157 @@ extern "C" {
         type_dst: i32,
         stream: *mut c_void,
     );
+}
+
+macro_rules! moe_prefetch_ffi {
+    ($gate:ident, $down:ident) => {
+        extern "C" {
+            pub fn $gate(
+                gate: *const c_void,
+                up: *const c_void,
+                input: *const c_void,
+                ids: *const u32,
+                output: *mut f32,
+                rows: i32,
+                columns: i32,
+                batch: i32,
+                topk: i32,
+                stride: i32,
+                activation: i32,
+                stream: *mut c_void,
+            );
+            pub fn $down(
+                weight: *const c_void,
+                input: *const c_void,
+                ids: *const u32,
+                routing: *const f32,
+                output: *mut f32,
+                rows: i32,
+                columns: i32,
+                batch: i32,
+                topk: i32,
+                stride: i32,
+                stream: *mut c_void,
+            );
+        }
+    };
+}
+moe_prefetch_ffi!(
+    launch_moe_gemv_fused_gate_up_q8_0_prefetch,
+    launch_moe_gemv_down_aggregate_q8_0_prefetch
+);
+moe_prefetch_ffi!(
+    launch_moe_gemv_fused_gate_up_q4_0_prefetch,
+    launch_moe_gemv_down_aggregate_q4_0_prefetch
+);
+moe_prefetch_ffi!(
+    launch_moe_gemv_fused_gate_up_q4_1_prefetch,
+    launch_moe_gemv_down_aggregate_q4_1_prefetch
+);
+moe_prefetch_ffi!(
+    launch_moe_gemv_fused_gate_up_q5_0_prefetch,
+    launch_moe_gemv_down_aggregate_q5_0_prefetch
+);
+moe_prefetch_ffi!(
+    launch_moe_gemv_fused_gate_up_q5_1_prefetch,
+    launch_moe_gemv_down_aggregate_q5_1_prefetch
+);
+moe_prefetch_ffi!(
+    launch_moe_gemv_fused_gate_up_q8_1_prefetch,
+    launch_moe_gemv_down_aggregate_q8_1_prefetch
+);
+moe_prefetch_ffi!(
+    launch_moe_gemv_fused_gate_up_q2k_prefetch,
+    launch_moe_gemv_down_aggregate_q2k_prefetch
+);
+moe_prefetch_ffi!(
+    launch_moe_gemv_fused_gate_up_q3k_prefetch,
+    launch_moe_gemv_down_aggregate_q3k_prefetch
+);
+moe_prefetch_ffi!(
+    launch_moe_gemv_fused_gate_up_q4k_prefetch,
+    launch_moe_gemv_down_aggregate_q4k_prefetch
+);
+moe_prefetch_ffi!(
+    launch_moe_gemv_fused_gate_up_q5k_prefetch,
+    launch_moe_gemv_down_aggregate_q5k_prefetch
+);
+moe_prefetch_ffi!(
+    launch_moe_gemv_fused_gate_up_q6k_prefetch,
+    launch_moe_gemv_down_aggregate_q6k_prefetch
+);
+
+macro_rules! mmvq_prefetch_ffi {
+    ($($name:ident),+) => {
+        extern "C" { $(pub fn $name(weight: *const c_void, input: *const c_void,
+            output: *mut c_void, columns: i32, rows: i32, input_stride: i32,
+            output_stride: i32, batch: i32, stream: *mut c_void);)+ }
+    };
+}
+mmvq_prefetch_ffi!(
+    launch_mmvq_gguf_q8_0_bf16_prefetch,
+    launch_mmvq_gguf_q8_0_f16_prefetch,
+    launch_mmvq_gguf_q8_0_f32_prefetch
+);
+mmvq_prefetch_ffi!(
+    launch_mmvq_gguf_q4_0_bf16_prefetch,
+    launch_mmvq_gguf_q4_0_f16_prefetch,
+    launch_mmvq_gguf_q4_0_f32_prefetch
+);
+mmvq_prefetch_ffi!(
+    launch_mmvq_gguf_q4_1_bf16_prefetch,
+    launch_mmvq_gguf_q4_1_f16_prefetch,
+    launch_mmvq_gguf_q4_1_f32_prefetch
+);
+mmvq_prefetch_ffi!(
+    launch_mmvq_gguf_q5_0_bf16_prefetch,
+    launch_mmvq_gguf_q5_0_f16_prefetch,
+    launch_mmvq_gguf_q5_0_f32_prefetch
+);
+mmvq_prefetch_ffi!(
+    launch_mmvq_gguf_q5_1_bf16_prefetch,
+    launch_mmvq_gguf_q5_1_f16_prefetch,
+    launch_mmvq_gguf_q5_1_f32_prefetch
+);
+mmvq_prefetch_ffi!(
+    launch_mmvq_gguf_q4k_bf16_prefetch,
+    launch_mmvq_gguf_q4k_f16_prefetch,
+    launch_mmvq_gguf_q4k_f32_prefetch
+);
+mmvq_prefetch_ffi!(
+    launch_mmvq_gguf_q5k_bf16_prefetch,
+    launch_mmvq_gguf_q5k_f16_prefetch,
+    launch_mmvq_gguf_q5k_f32_prefetch
+);
+mmvq_prefetch_ffi!(
+    launch_mmvq_gguf_q6k_bf16_prefetch,
+    launch_mmvq_gguf_q6k_f16_prefetch,
+    launch_mmvq_gguf_q6k_f32_prefetch
+);
+
+extern "C" {
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q4_0_bf16_qkv_prefetch);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q4_0_f16_qkv_prefetch);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q4_0_f32_qkv_prefetch);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q4_1_bf16_qkv_prefetch);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q4_1_f16_qkv_prefetch);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q4_1_f32_qkv_prefetch);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q5_0_bf16_qkv_prefetch);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q5_0_f16_qkv_prefetch);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q5_0_f32_qkv_prefetch);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q5_1_bf16_qkv_prefetch);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q5_1_f16_qkv_prefetch);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q5_1_f32_qkv_prefetch);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q8_0_bf16_qkv_prefetch);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q8_0_f16_qkv_prefetch);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q8_0_f32_qkv_prefetch);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q4k_bf16_qkv_prefetch);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q4k_f16_qkv_prefetch);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q4k_f32_qkv_prefetch);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q5k_bf16_qkv_prefetch);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q5k_f16_qkv_prefetch);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q5k_f32_qkv_prefetch);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q6k_bf16_qkv_prefetch);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q6k_f16_qkv_prefetch);
+    declare_mmvq_fused_qkv!(launch_mmvq_gguf_q6k_f32_qkv_prefetch);
 }

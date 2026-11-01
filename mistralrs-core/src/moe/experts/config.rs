@@ -135,9 +135,11 @@ pub fn prelog_moe_backend(
 
 #[cfg(feature = "cuda")]
 pub(super) fn gated_act(act: Activation) -> Result<mistralrs_quant::moe::cuda::GatedAct> {
-    match act {
-        Activation::Silu => Ok(mistralrs_quant::moe::cuda::GatedAct::Silu),
-        Activation::NewGelu | Activation::GeluPytorchTanh => {
+    match crate::ops::glu_activation_type(act) {
+        Some(mistralrs_quant::GluActivationType::Silu) => {
+            Ok(mistralrs_quant::moe::cuda::GatedAct::Silu)
+        }
+        Some(mistralrs_quant::GluActivationType::Gelu) => {
             Ok(mistralrs_quant::moe::cuda::GatedAct::GeluTanh)
         }
         _ => candle_core::bail!("activation {act:?} is not supported by grouped MoE kernels"),
@@ -307,6 +309,10 @@ mod tests {
     fn grouped_activation_mapping_is_exhaustive() {
         assert_eq!(
             gated_act(Activation::Silu).unwrap(),
+            mistralrs_quant::moe::cuda::GatedAct::Silu
+        );
+        assert_eq!(
+            gated_act(Activation::Swish).unwrap(),
             mistralrs_quant::moe::cuda::GatedAct::Silu
         );
         assert_eq!(

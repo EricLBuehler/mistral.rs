@@ -10,8 +10,8 @@ use mistralrs_core::{
     DefaultSchedulerMethod, DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting,
     HfConfigOverrides, Loader, LoaderBuilder, McpClientConfig, MemoryGoal, MistralRsBuilder,
     ModelLoaderConfig, ModelSelected, MtpConfig, MtpRuntimeConfig, PagedAttentionConfig,
-    PagedCacheType, PagedKvModelRequest, SchedulerConfig, SearchCallback, SearchEmbeddingModel,
-    TokenSource,
+    PagedCacheType, PagedKvModelRequest, PrefixCacheCapacity, SchedulerConfig, SearchCallback,
+    SearchEmbeddingModel, TokenSource,
 };
 use tracing::{debug, info};
 
@@ -127,7 +127,7 @@ pub mod defaults {
     pub const CHAT_TEMPLATE: Option<String> = None;
     pub const JINJA_EXPLICIT: Option<String> = None;
     pub const INTERACTIVE_MODE: bool = false;
-    pub const PREFIX_CACHE_N: usize = 16;
+    pub const PREFIX_CACHE_N: usize = mistralrs_core::DEFAULT_PREFIX_CACHE_N;
     pub const NUM_DEVICE_LAYERS: Option<Vec<String>> = None;
     pub const IN_SITU_QUANT: Option<String> = None;
     pub const PAGED_ATTN_BLOCK_SIZE: Option<usize> = None;
@@ -234,7 +234,7 @@ pub struct MistralRsForServerBuilder {
     interactive_mode: bool,
 
     /// Number of prefix caches to hold on the device. Other caches are evicted to the CPU based on a LRU strategy.
-    prefix_cache_n: usize,
+    prefix_cache_n: PrefixCacheCapacity,
 
     /// NOTE: This can be omitted to use automatic device mapping!
     /// Number of device layers to load and run on GPU(s). All others will be on the CPU.
@@ -311,7 +311,7 @@ impl Default for MistralRsForServerBuilder {
             hf_config_overrides: None,
             token_source: defaults::TOKEN_SOURCE,
             interactive_mode: defaults::INTERACTIVE_MODE,
-            prefix_cache_n: defaults::PREFIX_CACHE_N,
+            prefix_cache_n: PrefixCacheCapacity::Auto,
             num_device_layers: defaults::NUM_DEVICE_LAYERS,
             in_situ_quant: defaults::IN_SITU_QUANT,
             memory_goal: MemoryGoal::Auto,
@@ -558,9 +558,9 @@ impl MistralRsForServerBuilder {
         self
     }
 
-    /// Sets the number of prefix caches to hold on the device.
-    pub fn with_prefix_cache_n(mut self, prefix_cache_n: usize) -> Self {
-        self.prefix_cache_n = prefix_cache_n;
+    /// Sets prefix retention; `Auto` sizes the default capacity within the memory budget.
+    pub fn with_prefix_cache_n(mut self, prefix_cache_n: impl Into<PrefixCacheCapacity>) -> Self {
+        self.prefix_cache_n = prefix_cache_n.into();
         self
     }
 
@@ -753,7 +753,8 @@ impl MistralRsForServerBuilder {
 
     /// Build a single-model instance (legacy mode)
     async fn build_single_model(mut self) -> Result<SharedMistralRsState> {
-        let mtp_runtime = MtpRuntimeConfig::new(self.prefix_cache_n);
+        let prefix_cache_n = self.prefix_cache_n.requested();
+        let mtp_runtime = MtpRuntimeConfig::new(prefix_cache_n);
         let model = self.model.context("Model was None")?;
 
         let tgt_non_granular_index = get_tgt_non_granular_index(&model);
@@ -881,7 +882,7 @@ impl MistralRsForServerBuilder {
         )
         .with_opt_log(self.log)
         .with_no_kv_cache(self.no_kv_cache)
-        .with_prefix_cache_n(self.prefix_cache_n)
+        .with_prefix_cache_n(prefix_cache_n)
         .with_disable_eos_stop(self.disable_eos_stop)
         .with_loader_config(loader_config);
 
@@ -908,7 +909,8 @@ impl MistralRsForServerBuilder {
 
     /// Build a multi-model instance
     pub async fn build_multi_model(mut self) -> Result<SharedMistralRsState> {
-        let mtp_runtime = MtpRuntimeConfig::new(self.prefix_cache_n);
+        let prefix_cache_n = self.prefix_cache_n.requested();
+        let mtp_runtime = MtpRuntimeConfig::new(prefix_cache_n);
         if self.models.is_empty() {
             anyhow::bail!("No models configured for multi-model mode");
         }
@@ -1102,7 +1104,7 @@ impl MistralRsForServerBuilder {
         )
         .with_opt_log(self.log.clone())
         .with_no_kv_cache(self.no_kv_cache)
-        .with_prefix_cache_n(self.prefix_cache_n)
+        .with_prefix_cache_n(prefix_cache_n)
         .with_disable_eos_stop(self.disable_eos_stop)
         .with_deferred_daemon_start(true)
         .with_loader_config(first_loader_config);
@@ -1229,7 +1231,7 @@ impl MistralRsForServerBuilder {
             let engine_config = mistralrs_core::EngineConfig {
                 no_kv_cache: self.no_kv_cache,
                 no_prefix_cache: false,
-                prefix_cache_n: self.prefix_cache_n,
+                prefix_cache_n,
                 disable_eos_stop: self.disable_eos_stop,
                 throughput_logging_enabled: !self.interactive_mode,
                 search_embedding_model,

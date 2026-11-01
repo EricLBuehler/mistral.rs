@@ -97,7 +97,7 @@ impl Phi4MMImageAudioEmbedding {
         encoder_cache: &Mutex<EncoderCacheManager>,
     ) -> Result<Tensor> {
         let input_ids = input_ids.reshape(((), input_ids.dim(D::Minus1)?))?;
-        let text_embeddings = self.wte.embedding_forward(&input_ids, self.dtype)?;
+        let text_embeddings = self.wte.embedding_forward(&input_ids, self.dtype.into())?;
         let mut encoder_outputs: MultimodalEncoderOutputs = HashMap::new();
 
         match (
@@ -235,7 +235,7 @@ impl Phi4MMImageAudioEmbedding {
             (Some(image_hidden_states), None) => Ok(image_hidden_states),
             (None, Some(audio_hidden_states)) => Ok(audio_hidden_states),
 
-            (None, None) => self.wte.embedding_forward(&input_ids, self.dtype),
+            (None, None) => self.wte.embedding_forward(&input_ids, self.dtype.into()),
         }
     }
 

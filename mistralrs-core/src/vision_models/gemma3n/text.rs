@@ -1156,7 +1156,10 @@ enum PerLayerTokenEmbedding {
 impl PerLayerTokenEmbedding {
     fn forward(&self, input_ids: &Tensor, dtype: DType, scale: f64) -> Result<Tensor> {
         match self {
-            Self::Method(embedding) => embedding.embedding_forward(input_ids, dtype)? * scale,
+            Self::Method(embedding) => embedding.embedding_forward(
+                input_ids,
+                mistralrs_quant::EmbeddingOutput::scaled(dtype, scale),
+            ),
             Self::Dense(embedding) => embedding.forward(input_ids),
         }
     }
@@ -1594,7 +1597,10 @@ impl TextModel {
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.embedding_forward(input_ids, self.dtype)? * self.embed_tokens_scale
+        self.embed_tokens.embedding_forward(
+            input_ids,
+            mistralrs_quant::EmbeddingOutput::scaled(self.dtype, self.embed_tokens_scale),
+        )
     }
 
     fn get_per_layer_inputs(&self, input_ids: &Tensor) -> Result<Tensor> {

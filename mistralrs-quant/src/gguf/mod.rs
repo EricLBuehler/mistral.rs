@@ -2,15 +2,30 @@ pub mod archive;
 pub mod cpu;
 #[cfg(feature = "cuda")]
 pub(crate) mod cuda;
+pub mod embedding;
 #[cfg(feature = "cuda")]
 pub mod fast_mmq;
 #[cfg(feature = "cuda")]
 pub mod fast_mmvq;
 #[cfg(feature = "cuda")]
 mod ffi;
+#[cfg(feature = "cuda")]
+pub(crate) mod gated_mix;
+mod group;
 #[cfg(all(feature = "cuda", has_marlin_kernels))]
 mod packed_affine;
+pub(crate) mod quantize;
 mod weight_source;
+
+#[cfg(feature = "cuda")]
+pub(crate) mod q8_1 {
+    pub(crate) const BLOCK_ELEMENTS: usize = 32;
+    // Two f16 scale halves followed by the int8 quants.
+    pub(crate) const BLOCK_BYTES: usize = 4 + BLOCK_ELEMENTS;
+    // MMQ tiles pack four blocks' quants plus their four f32 scale slots.
+    pub(crate) const MMQ_BLOCK_BYTES: usize = 4 * BLOCK_ELEMENTS + 4 * 4;
+    pub(crate) const ROW_PADDING: usize = 512;
+}
 
 pub use weight_source::{
     GgufBindingMap, GgufBindingResolver, GgufTensorBackend, GgufTensorBinding, GgufWeightSource,
@@ -243,10 +258,10 @@ impl GgufMatMul {
             }
         }
 
-        let mut bytes = Vec::new();
+        let mut bytes =
+            Vec::with_capacity(stack.elem_count() / dtype.block_size() * dtype.type_size());
         for e in 0..num_experts {
-            // expert views share storage with an offset; quantize reads raw storage
-            let slab = stack.get(e)?.force_contiguous()?;
+            let slab = stack.get(e)?;
             let vector = imatrix.and_then(|v| {
                 if v.len() == in_dim {
                     Some(v)
@@ -258,9 +273,9 @@ impl GgufMatMul {
             });
             let qt = match vector {
                 Some(v) if imatrix_capable && v.iter().any(|x| *x != 0.0) => {
-                    candle_core::quantized::QTensor::quantize_imatrix(&slab, v, dtype)?
+                    quantize::quantize_cpu(&slab, dtype, Some(v))?
                 }
-                _ => candle_core::quantized::QTensor::quantize(&slab, dtype)?,
+                _ => quantize::quantize_cpu(&slab, dtype, None)?,
             };
             bytes.extend_from_slice(&qt.data()?);
         }
@@ -451,8 +466,21 @@ impl QuantMethod for GgufMatMul {
         }
     }
 
-    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
-        self.w.embedding(ids)
+    fn embedding_table(&self) -> Option<crate::EmbeddingTable<'_>> {
+        match &self.w {
+            QMatMul::QTensor(q) => crate::EmbeddingTable::quantized(q).ok(),
+            QMatMul::Tensor(w) | QMatMul::TensorF16(w) => {
+                let (rows, columns) = w.dims2().ok()?;
+                w.is_contiguous().then(|| {
+                    crate::EmbeddingTable::new(
+                        crate::embedding::RowCodec::Dense(w.dtype()),
+                        rows,
+                        columns,
+                        w,
+                    )
+                })
+            }
+        }
     }
 
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
@@ -540,22 +568,12 @@ impl QuantMethod for GgufMatMul {
         }
     }
 
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
-    fn prepare_gguf_affine_raw(
+    fn group_member(
         &self,
-        flat_batch: usize,
-        dtype: DType,
-        device: &Device,
-    ) -> Result<bool> {
-        Ok(self.packed_affine_for(flat_batch, dtype, device)?.is_some())
-    }
-
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
-    fn try_gguf_affine_forward_raw(&self, a: &Tensor) -> Result<Option<Tensor>> {
-        let Some(out) = self.packed_affine_forward(a)? else {
-            return Ok(None);
-        };
-        Ok(Some(self.add_bias(out)?))
+        xs: &Tensor,
+        kind: crate::GroupKind<'_>,
+    ) -> Result<Option<crate::GroupMember>> {
+        self.gguf_group_member(xs, kind)
     }
 
     fn quantized_act_type(&self) -> Option<DType> {
@@ -643,7 +661,7 @@ impl QuantMethod for GgufMatMul {
         };
         if shape.len() == 3 && request.ty.is_some_and(|ty| !ty.supports_stacked_gather()) {
             candle_core::bail!(
-                "Cannot quantize stacked GGUF expert weights to {}: that target does not support stacked expert gather. Use a Q*K/Q*_0/Q*_1 target, AFQ, or omit ISQ.",
+                "Cannot quantize stacked GGUF expert weights to {}: that target does not support stacked expert gather.",
                 request.ty.expect("rank-3 rejection requires an ISQ target")
             );
         }
@@ -870,7 +888,7 @@ mod tests {
             .index_select(&ids.flatten_all()?, 0)?
             .reshape((2, 3, TEST_EMBEDDING_DIM))?;
         let layer = GgufMatMul::from_qtensor(weight, None);
-        let actual = layer.embedding_forward_raw(&ids)?;
+        let actual = layer.embedding_forward(&ids, candle_core::DType::F32.into())?;
 
         assert_eq!(actual.dims(), &[2, 3, TEST_EMBEDDING_DIM]);
         assert_eq!(actual.dtype(), DType::F32);
@@ -1084,43 +1102,42 @@ mod tests {
 
     #[test]
     fn packed_expert_stack_rejects_targets_without_gather() -> Result<()> {
-        for ty in [IsqType::F8Q8, IsqType::HQQ4, IsqType::MXFP4] {
-            let weight = Tensor::ones((2, 4, 32), DType::F32, &Device::Cpu)?;
-            let layer = Arc::new(GgufMatMul::from_qtensor(
-                QTensor::quantize(&weight, GgmlDType::Q8_0)?,
+        let ty = IsqType::F8Q8;
+        let weight = Tensor::ones((2, 4, 32), DType::F32, &Device::Cpu)?;
+        let layer = Arc::new(GgufMatMul::from_qtensor(
+            QTensor::quantize(&weight, GgmlDType::Q8_0)?,
+            None,
+        ));
+        let request = crate::IsqRequest {
+            ty: Some(ty),
+            device: Device::Cpu,
+            has_imatrix: false,
+            capture: crate::IsqCaptureMode::Immediate,
+            consumer: crate::IsqConsumer::UqffWrite,
+            module_key: "experts".to_string(),
+        };
+        let plan_error = layer.plan_isq(&request).unwrap_err();
+        assert!(
+            plan_error
+                .to_string()
+                .contains("does not support stacked expert gather"),
+            "{ty}: {plan_error}"
+        );
+        let error = layer
+            .apply_isq(
+                Some(ty),
+                Device::Cpu,
+                &AtomicUsize::new(0),
                 None,
-            ));
-            let request = crate::IsqRequest {
-                ty: Some(ty),
-                device: Device::Cpu,
-                has_imatrix: false,
-                capture: crate::IsqCaptureMode::Immediate,
-                consumer: crate::IsqConsumer::UqffWrite,
-                module_key: "experts".to_string(),
-            };
-            let plan_error = layer.plan_isq(&request).unwrap_err();
-            assert!(
-                plan_error
-                    .to_string()
-                    .contains("does not support stacked expert gather"),
-                "{ty}: {plan_error}"
-            );
-            let error = layer
-                .apply_isq(
-                    Some(ty),
-                    Device::Cpu,
-                    &AtomicUsize::new(0),
-                    None,
-                    QuantizeOntoGuard::new(),
-                )
-                .unwrap_err();
-            assert!(
-                error
-                    .to_string()
-                    .contains("does not support stacked expert gather"),
-                "{ty}: {error}"
-            );
-        }
+                QuantizeOntoGuard::new(),
+            )
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("does not support stacked expert gather"),
+            "{ty}: {error}"
+        );
         Ok(())
     }
 

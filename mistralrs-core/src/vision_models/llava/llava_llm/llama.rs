@@ -393,7 +393,7 @@ impl Llama {
         input_ids: &Tensor,
         ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        let x = self.wte.embedding_forward(input_ids, self.dtype)?;
+        let x = self.wte.embedding_forward(input_ids, self.dtype.into())?;
         self.forward_input_embed(input_ids, x, ctx)
     }
 
@@ -518,7 +518,7 @@ impl IsqModel for Llama {
 
 impl LLaVALLM for Llama {
     fn embed(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.wte.embedding_forward(input_ids, self.dtype)
+        self.wte.embedding_forward(input_ids, self.dtype.into())
     }
     fn forward_input_embed(
         &self,

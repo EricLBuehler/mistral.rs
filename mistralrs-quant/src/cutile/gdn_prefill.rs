@@ -12,7 +12,7 @@ use cutile::cuda_core::sys::CUdeviceptr;
 use cutile::tile_kernel::TileKernel;
 use half::bf16;
 
-use super::warmup::CutileKernel;
+use super::warmup::{CutileKernel, WarmupProgress};
 use super::{catch_cutile_panic, context, jit_available};
 use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
 
@@ -20,6 +20,7 @@ pub const GDN_PREFILL_CHUNK: usize = 64;
 pub const GDN_PREFILL_HEAD_DIM: usize = 128;
 const KV_SIZE: usize = GDN_PREFILL_HEAD_DIM * GDN_PREFILL_HEAD_DIM;
 const GDN_SOLVE_BLOCK: usize = 16;
+const WARMUP_STAGES: usize = 3;
 
 // Ragged counts travel as f32: cuTile keys its JIT cache on the divisibility of every i32 scalar and
 // tensor dim, so with chunk-padded operands one compiled variant serves every sequence length.
@@ -568,7 +569,7 @@ pub fn gdn_prefill_supported(dev: &CudaDevice, head_k_dim: usize, head_v_dim: us
 
 /// Returns the token-major output [B, S, H, 128] in BF16.
 pub fn cutile_gdn_prefill(args: &GdnPrefillArgs<'_>, dev: &CudaDevice) -> Result<Tensor> {
-    launch(args, dev, false)
+    launch(args, dev, None)
 }
 
 fn borrow_bf16_3d(
@@ -605,7 +606,11 @@ fn borrow_2d<T: cutile::DType>(
     }
 }
 
-fn launch(args: &GdnPrefillArgs<'_>, dev: &CudaDevice, compile_only: bool) -> Result<Tensor> {
+fn launch(
+    args: &GdnPrefillArgs<'_>,
+    dev: &CudaDevice,
+    progress: Option<&WarmupProgress>,
+) -> Result<Tensor> {
     let (bh, padded, k_dim) = args.q.dims3()?;
     let v_dim = args.v.dim(2)?;
     let seq_len = args.seq_len;
@@ -815,16 +820,22 @@ fn launch(args: &GdnPrefillArgs<'_>, dev: &CudaDevice, compile_only: bool) -> Re
     }
     .generics(generics)
     .grid(((bh * num_chunks) as u32, 1, 1));
-    if compile_only {
+    if let Some(progress) = progress {
         catch_cutile_panic("GDN prefill compile", || {
-            wy.compile_on(&cutile_stream)
-                .map_err(|e| candle_core::Error::Msg(format!("cutile gdn wy compile: {e:?}")))?;
-            state
-                .compile_on(&cutile_stream)
-                .map_err(|e| candle_core::Error::Msg(format!("cutile gdn state compile: {e:?}")))?;
-            out_k
-                .compile_on(&cutile_stream)
-                .map_err(|e| candle_core::Error::Msg(format!("cutile gdn out compile: {e:?}")))?;
+            progress.run("WY transform", || {
+                wy.compile_on(&cutile_stream)
+                    .map_err(|e| candle_core::Error::Msg(format!("cutile gdn wy compile: {e:?}")))
+            })?;
+            progress.run("state update", || {
+                state.compile_on(&cutile_stream).map_err(|e| {
+                    candle_core::Error::Msg(format!("cutile gdn state compile: {e:?}"))
+                })
+            })?;
+            progress.run("output projection", || {
+                out_k
+                    .compile_on(&cutile_stream)
+                    .map_err(|e| candle_core::Error::Msg(format!("cutile gdn out compile: {e:?}")))
+            })?;
             Ok(())
         })?;
     } else {
@@ -848,7 +859,7 @@ fn launch(args: &GdnPrefillArgs<'_>, dev: &CudaDevice, compile_only: bool) -> Re
 }
 
 impl CutileKernel for GdnPrefillKernel {
-    fn warm(&self, dev: &CudaDevice) -> Result<()> {
+    fn warm(&self, dev: &CudaDevice, silent: bool) -> Result<()> {
         if !jit_available(dev) {
             return Ok(());
         }
@@ -877,7 +888,8 @@ impl CutileKernel for GdnPrefillKernel {
             seq_len,
         };
         tracing::info!("Warming cuTile GDN prefill kernels.");
-        if let Err(err) = launch(&args, dev, true) {
+        let progress = WarmupProgress::new("GDN prefill kernels", WARMUP_STAGES, silent);
+        if let Err(err) = launch(&args, dev, Some(&progress)) {
             tracing::warn!("cuTile GDN prefill warmup failed: {err}");
         }
         Ok(())

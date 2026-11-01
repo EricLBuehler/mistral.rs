@@ -25,6 +25,14 @@ const LARGE_MATRIX_COLUMNS: usize = 16;
 const LARGE_MATRIX_K: usize = 1024;
 const LARGE_MATRIX_MIN_ELEMENTS: usize = 32 * 1024 * 1024;
 
+pub(crate) fn geometry(n: usize, k: usize) -> (usize, usize) {
+    if n * k >= LARGE_MATRIX_MIN_ELEMENTS {
+        (LARGE_MATRIX_COLUMNS, LARGE_MATRIX_K)
+    } else {
+        (SMALL_MATRIX_COLUMNS, SMALL_MATRIX_K)
+    }
+}
+
 #[cutile::module]
 mod kernels {
     use cutile::core::*;
@@ -288,11 +296,7 @@ pub(super) fn launch(
         .activation_global_scale
         .unwrap_or(&weight_global)
         .contiguous()?;
-    let (tile_columns, tile_k) = if n * k >= LARGE_MATRIX_MIN_ELEMENTS {
-        (LARGE_MATRIX_COLUMNS, LARGE_MATRIX_K)
-    } else {
-        (SMALL_MATRIX_COLUMNS, SMALL_MATRIX_K)
-    };
+    let (tile_columns, tile_k) = geometry(n, k);
     let stream = dev.cuda_stream();
     let ordinal = stream.context().ordinal();
     let (x_storage, x_layout) = x.storage_and_layout();

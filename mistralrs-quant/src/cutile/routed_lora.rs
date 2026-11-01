@@ -27,12 +27,12 @@ use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
 
 use super::tune::{config, cutile_error, tune, Bucket, Prepared, Space, TuneMode, TuneRequest};
 
-use super::{
-    catch_cutile_panic, context, device_compute_capability, device_supported, jit_available,
-};
+use super::{catch_cutile_panic, context, device_supported, jit_available};
 
 pub const CUTILE_ROUTED_LORA_MAX_RANK: usize = 128;
 
+// Tile IR documents num_cta_in_cga hints only for Blackwell (sm_100/sm_120) targets.
+const CLUSTER_HINT_MIN_COMPUTE_MAJOR: i32 = 10;
 const MIN_BLOCK_R: usize = 16;
 const TARGET_CTA_PER_SM: usize = 2;
 const MAX_N_AXIS_GROUPS: usize = 8;
@@ -779,20 +779,6 @@ fn cached_bucket_config(key: CutileRoutedLoraTuningKey) -> Option<CutileRoutedLo
         .filter(|config| valid_config(key, *config))
 }
 
-fn multiprocessor_count(dev: &CudaDevice) -> usize {
-    use candle_core::cuda::cudarc::driver::{result, sys};
-
-    let cu_device = dev.cuda_stream().context().cu_device();
-    unsafe {
-        result::device::get_attribute(
-            cu_device,
-            sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT,
-        )
-    }
-    .unwrap_or(1)
-    .max(1) as usize
-}
-
 fn tuning_key(
     dev: &CudaDevice,
     metadata: RoutedLoraMetadataLayout,
@@ -800,13 +786,13 @@ fn tuning_key(
     max_rank_stride: usize,
     addresses: KernelAddresses,
 ) -> CutileRoutedLoraTuningKey {
-    let (compute_major, compute_minor) = device_compute_capability(dev);
+    let info = crate::cuda_device::cuda_device_info(dev);
     CutileRoutedLoraTuningKey {
         device: CutileRoutedLoraDeviceKey {
             ordinal: dev.cuda_stream().context().ordinal(),
-            compute_major,
-            compute_minor,
-            multiprocessors: multiprocessor_count(dev),
+            compute_major: info.major,
+            compute_minor: info.minor,
+            multiprocessors: info.sms,
         },
         shape: CutileRoutedLoraShapeKey {
             top_k: metadata.top_k(),
@@ -890,7 +876,7 @@ fn valid_config(key: CutileRoutedLoraTuningKey, config: CutileRoutedLoraConfig) 
         return false;
     }
     if config.optimization_hint == CutileRoutedLoraOptimizationHint::Cluster2 {
-        key.device.compute_major >= 12 && grid_x.is_multiple_of(2)
+        key.device.compute_major >= CLUSTER_HINT_MIN_COMPUTE_MAJOR && grid_x.is_multiple_of(2)
     } else {
         true
     }

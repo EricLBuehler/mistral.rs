@@ -1114,32 +1114,11 @@ impl Qwen3_5TextModel {
     }
 
     pub(super) fn reserve_recurrent_decode_deferred_storage(&self) -> Result<bool> {
-        let mut cache = self.cache.hybrid();
-        let mut spec = None;
-        for (layer_idx, layer_type) in self.layer_types.iter().enumerate() {
-            if *layer_type != LayerType::LinearAttention {
-                continue;
-            }
-            let (LayerImpl::LinearAttention(gdn), Some(HybridLayerCache::Recurrent(pool))) =
-                (&self.layers[layer_idx].layer_impl, cache.get(layer_idx))
-            else {
-                candle_core::bail!("Qwen3.5 GDN layer has no recurrent state pool");
-            };
-            if !gdn.deferred_decode_supported(pool, self.dtype) {
-                return Ok(false);
-            }
-            let layer_spec = gdn.deferred_state_spec();
-            if spec
-                .replace(layer_spec)
-                .is_some_and(|spec| spec != layer_spec)
-            {
-                candle_core::bail!("Qwen3.5 GDN deferred-state dimensions diverge across layers");
-            }
-        }
-        let Some(spec) = spec else {
-            return Ok(false);
-        };
-        cache.reserve_gdn_deferred_state(spec)
+        crate::gdn::reserve_deferred_decode_state(
+            &mut self.cache.hybrid(),
+            self.gdn_transition_layers().layers,
+            self.dtype,
+        )
     }
 
     pub(super) fn disable_recurrent_decode_deferred_storage(&self) -> Result<bool> {
@@ -1168,55 +1147,6 @@ impl Qwen3_5TextModel {
         self.apply_pending_recurrent_transitions_for_current_batch(&cache)
     }
 
-    fn flush_deferred_recurrent_state(
-        &self,
-        cache: &HybridCache,
-        slots: Option<&[u32]>,
-    ) -> Result<bool> {
-        if !cache.uses_gdn_deferred_state() {
-            return Ok(false);
-        }
-        let host_slots = slots.map(|slots| {
-            let mut slots = slots
-                .iter()
-                .copied()
-                .filter(|slot| *slot != crate::cuda::gdn::GDN_PAD_SLOT)
-                .collect::<Vec<_>>();
-            slots.sort_unstable();
-            slots.dedup();
-            slots
-        });
-        if host_slots.as_ref().is_some_and(Vec::is_empty) {
-            return Ok(true);
-        }
-        let mut flushed = false;
-        for (layer_idx, layer_type) in self.layer_types.iter().enumerate() {
-            if *layer_type != LayerType::LinearAttention {
-                continue;
-            }
-            let (LayerImpl::LinearAttention(gdn), Some(HybridLayerCache::Recurrent(pool))) =
-                (&self.layers[layer_idx].layer_impl, cache.get(layer_idx))
-            else {
-                return Ok(false);
-            };
-            let active_slots = match &host_slots {
-                Some(slots) => Tensor::from_vec(slots.clone(), (slots.len(),), pool.device())?,
-                None => cache
-                    .state_indices_for_device(pool.device())
-                    .ok_or_else(|| {
-                        candle_core::Error::msg(
-                            "GDN deferred-state flush has no device-local state slots",
-                        )
-                    })?,
-            };
-            if !gdn.flush_deferred_state(pool, &active_slots, self.dtype)? {
-                return Ok(false);
-            }
-            flushed = true;
-        }
-        Ok(flushed)
-    }
-
     pub(super) fn flush_current_recurrent_state(&self) -> Result<()> {
         let cache = self.cache.hybrid();
         let has_slots = cache
@@ -1230,9 +1160,7 @@ impl Qwen3_5TextModel {
         {
             candle_core::bail!("Qwen3.5 pending recurrent transitions cannot be applied");
         }
-        if cache.uses_gdn_deferred_state() && !self.flush_deferred_recurrent_state(&cache, None)? {
-            candle_core::bail!("Qwen3.5 deferred recurrent state cannot be materialized");
-        }
+        cache.materialize_deferred_state_for_current_batch()?;
         Ok(())
     }
 
@@ -1248,12 +1176,7 @@ impl Qwen3_5TextModel {
         {
             candle_core::bail!("Qwen3.5 pending recurrent transitions cannot be applied");
         }
-        if cache.uses_gdn_deferred_state()
-            && !self.flush_deferred_recurrent_state(&cache, Some(&slots))?
-            && !slots.is_empty()
-        {
-            candle_core::bail!("Qwen3.5 deferred recurrent state cannot be materialized");
-        }
+        cache.materialize_deferred_state_for_slots(&slots)?;
         Ok(())
     }
 
@@ -1427,7 +1350,8 @@ impl Qwen3_5TextModel {
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.embedding_forward(input_ids, self.dtype)
+        self.embed_tokens
+            .embedding_forward(input_ids, self.dtype.into())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1443,7 +1367,6 @@ impl Qwen3_5TextModel {
     ) -> Result<Tensor> {
         let mut hybrid_cache = self.cache.hybrid();
         let checkpoint_lanes = hybrid_cache.checkpoint_lanes();
-        let batch_size = xs.dim(0)?;
         let query_len = xs.dim(1)?;
         let recurrent_metadata = ctx.recurrent_metadata().cloned();
         let has_linear_attention = self
@@ -1501,21 +1424,6 @@ impl Qwen3_5TextModel {
                 && has_slots
             {
                 candle_core::bail!("Qwen3.5 pending recurrent transitions cannot be applied");
-            }
-        }
-        let deferred_gdn = query_len == 1
-            && crate::cuda::gdn::deferred_decode_batch_supported(batch_size)
-            && packed_layout.is_none()
-            && recurrent_metadata
-                .as_ref()
-                .is_some_and(|metadata| metadata.batch_kind() == RecurrentBatchKind::Decode)
-            && hybrid_cache.uses_gdn_deferred_state();
-        if !deferred_gdn && hybrid_cache.uses_gdn_deferred_state() {
-            let has_slots = hybrid_cache
-                .state_indices()
-                .is_some_and(|slots| slots.elem_count() != 0);
-            if has_slots && !self.flush_deferred_recurrent_state(&hybrid_cache, None)? {
-                candle_core::bail!("Qwen3.5 deferred recurrent state cannot be materialized");
             }
         }
         let checkpoint_gdn = speculative_gdn

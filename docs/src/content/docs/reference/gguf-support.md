@@ -107,7 +107,7 @@ mistral.rs accepts GGUF files using the following storage types. A file can mix 
 | K-quants | `Q2_K`, `Q3_K`, `Q4_K`, `Q5_K`, `Q6_K`, `Q8_K` |
 | GPT-OSS | The GPT-OSS MXFP4 representation |
 
-IQ storage types, including IQ1, IQ2, IQ3, and IQ4 variants, are not supported for GGUF files yet.
+IQ storage types are not supported for matrix projections. The shared embedding gather supports IQ4_NL, including the Qwen3.8-Flash-Next PLE table.
 Select a supported Q/K artifact instead. Other storage types not listed above are also unsupported.
 Big-endian GGUF files are not supported.
 

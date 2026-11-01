@@ -2,6 +2,8 @@
 mod memory_budget;
 pub(crate) use memory_budget::ModelMemoryBudget;
 #[cfg(any(feature = "cuda", test))]
+pub(crate) use memory_budget::RecurrentPrefixReservation;
+#[cfg(any(feature = "cuda", test))]
 pub use memory_budget::RuntimeMemoryReservation;
 
 use std::sync::Arc;
@@ -138,7 +140,7 @@ mod tests {
             .memory_budget
             .as_ref()
             .unwrap()
-            .reserve_runtime(std::collections::HashMap::new());
+            .reserve_runtime(std::collections::HashMap::new(), None);
         assert!(!runtime.capture_ready());
         Ok(())
     }
@@ -153,7 +155,7 @@ mod tests {
         .with_serving_capacity(16)?
         .with_base_device_memory_reservation(4 * 1024 * 1024 * 1024)?
         .with_recurrent_checkpoint_lanes(8)?
-        .with_recurrent_prefix_capacity(16);
+        .with_recurrent_prefix_capacity(crate::PrefixCacheCapacity::Fixed(16));
         config.recurrent_checkpoint_lanes_auto = true;
         config.reserve_activation_memory(512 * 1024 * 1024, 256 * 1024 * 1024);
 

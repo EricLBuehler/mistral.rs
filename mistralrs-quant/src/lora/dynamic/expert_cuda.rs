@@ -628,7 +628,7 @@ fn with_prepared_resource<T>(
     let hidden = site.spec().hidden_size();
     let intermediate = site.spec().local_intermediate_size();
     #[cfg(feature = "cutile")]
-    let cutile_compute_major = Some(crate::cutile::device_compute_capability(device).0);
+    let cutile_compute_major = Some(crate::cuda_device::cuda_device_info(device).major);
     #[cfg(not(feature = "cutile"))]
     let cutile_compute_major = None;
     let needs_metadata = [
@@ -901,7 +901,7 @@ fn launch_projection<T: RoutedLoraElement>(
     };
     #[cfg(feature = "cutile")]
     let native_over_cutile = prefer_native_over_cutile(
-        crate::cutile::device_compute_capability(context.device).0,
+        crate::cuda_device::cuda_device_info(context.device).major,
         context.metadata_layout,
         run.input.dtype(),
         native_shape,

@@ -1,8 +1,11 @@
 use std::f64;
+use std::sync::Arc;
 
 use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
-use candle_nn::{Embedding, LayerNorm, LayerNormConfig, Linear, Module};
-use mistralrs_quant::{QuantizedConfig, ShardedVarBuilder};
+use candle_nn::{Embedding, LayerNorm, LayerNormConfig, Module};
+use mistralrs_quant::{
+    QuantMethod, QuantMethodConfig, QuantizedConfig, ShardedVarBuilder, UnquantLinear,
+};
 
 use crate::{
     attention::{AttentionMask, SdpaParams},
@@ -12,6 +15,26 @@ use crate::{
 };
 
 use super::config::VisionConfig;
+
+fn vision_linear(
+    in_dim: usize,
+    out_dim: usize,
+    quantization: &Option<QuantizedConfig>,
+    vb: ShardedVarBuilder,
+) -> Result<Arc<dyn QuantMethod>> {
+    let configured = if let Some(config) = quantization {
+        config.has_checkpoint_quantization(&vb)?
+    } else {
+        false
+    };
+    if configured {
+        mistralrs_quant::linear(in_dim, out_dim, quantization, vb)
+    } else {
+        Ok(Arc::new(UnquantLinear::new(
+            QuantMethodConfig::Unquantized(layers::linear(in_dim, out_dim, vb)?),
+        )?))
+    }
+}
 
 struct PatchEmbed {
     proj: Conv3dNoBias,
@@ -77,16 +100,22 @@ impl PatchEmbed {
 }
 
 struct VisionMlp {
-    fc1: Linear,
-    fc2: Linear,
+    fc1: Arc<dyn QuantMethod>,
+    fc2: Arc<dyn QuantMethod>,
     act: Activation,
 }
 
 impl VisionMlp {
-    fn new(dim: usize, hidden_dim: usize, act: Activation, vb: ShardedVarBuilder) -> Result<Self> {
+    fn new(
+        dim: usize,
+        hidden_dim: usize,
+        act: Activation,
+        quantization: &Option<QuantizedConfig>,
+        vb: ShardedVarBuilder,
+    ) -> Result<Self> {
         Ok(Self {
-            fc1: layers::linear(dim, hidden_dim, vb.pp("linear_fc1"))?,
-            fc2: layers::linear(hidden_dim, dim, vb.pp("linear_fc2"))?,
+            fc1: vision_linear(dim, hidden_dim, quantization, vb.pp("linear_fc1"))?,
+            fc2: vision_linear(hidden_dim, dim, quantization, vb.pp("linear_fc2"))?,
             act,
         })
     }
@@ -127,17 +156,22 @@ fn apply_rotary_pos_emb_vision(
 }
 
 struct VisionAttention {
-    qkv: Linear,
-    proj: Linear,
+    qkv: Arc<dyn QuantMethod>,
+    proj: Arc<dyn QuantMethod>,
     num_heads: usize,
     head_dim: usize,
 }
 
 impl VisionAttention {
-    fn new(dim: usize, num_heads: usize, vb: ShardedVarBuilder) -> Result<Self> {
+    fn new(
+        dim: usize,
+        num_heads: usize,
+        quantization: &Option<QuantizedConfig>,
+        vb: ShardedVarBuilder,
+    ) -> Result<Self> {
         Ok(Self {
-            qkv: layers::linear(dim, dim * 3, vb.pp("qkv"))?,
-            proj: layers::linear(dim, dim, vb.pp("proj"))?,
+            qkv: vision_linear(dim, dim * 3, quantization, vb.pp("qkv"))?,
+            proj: vision_linear(dim, dim, quantization, vb.pp("proj"))?,
             num_heads,
             head_dim: dim / num_heads,
         })
@@ -223,18 +257,24 @@ struct VisionBlock {
 }
 
 impl VisionBlock {
-    fn new(cfg: &VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
+    fn new(
+        cfg: &VisionConfig,
+        quantization: &Option<QuantizedConfig>,
+        vb: ShardedVarBuilder,
+    ) -> Result<Self> {
         let norm_cfg = LayerNormConfig {
             eps: 1e-6,
             ..Default::default()
         };
         let norm1 = layers::layer_norm(cfg.hidden_size, norm_cfg, vb.pp("norm1"))?;
         let norm2 = layers::layer_norm(cfg.hidden_size, norm_cfg, vb.pp("norm2"))?;
-        let attn = VisionAttention::new(cfg.hidden_size, cfg.num_heads, vb.pp("attn"))?;
+        let attn =
+            VisionAttention::new(cfg.hidden_size, cfg.num_heads, quantization, vb.pp("attn"))?;
         let mlp = VisionMlp::new(
             cfg.hidden_size,
             cfg.intermediate_size,
             cfg.hidden_act,
+            quantization,
             vb.pp("mlp"),
         )?;
         Ok(Self {
@@ -274,12 +314,17 @@ struct PatchMerger {
     use_postshuffle_norm: bool,
     spatial_merge_unit: usize,
     merged_hidden_size: usize,
-    fc1: Linear,
-    fc2: Linear,
+    fc1: Arc<dyn QuantMethod>,
+    fc2: Arc<dyn QuantMethod>,
 }
 
 impl PatchMerger {
-    fn new(cfg: &VisionConfig, use_postshuffle_norm: bool, vb: ShardedVarBuilder) -> Result<Self> {
+    fn new(
+        cfg: &VisionConfig,
+        use_postshuffle_norm: bool,
+        quantization: &Option<QuantizedConfig>,
+        vb: ShardedVarBuilder,
+    ) -> Result<Self> {
         let merged_hidden_size = cfg.hidden_size * cfg.spatial_merge_size.pow(2);
         let norm_dim = if use_postshuffle_norm {
             merged_hidden_size
@@ -295,8 +340,18 @@ impl PatchMerger {
             use_postshuffle_norm,
             spatial_merge_unit: cfg.spatial_merge_size.pow(2),
             merged_hidden_size,
-            fc1: layers::linear(merged_hidden_size, merged_hidden_size, vb.pp("linear_fc1"))?,
-            fc2: layers::linear(merged_hidden_size, cfg.out_hidden_size, vb.pp("linear_fc2"))?,
+            fc1: vision_linear(
+                merged_hidden_size,
+                merged_hidden_size,
+                quantization,
+                vb.pp("linear_fc1"),
+            )?,
+            fc2: vision_linear(
+                merged_hidden_size,
+                cfg.out_hidden_size,
+                quantization,
+                vb.pp("linear_fc2"),
+            )?,
         })
     }
 
@@ -374,7 +429,11 @@ pub struct Qwen3VLVisionModel {
 }
 
 impl Qwen3VLVisionModel {
-    pub fn new(cfg: &VisionConfig, vb: ShardedVarBuilder) -> Result<Self> {
+    pub fn new(
+        cfg: &VisionConfig,
+        quantization: &Option<QuantizedConfig>,
+        vb: ShardedVarBuilder,
+    ) -> Result<Self> {
         let patch_embed = PatchEmbed::new(cfg, vb.pp("patch_embed"))?;
         let quant: Option<QuantizedConfig> = None;
         let pos_embed = layers::dense_embedding(
@@ -386,15 +445,26 @@ impl Qwen3VLVisionModel {
 
         let mut blocks = Vec::with_capacity(cfg.depth);
         for i in 0..cfg.depth {
-            blocks.push(VisionBlock::new(cfg, vb.pp(format!("blocks.{i}")))?);
+            blocks.push(VisionBlock::new(
+                cfg,
+                quantization,
+                vb.pp(format!("blocks.{i}")),
+            )?);
         }
 
-        let merger = PatchMerger::new(cfg, false, vb.pp("merger"))?;
+        let merger = PatchMerger::new(cfg, false, quantization, vb.pp("merger"))?;
         let deepstack_mergers = cfg
             .deepstack_visual_indexes
             .iter()
             .enumerate()
-            .map(|(i, _)| PatchMerger::new(cfg, true, vb.pp(format!("deepstack_merger_list.{i}"))))
+            .map(|(i, _)| {
+                PatchMerger::new(
+                    cfg,
+                    true,
+                    quantization,
+                    vb.pp(format!("deepstack_merger_list.{i}")),
+                )
+            })
             .collect::<Result<Vec<_>>>()?;
 
         let mut deepstack_lookup = vec![None; cfg.depth];
@@ -666,5 +736,102 @@ impl Qwen3VLVisionModel {
         }
 
         uvb.to_safetensors()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::vision_linear;
+    use candle_core::{DType, Device, Result, Tensor};
+    use float8::F8E4M3;
+    use mistralrs_quant::{QuantizedConfig, ShardedSafeTensors};
+    use std::collections::HashMap;
+
+    const INPUT_DIM: usize = 32;
+    const OUTPUT_DIM: usize = 2;
+    const PREFIX: &str = "model.visual.blocks.0.mlp.linear_fc1";
+
+    #[test]
+    fn vision_linear_loads_explicit_and_global_nvfp4_weights_with_bias() -> Result<()> {
+        let tensors = HashMap::from([
+            (
+                format!("{PREFIX}.weight"),
+                Tensor::full(0x22u8, (OUTPUT_DIM, INPUT_DIM / 2), &Device::Cpu)?,
+            ),
+            (
+                format!("{PREFIX}.weight_scale"),
+                Tensor::from_vec(
+                    vec![F8E4M3::from_f32(2.0); OUTPUT_DIM * 2],
+                    (OUTPUT_DIM, 2),
+                    &Device::Cpu,
+                )?,
+            ),
+            (
+                format!("{PREFIX}.weight_scale_2"),
+                Tensor::new(0.25f32, &Device::Cpu)?,
+            ),
+            (
+                format!("{PREFIX}.bias"),
+                Tensor::from_slice(&[1f32, -1.], OUTPUT_DIM, &Device::Cpu)?,
+            ),
+        ]);
+        for value in [
+            serde_json::json!({
+                "quant_method": "modelopt",
+                "quant_algo": "MIXED_PRECISION",
+                "quantized_layers": {(PREFIX): {"quant_algo": "W4A16_NVFP4", "group_size": 16}}
+            }),
+            serde_json::json!({"quant_method": "modelopt", "quant_algo": "W4A16_NVFP4"}),
+        ] {
+            let config = serde_json::from_value(value).map_err(candle_core::Error::msg)?;
+            let vb = ShardedSafeTensors::wrap(tensors.clone(), DType::F32, Device::Cpu);
+            let layer = vision_linear(INPUT_DIM, OUTPUT_DIM, &Some(config), vb.pp(PREFIX))?;
+            let input = Tensor::arange(1f32, (INPUT_DIM + 1) as f32, &Device::Cpu)?
+                .reshape((1, INPUT_DIM))?;
+            assert_eq!(
+                layer.forward(&input)?.to_vec2::<f32>()?,
+                vec![vec![265., 263.]]
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn vision_linear_preserves_dense_weights_under_global_text_quantization() -> Result<()> {
+        let modelopt = |algorithm: &str| {
+            serde_json::from_value::<QuantizedConfig>(serde_json::json!({
+                "quant_method": "modelopt",
+                "quant_algo": algorithm,
+                "exclude_modules": ["lm_head"]
+            }))
+            .map_err(candle_core::Error::msg)
+        };
+        let native = QuantizedConfig::Fp8 {
+            weight_block_size: None,
+            activation_scheme: None,
+            fmt: None,
+            modules_to_not_convert: vec!["lm_head".to_string()],
+        };
+        for config in [modelopt("NVFP4")?, modelopt("FP8")?, native] {
+            assert!(config.resolve_checkpoint(PREFIX)?.is_some());
+            let tensors = HashMap::from([
+                (
+                    format!("{PREFIX}.weight"),
+                    Tensor::full(0.5f32, (OUTPUT_DIM, INPUT_DIM), &Device::Cpu)?,
+                ),
+                (
+                    format!("{PREFIX}.bias"),
+                    Tensor::from_slice(&[1f32, -1.], OUTPUT_DIM, &Device::Cpu)?,
+                ),
+            ]);
+            let vb = ShardedSafeTensors::wrap(tensors, DType::F32, Device::Cpu);
+            let layer = vision_linear(INPUT_DIM, OUTPUT_DIM, &Some(config), vb.pp(PREFIX))?;
+            let input = Tensor::ones((1, INPUT_DIM), DType::F32, &Device::Cpu)?;
+            assert_eq!(
+                layer.forward(&input)?.to_vec2::<f32>()?,
+                vec![vec![17., 15.]]
+            );
+        }
+        Ok(())
     }
 }

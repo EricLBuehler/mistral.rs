@@ -244,6 +244,7 @@ pub use messages::{
     EmbeddingRequest, EmbeddingRequestBuilder, EmbeddingRequestInput, InputFile,
     MultimodalMessages, RequestBuilder, RequestLike, TextMessageRole, TextMessages,
 };
+pub use mistralrs_core::PrefixCacheCapacity;
 pub use mistralrs_core::{
     AdapterGenerationId, AdapterSelection, LoraAdapterError, LoraAdapterInfo,
     LoraAdapterLoadPolicy, LoraAdapterRoute, LoraAdapterSpec, LoraResidentGenerationInfo,

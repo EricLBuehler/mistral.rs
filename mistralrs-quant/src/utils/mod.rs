@@ -1,4 +1,8 @@
 #[cfg(feature = "cuda")]
+mod cuda_read;
+#[cfg(all(test, feature = "cuda"))]
+pub(crate) mod cuda_test;
+#[cfg(feature = "cuda")]
 mod ffi;
 mod fp8;
 pub(crate) mod isq;
@@ -6,6 +10,8 @@ pub mod log;
 mod ops;
 mod uqff;
 
+#[cfg(feature = "cuda")]
+pub(crate) use cuda_read::CudaReadView;
 pub(crate) use fp8::contiguous_fp8;
 pub use ops::flash_attn_sinks_metal;
 pub use ops::flash_attn_sinks_varlen_metal;

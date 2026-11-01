@@ -1,0 +1,18 @@
+{
+  "gguf": [
+    {"prompt_tokens": 512, "mistralrs": {"prefill_tokens_s": 1239.518971387757, "decode_tokens_s": 31.4796582825387}, "baseline": {"prefill_tokens_s": 772.229347734774, "decode_tokens_s": 27.65975101836031}},
+    {"prompt_tokens": 2048, "mistralrs": {"prefill_tokens_s": 1849.431698710821, "decode_tokens_s": 30.579553897364008}, "baseline": {"prefill_tokens_s": 1093.756749528505, "decode_tokens_s": 27.43836304848781}},
+    {"prompt_tokens": 8192, "mistralrs": {"prefill_tokens_s": 1949.8769501267802, "decode_tokens_s": 30.43561873760826}, "baseline": {"prefill_tokens_s": 1211.2059808109923, "decode_tokens_s": 25.979455353092337}}
+  ],
+  "fp4": [
+    {"prompt_tokens": 512, "mistralrs": {"prefill_tokens_s": 2180.3241167557403, "decode_tokens_s": 26.452759260605998}, "baseline": {"prefill_tokens_s": 2006.601298154553, "decode_tokens_s": 25.501127972431856}},
+    {"prompt_tokens": 2048, "mistralrs": {"prefill_tokens_s": 2990.1013279347967, "decode_tokens_s": 26.109250983151075}, "baseline": {"prefill_tokens_s": 2635.409526738245, "decode_tokens_s": 25.517873872412775}},
+    {"prompt_tokens": 8192, "mistralrs": {"prefill_tokens_s": 2964.724494266048, "decode_tokens_s": 25.99511584665776}, "baseline": {"prefill_tokens_s": 2830.8065723138, "decode_tokens_s": 25.405851508181968}}
+  ],
+  "fp4_concurrency": [
+    {"prompt_tokens": 2048, "concurrency": 1, "mistralrs": {"output_tokens_s": 23.038165593686532, "ttft_ms": 677.4496071027695, "decode_tokens_s": 26.034529370180167}, "baseline": {"output_tokens_s": 22.17290138496034, "ttft_ms": 767.3483354996683, "decode_tokens_s": 25.375564258947765}},
+    {"prompt_tokens": 2048, "concurrency": 2, "mistralrs": {"output_tokens_s": 35.14236131418525, "ttft_ms": 1233.908518553815, "decode_tokens_s": 21.035799493777475}, "baseline": {"output_tokens_s": 33.825729174434976, "ttft_ms": 1414.3097248355236, "decode_tokens_s": 20.673294444473797}},
+    {"prompt_tokens": 2048, "concurrency": 4, "mistralrs": {"output_tokens_s": 49.47217761388825, "ttft_ms": 2018.5686215538428, "decode_tokens_s": 15.262610261331544}, "baseline": {"output_tokens_s": 48.482581244723605, "ttft_ms": 2201.1411293901297, "decode_tokens_s": 15.246881415163658}},
+    {"prompt_tokens": 2048, "concurrency": 8, "mistralrs": {"output_tokens_s": 66.13544479918349, "ttft_ms": 2846.4583756318057, "decode_tokens_s": 10.018359869895669}, "baseline": {"output_tokens_s": 64.96331562978689, "ttft_ms": 3711.0950671388614, "decode_tokens_s": 10.559727639858624}}
+  ]
+}

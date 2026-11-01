@@ -71,7 +71,7 @@ mistralrs serve [OPTIONS] [COMMAND]
 | `--max-prefill-chunk-tokens <MAX_PREFILL_CHUNK_TOKENS>` | `512` | CUDA or Metal prompt-token quantum used while decode is resident and for recurrent prefill batching |
 | `--max-decode-steps-before-prefill <MAX_DECODE_STEPS_BEFORE_PREFILL>` | `8` | Maximum decode steps before a waiting prefill batch is admitted |
 | `--no-kv-cache` | `false` | Disable KV cache entirely |
-| `--prefix-cache-n <PREFIX_CACHE_N>` | `16` | Number of prefix caches to hold (0 to disable) |
+| `--prefix-cache-n <PREFIX_CACHE_N>` |  | Number of prefix caches to hold (0 to disable; defaults to up to 16 within the memory budget) |
 | `-c, --chat-template <CHAT_TEMPLATE>` |  | Custom chat template file (.json or .jinja) |
 | `-j, --jinja-explicit <JINJA_EXPLICIT>` |  | Explicit JINJA template override |
 | `--matformer-config-path <MATFORMER_CONFIG_PATH>` |  | Path to a MatFormer config (CSV/JSON describing available slices). See model card |

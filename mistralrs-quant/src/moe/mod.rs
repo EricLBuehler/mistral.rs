@@ -1,6 +1,10 @@
 //! MoE support that is independent of any specific quant scheme.
 
 pub mod cuda;
+#[cfg(has_blockwise_fp8_kernels)]
+pub(crate) mod grouped_fp8;
+mod weighted_reduce;
+pub use weighted_reduce::moe_weighted_reduce;
 #[cfg(has_cutlass_moe_kernels)]
 pub mod cutlass;
 

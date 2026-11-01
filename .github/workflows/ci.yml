@@ -92,7 +92,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Test PowerShell installer
-        shell: ${{ matrix.shell }}
+        if: matrix.shell == 'powershell'
+        shell: powershell
+        run: ./scripts/tests/test_install_windows.ps1
+      - name: Test PowerShell Core installer
+        if: matrix.shell == 'pwsh'
+        shell: pwsh
         run: ./scripts/tests/test_install_windows.ps1
 
   fmt:

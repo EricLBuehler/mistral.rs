@@ -15,6 +15,7 @@ use mistralrs_quant::log::once_log_info;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
+use mappers::OptionalHostDeviceMapper;
 use peer::CudaPeerAccess;
 
 type MapperBox = Box<dyn DeviceMapper + Send + Sync>;
@@ -45,6 +46,8 @@ pub enum DeviceMapSetting {
 pub struct DeviceMapMetadata {
     device_layers: Option<Vec<DeviceLayerMapMetadata>>,
     host_layers: Option<usize>,
+    #[serde(skip)]
+    host_resources: Vec<String>,
 }
 
 impl DeviceMapMetadata {
@@ -52,6 +55,7 @@ impl DeviceMapMetadata {
         Self {
             device_layers: Some(device_layers),
             host_layers: None,
+            host_resources: Vec::new(),
         }
     }
     /// A device mapper to not map device.
@@ -59,6 +63,7 @@ impl DeviceMapMetadata {
         Self {
             device_layers: None,
             host_layers: None,
+            host_resources: Vec::new(),
         }
     }
 
@@ -68,6 +73,11 @@ impl DeviceMapMetadata {
 
     pub fn host_layers(&self) -> Option<usize> {
         self.host_layers
+    }
+
+    pub(crate) fn with_host_resources(mut self, resources: Vec<String>) -> Self {
+        self.host_resources = resources;
+        self
     }
 
     pub fn to_cli_spec(&self) -> Option<String> {
@@ -85,6 +95,23 @@ impl DeviceMapMetadata {
     }
 
     fn build_mapper(
+        &self,
+        model_layers: usize,
+        device: &Device,
+        topology: Option<&Topology>,
+        all_devices: &[Device],
+    ) -> Result<MapperBox> {
+        let mapper = self.build_inner_mapper(model_layers, device, topology, all_devices)?;
+        if self.host_resources.is_empty() {
+            return Ok(mapper);
+        }
+        Ok(Box::new(OptionalHostDeviceMapper::new(
+            mapper,
+            self.host_resources.clone(),
+        )))
+    }
+
+    fn build_inner_mapper(
         &self,
         model_layers: usize,
         device: &Device,

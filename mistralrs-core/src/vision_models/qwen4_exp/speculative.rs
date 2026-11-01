@@ -165,6 +165,18 @@ impl SpeculativeTargetMixin for Qwen4ExpModel {
         self.text.reserve_recurrent_transition_storage()
     }
 
+    fn reserve_recurrent_decode_deferred_storage(&self) -> Result<bool> {
+        if self.has_speculative_proposer() {
+            Ok(false)
+        } else {
+            self.text.reserve_recurrent_decode_deferred_storage()
+        }
+    }
+
+    fn disable_recurrent_decode_deferred_storage(&self) -> Result<bool> {
+        self.text.disable_recurrent_decode_deferred_storage()
+    }
+
     fn apply_recurrent_speculative_transitions_for_current_batch(&self) -> Result<bool> {
         self.text.apply_current_recurrent_transitions()
     }

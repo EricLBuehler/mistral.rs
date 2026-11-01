@@ -68,6 +68,9 @@ impl Qwen3_5MoeModel {
         .without_lora_registry();
         let vision = Qwen3VLVisionModel::new(
             &cfg.vision_config,
+            &cfg.quantization_config
+                .clone()
+                .or_else(|| cfg.text_config.quantization_config.clone()),
             vision_vb.set_device(normal_loading_metadata.real_device.clone()),
         )?;
         // Use top-level quantization_config if present, otherwise fall back to text_config's
@@ -417,7 +420,28 @@ impl Qwen3_5MoeModel {
     }
 }
 
-impl crate::speculative::SpeculativeTargetMixin for Qwen3_5MoeModel {}
+impl crate::speculative::SpeculativeTargetMixin for Qwen3_5MoeModel {
+    fn reserve_recurrent_decode_deferred_storage(&self) -> Result<bool> {
+        self.text.reserve_recurrent_decode_deferred_storage()
+    }
+
+    fn disable_recurrent_decode_deferred_storage(&self) -> Result<bool> {
+        self.text.cache.hybrid().disable_gdn_deferred_state()
+    }
+
+    fn flush_recurrent_state_for_current_batch(&self) -> Result<()> {
+        self.text
+            .cache
+            .hybrid()
+            .materialize_deferred_state_for_current_batch()
+    }
+
+    fn flush_recurrent_speculative_transitions(&self, sequence_ids: &[usize]) -> Result<()> {
+        let cache = self.text.cache.hybrid();
+        let slots = cache.recurrent_slots_for_sequences(sequence_ids);
+        cache.materialize_deferred_state_for_slots(&slots)
+    }
+}
 
 impl crate::block_diffusion::BlockDiffusionMixin for Qwen3_5MoeModel {}
 

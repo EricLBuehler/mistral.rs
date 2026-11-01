@@ -59,7 +59,7 @@ pub struct TextModelBuilder {
     pub(crate) max_num_seqs: usize,
     pub(crate) no_kv_cache: bool,
     pub(crate) with_logging: bool,
-    pub(crate) prefix_cache_n: Option<usize>,
+    pub(crate) prefix_cache_n: PrefixCacheCapacity,
 }
 
 /// Builder for PagedAttention metadata.
@@ -145,7 +145,7 @@ impl TextModelBuilder {
             no_paged_attn: false,
             max_num_seqs: mistralrs_core::memory_plan::DEFAULT_MAX_NUM_SEQS,
             no_kv_cache: false,
-            prefix_cache_n: Some(16),
+            prefix_cache_n: PrefixCacheCapacity::Auto,
             with_logging: false,
             device_mapping: None,
             imatrix: None,

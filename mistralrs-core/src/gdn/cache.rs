@@ -107,9 +107,17 @@ impl GdnLayerCache {
         pool.scatter_recurrent_state_with_host_indices(indices, host_indices, &self.recurrent_state)
     }
 
+    pub(crate) fn materialize_deferred_state(&self) -> Result<()> {
+        if let (Some(deferred), Some(slots)) = (&self.deferred_state, &self.slots) {
+            deferred.materialize(&self.recurrent_state, slots)?;
+        }
+        Ok(())
+    }
+
     pub fn reset(&mut self) -> Result<()> {
         self.conv_state = self.conv_state.zeros_like()?;
         self.recurrent_state = self.recurrent_state.zeros_like()?;
+        self.deferred_state = None;
         Ok(())
     }
 }

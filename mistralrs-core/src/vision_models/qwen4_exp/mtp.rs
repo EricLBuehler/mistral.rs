@@ -12,13 +12,12 @@ use mistralrs_quant::{QuantMethod, ReplicatedLayer, ShardedVarBuilder};
 
 use super::{
     config::{QsaConfig, TextConfig},
-    hyper::GatedResidual,
     qsa::{QsaAttention, QsaMode, QsaStep},
     text::SparseMoeBlock,
 };
 use crate::{
     device_map::DeviceMapper,
-    layers::{GemmaRmsNorm, Qwen3VLRotaryEmbedding},
+    layers::{GatedResidual, GemmaRmsNorm, Qwen3VLRotaryEmbedding},
     paged_attention::AttentionImplementation,
     speculative::builtin_mtp::{MtpAttentionInputs, MtpDraftOutput},
     utils::unvarbuilder::UnVarBuilder,
@@ -114,8 +113,18 @@ impl Qwen4ExpMtpHead {
                 matches!(attention_mechanism, AttentionImplementation::PagedAttention),
                 &comm,
             )?,
-            attn_hc: GatedResidual::load(cfg, vb_layer.pp("attn_hyper_connection"), true)?,
-            mlp_hc: GatedResidual::load(cfg, vb_layer.pp("mlp_hyper_connection"), true)?,
+            attn_hc: GatedResidual::load(
+                &cfg.gated_residual_config(),
+                &cfg.quantization_config,
+                vb_layer.pp("attn_hyper_connection"),
+                true,
+            )?,
+            mlp_hc: GatedResidual::load(
+                &cfg.gated_residual_config(),
+                &cfg.quantization_config,
+                vb_layer.pp("mlp_hyper_connection"),
+                true,
+            )?,
             moe: SparseMoeBlock::new(
                 cfg,
                 vb_layer_quant.pp("mlp"),
@@ -123,7 +132,12 @@ impl Qwen4ExpMtpHead {
                 loading_isq,
                 &comm,
             )?,
-            mixer: GatedResidual::load(cfg, vb_plain.pp("hyper_connection_mixer"), false)?,
+            mixer: GatedResidual::load(
+                &cfg.gated_residual_config(),
+                &cfg.quantization_config,
+                vb_plain.pp("hyper_connection_mixer"),
+                false,
+            )?,
             rotary_emb,
             qsa,
             max_seq_len: cfg.max_position_embeddings,
@@ -222,8 +236,7 @@ impl Qwen4ExpMtpHead {
         };
 
         let xn = self.attn_hc.norm(&res)?;
-        let h = self.attn_hc.mix(&xn)?;
-        let inject = self.attn_hc.inject(&xn)?;
+        let (h, inject) = self.attn_hc.mix_and_inject(&xn)?;
         let out = self.attn.forward(
             &h,
             attention.attention_mask,
@@ -240,8 +253,7 @@ impl Qwen4ExpMtpHead {
             Some(xn) => xn,
             None => self.mlp_hc.norm(&res)?,
         };
-        let h = self.mlp_hc.mix(&xn)?;
-        let inject = self.mlp_hc.inject(&xn)?;
+        let (h, inject) = self.mlp_hc.mix_and_inject(&xn)?;
         let out = self.moe.forward(&h)?;
         let (res, xn) = self
             .mlp_hc

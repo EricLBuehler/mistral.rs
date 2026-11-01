@@ -468,23 +468,7 @@ mod cuda {
                         .unwrap_or(0)
                 })
                 .collect();
-            use candle_core::cuda::cudarc::driver::{result, sys};
-            let cu_device = device.cuda_stream().context().cu_device();
-            let compute_major = unsafe {
-                result::device::get_attribute(
-                    cu_device,
-                    sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
-                )
-            }
-            .unwrap_or(0);
-            let sm_count = unsafe {
-                result::device::get_attribute(
-                    cu_device,
-                    sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT,
-                )
-            }
-            .unwrap_or(1)
-            .max(1) as usize;
+            let info = crate::cuda_device::cuda_device_info(device);
             let mut table = unsafe { device.alloc::<RoutedLoraAdapterWeight>(descriptors.len())? };
             device.memcpy_htod(descriptors, &mut table)?;
             Ok(Self {
@@ -495,8 +479,8 @@ mod cuda {
                 max_rank,
                 max_rank_by_slice,
                 max_rank_stride_by_slice,
-                sm80_or_newer: compute_major >= 8,
-                sm_count,
+                sm80_or_newer: info.has_bf16_mma(),
+                sm_count: info.sms,
             })
         }
 

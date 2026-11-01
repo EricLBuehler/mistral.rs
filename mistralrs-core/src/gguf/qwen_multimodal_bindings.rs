@@ -4,6 +4,7 @@ use anyhow::{bail, Context, Result};
 use candle_core::quantized::gguf_file::Value;
 use mistralrs_quant::{GgufArchive, GgufBindingMap, GgufTensorBinding};
 
+use super::normal_bindings::bind_slices;
 use crate::{gdn::GDN_V_HEAD_LAYOUT_CONFIG_KEY, pipeline::MultimodalLoaderType};
 
 const GENERAL_ARCHITECTURE: &str = "general.architecture";
@@ -84,6 +85,13 @@ impl TensorInventory {
             .get(name)
             .map(Vec::as_slice)
             .with_context(|| format!("cannot find GGUF tensor `{name}`"))
+    }
+
+    pub(super) fn rows(&self, name: &str) -> Result<usize> {
+        match self.shape(name)? {
+            &[rows, _] => Ok(rows),
+            shape => bail!("GGUF tensor `{name}` has shape {shape:?}, expected rank 2"),
+        }
     }
 
     fn layer_indices(&self, prefix: &str) -> BTreeSet<usize> {
@@ -505,6 +513,7 @@ pub(super) fn bind_gdn(
             GgufTensorBinding::tensor(&qkv),
         );
     }
+    bind_gdn_merged_projections(inventory, &native, source, metadata, bindings)?;
     for (target, role) in [
         ("in_proj_z.weight", "attn_gate.weight"),
         ("in_proj_b.weight", "ssm_beta.weight"),
@@ -552,6 +561,50 @@ pub(super) fn bind_gdn(
         format!("{native}.norm.weight"),
         format!("{source}.ssm_norm.weight"),
     );
+    Ok(())
+}
+
+// some converters (e.g. qwen4exp) store row-concatenated `[qkv; z]` and `[beta; alpha]` GDN projections
+fn bind_gdn_merged_projections(
+    inventory: &TensorInventory,
+    native: &str,
+    source: &str,
+    metadata: GdnMetadata,
+    bindings: &mut GgufBindingMap,
+) -> Result<()> {
+    let qkv_gate = format!("{source}.attn_qkv_gate.weight");
+    if inventory.contains(&qkv_gate) {
+        let value_dim = metadata.value_dim()?;
+        let qkv_dim = metadata
+            .key_dim()?
+            .checked_mul(2)
+            .and_then(|qk| qk.checked_add(value_dim))
+            .context("Qwen3.5 GDN projection dimension overflow")?;
+        bind_slices(
+            bindings,
+            &qkv_gate,
+            0,
+            inventory.rows(&qkv_gate)?,
+            [
+                (format!("{native}.in_proj_qkv.weight"), qkv_dim),
+                (format!("{native}.in_proj_z.weight"), value_dim),
+            ],
+        )?;
+    }
+    let beta_alpha = format!("{source}.ssm_beta_alpha.weight");
+    if inventory.contains(&beta_alpha) {
+        let heads = metadata.value_heads;
+        bind_slices(
+            bindings,
+            &beta_alpha,
+            0,
+            inventory.rows(&beta_alpha)?,
+            [
+                (format!("{native}.in_proj_b.weight"), heads),
+                (format!("{native}.in_proj_a.weight"), heads),
+            ],
+        )?;
+    }
     Ok(())
 }
 

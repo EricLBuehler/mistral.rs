@@ -1,6 +1,6 @@
 //! Plain-CUDA MoE ops (kernels in `kernels/moe/*.cu`): token alignment, fused GeLU-tanh + multiply, and cross-expert sum.
 
-use candle_core::cuda::cudarc::driver::CudaSlice;
+use candle_core::cuda::cudarc::driver::{CudaSlice, DevicePtr};
 use candle_core::{CudaDevice, DType, Result, Storage, Tensor};
 use half::bf16;
 
@@ -161,7 +161,7 @@ pub fn moe_align_em(
 /// Aligns tokens into per-expert blocks. Returns (sorted_token_ids[EM], expert_ids[nblocks], num_tokens_post_pad[1], EM); topk_ids is a contiguous u32 slice of [num_tokens*topk] expert ids (< 2^31).
 #[allow(clippy::type_complexity)]
 pub fn moe_align(
-    topk_ids_u32: &CudaSlice<u32>,
+    topk_ids_u32: &impl DevicePtr<u32>,
     num_tokens: usize,
     num_experts: usize,
     topk: usize,
@@ -180,7 +180,7 @@ pub fn moe_align(
 
     let stream = dev.cuda_stream();
     let cu_stream = stream.cu_stream();
-    let (tk_ptr, _tk_guard) = slice_ptr_on_stream(topk_ids_u32, 0, &stream);
+    let (tk_ptr, _tk_guard) = topk_ids_u32.device_ptr(&stream);
     let (s_ptr, s_guard) = slice_ptr_mut_on_stream(&mut sids, 0, &stream);
     let (e_ptr, e_guard) = slice_ptr_mut_on_stream(&mut eids, 0, &stream);
     let (n_ptr, n_guard) = slice_ptr_mut_on_stream(&mut ntpp, 0, &stream);
@@ -333,6 +333,87 @@ pub fn moe_sum_bf16(
 
 #[cfg(test)]
 mod tests {
+    const ALIGNMENT_EXPERTS: usize = 8;
+    const ALIGNMENT_TOPK: usize = 3;
+    const ALIGNMENT_BATCHES: [usize; 3] = [1, 4, 33];
+    const ALIGNMENT_BLOCKS: [usize; 3] = [8, 16, 64];
+    const ALIGNMENT_OFFSETS: [usize; 3] = [0, 1, 17];
+
+    #[test]
+    fn moe_align_honors_offset_views_and_duplicate_routes() -> candle_core::Result<()> {
+        use candle_core::{Device, Storage, Tensor};
+
+        let device = Device::new_cuda_with_stream(0)?;
+        let dev = device.as_cuda_device()?;
+        for tokens in ALIGNMENT_BATCHES {
+            let routes = tokens * ALIGNMENT_TOPK;
+            let ids = (0..routes)
+                .map(|route| {
+                    ((route / ALIGNMENT_TOPK * ALIGNMENT_TOPK
+                        + usize::from(route % ALIGNMENT_TOPK == 1))
+                        % ALIGNMENT_EXPERTS) as u32
+                })
+                .collect::<Vec<_>>();
+            for offset in ALIGNMENT_OFFSETS {
+                let mut data = vec![ALIGNMENT_EXPERTS as u32; offset];
+                data.extend_from_slice(&ids);
+                data.push(ALIGNMENT_EXPERTS as u32);
+                let tensor = Tensor::from_vec(data, offset + routes + 1, &device)?
+                    .narrow(0, offset, routes)?;
+                let (storage, layout) = tensor.storage_and_layout();
+                let Storage::Cuda(storage) = &*storage else {
+                    unreachable!()
+                };
+                let view = storage
+                    .as_cuda_slice::<u32>()?
+                    .slice(layout.start_offset()..layout.start_offset() + routes);
+                for block in ALIGNMENT_BLOCKS {
+                    let (sorted, experts, padded, capacity) = super::moe_align(
+                        &view,
+                        tokens,
+                        ALIGNMENT_EXPERTS,
+                        ALIGNMENT_TOPK,
+                        block as i32,
+                        dev,
+                    )?;
+                    let sorted = dev.clone_dtoh(&sorted)?;
+                    let experts = dev.clone_dtoh(&experts)?;
+                    let padded = dev.clone_dtoh(&padded)?[0] as usize;
+                    let mut start = 0;
+                    for expert in 0..ALIGNMENT_EXPERTS {
+                        let expected = ids
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(route, &id)| {
+                                (id as usize == expert).then_some(route as i32)
+                            })
+                            .collect::<Vec<_>>();
+                        let end = start + expected.len().div_ceil(block) * block;
+                        let mut actual = sorted[start..start + expected.len()].to_vec();
+                        actual.sort_unstable();
+                        assert_eq!(
+                            actual, expected,
+                            "tokens={tokens} offset={offset} block={block} expert={expert}"
+                        );
+                        assert!(sorted[start + expected.len()..end]
+                            .iter()
+                            .all(|&route| route == routes as i32));
+                        assert!(experts[start / block..end / block]
+                            .iter()
+                            .all(|&id| id == expert as i32));
+                        start = end;
+                    }
+                    assert_eq!(padded, start);
+                    assert!(sorted[padded..capacity]
+                        .iter()
+                        .all(|&route| route == routes as i32));
+                    assert!(experts[padded / block..].iter().all(|&id| id == -1));
+                }
+            }
+        }
+        Ok(())
+    }
+
     #[cfg(feature = "cuda")]
     #[test]
     fn test_hunyuan_moe_capacity_mask_cuda() -> candle_core::Result<()> {

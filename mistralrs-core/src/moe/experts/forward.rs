@@ -53,7 +53,6 @@ impl MoEForwardShape {
 }
 
 pub(super) struct MoEForward<'a> {
-    pub xs: &'a Tensor,
     pub xs_flat: &'a Tensor,
     pub topk_weights: &'a Tensor,
     pub topk_ids: &'a Tensor,
@@ -70,9 +69,14 @@ pub(super) struct MoEForwardConfig {
     pub act: Activation,
 }
 
-#[cfg(feature = "cuda")]
-#[derive(Clone, Copy)]
-pub(super) enum MoECudaFastPath {
-    Decode,
-    GroupedPrefill,
+impl MoEForward<'_> {
+    pub(super) fn routed_input(&self) -> mistralrs_quant::routed_moe::RoutedInput<'_> {
+        mistralrs_quant::routed_moe::RoutedInput {
+            xs: self.xs_flat,
+            indices: self.topk_ids,
+            routing: self.topk_weights,
+            output_dtype: self.original_dtype,
+            lora: self.lora.as_ref(),
+        }
+    }
 }

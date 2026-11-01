@@ -5,7 +5,7 @@ use super::{
     cache_device_allocations, cache_prefix_capacity, calculate_cache_config, CacheConfig,
     CacheConfigRequest, CacheEngine, MemoryGoal, PagedAttentionConfig, SIZE_IN_MB,
 };
-use crate::memory_plan::resolve_device_budget;
+use crate::memory_plan::{resolve_device_budget, resolve_forward_budget};
 use crate::utils::memory_usage::DeviceMemory;
 use crate::MemoryUsage;
 
@@ -15,6 +15,16 @@ const MIN_CACHE_BLOCKS: usize = 2;
 struct AllocationSnapshot {
     memory: DeviceMemory,
     budget: usize,
+    execution_budget: usize,
+}
+
+impl AllocationSnapshot {
+    fn execution(self) -> Self {
+        Self {
+            budget: self.execution_budget,
+            ..self
+        }
+    }
 }
 
 fn allocation_snapshot(
@@ -31,6 +41,7 @@ fn allocation_snapshot(
     Ok(AllocationSnapshot {
         memory,
         budget: config.allocation_budget(device, memory)?,
+        execution_budget: config.execution_budget(device, memory)?,
     })
 }
 
@@ -162,15 +173,37 @@ pub fn allocate_cache(
             } else {
                 0
             };
-            let required = reserved
-                .checked_add(activation.saturating_sub(baseline_activation))
-                .and_then(|bytes| bytes.checked_add(affine))
+            let staging = if primary {
+                request.memory_reservations.primary_staging_bytes
+            } else {
+                request.memory_reservations.secondary_staging_bytes
+            };
+            let persistent = reserved
+                .saturating_sub(baseline_activation)
+                .saturating_sub(staging)
+                .checked_add(affine)
+                .context("KV persistent reservation size overflow")?;
+            let required = persistent
+                .checked_add(activation.max(baseline_activation))
+                .and_then(|bytes| bytes.checked_add(staging))
                 .context("KV runtime reservation size overflow")?;
             let after = allocation_snapshot(&baseline, allocation.device)?;
             let budget = resolve_device_budget(baseline.allocation_memory_goal(), after.memory)?;
-            let deficit = allocation_deficit(before, after, required, budget.engine_limit_bytes);
+            let execution =
+                resolve_forward_budget(baseline.allocation_memory_goal(), after.memory)?;
+            let deficit = allocation_deficit(before, after, persistent, budget.engine_limit_bytes)
+                .max(allocation_deficit(
+                    before.execution(),
+                    after.execution(),
+                    required,
+                    execution.engine_limit_bytes,
+                ));
             deficits.push((deficit, allocation.bytes_per_block));
-            headroom.push((allocation.device.location(), after.budget, required));
+            headroom.push((
+                allocation.device.location(),
+                after.execution_budget,
+                required,
+            ));
         }
         let next_blocks = adjusted_cache_blocks(
             baseline.memory_goal(),
@@ -240,6 +273,7 @@ mod tests {
                 free: total - occupied,
             },
             budget,
+            execution_budget: budget,
         }
     }
 
@@ -268,6 +302,7 @@ mod tests {
                 working_set_limit: 900,
             },
             budget: 150,
+            execution_budget: 150,
         };
         assert_eq!(allocation_deficit(before, after, 40, 900), 20);
     }
@@ -327,6 +362,7 @@ mod tests {
                     ..Default::default()
                 })
             },
+            reserve_decode_graphs: false,
             silent: true,
         };
         let mut cache = CacheConfig {
@@ -375,6 +411,7 @@ mod tests {
                         ..Default::default()
                     })
                 },
+                reserve_decode_graphs: true,
                 silent: true,
             },
         )?;

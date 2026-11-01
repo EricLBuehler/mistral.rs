@@ -88,18 +88,18 @@ impl QuantMethod for MXFP4Layer {
         self.dequantize_weights_to(self.blocks.device())
     }
 
-    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
-        let (_, k_half) = self.blocks.dims2()?;
-        let mut output_shape = ids.dims().to_vec();
-        output_shape.push(k_half * 2);
-
-        let ids = ids
-            .to_device(self.blocks.device())?
-            .flatten_all()?
-            .contiguous()?;
-        let blocks = self.blocks.index_select(&ids, 0)?;
-        let scales = self.scales.index_select(&ids, 0)?;
-        Self::dequantize_rows(&blocks, &scales)?.reshape(output_shape)
+    fn embedding_table(&self) -> Option<crate::EmbeddingTable<'_>> {
+        use crate::embedding::{RowCodec, ScaleGrid, ScaleType};
+        let (rows, k_half) = self.blocks.dims2().ok()?;
+        Some(
+            crate::EmbeddingTable::new(
+                RowCodec::Fp4(ScaleGrid::per_row(ScaleType::E8m0Raw, MXFP4_BLOCK_SIZE)),
+                rows,
+                k_half * 2,
+                &self.blocks,
+            )
+            .with_scales(&self.scales),
+        )
     }
 
     #[allow(unused_variables)]
@@ -152,8 +152,25 @@ impl QuantMethod for MXFP4Layer {
         self.forward_dequantize(x)
     }
 
+    fn routed_weights(&self) -> Option<crate::RoutedWeights> {
+        let (experts, n, half_k) = self.blocks.dims3().ok()?;
+        Some(crate::RoutedWeights::new(
+            crate::RoutedCodec::Mxfp4,
+            self.blocks.clone(),
+            self.scales.clone(),
+            None,
+            self.bias.clone(),
+            [experts, n, half_k * 2],
+        ))
+    }
+
     #[allow(unused_variables)]
     fn gather_forward_raw(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        if let Some(routed) = self.routed_weights() {
+            if let Some(output) = crate::try_routed_gather(x, indices, &routed)? {
+                return Ok(output);
+            }
+        }
         #[cfg(feature = "cuda")]
         if matches!(x.device(), Device::Cuda(_)) && ffi::HAVE_MXFP4_GEMM_KERNELS {
             return ops::mxfp4_indexed_moe_gemm(
@@ -202,9 +219,9 @@ impl QuantMethod for MXFP4Layer {
         if let Some(last) = shape.last_mut() {
             *last = last.saturating_mul(2);
         }
-        if shape.len() == 3 && request.ty.is_some_and(|ty| !Self::supports_stacked_isq(ty)) {
+        if shape.len() == 3 && request.ty.is_some_and(|ty| !ty.supports_stacked_gather()) {
             candle_core::bail!(
-                "Cannot requantize packed MXFP4 expert weights to {}: that target does not support stacked expert gather. Use a Q*K/Q*_0/Q*_1 target, AFQ, MXFP4, or omit ISQ.",
+                "Cannot requantize packed MXFP4 expert weights to {}: that target does not support stacked expert gather.",
                 request.ty.expect("rank-3 rejection requires an ISQ target")
             );
         }
@@ -266,9 +283,9 @@ impl QuantMethod for MXFP4Layer {
                 return Ok(Arc::new(crate::GgufMatMul::from_qtensor(weight, bias)));
             }
 
-            if !Self::supports_stacked_isq(dtype) {
+            if !dtype.supports_stacked_gather() {
                 candle_core::bail!(
-                    "Cannot requantize packed MXFP4 expert weights to {dtype}: that target does not support stacked expert gather. Use a Q*K/Q*_0/Q*_1 target, AFQ, MXFP4, or omit ISQ."
+                    "Cannot requantize packed MXFP4 expert weights to {dtype}: that target does not support stacked expert gather."
                 );
             }
         }
@@ -281,10 +298,6 @@ impl QuantMethod for MXFP4Layer {
 }
 
 impl MXFP4Layer {
-    pub fn supports_stacked_isq(ty: IsqType) -> bool {
-        ty.supports_stacked_gather() || ty == IsqType::MXFP4
-    }
-
     pub fn from_parts(blocks: Tensor, scales: Tensor, bias: Option<Tensor>) -> Self {
         Self {
             blocks,
@@ -664,48 +677,6 @@ impl MXFP4Layer {
             .to_device(device)
     }
 
-    fn dequantize_rows(blocks: &Tensor, scales: &Tensor) -> Result<Tensor> {
-        use rayon::prelude::*;
-
-        let (num_rows, k_half) = blocks.dims2()?;
-        let k = k_half * 2;
-        let num_blocks_per_row = k / MXFP4_BLOCK_SIZE;
-        let half_block = MXFP4_BLOCK_SIZE / 2;
-        let blocks_data = blocks
-            .to_device(&Device::Cpu)?
-            .flatten_all()?
-            .to_vec1::<u8>()?;
-        let scales_data = scales
-            .to_device(&Device::Cpu)?
-            .flatten_all()?
-            .to_vec1::<u8>()?;
-        let mut weights = vec![0f32; num_rows * k];
-
-        weights
-            .par_chunks_mut(k)
-            .enumerate()
-            .for_each(|(row, weights_row)| {
-                let blocks_row = row * k_half;
-                let scales_row = row * num_blocks_per_row;
-                for blk in 0..num_blocks_per_row {
-                    let scale = scales_data[scales_row + blk] as usize;
-                    let dequant = &Self::DEQUANT_LUT[scale];
-                    let block_start = blocks_row + blk * half_block;
-                    let output_start = blk * MXFP4_BLOCK_SIZE;
-                    for byte_i in 0..half_block {
-                        let packed = blocks_data[block_start + byte_i];
-                        weights_row[output_start + byte_i * 2] = dequant[(packed & 0x0F) as usize];
-                        weights_row[output_start + byte_i * 2 + 1] =
-                            dequant[((packed >> 4) & 0x0F) as usize];
-                    }
-                }
-            });
-
-        Tensor::from_vec(weights, (num_rows, k), &Device::Cpu)?
-            .to_device(blocks.device())?
-            .to_dtype(DType::BF16)
-    }
-
     /// CPU forward pass: blocked dequant + matmul to avoid full weight allocation.
     /// Processes MXFP4_BLOCK_SIZE (32) input columns at a time, dequantizing only
     /// the needed weight slice before accumulating partial results.
@@ -1000,7 +971,7 @@ mod tests {
         let layer = test_layer()?;
         let ids = Tensor::from_vec(vec![6u32, 1, 6, 3, 0, 4], (2, 3), &Device::Cpu)?;
 
-        let output = layer.embedding_forward(&ids, DType::F32)?;
+        let output = layer.embedding_forward(&ids, DType::F32.into())?;
         let expected = expected_embedding(layer.as_ref(), &ids)?.to_dtype(DType::F32)?;
 
         assert_eq!(output.dims(), &[2, 3, TEST_HIDDEN_SIZE]);
@@ -1038,7 +1009,7 @@ mod tests {
             .load_linear("test.embedding", &Device::Cpu, Shard::default())?
             .unwrap();
         let ids = Tensor::from_vec(vec![5u32, 2, 1, 5], (2, 2), &Device::Cpu)?;
-        let output = loaded.embedding_forward(&ids, DType::BF16)?;
+        let output = loaded.embedding_forward(&ids, DType::BF16.into())?;
         let expected = expected_embedding(layer.as_ref(), &ids)?;
         drop(reader);
         let _ = std::fs::remove_file(path);
@@ -1117,6 +1088,54 @@ mod tests {
         assert_ne!(converted.name(), "mxfp4-layer");
         assert_eq!(n_quantized.load(std::sync::atomic::Ordering::Relaxed), 1);
         assert_close(&actual, &expected, 0.01)
+    }
+
+    #[test]
+    fn stacked_mxfp4_requantizes_to_hqq_and_fp8() -> Result<()> {
+        requantize_stacked_experts(Device::Cpu)?;
+        #[cfg(feature = "cuda")]
+        requantize_stacked_experts(Device::new_cuda_with_stream(0)?)?;
+        Ok(())
+    }
+
+    fn requantize_stacked_experts(device: Device) -> Result<()> {
+        let (input, indices) = stacked_test_inputs()?;
+        let input = input.to_device(&device)?;
+        let indices = indices.to_device(&device)?;
+        for ty in [IsqType::HQQ4, IsqType::HQQ8, IsqType::F8E4M3] {
+            let layer = stacked_test_layer()?;
+            let expected = layer
+                .gather_forward(
+                    &input.to_device(&Device::Cpu)?,
+                    &indices.to_device(&Device::Cpu)?,
+                )?
+                .to_device(&device)?;
+            let request = crate::IsqRequest {
+                ty: Some(ty),
+                device: device.clone(),
+                has_imatrix: false,
+                capture: crate::IsqCaptureMode::Immediate,
+                consumer: crate::IsqConsumer::RuntimeSwap,
+                module_key: "experts".to_string(),
+            };
+            layer.plan_isq(&request)?;
+            let n_quantized = AtomicUsize::new(0);
+            let converted = layer.apply_isq(
+                Some(ty),
+                device.clone(),
+                &n_quantized,
+                None,
+                QuantizeOntoGuard::new(),
+            )?;
+            assert_ne!(converted.name(), "mxfp4-layer");
+            assert!(converted.has_bias());
+            assert_close(
+                &converted.gather_forward(&input, &indices)?,
+                &expected,
+                0.05,
+            )?;
+        }
+        Ok(())
     }
 
     #[test]

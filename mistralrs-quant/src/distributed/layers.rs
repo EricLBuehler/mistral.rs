@@ -4,22 +4,18 @@ use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
 use candle_nn::Linear;
 
 use crate::{
-    blockwise_fp8::{
-        blockwise_fp8_module_kind, blockwise_fp8_moe, scale_shard_from_weight_shard,
-        BlockwiseFp8ModuleKind,
-    },
-    distributed,
-    gptq::gptq_linear,
-    lora::maybe_wrap_dynamic_lora_with_key,
-    make_dummy_or_error, maybe_wrap_dynamic_lora, should_apply_immediate_isq,
-    utils::isq::apply_immediate_isq_sharded,
-    ActivationQuantizationScheme, ActivationScaleLayout, AfqLayer, BlockwiseFP8Linear, BnbLinear,
+    blockwise_fp8::blockwise_fp8_moe, distributed, gptq::gptq_linear,
+    lora::maybe_wrap_dynamic_lora_with_key, make_dummy_or_error, maybe_wrap_dynamic_lora,
+    should_apply_immediate_isq, utils::isq::apply_immediate_isq_sharded, AfqLayer, BnbLinear,
     DistributedKind, LoraLinearSpec, LoraSiteKey, MXFP4Layer, QuantMethod, QuantMethodConfig,
     QuantizeOntoGuard, QuantizedActivation, QuantizedConfig, QuantizedSerde, Shard,
     ShardedVarBuilder, UnquantLinear,
 };
 
-use super::Comm;
+use super::{
+    packing::{load_packed_weights, PackRequest},
+    Comm,
+};
 
 fn shard(dim: usize, rank: usize, world_size: usize) -> Shard {
     Shard::Simple {
@@ -63,12 +59,6 @@ fn load_weight_source_dense(
         None
     };
     Ok(Some((weight, bias)))
-}
-
-struct PackedWeights {
-    packed: Arc<dyn QuantMethod>,
-    constituents: Vec<Arc<dyn QuantMethod>>,
-    rows: Vec<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -144,14 +134,14 @@ impl PackedOutputLayout {
         })
     }
 
-    fn is_identity(&self) -> bool {
+    pub(crate) fn is_identity(&self) -> bool {
         self.runtime_to_canonical
             .iter()
             .enumerate()
             .all(|(runtime, &canonical)| runtime == canonical)
     }
 
-    fn local_runtime_to_canonical(
+    pub(crate) fn local_runtime_to_canonical(
         &self,
         out_dim: usize,
         shard: Shard,
@@ -205,7 +195,19 @@ impl PackedOutputLayout {
     }
 }
 
-fn select_rows(tensor: &Tensor, rows: &[usize]) -> Result<Tensor> {
+pub(crate) fn select_rows(tensor: &Tensor, rows: &[usize]) -> Result<Tensor> {
+    // CUDA index_select has no FP8 kernel, so gather FP8 rows as contiguous runs instead.
+    if tensor.dtype() == DType::F8E4M3 {
+        let mut runs = Vec::new();
+        let mut start = 0;
+        for end in 1..=rows.len() {
+            if end == rows.len() || rows[end] != rows[end - 1] + 1 {
+                runs.push(tensor.narrow(0, rows[start], end - start)?);
+                start = end;
+            }
+        }
+        return Tensor::cat(&runs, 0);
+    }
     let indices = rows
         .iter()
         .map(|&row| u32::try_from(row).map_err(candle_core::Error::wrap))
@@ -215,14 +217,14 @@ fn select_rows(tensor: &Tensor, rows: &[usize]) -> Result<Tensor> {
 }
 
 #[derive(Debug)]
-struct RuntimeOutputLinear {
+pub(crate) struct RuntimeOutputLinear {
     inner: Arc<dyn QuantMethod>,
     runtime_to_canonical: Arc<[usize]>,
     canonical_to_runtime: Arc<[usize]>,
 }
 
 impl RuntimeOutputLinear {
-    fn wrap(
+    pub(crate) fn wrap(
         inner: Arc<dyn QuantMethod>,
         runtime_to_canonical: Option<Arc<[usize]>>,
     ) -> Arc<dyn QuantMethod> {
@@ -249,11 +251,14 @@ impl RuntimeOutputLinear {
     }
 }
 
-impl QuantMethod for RuntimeOutputLinear {
-    #[cfg(feature = "metal")]
-    fn prepare_metal_kernels(&self, activation_dtype: DType) -> Result<()> {
-        self.inner.prepare_metal_kernels(activation_dtype)
+impl RuntimeOutputLinear {
+    fn inner_layer(&self) -> Option<&dyn QuantMethod> {
+        Some(&*self.inner)
     }
+}
+
+impl QuantMethod for RuntimeOutputLinear {
+    crate::forward_quant_hooks!(meta, activation, output, weights, group: Self::inner_layer);
 
     fn new(_method: QuantMethodConfig) -> Result<Self>
     where
@@ -272,81 +277,6 @@ impl QuantMethod for RuntimeOutputLinear {
 
     fn gather_forward_raw(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
         self.inner.gather_forward_raw(a, indices)
-    }
-
-    fn get_qtensor(&self) -> Option<Arc<candle_core::quantized::QTensor>> {
-        self.inner.get_qtensor()
-    }
-
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
-    fn prepare_gguf_affine_raw(
-        &self,
-        flat_batch: usize,
-        dtype: DType,
-        device: &Device,
-    ) -> Result<bool> {
-        self.inner
-            .prepare_gguf_affine_raw(flat_batch, dtype, device)
-    }
-
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
-    fn try_gguf_affine_forward_raw(&self, a: &Tensor) -> Result<Option<Tensor>> {
-        self.inner.try_gguf_affine_forward_raw(a)
-    }
-
-    fn afq_inner(&self) -> Option<crate::AfqInner> {
-        self.inner.afq_inner()
-    }
-
-    fn activation_quantization_scheme(&self) -> Option<ActivationQuantizationScheme> {
-        self.inner.activation_quantization_scheme()
-    }
-
-    fn activation_quantization_scheme_for(
-        &self,
-        a: &Tensor,
-    ) -> Option<ActivationQuantizationScheme> {
-        self.inner.activation_quantization_scheme_for(a)
-    }
-
-    fn preferred_activation_scale_layout_for(&self, a: &Tensor) -> Option<ActivationScaleLayout> {
-        self.inner.preferred_activation_scale_layout_for(a)
-    }
-
-    fn nvfp4_input_calibration(&self) -> Option<crate::Nvfp4InputCalibration<'_>> {
-        self.inner.nvfp4_input_calibration()
-    }
-
-    fn activation_quantization_global_scale(&self) -> Option<f32> {
-        self.inner.activation_quantization_global_scale()
-    }
-
-    fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {
-        self.inner.quantize_activation(a)
-    }
-
-    fn try_quantize_glu(
-        &self,
-        gate: &Tensor,
-        value: &Tensor,
-        activation: crate::GluActivationType,
-    ) -> Result<Option<QuantizedActivation>> {
-        self.inner.try_quantize_glu(gate, value, activation)
-    }
-
-    fn forward_quantized(&self, a: &QuantizedActivation) -> Result<Tensor> {
-        self.inner.forward_quantized(a)
-    }
-
-    #[cfg(feature = "cuda")]
-    fn try_forward_fused_split_glu(
-        &self,
-        input: &Tensor,
-        split_size: usize,
-        activation: crate::GluActivationType,
-    ) -> Result<Option<Tensor>> {
-        self.inner
-            .try_forward_fused_split_glu(input, split_size, activation)
     }
 
     fn quantized_act_type(&self) -> Option<DType> {
@@ -400,22 +330,6 @@ impl QuantMethod for RuntimeOutputLinear {
     fn has_bias(&self) -> bool {
         self.inner.has_bias()
     }
-
-    fn begin_track_stats(&self) -> Result<()> {
-        self.inner.begin_track_stats()
-    }
-
-    fn end_track_stats(&self) -> Result<Tensor> {
-        self.inner.end_track_stats()
-    }
-
-    fn stats_snapshot(&self) -> Option<(usize, usize)> {
-        self.inner.stats_snapshot()
-    }
-
-    fn process_routed_stats(&self, x: &Tensor, ids: &Tensor) -> Result<()> {
-        self.inner.process_routed_stats(x, ids)
-    }
 }
 
 impl QuantizedSerde for RuntimeOutputLinear {
@@ -425,332 +339,6 @@ impl QuantizedSerde for RuntimeOutputLinear {
 
     fn isq_serde_supported(&self) -> bool {
         false
-    }
-}
-
-enum PackedWeightKind {
-    Unquantized,
-    BlockwiseFp8 {
-        block_size: [usize; 2],
-        activation_scheme: Option<crate::Fp8ActivationScheme>,
-    },
-}
-
-fn load_packed_weights(
-    in_dim: usize,
-    out_dims: &[usize],
-    names: &[&str],
-    config: &Option<QuantizedConfig>,
-    shards: &[Shard],
-    output_layouts: &[PackedOutputLayout],
-    vb: ShardedVarBuilder,
-) -> Result<Option<PackedWeights>> {
-    if out_dims.is_empty()
-        || out_dims.len() != names.len()
-        || names.len() != shards.len()
-        || names.len() != output_layouts.len()
-    {
-        candle_core::bail!(
-            "packed projection requires matching nonempty output dimensions, names, and shards"
-        );
-    }
-    if crate::get_immediate_isq().is_some() {
-        return Ok(None);
-    }
-
-    let builders = names.iter().map(|name| vb.pp(name)).collect::<Vec<_>>();
-    if builders
-        .iter()
-        .any(|builder| should_apply_immediate_isq(builder) || builder.weight_source().is_some())
-    {
-        return Ok(None);
-    }
-    if let Some(
-        config @ (QuantizedConfig::ModelOpt { .. } | QuantizedConfig::CompressedTensors { .. }),
-    ) = config
-    {
-        if output_layouts.iter().any(|layout| !layout.is_identity()) {
-            return Ok(None);
-        }
-        let mut specs = Vec::with_capacity(builders.len());
-        for (((builder, &out_dim), &shard), layout) in builders
-            .iter()
-            .zip(out_dims)
-            .zip(shards)
-            .zip(output_layouts)
-        {
-            layout.local_runtime_to_canonical(out_dim, shard)?;
-            let Some(crate::CheckpointLinearSpec::Nvfp4(spec)) =
-                config.resolve_checkpoint(&builder.prefix())?
-            else {
-                return Ok(None);
-            };
-            if !builder.contains_tensor(spec.scale_names.weight) {
-                return Ok(None);
-            }
-            specs.push(spec);
-        }
-        let layers = builders
-            .iter()
-            .zip(out_dims)
-            .zip(shards)
-            .zip(specs)
-            .map(|(((builder, &out_dim), &shard), spec)| {
-                crate::Nvfp4Layer::load(in_dim, out_dim, spec, false, shard, builder.clone())
-            })
-            .collect::<Result<Vec<_>>>()?;
-        return Ok(
-            crate::Nvfp4Layer::merge(layers)?.map(|group| PackedWeights {
-                packed: group.packed,
-                constituents: group.constituents,
-                rows: group.rows_per_rank,
-            }),
-        );
-    }
-    if builders
-        .iter()
-        .any(|builder| !builder.contains_tensor("weight"))
-    {
-        return Ok(None);
-    }
-
-    let kind = match config {
-        None => PackedWeightKind::Unquantized,
-        Some(
-            config @ QuantizedConfig::Fp8 {
-                weight_block_size, ..
-            },
-        ) => {
-            let Some(weight_block_size) = weight_block_size else {
-                return Ok(None);
-            };
-            if builders
-                .iter()
-                .any(|builder| builder.contains_tensor("weight_scale"))
-            {
-                return Ok(None);
-            }
-            let module_kinds = builders
-                .iter()
-                .map(|builder| blockwise_fp8_module_kind(config, builder))
-                .collect::<Result<Vec<_>>>()?;
-            let Some(&first) = module_kinds.first() else {
-                unreachable!()
-            };
-            if first == BlockwiseFp8ModuleKind::Missing
-                || module_kinds.iter().any(|kind| *kind != first)
-            {
-                return Ok(None);
-            }
-            match first {
-                BlockwiseFp8ModuleKind::Missing => unreachable!(),
-                BlockwiseFp8ModuleKind::Unquantized => PackedWeightKind::Unquantized,
-                BlockwiseFp8ModuleKind::Quantized => {
-                    if vb.device().is_metal() {
-                        return Ok(None);
-                    }
-                    let QuantizedConfig::Fp8 {
-                        activation_scheme,
-                        fmt,
-                        ..
-                    } = config
-                    else {
-                        unreachable!()
-                    };
-                    let [row_block, col_block]: [usize; 2] = weight_block_size
-                        .as_slice()
-                        .try_into()
-                        .map_err(|_| {
-                            candle_core::Error::msg(format!(
-                                "expected FP8 weight block size with two dimensions, got {weight_block_size:?}"
-                            ))
-                        })?;
-                    if row_block == 0 || col_block == 0 {
-                        candle_core::bail!(
-                            "expected nonzero FP8 weight block dimensions, got {weight_block_size:?}"
-                        );
-                    }
-                    crate::fp8_config::validate_e4m3(fmt.as_deref())
-                        .map_err(candle_core::Error::msg)?;
-                    PackedWeightKind::BlockwiseFp8 {
-                        block_size: [row_block, col_block],
-                        activation_scheme: *activation_scheme,
-                    }
-                }
-            }
-        }
-        Some(_) => return Ok(None),
-    };
-
-    match kind {
-        PackedWeightKind::Unquantized => {
-            let parts = builders
-                .iter()
-                .zip(out_dims)
-                .zip(shards)
-                .zip(output_layouts)
-                .map(|(((builder, &out_dim), &shard), layout)| {
-                    let weight = builder.get_with_hints((out_dim, in_dim), "weight", shard)?;
-                    let output_map = layout.local_runtime_to_canonical(out_dim, shard)?;
-                    let weight = match &output_map {
-                        Some(output_map) => select_rows(&weight, output_map)?,
-                        None => weight,
-                    };
-                    Ok((weight, output_map))
-                })
-                .collect::<Result<Vec<_>>>()?;
-            let rows = parts
-                .iter()
-                .map(|(part, _)| part.dim(0))
-                .collect::<Result<Vec<_>>>()?;
-            let packed_weight =
-                Tensor::cat(&parts.iter().map(|(part, _)| part).collect::<Vec<_>>(), 0)?;
-            let packed = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                Linear::new(packed_weight.clone(), None),
-            ))?) as Arc<dyn QuantMethod>;
-            let mut constituents = Vec::with_capacity(parts.len());
-            let mut offset = 0;
-            for (&rows, (_, output_map)) in rows.iter().zip(parts) {
-                let weight = packed_weight.narrow(0, offset, rows)?;
-                let weight = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
-                    Linear::new(weight, None),
-                ))?) as Arc<dyn QuantMethod>;
-                constituents.push(RuntimeOutputLinear::wrap(weight, output_map));
-                offset += rows;
-            }
-            Ok(Some(PackedWeights {
-                packed,
-                constituents,
-                rows,
-            }))
-        }
-        PackedWeightKind::BlockwiseFp8 {
-            block_size,
-            activation_scheme,
-        } => {
-            let mut weights = Vec::with_capacity(builders.len());
-            let mut scales = Vec::with_capacity(builders.len());
-            let mut rows = Vec::with_capacity(builders.len());
-            let mut output_maps = Vec::with_capacity(builders.len());
-            for ((((builder, &out_dim), &shard), name), layout) in builders
-                .iter()
-                .zip(out_dims)
-                .zip(shards)
-                .zip(names)
-                .zip(output_layouts)
-            {
-                let scale_shard =
-                    scale_shard_from_weight_shard([out_dim, in_dim], block_size, shard)?;
-                let weight = builder.get_with_hints_dtype(
-                    (out_dim, in_dim),
-                    "weight",
-                    shard,
-                    DType::F8E4M3,
-                )?;
-                let local_rows = weight.dim(0)?;
-                if !local_rows.is_multiple_of(block_size[0]) {
-                    tracing::debug!(
-                        projection = *name,
-                        rows = local_rows,
-                        block_rows = block_size[0],
-                        "Skipping FP8 projection packing because an output boundary is not block aligned"
-                    );
-                    return Ok(None);
-                }
-                let scale = builder.get_with_hints_dtype(
-                    (
-                        out_dim.div_ceil(block_size[0]),
-                        in_dim.div_ceil(block_size[1]),
-                    ),
-                    "weight_scale_inv",
-                    scale_shard,
-                    DType::F32,
-                )?;
-                if scale.dim(0)? != local_rows / block_size[0] {
-                    candle_core::bail!(
-                        "FP8 projection `{}` has {} local scale rows for {local_rows} weight rows and block size {}",
-                        builder.prefix(),
-                        scale.dim(0)?,
-                        block_size[0]
-                    );
-                }
-                let output_map = layout.local_runtime_to_canonical(out_dim, shard)?;
-                let (weight, scale) = if let Some(output_map) = &output_map {
-                    let mut block_rows = Vec::with_capacity(local_rows / block_size[0]);
-                    for runtime_block in 0..local_rows / block_size[0] {
-                        let runtime_start = runtime_block * block_size[0];
-                        let canonical_start = output_map[runtime_start];
-                        if !canonical_start.is_multiple_of(block_size[0])
-                            || output_map[runtime_start..runtime_start + block_size[0]]
-                                .iter()
-                                .enumerate()
-                                .any(|(offset, &canonical)| canonical != canonical_start + offset)
-                        {
-                            tracing::debug!(
-                                projection = *name,
-                                block_rows = block_size[0],
-                                "Skipping FP8 projection packing because its output layout splits scale blocks"
-                            );
-                            return Ok(None);
-                        }
-                        block_rows.push(canonical_start / block_size[0]);
-                    }
-                    let weight_parts = block_rows
-                        .iter()
-                        .map(|&block| weight.narrow(0, block * block_size[0], block_size[0]))
-                        .collect::<Result<Vec<_>>>()?;
-                    let scale_parts = block_rows
-                        .iter()
-                        .map(|&block| scale.narrow(0, block, 1))
-                        .collect::<Result<Vec<_>>>()?;
-                    (
-                        Tensor::cat(&weight_parts.iter().collect::<Vec<_>>(), 0)?,
-                        Tensor::cat(&scale_parts.iter().collect::<Vec<_>>(), 0)?,
-                    )
-                } else {
-                    (weight, scale)
-                };
-                rows.push(local_rows);
-                weights.push(weight);
-                scales.push(scale);
-                output_maps.push(output_map);
-            }
-
-            let packed_weight = Tensor::cat(&weights.iter().collect::<Vec<_>>(), 0)?;
-            let packed_scales = Tensor::cat(&scales.iter().collect::<Vec<_>>(), 0)?;
-            let make_layer =
-                |weight: Tensor, weight_scale_inv: Tensor| -> Result<Arc<dyn QuantMethod>> {
-                    Ok(Arc::new(BlockwiseFP8Linear::new(
-                        QuantMethodConfig::BlockwiseFP8 {
-                            weight,
-                            weight_scale_inv,
-                            bias: None,
-                            dequant_dtype: vb.dtype(),
-                            weight_block_size: block_size.to_vec(),
-                            activation_scheme,
-                        },
-                    )?))
-                };
-            let packed = make_layer(packed_weight.clone(), packed_scales.clone())?;
-            let mut constituents = Vec::with_capacity(rows.len());
-            let mut weight_offset = 0;
-            let mut scale_offset = 0;
-            for (&rows, output_map) in rows.iter().zip(output_maps) {
-                let scale_rows = rows / block_size[0];
-                let layer = make_layer(
-                    packed_weight.narrow(0, weight_offset, rows)?,
-                    packed_scales.narrow(0, scale_offset, scale_rows)?,
-                )?;
-                constituents.push(RuntimeOutputLinear::wrap(layer, output_map));
-                weight_offset += rows;
-                scale_offset += scale_rows;
-            }
-            Ok(Some(PackedWeights {
-                packed,
-                constituents,
-                rows,
-            }))
-        }
     }
 }
 
@@ -1026,10 +614,43 @@ impl RowParallelLayer {
     }
 }
 
+impl RowParallelLayer {
+    fn weight_layer(&self) -> Option<&dyn QuantMethod> {
+        Some(&*self.weight)
+    }
+
+    fn transparent_layer(&self) -> Option<&dyn QuantMethod> {
+        (self.all_reduce.is_noop() && self.bias.is_none()).then_some(&*self.weight)
+    }
+
+    fn reduce_output(&self, mut xs: Tensor) -> Result<Tensor> {
+        if !self.all_reduce.is_noop() {
+            xs = self.all_reduce.sum_all_reduce(&xs.contiguous()?)?;
+        }
+        match &self.bias {
+            Some(bias) => xs.broadcast_add(bias),
+            None => Ok(xs),
+        }
+    }
+}
+
 impl QuantMethod for RowParallelLayer {
-    #[cfg(feature = "metal")]
-    fn prepare_metal_kernels(&self, activation_dtype: DType) -> Result<()> {
-        self.weight.prepare_metal_kernels(activation_dtype)
+    crate::forward_quant_hooks!(meta, activation: Self::weight_layer);
+    crate::forward_quant_hooks!(weights, group: Self::transparent_layer);
+
+    fn forward_quantized(&self, a: &QuantizedActivation) -> Result<Tensor> {
+        self.reduce_output(self.weight.forward_quantized(a)?)
+    }
+
+    fn forward_glu(
+        &self,
+        input: crate::GluInput<'_>,
+        activation: crate::GluActivationType,
+    ) -> Result<Option<Tensor>> {
+        self.weight
+            .forward_glu(input, activation)?
+            .map(|output| self.reduce_output(output))
+            .transpose()
     }
 
     fn new(_method: QuantMethodConfig) -> Result<Self>
@@ -1072,92 +693,6 @@ impl QuantMethod for RowParallelLayer {
         self.weight.plan_isq(request)
     }
 
-    fn begin_track_stats(&self) -> Result<()> {
-        self.weight.begin_track_stats()
-    }
-
-    fn stats_snapshot(&self) -> Option<(usize, usize)> {
-        self.weight.stats_snapshot()
-    }
-
-    fn process_routed_stats(&self, x: &Tensor, ids: &Tensor) -> Result<()> {
-        self.weight.process_routed_stats(x, ids)
-    }
-
-    fn end_track_stats(&self) -> Result<Tensor> {
-        self.weight.end_track_stats()
-    }
-
-    fn activation_quantization_scheme(&self) -> Option<ActivationQuantizationScheme> {
-        self.weight.activation_quantization_scheme()
-    }
-
-    fn activation_quantization_scheme_for(
-        &self,
-        a: &Tensor,
-    ) -> Option<ActivationQuantizationScheme> {
-        self.weight.activation_quantization_scheme_for(a)
-    }
-
-    fn preferred_activation_scale_layout_for(&self, a: &Tensor) -> Option<ActivationScaleLayout> {
-        self.weight.preferred_activation_scale_layout_for(a)
-    }
-
-    fn nvfp4_input_calibration(&self) -> Option<crate::Nvfp4InputCalibration<'_>> {
-        self.weight.nvfp4_input_calibration()
-    }
-
-    fn activation_quantization_global_scale(&self) -> Option<f32> {
-        self.weight.activation_quantization_global_scale()
-    }
-
-    fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {
-        self.weight.quantize_activation(a)
-    }
-
-    fn try_quantize_glu(
-        &self,
-        gate: &Tensor,
-        value: &Tensor,
-        activation: crate::GluActivationType,
-    ) -> Result<Option<QuantizedActivation>> {
-        self.weight.try_quantize_glu(gate, value, activation)
-    }
-
-    fn forward_quantized(&self, a: &QuantizedActivation) -> Result<Tensor> {
-        let mut xs = self.weight.forward_quantized(a)?;
-        if !self.all_reduce.is_noop() {
-            let xs_contiguous = xs.contiguous()?;
-            xs = self.all_reduce.sum_all_reduce(&xs_contiguous)?;
-        }
-        if let Some(bias) = &self.bias {
-            xs = xs.broadcast_add(bias)?;
-        }
-        Ok(xs)
-    }
-
-    #[cfg(feature = "cuda")]
-    fn try_forward_fused_split_glu(
-        &self,
-        input: &Tensor,
-        split_size: usize,
-        activation: crate::GluActivationType,
-    ) -> Result<Option<Tensor>> {
-        let Some(mut output) = self
-            .weight
-            .try_forward_fused_split_glu(input, split_size, activation)?
-        else {
-            return Ok(None);
-        };
-        if !self.all_reduce.is_noop() {
-            output = self.all_reduce.sum_all_reduce(&output.contiguous()?)?;
-        }
-        if let Some(bias) = &self.bias {
-            output = output.broadcast_add(bias)?;
-        }
-        Ok(Some(output))
-    }
-
     fn quantized_act_type(&self) -> Option<candle_core::DType> {
         self.weight.quantized_act_type()
     }
@@ -1180,46 +715,6 @@ impl QuantMethod for RowParallelLayer {
 
     fn has_bias(&self) -> bool {
         self.bias.is_some() || self.weight.has_bias()
-    }
-
-    fn get_qtensor(&self) -> Option<Arc<candle_core::quantized::QTensor>> {
-        if self.all_reduce.is_noop() {
-            self.weight.get_qtensor()
-        } else {
-            None
-        }
-    }
-
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
-    fn prepare_gguf_affine_raw(
-        &self,
-        flat_batch: usize,
-        dtype: DType,
-        device: &Device,
-    ) -> Result<bool> {
-        if self.all_reduce.is_noop() {
-            self.weight
-                .prepare_gguf_affine_raw(flat_batch, dtype, device)
-        } else {
-            Ok(false)
-        }
-    }
-
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
-    fn try_gguf_affine_forward_raw(&self, a: &Tensor) -> Result<Option<Tensor>> {
-        if self.all_reduce.is_noop() {
-            self.weight.try_gguf_affine_forward_raw(a)
-        } else {
-            Ok(None)
-        }
-    }
-
-    fn afq_inner(&self) -> Option<crate::AfqInner> {
-        if self.all_reduce.is_noop() {
-            self.weight.afq_inner()
-        } else {
-            None
-        }
     }
 
     fn apply_isq(
@@ -1600,15 +1095,15 @@ impl ColumnParallelLayer {
         let shards = (0..names.len())
             .map(|i| shards.map_or(default_shard, |shards| shards[i]))
             .collect::<Vec<_>>();
-        let Some(loaded) = load_packed_weights(
+        let Some(loaded) = load_packed_weights(&PackRequest {
             in_dim,
             out_dims,
             names,
-            config,
-            &shards,
+            shards: &shards,
             output_layouts,
-            vb.clone(),
-        )?
+            config,
+            vb: &vb,
+        })?
         else {
             return Ok(None);
         };
@@ -1641,7 +1136,7 @@ impl ColumnParallelLayer {
         Ok(Some(PackedLinear {
             packed: loaded.packed,
             constituents,
-            rows_per_rank: loaded.rows,
+            rows_per_rank: loaded.rows_per_rank,
         }))
     }
 
@@ -1705,10 +1200,40 @@ pub struct PackedLinear {
 
 pub type PackedColumnParallel = PackedLinear;
 
+impl ColumnParallelLayer {
+    fn weight_layer(&self) -> Option<&dyn QuantMethod> {
+        Some(&*self.weight)
+    }
+
+    fn transparent_layer(&self) -> Option<&dyn QuantMethod> {
+        self.bias.is_none().then_some(&*self.weight)
+    }
+
+    fn add_bias(&self, xs: Tensor) -> Result<Tensor> {
+        match &self.bias {
+            Some(bias) => xs.broadcast_add(bias),
+            None => Ok(xs),
+        }
+    }
+}
+
 impl QuantMethod for ColumnParallelLayer {
-    #[cfg(feature = "metal")]
-    fn prepare_metal_kernels(&self, activation_dtype: DType) -> Result<()> {
-        self.weight.prepare_metal_kernels(activation_dtype)
+    crate::forward_quant_hooks!(meta, activation: Self::weight_layer);
+    crate::forward_quant_hooks!(weights, group: Self::transparent_layer);
+
+    fn forward_quantized(&self, a: &QuantizedActivation) -> Result<Tensor> {
+        self.add_bias(self.weight.forward_quantized(a)?)
+    }
+
+    fn forward_glu(
+        &self,
+        input: crate::GluInput<'_>,
+        activation: crate::GluActivationType,
+    ) -> Result<Option<Tensor>> {
+        self.weight
+            .forward_glu(input, activation)?
+            .map(|output| self.add_bias(output))
+            .transpose()
     }
 
     fn new(_method: QuantMethodConfig) -> Result<Self>
@@ -1754,85 +1279,6 @@ impl QuantMethod for ColumnParallelLayer {
         self.weight.plan_isq(request)
     }
 
-    fn begin_track_stats(&self) -> Result<()> {
-        self.weight.begin_track_stats()
-    }
-
-    fn stats_snapshot(&self) -> Option<(usize, usize)> {
-        self.weight.stats_snapshot()
-    }
-
-    fn process_routed_stats(&self, x: &Tensor, ids: &Tensor) -> Result<()> {
-        self.weight.process_routed_stats(x, ids)
-    }
-
-    fn end_track_stats(&self) -> Result<Tensor> {
-        self.weight.end_track_stats()
-    }
-
-    fn activation_quantization_scheme(&self) -> Option<ActivationQuantizationScheme> {
-        self.weight.activation_quantization_scheme()
-    }
-
-    fn activation_quantization_scheme_for(
-        &self,
-        a: &Tensor,
-    ) -> Option<ActivationQuantizationScheme> {
-        self.weight.activation_quantization_scheme_for(a)
-    }
-
-    fn preferred_activation_scale_layout_for(&self, a: &Tensor) -> Option<ActivationScaleLayout> {
-        self.weight.preferred_activation_scale_layout_for(a)
-    }
-
-    fn nvfp4_input_calibration(&self) -> Option<crate::Nvfp4InputCalibration<'_>> {
-        self.weight.nvfp4_input_calibration()
-    }
-
-    fn activation_quantization_global_scale(&self) -> Option<f32> {
-        self.weight.activation_quantization_global_scale()
-    }
-
-    fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {
-        self.weight.quantize_activation(a)
-    }
-
-    fn try_quantize_glu(
-        &self,
-        gate: &Tensor,
-        value: &Tensor,
-        activation: crate::GluActivationType,
-    ) -> Result<Option<QuantizedActivation>> {
-        self.weight.try_quantize_glu(gate, value, activation)
-    }
-
-    fn forward_quantized(&self, a: &QuantizedActivation) -> Result<Tensor> {
-        let mut xs = self.weight.forward_quantized(a)?;
-        if let Some(bias) = &self.bias {
-            xs = xs.broadcast_add(bias)?;
-        }
-        Ok(xs)
-    }
-
-    #[cfg(feature = "cuda")]
-    fn try_forward_fused_split_glu(
-        &self,
-        input: &Tensor,
-        split_size: usize,
-        activation: crate::GluActivationType,
-    ) -> Result<Option<Tensor>> {
-        let Some(mut output) = self
-            .weight
-            .try_forward_fused_split_glu(input, split_size, activation)?
-        else {
-            return Ok(None);
-        };
-        if let Some(bias) = &self.bias {
-            output = output.broadcast_add(bias)?;
-        }
-        Ok(Some(output))
-    }
-
     fn quantized_act_type(&self) -> Option<candle_core::DType> {
         self.weight.quantized_act_type()
     }
@@ -1851,30 +1297,6 @@ impl QuantMethod for ColumnParallelLayer {
 
     fn has_bias(&self) -> bool {
         self.bias.is_some() || self.weight.has_bias()
-    }
-
-    fn get_qtensor(&self) -> Option<Arc<candle_core::quantized::QTensor>> {
-        self.weight.get_qtensor()
-    }
-
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
-    fn prepare_gguf_affine_raw(
-        &self,
-        flat_batch: usize,
-        dtype: DType,
-        device: &Device,
-    ) -> Result<bool> {
-        self.weight
-            .prepare_gguf_affine_raw(flat_batch, dtype, device)
-    }
-
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
-    fn try_gguf_affine_forward_raw(&self, a: &Tensor) -> Result<Option<Tensor>> {
-        self.weight.try_gguf_affine_forward_raw(a)
-    }
-
-    fn afq_inner(&self) -> Option<crate::AfqInner> {
-        self.weight.afq_inner()
     }
 
     fn apply_isq(
@@ -2093,15 +1515,15 @@ impl ReplicatedLayer {
             .map(LoraLinearSpec::out_features)
             .collect::<Vec<_>>();
         let shards = vec![Shard::default(); names.len()];
-        let Some(loaded) = load_packed_weights(
+        let Some(loaded) = load_packed_weights(&PackRequest {
             in_dim,
-            &out_dims,
+            out_dims: &out_dims,
             names,
-            config,
-            &shards,
+            shards: &shards,
             output_layouts,
-            vb.clone(),
-        )?
+            config,
+            vb: &vb,
+        })?
         else {
             return Ok(None);
         };
@@ -2130,7 +1552,7 @@ impl ReplicatedLayer {
         Ok(Some(PackedLinear {
             packed: loaded.packed,
             constituents,
-            rows_per_rank: loaded.rows,
+            rows_per_rank: loaded.rows_per_rank,
         }))
     }
 
@@ -2280,10 +1702,17 @@ impl ReplicatedLayer {
     }
 }
 
+impl ReplicatedLayer {
+    fn inner_layer(&self) -> Option<&dyn QuantMethod> {
+        Some(&*self.0)
+    }
+}
+
 impl QuantMethod for ReplicatedLayer {
-    #[cfg(feature = "metal")]
-    fn prepare_metal_kernels(&self, activation_dtype: DType) -> Result<()> {
-        self.0.prepare_metal_kernels(activation_dtype)
+    crate::forward_quant_hooks!(meta, activation, output, weights, group: Self::inner_layer);
+
+    fn gather_forward_raw(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        self.0.gather_forward_raw(a, indices)
     }
 
     fn new(_method: QuantMethodConfig) -> Result<Self>
@@ -2297,12 +1726,8 @@ impl QuantMethod for ReplicatedLayer {
         self.0.forward_raw(a)
     }
 
-    fn embedding_forward(&self, ids: &Tensor, output_dtype: candle_core::DType) -> Result<Tensor> {
-        self.0.embedding_forward(ids, output_dtype)
-    }
-
-    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
-        self.0.embedding_forward_raw(ids)
+    fn embedding_forward(&self, ids: &Tensor, out: crate::EmbeddingOutput) -> Result<Tensor> {
+        self.0.embedding_forward(ids, out)
     }
 
     fn add_delta_w(&self, delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
@@ -2319,73 +1744,6 @@ impl QuantMethod for ReplicatedLayer {
 
     fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
         self.0.plan_isq(request)
-    }
-
-    fn begin_track_stats(&self) -> Result<()> {
-        self.0.begin_track_stats()
-    }
-
-    fn stats_snapshot(&self) -> Option<(usize, usize)> {
-        self.0.stats_snapshot()
-    }
-
-    fn process_routed_stats(&self, x: &Tensor, ids: &Tensor) -> Result<()> {
-        self.0.process_routed_stats(x, ids)
-    }
-
-    fn end_track_stats(&self) -> Result<Tensor> {
-        self.0.end_track_stats()
-    }
-
-    fn activation_quantization_scheme(&self) -> Option<ActivationQuantizationScheme> {
-        self.0.activation_quantization_scheme()
-    }
-
-    fn activation_quantization_scheme_for(
-        &self,
-        a: &Tensor,
-    ) -> Option<ActivationQuantizationScheme> {
-        self.0.activation_quantization_scheme_for(a)
-    }
-
-    fn preferred_activation_scale_layout_for(&self, a: &Tensor) -> Option<ActivationScaleLayout> {
-        self.0.preferred_activation_scale_layout_for(a)
-    }
-
-    fn nvfp4_input_calibration(&self) -> Option<crate::Nvfp4InputCalibration<'_>> {
-        self.0.nvfp4_input_calibration()
-    }
-
-    fn activation_quantization_global_scale(&self) -> Option<f32> {
-        self.0.activation_quantization_global_scale()
-    }
-
-    fn quantize_activation(&self, a: &Tensor) -> Result<QuantizedActivation> {
-        self.0.quantize_activation(a)
-    }
-
-    fn try_quantize_glu(
-        &self,
-        gate: &Tensor,
-        value: &Tensor,
-        activation: crate::GluActivationType,
-    ) -> Result<Option<QuantizedActivation>> {
-        self.0.try_quantize_glu(gate, value, activation)
-    }
-
-    fn forward_quantized(&self, a: &QuantizedActivation) -> Result<Tensor> {
-        self.0.forward_quantized(a)
-    }
-
-    #[cfg(feature = "cuda")]
-    fn try_forward_fused_split_glu(
-        &self,
-        input: &Tensor,
-        split_size: usize,
-        activation: crate::GluActivationType,
-    ) -> Result<Option<Tensor>> {
-        self.0
-            .try_forward_fused_split_glu(input, split_size, activation)
     }
 
     fn quantized_act_type(&self) -> Option<candle_core::DType> {
@@ -2406,29 +1764,6 @@ impl QuantMethod for ReplicatedLayer {
 
     fn has_bias(&self) -> bool {
         self.0.has_bias()
-    }
-
-    fn get_qtensor(&self) -> Option<Arc<candle_core::quantized::QTensor>> {
-        self.0.get_qtensor()
-    }
-
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
-    fn prepare_gguf_affine_raw(
-        &self,
-        flat_batch: usize,
-        dtype: DType,
-        device: &Device,
-    ) -> Result<bool> {
-        self.0.prepare_gguf_affine_raw(flat_batch, dtype, device)
-    }
-
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
-    fn try_gguf_affine_forward_raw(&self, a: &Tensor) -> Result<Option<Tensor>> {
-        self.0.try_gguf_affine_forward_raw(a)
-    }
-
-    fn afq_inner(&self) -> Option<crate::AfqInner> {
-        self.0.afq_inner()
     }
 
     fn apply_isq(
@@ -2513,21 +1848,33 @@ impl CheckpointExpertLoad<'_> {
                     .collect::<Result<Vec<_>>>()?;
                 Ok(Arc::new(crate::nvfp4::Nvfp4Layer::stack(layers)?))
             }
+            Some(CheckpointLinearSpec::Mxfp8(_)) => {
+                let layers = builders
+                    .into_iter()
+                    .map(|vb| {
+                        crate::mxfp8::Mxfp8Linear::load(
+                            in_dim,
+                            out_dim,
+                            false,
+                            Shard::default(),
+                            vb,
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Arc::new(crate::mxfp8::Mxfp8Linear::stack(layers)?))
+            }
             Some(CheckpointLinearSpec::Fp8(spec)) => {
-                let Fp8WeightScaleLayout::Block(block_size) = spec.weight_scale else {
-                    candle_core::bail!(
-                        "Checkpoint FP8 experts at `{}.*.{name}` require blockwise weight scales",
-                        self.experts_vb.prefix()
-                    );
+                // Tensor/channel scales become one block per output row, which the blockwise gather serves exactly.
+                let block_size = match spec.weight_scale {
+                    Fp8WeightScaleLayout::Block(block_size) => block_size,
+                    Fp8WeightScaleLayout::Tensor | Fp8WeightScaleLayout::Channel => [1, in_dim],
                 };
+                // Static/per-token activation scales are dropped: experts run W8A16 like the dense dequant fallback.
                 let activation_scheme = match spec.activation {
-                    Fp8ActivationMode::None => None,
                     Fp8ActivationMode::DynamicBlock(_) => Some(crate::Fp8ActivationScheme::Dynamic),
-                    _ => candle_core::bail!(
-                        "Checkpoint FP8 experts at `{}.*.{name}` do not support {:?} activation quantization",
-                        self.experts_vb.prefix(),
-                        spec.activation
-                    ),
+                    Fp8ActivationMode::None
+                    | Fp8ActivationMode::StaticTensor
+                    | Fp8ActivationMode::DynamicToken => None,
                 };
                 let mut weights = Vec::with_capacity(self.num_experts);
                 let mut scales = Vec::with_capacity(self.num_experts);
@@ -2543,7 +1890,7 @@ impl CheckpointExpertLoad<'_> {
                         Shard::default(),
                         DType::F8E4M3,
                     )?);
-                    scales.push(spec.weight_scale.normalize(
+                    let scale = spec.weight_scale.normalize(
                         vb.get_with_hints_dtype(
                             scale_shape,
                             scale_name,
@@ -2551,7 +1898,14 @@ impl CheckpointExpertLoad<'_> {
                             DType::F32,
                         )?,
                         [out_dim, in_dim],
-                    )?);
+                    )?;
+                    scales.push(match spec.weight_scale {
+                        Fp8WeightScaleLayout::Block(_) => scale,
+                        Fp8WeightScaleLayout::Tensor | Fp8WeightScaleLayout::Channel => scale
+                            .reshape(((), 1))?
+                            .broadcast_as((out_dim, 1))?
+                            .contiguous()?,
+                    });
                 }
                 blockwise_fp8_moe(
                     Tensor::stack(&weights, 0)?,
@@ -3273,6 +2627,204 @@ mod tests {
         Ok(())
     }
 
+    const FP8_MOE_HIDDEN: usize = 128;
+    const FP8_MOE_INTERMEDIATE: usize = 64;
+    const FP8_MOE_EXPERTS: usize = 3;
+    const FP8_MOE_TOKENS: usize = 4;
+    const FP8_MOE_TOPK: usize = 2;
+    const FP8_MOE_IDS: [u32; FP8_MOE_TOKENS * FP8_MOE_TOPK] = [2, 0, 1, 2, 0, 1, 2, 1];
+
+    enum Fp8ScaleFixture {
+        Tensor,
+        Channel,
+    }
+
+    fn fp8_expert_values(expert: usize, projection: usize, out: usize, inp: usize) -> Vec<f32> {
+        (0..out * inp)
+            .map(|i| (((i * 7 + expert * 13 + projection * 29) % 41) as f32 - 20.0) * 0.5)
+            .collect()
+    }
+
+    fn per_tensor_fp8_experts_load_and_gather(
+        config: serde_json::Value,
+        scales: Fp8ScaleFixture,
+        device: &Device,
+    ) -> candle_core::Result<()> {
+        let config =
+            serde_json::from_value::<QuantizedConfig>(config).map_err(candle_core::Error::msg)?;
+        let cpu = Device::Cpu;
+        let mut tensors = HashMap::new();
+        let mut dense = HashMap::new();
+        for expert in 0..FP8_MOE_EXPERTS {
+            for (projection, (name, out, inp)) in [
+                ("gate_proj", FP8_MOE_INTERMEDIATE, FP8_MOE_HIDDEN),
+                ("up_proj", FP8_MOE_INTERMEDIATE, FP8_MOE_HIDDEN),
+                ("down_proj", FP8_MOE_HIDDEN, FP8_MOE_INTERMEDIATE),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let prefix = format!("model.layers.0.mlp.experts.{expert}.{name}");
+                let weight = Tensor::from_vec(
+                    fp8_expert_values(expert, projection, out, inp),
+                    (out, inp),
+                    &cpu,
+                )?
+                .to_dtype(DType::F8E4M3)?;
+                let scale = match scales {
+                    Fp8ScaleFixture::Tensor => {
+                        Tensor::new(0.01f32 * (expert + projection + 1) as f32, &cpu)?
+                    }
+                    Fp8ScaleFixture::Channel => Tensor::from_vec(
+                        (0..out)
+                            .map(|row| 0.001 * (row + expert + projection + 1) as f32)
+                            .collect::<Vec<_>>(),
+                        (out, 1),
+                        &cpu,
+                    )?,
+                };
+                let row_scale = match scales {
+                    Fp8ScaleFixture::Tensor => scale.reshape((1, 1))?,
+                    Fp8ScaleFixture::Channel => scale.clone(),
+                };
+                dense.insert(
+                    (expert, name),
+                    weight.to_dtype(DType::F32)?.broadcast_mul(&row_scale)?,
+                );
+                tensors.insert(format!("{prefix}.weight"), weight);
+                tensors.insert(format!("{prefix}.weight_scale"), scale);
+                tensors.insert(format!("{prefix}.input_scale"), Tensor::new(0.05f32, &cpu)?);
+            }
+        }
+        let dir = tempfile::tempdir().map_err(candle_core::Error::wrap)?;
+        let path = dir.path().join("model.safetensors");
+        candle_core::safetensors::save(&tensors, &path)?;
+        let vb = unsafe {
+            ShardedSafeTensors::sharded(&[&path], DType::BF16, device, None, Arc::new(|_| true))?
+        }
+        .pp("model.layers.0.mlp");
+        let experts = super::PreQuantizedExperts::new(
+            FP8_MOE_HIDDEN,
+            FP8_MOE_INTERMEDIATE,
+            FP8_MOE_EXPERTS,
+            &Some(config),
+            vb,
+        )?;
+
+        let ids = Tensor::from_vec(FP8_MOE_IDS.to_vec(), (FP8_MOE_TOKENS, FP8_MOE_TOPK), device)?;
+        let x = Tensor::from_vec(
+            (0..FP8_MOE_TOKENS * FP8_MOE_HIDDEN)
+                .map(|i| ((i as f32) * 0.13).sin())
+                .collect::<Vec<_>>(),
+            (FP8_MOE_TOKENS, FP8_MOE_HIDDEN),
+            &cpu,
+        )?;
+        for (name, layer) in [
+            ("gate_proj", &experts.fused_gate_proj),
+            ("up_proj", &experts.fused_up_proj),
+        ] {
+            let got = layer
+                .gather_forward(
+                    &x.reshape((FP8_MOE_TOKENS, 1, FP8_MOE_HIDDEN))?
+                        .to_dtype(DType::BF16)?
+                        .to_device(device)?,
+                    &ids,
+                )?
+                .to_device(&cpu)?
+                .to_dtype(DType::F32)?;
+            let mut rows = Vec::new();
+            for (route, &expert) in FP8_MOE_IDS.iter().enumerate() {
+                rows.push(
+                    x.narrow(0, route / FP8_MOE_TOPK, 1)?
+                        .matmul(&dense[&(expert as usize, name)].t()?)?,
+                );
+            }
+            let expected = Tensor::cat(&rows, 0)?.reshape((
+                FP8_MOE_TOKENS,
+                FP8_MOE_TOPK,
+                FP8_MOE_INTERMEDIATE,
+            ))?;
+            let err = (got - &expected)?.abs()?.max_all()?.to_scalar::<f32>()?;
+            let scale = expected.abs()?.max_all()?.to_scalar::<f32>()?;
+            assert!(err <= 0.02 * scale, "{name}: max err {err} vs {scale}");
+        }
+        let down = experts
+            .fused_down_proj
+            .dequantize_w()?
+            .to_device(&cpu)?
+            .to_dtype(DType::F32)?;
+        for expert in 0..FP8_MOE_EXPERTS {
+            let err = (down.get(expert)? - &dense[&(expert, "down_proj")])?
+                .abs()?
+                .max_all()?
+                .to_scalar::<f32>()?;
+            assert!(err <= 0.05, "down_proj expert {expert}: max err {err}");
+        }
+        Ok(())
+    }
+
+    fn fp8_moe_fixture_configs() -> Vec<(serde_json::Value, Fp8ScaleFixture)> {
+        vec![
+            (
+                serde_json::json!({"quant_method": "modelopt", "quant_algo": "FP8"}),
+                Fp8ScaleFixture::Tensor,
+            ),
+            (
+                serde_json::json!({
+                    "quant_method": "modelopt",
+                    "quant_algo": "FP8_PER_CHANNEL_PER_TOKEN"
+                }),
+                Fp8ScaleFixture::Channel,
+            ),
+            (
+                serde_json::json!({
+                    "quant_method": "compressed-tensors",
+                    "format": "float-quantized",
+                    "config_groups": {"group_0": {
+                        "targets": ["Linear"],
+                        "weights": {"dynamic": false, "num_bits": 8, "strategy": "tensor",
+                            "symmetric": true, "type": "float"},
+                        "input_activations": {"dynamic": false, "num_bits": 8,
+                            "strategy": "tensor", "symmetric": true, "type": "float"}
+                    }}
+                }),
+                Fp8ScaleFixture::Tensor,
+            ),
+            (
+                serde_json::json!({
+                    "quant_method": "compressed-tensors",
+                    "format": "float-quantized",
+                    "config_groups": {"group_0": {
+                        "targets": ["Linear"],
+                        "weights": {"dynamic": false, "num_bits": 8, "strategy": "channel",
+                            "symmetric": true, "type": "float"},
+                        "input_activations": {"dynamic": true, "num_bits": 8,
+                            "strategy": "token", "symmetric": true, "type": "float"}
+                    }}
+                }),
+                Fp8ScaleFixture::Channel,
+            ),
+        ]
+    }
+
+    #[test]
+    fn per_tensor_and_channel_fp8_experts_load_cpu() -> candle_core::Result<()> {
+        for (config, scales) in fp8_moe_fixture_configs() {
+            per_tensor_fp8_experts_load_and_gather(config, scales, &Device::Cpu)?;
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn per_tensor_and_channel_fp8_experts_load_cuda() -> candle_core::Result<()> {
+        let device = Device::new_cuda(0)?;
+        for (config, scales) in fp8_moe_fixture_configs() {
+            per_tensor_fp8_experts_load_and_gather(config, scales, &device)?;
+        }
+        Ok(())
+    }
+
     #[test]
     fn checkpoint_experts_reject_mixed_precision_within_projection() -> candle_core::Result<()> {
         let config = serde_json::from_value::<QuantizedConfig>(serde_json::json!({
@@ -3320,6 +2872,7 @@ mod tests {
         fn activation_quantization_scheme(&self) -> Option<ActivationQuantizationScheme> {
             Some(ActivationQuantizationScheme {
                 dtype: DType::F8E4M3,
+                scale_encoding: crate::ActivationScaleEncoding::F32,
                 block_shape: [1, 4],
             })
         }
@@ -3335,22 +2888,25 @@ mod tests {
             )
         }
 
-        fn try_quantize_glu(
+        fn forward_glu(
             &self,
-            gate: &Tensor,
-            value: &Tensor,
+            input: crate::GluInput<'_>,
             activation: crate::GluActivationType,
-        ) -> candle_core::Result<Option<QuantizedActivation>> {
+        ) -> candle_core::Result<Option<Tensor>> {
             assert!(
                 !self.active_lora && !self.tracking_stats,
                 "guarded projection reached fused quantization"
             );
+            let Some((gate, value)) = input.halves()? else {
+                return Ok(None);
+            };
             if gate.shape() != value.shape()
                 || !matches!(activation, crate::GluActivationType::Relu)
             {
                 return Ok(None);
             }
-            self.quantize_activation(gate).map(Some)
+            self.forward_quantized(&self.quantize_activation(&gate)?)
+                .map(Some)
         }
 
         fn forward_quantized(&self, _a: &QuantizedActivation) -> candle_core::Result<Tensor> {
@@ -3525,6 +3081,49 @@ mod tests {
     }
 
     #[test]
+    fn distributed_raw_weight_hooks_require_transparent_wrappers() -> candle_core::Result<()> {
+        use candle_core::quantized::{GgmlDType, QTensor};
+
+        let device = Device::Cpu;
+        let tensor = Tensor::ones((32, 32), DType::F32, &device)?;
+        let quantized = Arc::new(crate::GgufMatMul::new(QuantMethodConfig::Gguf {
+            q_weight: Arc::new(QTensor::quantize(&tensor, GgmlDType::Q4_0)?),
+            b: None,
+        })?) as Arc<dyn QuantMethod>;
+        let dense = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+            candle_nn::Linear::new(tensor, None),
+        ))?) as Arc<dyn QuantMethod>;
+        let comm = Arc::new(Comm::from_device(Id::new(), &device, 0, 1)?);
+        for weight in [quantized, dense] {
+            for biased in [false, true] {
+                let bias = biased
+                    .then(|| Tensor::ones(32, DType::F32, &device))
+                    .transpose()?;
+                let row = RowParallelLayer {
+                    weight: weight.clone(),
+                    bias: bias.clone(),
+                    all_reduce: distributed::SumAllReduce::new(&comm),
+                };
+                let column = ColumnParallelLayer {
+                    weight: weight.clone(),
+                    bias,
+                };
+                for layer in [&row as &dyn QuantMethod, &column] {
+                    assert_eq!(
+                        layer.get_qtensor().is_some(),
+                        !biased && weight.get_qtensor().is_some()
+                    );
+                    assert_eq!(
+                        layer.unquant_forward_weight().is_some(),
+                        !biased && weight.unquant_forward_weight().is_some()
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn distributed_wrappers_preserve_shared_activation_forwarding() -> candle_core::Result<()> {
         let device = Device::Cpu;
         let output = Tensor::from_vec(vec![1f32, 2.], (1, 2), &device)?;
@@ -3550,6 +3149,7 @@ mod tests {
 
         let expected_scheme = ActivationQuantizationScheme {
             dtype: DType::F8E4M3,
+            scale_encoding: crate::ActivationScaleEncoding::F32,
             block_shape: [1, 4],
         };
         for layer in [&row as &dyn QuantMethod, &column, &replicated] {
@@ -3559,25 +3159,20 @@ mod tests {
             );
         }
 
+        let glu = crate::GluInput::Split {
+            gate: &activation_input,
+            value: &activation_input,
+        };
         for layer in [&row as &dyn QuantMethod, &column, &replicated] {
-            let activation = layer
-                .try_quantize_glu(
-                    &activation_input,
-                    &activation_input,
-                    crate::GluActivationType::Relu,
-                )?
-                .expect("wrapper must preserve optional quantization capability");
-            assert_eq!(activation.source_shape(), activation_input.dims());
+            let output = layer
+                .forward_glu(glu, crate::GluActivationType::Relu)?
+                .expect("wrapper must preserve optional fused GLU capability");
             assert_eq!(
-                layer.forward_quantized(&activation)?.to_vec2::<f32>()?,
+                output.to_vec2::<f32>()?,
                 layer.forward(&activation_input)?.to_vec2::<f32>()?
             );
             assert!(layer
-                .try_quantize_glu(
-                    &activation_input,
-                    &activation_input,
-                    crate::GluActivationType::Gelu,
-                )?
+                .forward_glu(glu, crate::GluActivationType::Gelu)?
                 .is_none());
         }
 
@@ -3612,13 +3207,129 @@ mod tests {
                 tracking_stats,
             }) as Arc<dyn QuantMethod>;
             let column = ColumnParallelLayer { weight, bias: None };
-            assert!(crate::try_forward_fused_quantized_glu(
-                &input,
-                &input,
-                &column,
-                crate::GluActivationType::Relu,
-            )?
-            .is_none());
+            let glu = crate::GluInput::Split {
+                gate: &input,
+                value: &input,
+            };
+            assert!(
+                crate::forward_fused_glu(&column, glu, crate::GluActivationType::Relu)?.is_none()
+            );
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn packed_checkpoint_aligned_dense_exclusions_keep_logical_slices() -> candle_core::Result<()> {
+        const COLUMNS: usize = 64;
+        const ROWS: [usize; 2] = [32, 3];
+        const LOGICAL_ROWS: usize = 35;
+        const PADDED_ROWS: usize = 48;
+        let device = Device::new_cuda(0)?;
+        let names = ["down", "inject"];
+        let specs = ROWS.map(|rows| LoraLinearSpec::replicated(COLUMNS, rows));
+        let config = Some(
+            serde_json::from_value::<QuantizedConfig>(serde_json::json!({
+                "quant_method": "modelopt", "quant_algo": "NVFP4", "group_size": 16,
+                "exclude_modules": ["model.down", "model.inject"]
+            }))
+            .map_err(candle_core::Error::msg)?,
+        );
+        for dtype in [DType::F16, DType::BF16] {
+            let tensors = HashMap::from([
+                (
+                    "model.down.weight".to_string(),
+                    Tensor::full(0.25f32, (ROWS[0], COLUMNS), &device)?.to_dtype(dtype)?,
+                ),
+                (
+                    "model.inject.weight".to_string(),
+                    Tensor::full(0.5f32, (ROWS[1], COLUMNS), &device)?.to_dtype(dtype)?,
+                ),
+            ]);
+            let builder = ShardedSafeTensors::wrap(tensors, dtype, device.clone()).pp("model");
+            let group =
+                ReplicatedLayer::new_packed(&specs, &names, &config, false, builder)?.unwrap();
+            assert_eq!(group.rows_per_rank, ROWS);
+            assert_eq!(
+                group.packed.dequantize_w()?.dims(),
+                &[LOGICAL_ROWS, COLUMNS]
+            );
+            for tokens in [1, 17] {
+                let input = Tensor::ones((2, tokens, COLUMNS), dtype, &device)?;
+                let output = group.packed.forward(&input)?;
+                assert_eq!(output.dims(), &[2, tokens, LOGICAL_ROWS]);
+                let mut offset = 0;
+                for (projection, &rows) in group.constituents.iter().zip(&group.rows_per_rank) {
+                    let view = output.narrow(2, offset, rows)?;
+                    assert_eq!(view.stride(), &[tokens * PADDED_ROWS, PADDED_ROWS, 1]);
+                    assert_eq!(
+                        view.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>()?,
+                        projection
+                            .forward(&input)?
+                            .to_dtype(DType::F32)?
+                            .flatten_all()?
+                            .to_vec1::<f32>()?
+                    );
+                    offset += rows;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn packed_checkpoint_mixed_and_incompatible_groups_keep_fallback() -> candle_core::Result<()> {
+        const COLUMNS: usize = 32;
+        const ROWS: usize = 4;
+        let device = Device::Cpu;
+        let specs = [
+            LoraLinearSpec::replicated(COLUMNS, ROWS),
+            LoraLinearSpec::replicated(COLUMNS, ROWS),
+        ];
+        let mut tensors = HashMap::new();
+        for name in ["left", "right"] {
+            tensors.insert(
+                format!("model.block.{name}.weight"),
+                Tensor::ones((ROWS, COLUMNS), DType::F32, &device)?,
+            );
+            tensors.insert(
+                format!("model.block.{name}.weight_scale"),
+                Tensor::ones((ROWS, 2), DType::U8, &device)?,
+            );
+        }
+        let vb = ShardedSafeTensors::wrap(tensors, DType::F32, device).pp("model.block");
+        for value in [
+            serde_json::json!({
+                "quant_method": "modelopt", "quant_algo": "MXFP8", "group_size": 32,
+                "exclude_modules": ["model.block.left"]
+            }),
+            serde_json::json!({
+                "quant_method": "modelopt", "quant_algo": "MIXED_PRECISION",
+                "quantized_layers": {
+                    "model.block.left": {"quant_algo": "NVFP4", "group_size": 16},
+                    "model.block.right": {"quant_algo": "MXFP8", "group_size": 32}
+                }
+            }),
+            serde_json::json!({
+                "quant_method": "compressed-tensors", "format": "float-quantized",
+                "config_groups": {"group_0": {
+                    "targets": ["Linear"],
+                    "weights": {"dynamic": false, "num_bits": 8, "strategy": "channel",
+                                "symmetric": true, "type": "float"}
+                }},
+                "ignore": ["model.block.left"]
+            }),
+        ] {
+            let config = Some(
+                serde_json::from_value::<QuantizedConfig>(value)
+                    .map_err(candle_core::Error::msg)?,
+            );
+            for names in [["left", "right"], ["right", "left"]] {
+                assert!(
+                    ReplicatedLayer::new_packed(&specs, &names, &config, false, vb.clone())?
+                        .is_none()
+                );
+            }
         }
         Ok(())
     }
@@ -3819,42 +3530,6 @@ mod tests {
             canonical.iter().map(|row| row[0]).collect::<Vec<_>>(),
             vec![1., 1., 2., 2., 3., 3., 4., 4.]
         );
-        Ok(())
-    }
-
-    #[test]
-    fn packed_blockwise_fp8_weight_scale_alias_falls_back() -> candle_core::Result<()> {
-        let device = Device::Cpu;
-        let tensors = HashMap::from([
-            (
-                "q.weight".to_string(),
-                Tensor::ones((4, 4), DType::F8E4M3, &device)?,
-            ),
-            (
-                "q.weight_scale".to_string(),
-                Tensor::ones((2, 2), DType::F32, &device)?,
-            ),
-        ]);
-        let vb = ShardedSafeTensors::wrap(tensors, DType::BF16, device.clone());
-        let config = Some(QuantizedConfig::Fp8 {
-            weight_block_size: Some(vec![2, 2]),
-            activation_scheme: Some(Fp8ActivationScheme::Dynamic),
-            fmt: Some("e4m3".to_string()),
-            modules_to_not_convert: Vec::new(),
-        });
-        let comm = Arc::new(Comm::from_device(Id::new(), &device, 0, 1)?);
-        assert!(ColumnParallelLayer::new_packed(
-            4,
-            &[4],
-            &["q"],
-            &config,
-            false,
-            &comm,
-            None,
-            vb.clone(),
-        )?
-        .is_none());
-        ColumnParallelLayer::new(4, 4, &config, false, &comm, vb.pp("q"))?;
         Ok(())
     }
 

@@ -4,25 +4,17 @@ use half::{bf16, f16};
 
 const OUTPUT_DIM: usize = 32_769;
 const INPUT_DIM: usize = 3_074;
+const INPUT_DIMS: [usize; 3] = [2_048, 2_560, INPUT_DIM];
 const BIAS_INPUT_DIM: usize = 3_072;
 const EVEN_OFFSET: usize = 2;
 const CUDA_SEED: u64 = 0x61d2_89a3;
 const RANDOM_STDDEV: f32 = 0.0625;
 const ACCUMULATION_TOLERANCE: f32 = 1e-5;
 
-fn sm121_device() -> Result<Option<Device>> {
+fn unified_memory_device() -> Result<Option<Device>> {
     let device = Device::new_cuda(0)?;
-    let cuda = device.as_cuda_device()?;
-    let stream = cuda.cuda_stream();
-    let major = stream
-        .context()
-        .attribute(sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR)
-        .map_err(candle_core::Error::msg)?;
-    let minor = stream
-        .context()
-        .attribute(sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR)
-        .map_err(candle_core::Error::msg)?;
-    Ok((major == 12 && minor == 1).then_some(device))
+    let integrated = crate::cuda_device::cuda_device_info(device.as_cuda_device()?).integrated;
+    Ok(integrated.then_some(device))
 }
 
 fn linear(weight: Tensor, bias: Option<Tensor>) -> Result<UnquantLinear> {
@@ -100,22 +92,25 @@ fn dyadic_fixture(device: &Device, dtype: DType) -> Result<(Tensor, Tensor, Tens
 }
 
 #[test]
-#[ignore = "requires an SM121 CUDA device"]
+#[ignore = "requires a unified-memory CUDA device"]
 fn wide_gemv_random_tails_preserve_ranks_and_statistics() -> Result<()> {
-    let Some(device) = sm121_device()? else {
+    let Some(device) = unified_memory_device()? else {
         return Ok(());
     };
-    for dtype in [DType::BF16, DType::F16] {
+    for (dtype, input_dim) in [DType::BF16, DType::F16]
+        .into_iter()
+        .flat_map(|dtype| INPUT_DIMS.map(|input_dim| (dtype, input_dim)))
+    {
         device.set_seed(CUDA_SEED)?;
-        let weight = Tensor::randn(0f32, RANDOM_STDDEV, (OUTPUT_DIM, INPUT_DIM), &device)?
+        let weight = Tensor::randn(0f32, RANDOM_STDDEV, (OUTPUT_DIM, input_dim), &device)?
             .to_dtype(dtype)?;
-        let input = Tensor::randn(0f32, RANDOM_STDDEV, (1, INPUT_DIM), &device)?.to_dtype(dtype)?;
+        let input = Tensor::randn(0f32, RANDOM_STDDEV, (1, input_dim), &device)?.to_dtype(dtype)?;
         let layer = linear(weight.clone(), None)?;
         layer.begin_track_stats()?;
         for (index, shape) in [
-            vec![1, INPUT_DIM],
-            vec![1, 1, INPUT_DIM],
-            vec![1, 1, 1, INPUT_DIM],
+            vec![1, input_dim],
+            vec![1, 1, input_dim],
+            vec![1, 1, 1, input_dim],
         ]
         .iter()
         .enumerate()
@@ -126,7 +121,7 @@ fn wide_gemv_random_tails_preserve_ranks_and_statistics() -> Result<()> {
             let mut expected_shape = shape.clone();
             *expected_shape.last_mut().unwrap() = OUTPUT_DIM;
             let reference = input
-                .reshape((1, INPUT_DIM))?
+                .reshape((1, input_dim))?
                 .matmul(&weight.t()?)?
                 .reshape(expected_shape)?;
             assert_finite_close(&actual, &reference, false)?;
@@ -140,9 +135,9 @@ fn wide_gemv_random_tails_preserve_ranks_and_statistics() -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires an SM121 CUDA device"]
+#[ignore = "requires a unified-memory CUDA device"]
 fn wide_gemv_bias_rounds_after_matmul_with_aligned_offsets() -> Result<()> {
-    let Some(device) = sm121_device()? else {
+    let Some(device) = unified_memory_device()? else {
         return Ok(());
     };
     for dtype in [DType::BF16, DType::F16] {
@@ -171,9 +166,9 @@ fn wide_gemv_bias_rounds_after_matmul_with_aligned_offsets() -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires an SM121 CUDA device"]
+#[ignore = "requires a unified-memory CUDA device"]
 fn wide_gemv_rejects_unsupported_views_and_preserves_gemm_fallback() -> Result<()> {
-    let Some(device) = sm121_device()? else {
+    let Some(device) = unified_memory_device()? else {
         return Ok(());
     };
     for dtype in [DType::BF16, DType::F16] {
@@ -251,9 +246,9 @@ fn wide_gemv_rejects_unsupported_views_and_preserves_gemm_fallback() -> Result<(
 }
 
 #[test]
-#[ignore = "requires an SM121 CUDA device"]
+#[ignore = "requires a unified-memory CUDA device"]
 fn wide_gemv_graph_replay_reads_changed_inputs_and_preserves_bias() -> Result<()> {
-    let Some(device) = sm121_device()? else {
+    let Some(device) = unified_memory_device()? else {
         return Ok(());
     };
     for dtype in [DType::BF16, DType::F16] {

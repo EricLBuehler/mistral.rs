@@ -59,6 +59,11 @@ A tied output head reuses the effective embedding instead of storing a second co
 per-tensor ISQ type in a [topology](/guides/perf/topology/) takes precedence over these
 defaults.
 
+Embedding lookups on CUDA and Metal decode only the requested rows from supported compressed
+tables, including common GGUF, AFQ, FP8, and packed FP4 formats. Output conversion and embedding
+scaling operate on the gathered rows. The matrix-multiplication backend requirements below apply
+separately.
+
 ## Format-specific types
 
 ### AFQ family
@@ -110,7 +115,7 @@ compressed-tensors metadata may use either `quantization_config` or the legacy
 |---|---|
 | Native `quant_method: "fp8"` | Tensor-scaled W8A16, static or dynamic tensor-scaled W8A8, and 128x128 weight with dynamic 1x128 activation scaling |
 | compressed-tensors | Symmetric E4M3 W8A16 with tensor, channel, or block weight scales; static tensor W8A8; dynamic per-token tensor/channel W8A8; and dynamic block W8A8 |
-| ModelOpt | `FP8`, `FP8_PER_CHANNEL_PER_TOKEN`, `FP8_PB_WO`, and `MIXED_PRECISION` configurations combining supported FP8, [NVFP4](#nvfp4), and unquantized layers |
+| ModelOpt | `FP8`, `FP8_PER_CHANNEL_PER_TOKEN`, `FP8_PB_WO`, [MXFP8](#mxfp8), and `MIXED_PRECISION` configurations combining supported schemes and unquantized layers |
 
 Weight scales may be stored as `weight_scale` or `weight_scale_inv`; both names contain the
 dequantization multiplier. Static activation scales may be stored as `input_scale` or
@@ -127,7 +132,7 @@ not emulate activation quantize/dequantize rounding.
 
 The checkpoint adapters currently cover dense projections and recognized `gate_up_proj`/`qkv_proj`
 fusions. Partitioned tensor scales require equal-size fused chunks that the model loader exposes as
-separate output shards. Direct fused linears with a vector of scales, MXFP8, E5M2/FNUZ, asymmetric
+separate output shards. Direct fused linears with a vector of scales, E5M2/FNUZ, asymmetric
 FP8, output-activation quantization, FP8 KV cache checkpoint metadata, and checkpoint-specific MoE
 scale layouts are separate formats.
 
@@ -136,6 +141,19 @@ scale layouts are separate formats.
 | `fp8` | 8 | E4M3 (4-bit exponent, 3-bit mantissa) |
 | `f8q8` | 8 | CPU-only F8Q8 weights |
 
+### MXFP8
+
+ModelOpt `MXFP8` checkpoints use E4M3 weights and one unsigned E8M0 power-of-two scale per 32
+weights. They are distinct from tensor-scaled and 128x128 block FP8 checkpoints. The loader keeps
+the packed weights and raw scale bytes. Prefill dynamically quantizes activation blocks using the
+same 32-value scaling convention. Single-token CUDA dense projections can preserve the original
+activation precision for faster decode; this does not change the stored weights.
+
+CUDA provides a decode matrix-vector kernel and tiled tensor-core prefill. Blackwell GPUs with
+CUDA 13.3 or newer and `cuda,cutile` use native block-scaled tensor cores for prefill. Dense
+projections and expert stacks are supported, with a CPU reference path. Input-dimension shards
+must align to 32 values. MXFP8 creation through ISQ and UQFF serialization are not supported.
+
 ### NVFP4
 
 Load pretrained NVFP4 safetensors checkpoints directly. NVFP4 stores two E2M1 values per byte,
@@ -143,7 +161,7 @@ with an E4M3 scale per 16 weights and a separate FP32 global scale.
 
 | Checkpoint format | Supported schemes |
 |---|---|
-| NVIDIA ModelOpt | `NVFP4` (W4A4), `W4A16_NVFP4`, and `MIXED_PRECISION` combining supported FP8/NVFP4 schemes and unquantized layers |
+| NVIDIA ModelOpt | `NVFP4` (W4A4), `W4A16_NVFP4`, and `MIXED_PRECISION` combining supported FP8/MXFP8/NVFP4 schemes and unquantized layers |
 | compressed-tensors `nvfp4-pack-quantized` | Symmetric `tensor_group` weights with `group_size: 16`; W4A16 or calibrated W4A4 with `dynamic: "local"` input activations |
 
 W4A16 preserves BF16/F16 activations. W4A4 quantizes activation blocks to E2M1 using the
@@ -151,6 +169,11 @@ checkpoint's calibrated global scale. The loader preserves this choice, includin
 and reads older ModelOpt metadata from `hf_quant_config.json`. ModelOpt uses `weight_scale_2` and
 `input_scale`; compressed-tensors uses reciprocal `weight_global_scale` and `input_global_scale`.
 These conventions are normalized during loading.
+
+ModelOpt `weight_scale_encoding: "csf"` is supported for dense and expert projections. Compressed
+scales are decoded losslessly to E4M3 during loading; packed FP4 weights remain unchanged. Qwen
+n-gram embedding tables also support NVFP4, gathering and decoding only the requested rows from
+resident or memory-mapped packed tables.
 
 Accelerated inference requires an NVIDIA Blackwell GPU, CUDA 13.3 or newer, a compatible `tileiras`,
 and a binary built with `cuda,cutile`. Use BF16 or F16 model dtype. With CUDA 13.3 or newer selected in the
@@ -171,7 +194,7 @@ cargo run --release -p mistralrs --example nvfp4 --features cuda,cutile
 ```
 
 For a [Python source build](/developer/from-source/#python-wheels), run
-`maturin develop --release --features cuda,cutile` from `mistralrs-pyo3`.
+`maturin develop --release --features cuda,cutile,pyo3/extension-module` from `mistralrs-pyo3`.
 
 Dense and MoE projections are supported. Experts within each projection must share a quantization
 scheme, and input-dimension shards must align to 16 weights. NVFP4 creation through ISQ, NVFP4 UQFF

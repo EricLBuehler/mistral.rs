@@ -29,14 +29,14 @@ pub struct PerTensorFP8Linear {
     dequantized_weight: Mutex<Option<Tensor>>,
 }
 
-struct PerTensorFp8Parts {
-    weight: Tensor,
-    weight_scale_inv: Tensor,
-    weight_scale_layout: Fp8WeightScaleLayout,
-    activation_mode: Fp8ActivationMode,
-    activation_scale: Option<Tensor>,
-    bias: Option<Tensor>,
-    dequant_dtype: DType,
+pub(crate) struct PerTensorFp8Parts {
+    pub(crate) weight: Tensor,
+    pub(crate) weight_scale_inv: Tensor,
+    pub(crate) weight_scale_layout: Fp8WeightScaleLayout,
+    pub(crate) activation_mode: Fp8ActivationMode,
+    pub(crate) activation_scale: Option<Tensor>,
+    pub(crate) bias: Option<Tensor>,
+    pub(crate) dequant_dtype: DType,
 }
 
 impl PerTensorFP8Linear {
@@ -65,12 +65,70 @@ impl PerTensorFP8Linear {
             dequantized_weight: Mutex::new(None),
         };
         layer.validate()?;
-        if !layer.register_cutile() {
+        if !layer.register_cutile() && !layer.w8a16_kernel_supported() {
             let weight = layer.dequantize_uncached()?;
             layer.weight = None;
             layer.dequantized_weight = Mutex::new(Some(weight));
         }
         Ok(layer)
+    }
+
+    /// Packs bias-free row-concatenated parts; constituents are row views of the packed storage.
+    pub(crate) fn merge_packed(
+        parts: PerTensorFp8Parts,
+        rows_per_rank: Vec<usize>,
+    ) -> Result<crate::PackedLinear> {
+        let weight = parts.weight.clone();
+        let scale = parts.weight_scale_inv.clone();
+        let layout = parts.weight_scale_layout;
+        let activation_mode = parts.activation_mode;
+        let activation_scale = parts.activation_scale.clone();
+        let dequant_dtype = parts.dequant_dtype;
+        let packed = Self::from_parts(parts)?;
+        let k = packed.weight_shape[1];
+        let dequantized = packed.dequantized_weight.lock().unwrap().clone();
+        let mut constituents = Vec::with_capacity(rows_per_rank.len());
+        let mut offset = 0;
+        for &rows in &rows_per_rank {
+            let scale = match layout {
+                Fp8WeightScaleLayout::Tensor => scale.clone(),
+                Fp8WeightScaleLayout::Channel => scale.narrow(0, offset, rows)?,
+                Fp8WeightScaleLayout::Block([block_n, _]) => {
+                    scale.narrow(0, offset / block_n, rows.div_ceil(block_n))?
+                }
+            };
+            let layer = match &dequantized {
+                // Share the packed dequantized cache so constituents add no resident copy.
+                Some(dequantized) => Self {
+                    weight: None,
+                    weight_shape: [rows, k],
+                    device: packed.device.clone(),
+                    weight_scale_inv: scale,
+                    weight_scale_layout: layout,
+                    activation_mode,
+                    activation_scale: activation_scale.clone(),
+                    bias: None,
+                    dequant_dtype,
+                    dequantized_weight: Mutex::new(Some(dequantized.narrow(0, offset, rows)?)),
+                },
+                None => Self::from_parts(PerTensorFp8Parts {
+                    weight: weight.narrow(0, offset, rows)?,
+                    weight_scale_inv: scale,
+                    weight_scale_layout: layout,
+                    activation_mode,
+                    activation_scale: activation_scale.clone(),
+                    bias: None,
+                    dequant_dtype,
+                })?,
+            };
+            constituents.push(Arc::new(layer) as Arc<dyn QuantMethod>);
+            offset += rows;
+        }
+        Ok(crate::PackedLinear {
+            packed: Arc::new(packed),
+            constituents,
+            rows_per_rank,
+        })
     }
 
     pub fn from_w8a16(
@@ -189,6 +247,47 @@ impl PerTensorFP8Linear {
             }
         }
         false
+    }
+
+    #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+    fn w8a16_view<'a>(&'a self, weight: &'a Tensor) -> crate::moe::grouped_fp8::Fp8WeightView<'a> {
+        let [n, k] = self.weight_shape;
+        crate::moe::grouped_fp8::Fp8WeightView {
+            weight,
+            scales: &self.weight_scale_inv,
+            encoding: crate::moe::grouped_fp8::Fp8ScaleEncoding::F32,
+            block: match self.weight_scale_layout {
+                Fp8WeightScaleLayout::Tensor => [n, k],
+                Fp8WeightScaleLayout::Channel => [1, k],
+                Fp8WeightScaleLayout::Block(block) => block,
+            },
+        }
+    }
+
+    // The retained-E4M3 kernel replaces the resident dequantized copy whenever it serves the model dtype.
+    fn w8a16_kernel_supported(&self) -> bool {
+        #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+        if let Some(weight) = self.weight.as_ref() {
+            return crate::moe::grouped_fp8::dense_supported(
+                self.w8a16_view(weight),
+                self.dequant_dtype,
+            );
+        }
+        false
+    }
+
+    #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+    fn try_w8a16_kernel(&self, input: &Tensor) -> Result<Option<Tensor>> {
+        let Some(weight) = self.weight.as_ref() else {
+            return Ok(None);
+        };
+        let Some(result) = crate::moe::grouped_fp8::dense(input, self.w8a16_view(weight))? else {
+            return Ok(None);
+        };
+        match &self.bias {
+            Some(bias) => result.broadcast_add(bias).map(Some),
+            None => Ok(Some(result)),
+        }
     }
 
     fn dequantize_uncached(&self) -> Result<Tensor> {
@@ -455,6 +554,33 @@ impl QuantMethod for PerTensorFP8Linear {
         }
     }
 
+    fn embedding_table(&self) -> Option<crate::EmbeddingTable<'_>> {
+        use crate::embedding::{RowCodec, RowScale, ScaleGrid, ScaleType};
+        let weight = self.weight.as_ref()?;
+        let [rows, columns] = self.weight_shape;
+        let table = crate::EmbeddingTable::new(RowCodec::Fp8(None), rows, columns, weight);
+        Some(match self.weight_scale_layout {
+            Fp8WeightScaleLayout::Tensor => {
+                table.with_row_scale(RowScale::Scalar(&self.weight_scale_inv))
+            }
+            Fp8WeightScaleLayout::Channel => {
+                table.with_row_scale(RowScale::PerRow(&self.weight_scale_inv))
+            }
+            Fp8WeightScaleLayout::Block([block_rows, block_columns]) => {
+                let grid = ScaleGrid {
+                    ty: ScaleType::from_dtype(self.weight_scale_inv.dtype()).ok()?,
+                    group: block_columns,
+                    rows_per_scale: block_rows,
+                };
+                crate::EmbeddingTable {
+                    codec: RowCodec::Fp8(Some(grid)),
+                    ..table
+                }
+                .with_scales(&self.weight_scale_inv)
+            }
+        })
+    }
+
     fn dequantize_w(&self) -> Result<Tensor> {
         let cached = self.dequantized_weight.lock().unwrap();
         if let Some(weight) = cached.as_ref() {
@@ -474,6 +600,10 @@ impl QuantMethod for PerTensorFP8Linear {
         }
         #[cfg(all(feature = "cuda", feature = "cutile"))]
         if let Some(result) = self.try_cutile_w8a8(x)? {
+            return Ok(result);
+        }
+        #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+        if let Some(result) = self.try_w8a16_kernel(x)? {
             return Ok(result);
         }
         let unquant = UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(
