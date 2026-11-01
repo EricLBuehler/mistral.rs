@@ -643,7 +643,7 @@ impl DepthDecoder {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub(crate) struct AudioSampling {
     pub temperature: f64,
     pub top_k: Option<usize>,

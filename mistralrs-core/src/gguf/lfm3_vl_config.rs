@@ -185,7 +185,7 @@ pub(crate) fn lfm3_vl_processor_config(archive: &GgufArchive) -> Result<String> 
     }))?)
 }
 
-fn metadata_f64(archive: &GgufArchive, key: &str) -> Result<f64> {
+pub(super) fn metadata_f64(archive: &GgufArchive, key: &str) -> Result<f64> {
     match archive.metadata_value(key) {
         Some(Value::F32(value)) => Ok(f64::from(*value)),
         Some(Value::F64(value)) => Ok(*value),
@@ -210,7 +210,7 @@ fn rgb_array(archive: &GgufArchive, key: &str) -> Result<[f64; 3]> {
         .map_err(|_| anyhow::anyhow!("GGUF metadata `{key}` must contain three channels"))
 }
 
-fn token_id(archive: &GgufArchive, token: &str) -> Result<usize> {
+pub(super) fn token_id(archive: &GgufArchive, token: &str) -> Result<usize> {
     let Some(Value::Array(tokens)) = archive.metadata_value(TOKENS_KEY) else {
         bail!("GGUF metadata `{TOKENS_KEY}` must contain the vocabulary");
     };

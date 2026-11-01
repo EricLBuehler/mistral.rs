@@ -18,6 +18,7 @@ use crate::gguf::{
         prepare_gemma3_text_config,
     },
     generation_config_from_metadata, get_gguf_chat_template, get_gguf_chat_template_from_metadata,
+    lfm3_audio_config::{prepare_lfm3_audio_config, prepare_lfm3_omni_config},
     lfm3_vl_config::{lfm3_vl_processor_config, prepare_lfm3_vl_config},
     multimodal_bindings::build_gemma4_bindings,
     multimodal_vision_registry::resolve_native_multimodal_gguf,
@@ -952,6 +953,7 @@ impl GGUFLoader {
             );
         }
 
+        let internal_dtype = dtype.try_into_dtype(&[device])?;
         let (loader_type, bindings, rope_pairing) = match architecture.as_str() {
             "gemma4" => (
                 MultimodalLoaderType::Gemma4,
@@ -964,7 +966,8 @@ impl GGUFLoader {
                 RopePairing::HalfSplit,
             ),
             architecture => {
-                let Some(resolved) = resolve_native_multimodal_gguf(&archive)? else {
+                let Some(resolved) = resolve_native_multimodal_gguf(&archive, internal_dtype)?
+                else {
                     bail!(
                         "multimodal GGUF architecture `{architecture}` is not supported by the native multimodal loader"
                     );
@@ -978,21 +981,29 @@ impl GGUFLoader {
         };
         validate_native_dynamic_lora(self.dynamic_lora.as_ref(), rope_pairing, &architecture)?;
         let external_config = read_external_config(paths)?;
-        let config = if matches!(loader_type, MultimodalLoaderType::Lfm3Vl) {
-            prepare_lfm3_vl_config(external_config.as_deref(), &archive)?
-        } else {
-            let external_config = external_config.with_context(|| {
-                format!(
-                    "multimodal GGUF architecture `{architecture}` requires its original `config.json`; pass `--tok-model-id <original-model-id>`"
-                )
-            })?;
-            prepare_native_multimodal_config(&loader_type, &external_config)?
+        let config = match loader_type {
+            MultimodalLoaderType::Lfm3Vl => {
+                prepare_lfm3_vl_config(external_config.as_deref(), &archive)?
+            }
+            MultimodalLoaderType::Lfm3Audio => {
+                prepare_lfm3_audio_config(external_config.as_deref(), &archive)?
+            }
+            MultimodalLoaderType::Lfm3Omni => {
+                prepare_lfm3_omni_config(external_config.as_deref(), &archive)?
+            }
+            _ => {
+                let external_config = external_config.with_context(|| {
+                    format!(
+                        "multimodal GGUF architecture `{architecture}` requires its original `config.json`; pass `--tok-model-id <original-model-id>`"
+                    )
+                })?;
+                prepare_native_multimodal_config(&loader_type, &external_config)?
+            }
         };
         let config = stamp_qk_rope_layout(&config, rope_pairing)?;
         if architecture == "gemma3" {
             ensure_gemma3_vision_config(&config)?;
         }
-        let internal_dtype = dtype.try_into_dtype(&[device])?;
         let source = Arc::new(mistralrs_quant::GgufWeightSource::new(
             archive.clone(),
             &bindings,
@@ -1018,8 +1029,10 @@ impl GGUFLoader {
             .as_ref()
             .map(fs::read_to_string)
             .transpose()?;
-        if matches!(loader_type, MultimodalLoaderType::Lfm3Vl)
-            && processor_config.is_none()
+        if matches!(
+            loader_type,
+            MultimodalLoaderType::Lfm3Vl | MultimodalLoaderType::Lfm3Omni
+        ) && processor_config.is_none()
             && preprocessor_config.is_none()
         {
             processor_config = Some(lfm3_vl_processor_config(&archive)?);

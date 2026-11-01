@@ -222,6 +222,23 @@ impl LiquidCodec {
         {
             candle_core::bail!("Unsupported LiquidCodec synthesis configuration");
         }
+        let window_vb = vb.pp("decoder.istft");
+        let window = if vb.raw_gguf().is_some() && !window_vb.contains_tensor("window") {
+            // llama.cpp omits the codec's deterministic periodic Hann buffer.
+            let length = u32::try_from(config.stft_win_length).map_err(candle_core::Error::wrap)?;
+            Tensor::arange(0u32, length, vb.device())?
+                .to_dtype(DType::F32)?
+                .affine(std::f64::consts::TAU / f64::from(length), 0.0)?
+                .cos()?
+                .affine(-0.5, 0.5)?
+        } else {
+            window_vb.get_with_hints_dtype(
+                config.stft_win_length,
+                "window",
+                Default::default(),
+                DType::F32,
+            )?
+        };
         let effective = config.n_q * config.fsq_levels.len();
         Ok(Self {
             project_out: (effective != config.quantizer_dim)
@@ -249,12 +266,7 @@ impl LiquidCodec {
                 2 * (config.stft_n_fft / 2 + 1),
                 vb.pp("decoder").pp("lin"),
             )?,
-            window: vb.pp("decoder.istft").get_with_hints_dtype(
-                config.stft_win_length,
-                "window",
-                Default::default(),
-                DType::F32,
-            )?,
+            window,
             config,
         })
     }

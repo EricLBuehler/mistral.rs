@@ -20,6 +20,8 @@ pub(crate) struct SpeechConfig {
     pub audio_encoder_config: AudioEncoderConfig,
     pub depth_config: super::generation::DepthConfig,
     pub codec_config: super::codec::CodecConfig,
+    #[serde(default)]
+    pub audio_sampling: Option<super::generation::AudioSampling>,
     pub num_codebooks: usize,
     pub codebook_size: usize,
     pub audio_eos_code: u32,
