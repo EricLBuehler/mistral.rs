@@ -66,8 +66,8 @@ test("builds the blog from release posts", async () => {
   assert.ok(indexHtml.includes("up to 19.5% higher serving throughput than vLLM"));
   assert.ok(indexHtml.includes("By Eric Buehler"));
 
-  const slugMatch = indexHtml.match(/href="([^"]+\.html)"/);
-  assert.ok(slugMatch, "blog index should link at least one post");
+  const slugMatch = indexHtml.match(/href="(v0-9-3-throughput\.html)"/);
+  assert.ok(slugMatch, "blog index should link the v0.9.3 release post");
   const slug = slugMatch[1].replace(/\.html$/, "");
   const postHtml = await readFile(path.join(distBlogDir, slugMatch[1]), "utf8");
   const figure = await readFile(
