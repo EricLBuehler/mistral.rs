@@ -69,19 +69,24 @@ fn mapped_device_index_dispatch_checks_device() -> Result<()> {
 #[cfg(feature = "cuda")]
 fn mapped_lifetime_table(
     device: &Device,
-) -> Result<(ManagedEmbedding, std::sync::Weak<MmapedSafetensors>)> {
-    let file = tempfile::NamedTempFile::new().map_err(candle_core::Error::wrap)?;
+) -> Result<(
+    tempfile::TempDir,
+    ManagedEmbedding,
+    std::sync::Weak<MmapedSafetensors>,
+)> {
+    let dir = tempfile::tempdir().map_err(candle_core::Error::wrap)?;
+    let path = dir.path().join("weight.safetensors");
     candle_core::safetensors::save(
         &std::collections::HashMap::from([(
             "weight".to_owned(),
             Tensor::ones((LIFETIME_ROWS, LIFETIME_COLUMNS), DType::F32, &Device::Cpu)?,
         )]),
-        file.path(),
+        &path,
     )?;
-    let raw = Arc::new(unsafe { MmapedSafetensors::new(file.path())? });
+    let raw = Arc::new(unsafe { MmapedSafetensors::new(&path)? });
     let owner = Arc::downgrade(&raw);
     let source = EmbeddingSource::dense_shards(raw, vec!["weight".to_owned()], LIFETIME_COLUMNS)?;
-    Ok((ManagedEmbedding::new(source, device)?, owner))
+    Ok((dir, ManagedEmbedding::new(source, device)?, owner))
 }
 
 #[cfg(feature = "cuda")]
@@ -106,12 +111,13 @@ fn unified_dense_fallback_preserves_mapped_rows() -> Result<()> {
             .to_dtype(DType::BF16)?
             .flatten_all()?
             .to_vec1::<half::bf16>()?;
-        let file = tempfile::NamedTempFile::new().map_err(candle_core::Error::wrap)?;
+        let dir = tempfile::tempdir().map_err(candle_core::Error::wrap)?;
+        let path = dir.path().join("weight.safetensors");
         candle_core::safetensors::save(
             &std::collections::HashMap::from([("weight", weights)]),
-            file.path(),
+            &path,
         )?;
-        let raw = Arc::new(unsafe { MmapedSafetensors::new(file.path())? });
+        let raw = Arc::new(unsafe { MmapedSafetensors::new(&path)? });
         for allow_resident in [false, true] {
             let source = EmbeddingSource::dense_shards(
                 raw.clone(),
@@ -162,7 +168,7 @@ fn mapped_table_drop_waits_for_eager_cuda_reads() -> Result<()> {
     if !device_reads_pageable_memory(&device)? {
         return Ok(());
     }
-    let (table, owner) = mapped_lifetime_table(&device)?;
+    let (_dir, table, owner) = mapped_lifetime_table(&device)?;
     let ids = Tensor::new(&[0u32, (LIFETIME_ROWS - 1) as u32], &device)?;
     let stream = device.as_cuda_device()?.cuda_stream();
     let _delay = crate::utils::cuda_test::delay_stream(&stream)?;
@@ -185,7 +191,7 @@ fn captured_mapped_table_outlives_its_owner_until_graph_release() -> Result<()> 
     if !device_reads_pageable_memory(&device)? {
         return Ok(());
     }
-    let (table, owner) = mapped_lifetime_table(&device)?;
+    let (_dir, table, owner) = mapped_lifetime_table(&device)?;
     let ids = Tensor::new(&[0u32, (LIFETIME_ROWS - 1) as u32], &device)?;
     let gather = || table.gather(&ids, DType::F32.into(), EmbeddingGatherMode::Decode);
     drop(gather()?);

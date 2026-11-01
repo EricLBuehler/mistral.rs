@@ -996,8 +996,9 @@ mod tests {
     #[test]
     fn sliced_checkpoint_loading_preserves_offsets_shapes_and_dtypes() -> Result<()> {
         const SHAPE: (usize, usize, usize) = (4, 6, 8);
-        let file = tempfile::NamedTempFile::new().map_err(Error::wrap)?;
+        let dir = tempfile::tempdir().map_err(Error::wrap)?;
         for dtype in [DType::F16, DType::BF16, DType::F32] {
+            let path = dir.path().join(format!("{dtype:?}.safetensors"));
             let source = Tensor::from_vec(
                 (0..SHAPE.0 * SHAPE.1 * SHAPE.2)
                     .map(|i| (i as f32 - 83.0) * 0.031)
@@ -1006,13 +1007,10 @@ mod tests {
                 &Device::Cpu,
             )?
             .to_dtype(dtype)?;
-            candle_core::safetensors::save(
-                &HashMap::from([("weight", source.clone())]),
-                file.path(),
-            )?;
+            candle_core::safetensors::save(&HashMap::from([("weight", source.clone())]), &path)?;
             let vb = unsafe {
                 ShardedSafeTensors::sharded(
-                    &[file.path()],
+                    &[&path],
                     dtype,
                     &Device::Cpu,
                     None,
