@@ -948,12 +948,12 @@ mod tests {
         let module = TrackedModule {
             key: "m.experts.gate_proj".to_string(),
             ct,
-            ty: Some(IsqType::HQQ4),
+            ty: Some(IsqType::F8Q8),
             promote_default: false,
             shard: Some(mistralrs_quant::Shard::default()),
         };
 
-        let error = requantize_from_source(&[module], &[file], IsqType::HQQ4, &HashMap::new())
+        let error = requantize_from_source(&[module], &[file], IsqType::F8Q8, &HashMap::new())
             .unwrap_err()
             .to_string();
         assert!(

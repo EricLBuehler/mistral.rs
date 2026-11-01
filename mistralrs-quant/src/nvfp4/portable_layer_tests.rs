@@ -55,7 +55,7 @@ fn portable_activation_precision_is_independent_of_batch_size() -> Result<()> {
                 bias: None,
                 dtype,
             })?;
-            let mut row = vec![0.2f32; PRECISION_COLUMNS];
+            let mut row = [0.2f32; PRECISION_COLUMNS];
             row[0] = 1.0;
             for batch in PRECISION_BATCHES {
                 let x = Tensor::from_vec(row.repeat(batch), (batch, PRECISION_COLUMNS), &device)?

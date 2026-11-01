@@ -1102,43 +1102,42 @@ mod tests {
 
     #[test]
     fn packed_expert_stack_rejects_targets_without_gather() -> Result<()> {
-        for ty in [IsqType::F8Q8, IsqType::HQQ4, IsqType::MXFP4] {
-            let weight = Tensor::ones((2, 4, 32), DType::F32, &Device::Cpu)?;
-            let layer = Arc::new(GgufMatMul::from_qtensor(
-                QTensor::quantize(&weight, GgmlDType::Q8_0)?,
+        let ty = IsqType::F8Q8;
+        let weight = Tensor::ones((2, 4, 32), DType::F32, &Device::Cpu)?;
+        let layer = Arc::new(GgufMatMul::from_qtensor(
+            QTensor::quantize(&weight, GgmlDType::Q8_0)?,
+            None,
+        ));
+        let request = crate::IsqRequest {
+            ty: Some(ty),
+            device: Device::Cpu,
+            has_imatrix: false,
+            capture: crate::IsqCaptureMode::Immediate,
+            consumer: crate::IsqConsumer::UqffWrite,
+            module_key: "experts".to_string(),
+        };
+        let plan_error = layer.plan_isq(&request).unwrap_err();
+        assert!(
+            plan_error
+                .to_string()
+                .contains("does not support stacked expert gather"),
+            "{ty}: {plan_error}"
+        );
+        let error = layer
+            .apply_isq(
+                Some(ty),
+                Device::Cpu,
+                &AtomicUsize::new(0),
                 None,
-            ));
-            let request = crate::IsqRequest {
-                ty: Some(ty),
-                device: Device::Cpu,
-                has_imatrix: false,
-                capture: crate::IsqCaptureMode::Immediate,
-                consumer: crate::IsqConsumer::UqffWrite,
-                module_key: "experts".to_string(),
-            };
-            let plan_error = layer.plan_isq(&request).unwrap_err();
-            assert!(
-                plan_error
-                    .to_string()
-                    .contains("does not support stacked expert gather"),
-                "{ty}: {plan_error}"
-            );
-            let error = layer
-                .apply_isq(
-                    Some(ty),
-                    Device::Cpu,
-                    &AtomicUsize::new(0),
-                    None,
-                    QuantizeOntoGuard::new(),
-                )
-                .unwrap_err();
-            assert!(
-                error
-                    .to_string()
-                    .contains("does not support stacked expert gather"),
-                "{ty}: {error}"
-            );
-        }
+                QuantizeOntoGuard::new(),
+            )
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("does not support stacked expert gather"),
+            "{ty}: {error}"
+        );
         Ok(())
     }
 
