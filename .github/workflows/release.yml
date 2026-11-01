@@ -218,7 +218,7 @@ jobs:
         with:
           working-directory: mistralrs-pyo3
           command: build
-          args: --release --out dist --features metal
+          args: --release --out dist --features metal,pyo3/extension-module
       - uses: actions/upload-artifact@v4
         with:
           name: wheel-macos
@@ -459,7 +459,7 @@ jobs:
           sed -i 's/^version = "\([^"]*\)"/version = "\1+cuda${{ matrix.cuda_asset }}.sm${{ matrix.sm }}"/' mistralrs-pyo3/Cargo.toml
           # --auditwheel skip: maturin's built-in repair has no --exclude and chokes on libcuda; do
           # our own repair below instead so the driver is excluded rather than bundled.
-          maturin build --release --target "${{ matrix.triple }}" --features "cuda flash-attn nccl" --auditwheel skip -o wheelraw -m mistralrs-pyo3/Cargo.toml
+          maturin build --release --target "${{ matrix.triple }}" --features "cuda flash-attn nccl pyo3/extension-module" --auditwheel skip -o wheelraw -m mistralrs-pyo3/Cargo.toml
           # auditwheel must resolve libcuda.so.1 before it can honor --exclude; the build container
           # has only the driver stub (libcuda.so), so symlink it as libcuda.so.1 on the search path.
           stubdir=/usr/local/cuda/lib64/stubs

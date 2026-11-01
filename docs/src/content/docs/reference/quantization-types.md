@@ -194,7 +194,7 @@ cargo run --release -p mistralrs --example nvfp4 --features cuda,cutile
 ```
 
 For a [Python source build](/developer/from-source/#python-wheels), run
-`maturin develop --release --features cuda,cutile` from `mistralrs-pyo3`.
+`maturin develop --release --features cuda,cutile,pyo3/extension-module` from `mistralrs-pyo3`.
 
 Dense and MoE projections are supported. Experts within each projection must share a quantization
 scheme, and input-dimension shards must align to 16 weights. NVFP4 creation through ISQ, NVFP4 UQFF

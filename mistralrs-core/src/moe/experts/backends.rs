@@ -10,7 +10,7 @@ use mistralrs_quant::{
 use std::sync::Arc;
 
 use crate::cuda::moe;
-#[cfg(any(feature = "cuda", feature = "metal"))]
+#[cfg(feature = "cutile")]
 use crate::layers::Activation;
 
 use super::checkpoint::ExpertCheckpoint;
@@ -398,6 +398,7 @@ impl FastExpertsWeights {
 #[cfg(all(test, feature = "cuda"))]
 mod tests {
     use super::*;
+    use crate::layers::Activation;
     use crate::moe::experts::forward::{MoEForwardPhase, MoEForwardShape};
     use candle_core::quantized::{GgmlDType, QTensor};
     use mistralrs_quant::{
@@ -1244,6 +1245,7 @@ mod nvfp4_tests {
 #[cfg(all(test, feature = "metal"))]
 mod metal_tests {
     use super::*;
+    use crate::layers::Activation;
     use crate::moe::experts::forward::{MoEForwardPhase, MoEForwardShape};
 
     fn tensor(shape: impl Into<candle_core::Shape>, phase: f32) -> Result<Tensor> {

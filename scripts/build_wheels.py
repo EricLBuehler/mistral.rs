@@ -329,7 +329,7 @@ def _build_with_maturin(features: list[str], output_dir: Path, plat: Platform) -
     ]
 
     if features:
-        cmd.extend(["--features", ",".join(features)])
+        cmd.extend(["--features", ",".join([*features, "pyo3/extension-module"])])
 
     # Skip auditwheel for CUDA builds - don't bundle CUDA shared libraries
     # Users are expected to have CUDA installed on their system
@@ -383,7 +383,7 @@ def _build_with_docker(features: list[str], output_dir: Path, plat: Platform) ->
     ]
 
     if features:
-        maturin_args.extend(["--features", ",".join(features)])
+        maturin_args.extend(["--features", ",".join([*features, "pyo3/extension-module"])])
 
     # Docker command
     docker_cmd = [

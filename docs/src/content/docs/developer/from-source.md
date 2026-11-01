@@ -86,7 +86,7 @@ Building the Python SDK from source requires `maturin`:
 ```bash
 pip install maturin[patchelf]
 cd mistralrs-pyo3
-maturin develop --release --features "cuda nccl flash-attn cudnn"
+maturin develop --release --features "cuda nccl flash-attn cudnn pyo3/extension-module"
 ```
 
 This installs the package into the current Python environment. `maturin build` produces a redistributable wheel under `target/wheels/`.

@@ -43,7 +43,7 @@ Load a model.
 - `which` specifies which model to load.
 - `max_seqs` specifies how many sequences may be running at any time.
 - `no_kv_cache` disables the KV cache.
-- `prefix_cache_n` sets the number of sequences to retain in the prefix cache. The default `None` allows up to 16; recurrent models using paged attention can reduce that count to leave room for model weights, runtime buffers, and KV. Explicit integers preserve the requested capacity, and `0` disables retention.
+- `prefix_cache_n` sets the number of sequences to retain in the prefix cache. The default `None` allows up to 16, reduced when recurrent state must share memory with model weights; explicit integers preserve the requested capacity, and `0` disables retention.
 - `token_source` specifies where to load the HF token from.
     The token source follows the following format: "literal:<value>", "env:<value>", "path:<value>", "cache" to use a cached token or "none" to use no token.
 - `mtp_model` attaches an MTP assistant from a model id or path.
