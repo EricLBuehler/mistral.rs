@@ -208,10 +208,23 @@ pub struct DecisionAnswer {
 #[pymethods]
 impl DecisionAnswer {
     fn __getattr__(&self, py: Python<'_>, name: &str) -> PyResult<Py<PyAny>> {
-        let value = self.value.get(name).ok_or_else(|| {
-            PyAttributeError::new_err(format!("This decision answer has no {name} field"))
-        })?;
-        to_python(py, value)
+        if let Some(value) = self.value.get(name) {
+            return to_python(py, value);
+        }
+        if matches!(
+            (self.value["type"].as_str(), name),
+            (Some("choice"), "choice" | "choices" | "confidence")
+                | (Some("text" | "date"), "path")
+                | (
+                    Some("number"),
+                    "interval" | "text" | "span" | "found" | "path"
+                )
+        ) {
+            return Ok(py.None());
+        }
+        Err(PyAttributeError::new_err(format!(
+            "This decision answer has no {name} field"
+        )))
     }
 
     fn to_dict(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {

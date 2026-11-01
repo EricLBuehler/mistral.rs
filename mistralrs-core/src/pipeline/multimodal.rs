@@ -575,21 +575,6 @@ impl Loader for MultimodalLoader {
         let is_decision = modalities
             .output
             .contains(&crate::SupportedModality::Decision);
-        let config = if is_decision {
-            let mut value: serde_json::Value = serde_json::from_str(&config)?;
-            if value.get("d1_calibration").is_none() {
-                let path = paths
-                    .get_config_filename()
-                    .with_file_name("calibration.json");
-                value["d1_calibration"] = serde_json::from_str(&fs::read_to_string(path)?)?;
-            }
-            let calibration: crate::decision::DecisionCalibration =
-                serde_json::from_value(value["d1_calibration"].clone())?;
-            calibration.validate()?;
-            serde_json::to_string(&value)?
-        } else {
-            config
-        };
         let runtime_config = self
             .inner
             .runtime_config(&config, self.config.max_model_len)?;
@@ -2845,46 +2830,31 @@ impl Pipeline for MultimodalPipeline {
         Ok(self.forward_step(inputs, return_raw_logits)?.output)
     }
 
+    fn forward_decision(
+        &self,
+        sequence: &mut Sequence,
+    ) -> Result<crate::decision::DecisionResponse> {
+        let tokenizer = self
+            .tokenizer()
+            .context("Decision models require a tokenizer")?;
+        let processor = self.get_processor();
+        self.model.forward_decision(
+            sequence,
+            super::DecisionForwardContext {
+                tokenizer: &tokenizer,
+                processor: processor.as_ref(),
+                device: &self.device(),
+                processor_config: self.get_input_processor_config(),
+                mapper: self.device_mapper(),
+            },
+        )
+    }
+
     fn forward_step(
         &mut self,
         inputs: Box<dyn Any>,
         return_raw_logits: bool,
     ) -> candle_core::Result<ForwardStepResult> {
-        if inputs.is::<crate::decision::DecisionBatch>() {
-            let batch = *inputs
-                .downcast::<crate::decision::DecisionBatch>()
-                .expect("Decision inputs");
-            let mut results = Vec::with_capacity(batch.rows.len());
-            for rows in batch.rows {
-                let mut answers = indexmap::IndexMap::new();
-                let mut input_tokens = 0;
-                for row in rows {
-                    let (hidden, logits) = self.model.forward_decision(
-                        &row.inputs.input_ids,
-                        row.inputs.pixel_values,
-                        row.inputs.model_specific_args,
-                        &row.attention,
-                        &row.plan.code_readout(),
-                    )?;
-                    input_tokens += row.plan.ids.len();
-                    answers.extend(
-                        row.plan
-                            .decode(&hidden, &logits, &batch.calibration)
-                            .map_err(candle_core::Error::msg)?,
-                    );
-                }
-                results.push(crate::decision::DecisionResponse {
-                    answers,
-                    usage: crate::decision::DecisionUsage {
-                        input_tokens,
-                        output_tokens: 0,
-                    },
-                });
-            }
-            return Ok(ForwardStepResult::eager(ForwardInputsResult::Decision {
-                results,
-            }));
-        }
         let ModelInputs {
             input_ids,
             seqlen_offsets,

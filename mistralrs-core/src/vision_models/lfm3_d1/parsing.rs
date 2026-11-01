@@ -501,12 +501,10 @@ fn date_order(context: &str) -> Option<DateOrder> {
                 &captures[1],
                 captures.get(2).map(|country| country.as_str()),
             ) {
-                ("en", None | Some("us")) => Some(DateOrder::MonthFirst),
-                ("en", Some("gb" | "au" | "ca"))
-                | ("fr", None | Some("fr"))
-                | ("de", None | Some("de"))
-                | ("es", None | Some("es"))
-                | ("it", None | Some("it")) => Some(DateOrder::DayFirst),
+                ("en", Some("gb" | "au" | "ca")) | ("fr" | "de" | "es" | "it", _) => {
+                    Some(DateOrder::DayFirst)
+                }
+                ("en", _) => Some(DateOrder::MonthFirst),
                 _ => None,
             }
         })

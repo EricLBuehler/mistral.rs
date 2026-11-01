@@ -105,7 +105,8 @@ fn inject_auxiliary_model_configs(config: &str, config_path: &std::path::Path) -
                 .any(|architecture| architecture.as_str() == Some("D1Model"))
         })
     {
-        return Ok(config.to_owned());
+        crate::vision_models::lfm3_d1::config::inject_calibration(&mut value, config_path)?;
+        return Ok(serde_json::to_string(&value)?);
     }
     match value.get("model_type").and_then(serde_json::Value::as_str) {
         Some("lfm3_audio") => {

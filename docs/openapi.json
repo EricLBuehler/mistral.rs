@@ -4642,13 +4642,6 @@
           }
         ]
       },
-      "DecisionInstructions": {
-        "oneOf": [
-          {
-            "type": "string"
-          }
-        ]
-      },
       "DecisionMediaSource": {
         "oneOf": [
           {
@@ -4720,217 +4713,6 @@
               },
               "video_url": {
                 "$ref": "#/components/schemas/DecisionUrl"
-              }
-            }
-          }
-        ]
-      },
-      "DecisionQuestion": {
-        "oneOf": [
-          {
-            "type": "object",
-            "required": [
-              "instructions",
-              "type"
-            ],
-            "properties": {
-              "criteria": {
-                "type": [
-                  "object",
-                  "null"
-                ],
-                "additionalProperties": {},
-                "propertyNames": {
-                  "type": "string"
-                }
-              },
-              "instructions": {
-                "$ref": "#/components/schemas/DecisionInstructions"
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "noul"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "instructions",
-              "criteria",
-              "type"
-            ],
-            "properties": {
-              "criteria": {
-                "type": "object",
-                "additionalProperties": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "propertyNames": {
-                  "type": "string"
-                }
-              },
-              "instructions": {
-                "$ref": "#/components/schemas/DecisionInstructions"
-              },
-              "multiple": {
-                "type": "boolean"
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "choice"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "instructions",
-              "criteria",
-              "type"
-            ],
-            "properties": {
-              "criteria": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "instructions": {
-                "$ref": "#/components/schemas/DecisionInstructions"
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "score"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "instructions",
-              "type"
-            ],
-            "properties": {
-              "instructions": {
-                "$ref": "#/components/schemas/DecisionInstructions"
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "text"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "instructions",
-              "type"
-            ],
-            "properties": {
-              "instructions": {
-                "$ref": "#/components/schemas/DecisionInstructions"
-              },
-              "range": {
-                "type": [
-                  "array",
-                  "null"
-                ],
-                "items": {
-                  "type": "number",
-                  "format": "double"
-                }
-              },
-              "step": {
-                "type": [
-                  "number",
-                  "null"
-                ],
-                "format": "double"
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "number"
-                ]
-              },
-              "unit": {
-                "type": [
-                  "string",
-                  "null"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "instructions",
-              "type"
-            ],
-            "properties": {
-              "instructions": {
-                "$ref": "#/components/schemas/DecisionInstructions"
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "date"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "instructions",
-              "type"
-            ],
-            "properties": {
-              "instructions": {
-                "$ref": "#/components/schemas/DecisionInstructions"
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "box"
-                ]
-              }
-            }
-          },
-          {
-            "type": "object",
-            "required": [
-              "instructions",
-              "type"
-            ],
-            "properties": {
-              "instructions": {
-                "$ref": "#/components/schemas/DecisionInstructions"
-              },
-              "max": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
-                "minimum": 0
-              },
-              "type": {
-                "type": "string",
-                "enum": [
-                  "boxes"
-                ]
               }
             }
           }
@@ -9621,14 +9403,7 @@
                 }
               },
               "instructions": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "$ref": "#/components/schemas/DecisionAudioSource"
-                  }
-                ]
+                "$ref": "#/components/schemas/DecisionInstructionSource"
               },
               "type": {
                 "type": "string",
@@ -9659,14 +9434,7 @@
                 }
               },
               "instructions": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "$ref": "#/components/schemas/DecisionAudioSource"
-                  }
-                ]
+                "$ref": "#/components/schemas/DecisionInstructionSource"
               },
               "multiple": {
                 "type": "boolean"
@@ -9694,14 +9462,7 @@
                 }
               },
               "instructions": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "$ref": "#/components/schemas/DecisionAudioSource"
-                  }
-                ]
+                "$ref": "#/components/schemas/DecisionInstructionSource"
               },
               "type": {
                 "type": "string",
@@ -9719,14 +9480,7 @@
             ],
             "properties": {
               "instructions": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "$ref": "#/components/schemas/DecisionAudioSource"
-                  }
-                ]
+                "$ref": "#/components/schemas/DecisionInstructionSource"
               },
               "type": {
                 "type": "string",
@@ -9744,14 +9498,7 @@
             ],
             "properties": {
               "instructions": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "$ref": "#/components/schemas/DecisionAudioSource"
-                  }
-                ]
+                "$ref": "#/components/schemas/DecisionInstructionSource"
               },
               "range": {
                 "type": [
@@ -9792,14 +9539,7 @@
             ],
             "properties": {
               "instructions": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "$ref": "#/components/schemas/DecisionAudioSource"
-                  }
-                ]
+                "$ref": "#/components/schemas/DecisionInstructionSource"
               },
               "type": {
                 "type": "string",
@@ -9817,14 +9557,7 @@
             ],
             "properties": {
               "instructions": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "$ref": "#/components/schemas/DecisionAudioSource"
-                  }
-                ]
+                "$ref": "#/components/schemas/DecisionInstructionSource"
               },
               "type": {
                 "type": "string",
@@ -9842,14 +9575,7 @@
             ],
             "properties": {
               "instructions": {
-                "oneOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "$ref": "#/components/schemas/DecisionAudioSource"
-                  }
-                ]
+                "$ref": "#/components/schemas/DecisionInstructionSource"
               },
               "max": {
                 "type": [

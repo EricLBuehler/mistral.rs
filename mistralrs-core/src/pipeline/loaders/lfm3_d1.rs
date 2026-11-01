@@ -11,7 +11,6 @@ use super::{
 };
 use crate::{
     attention::ATTENTION_CHUNK_SIZE,
-    decision::DecisionProcessor,
     device_map::DeviceMapper,
     matformer::MatformerSliceConfig,
     models::lfm3::DECISION_PROJECTION_CHUNK_SIZE,
@@ -23,7 +22,7 @@ use crate::{
     vision_models::{
         lfm3_d1::{
             config::{Config, ModelConfig},
-            Lfm3D1Model,
+            DecisionProcessor, Lfm3D1Model,
         },
         lfm3_omni::memory::{ActivationMemory, AudioMemoryEstimate},
         preprocessor_config::PreProcessorConfig,

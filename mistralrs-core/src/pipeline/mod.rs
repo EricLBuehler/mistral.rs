@@ -155,6 +155,7 @@ pub(crate) use paths::{
     get_adapter_paths, get_chat_template, get_model_paths, AdapterPathOptions, XLoraPreload,
 };
 pub use paths::{AdapterPaths, ResolvedLoraAdapter};
+pub use processing::DecisionForwardContext;
 pub(crate) use processing::{
     apply_chat_template, BasicProcessor, MessagesAction, Processor, ProcessorCreator,
 };
@@ -1594,9 +1595,6 @@ pub enum CacheBackendMetadata {
 
 #[derive(Clone, Debug)]
 pub enum ForwardInputsResult {
-    Decision {
-        results: Vec<crate::decision::DecisionResponse>,
-    },
     RawLogits {
         logits: Tensor,
     },
@@ -1623,9 +1621,6 @@ pub enum ForwardInputsResult {
 impl ForwardInputsResult {
     fn index_bs(&self, bs_idx: usize) -> candle_core::Result<Self> {
         match self {
-            Self::Decision { results } => Ok(Self::Decision {
-                results: vec![results[bs_idx].clone()],
-            }),
             Self::CausalGeneration { logits } => Ok(Self::CausalGeneration {
                 logits: logits.i(bs_idx)?,
             }),
@@ -1659,7 +1654,6 @@ impl ForwardInputsResult {
 
     fn to_device(&self, device: &Device) -> candle_core::Result<Self> {
         match self {
-            Self::Decision { .. } => Ok(self.clone()),
             Self::CausalGeneration { logits } => Ok(Self::CausalGeneration {
                 logits: logits.to_device(device)?,
             }),
@@ -1837,6 +1831,13 @@ pub trait Pipeline:
         inputs: Box<dyn Any>,
         return_raw_logits: bool,
     ) -> Result<ForwardInputsResult, candle_core::Error>;
+
+    fn forward_decision(
+        &self,
+        _sequence: &mut Sequence,
+    ) -> Result<crate::decision::DecisionResponse> {
+        anyhow::bail!("This pipeline does not support decision requests")
+    }
 
     #[doc(hidden)]
     fn forward_step(
@@ -2064,6 +2065,44 @@ pub trait Pipeline:
         logger: &IntervalLogger,
         lookahead: StepLookahead,
     ) -> Result<StepSubmission, candle_core::Error> {
+        if matches!(self.category(), ModelCategory::Decision { .. }) {
+            let mut duration = Duration::ZERO;
+            for seq in input_seqs {
+                if seq.responder().is_closed() {
+                    seq.set_state(crate::sequence::SequenceState::Done(
+                        crate::sequence::StopReason::Canceled,
+                    ));
+                    continue;
+                }
+                let start = Instant::now();
+                let result = self.forward_decision(seq);
+                duration += start.elapsed();
+                if seq.responder().is_closed() {
+                    seq.set_state(crate::sequence::SequenceState::Done(
+                        crate::sequence::StopReason::Canceled,
+                    ));
+                    continue;
+                }
+                let response = match result {
+                    Ok(result) => {
+                        seq.set_state(crate::sequence::SequenceState::Done(
+                            crate::sequence::StopReason::Length(0),
+                        ));
+                        crate::Response::Decision { result }
+                    }
+                    Err(error) => {
+                        seq.set_state(crate::sequence::SequenceState::Error);
+                        if is_inputs_processor_validation_error(&error) {
+                            crate::Response::ValidationError(error.into())
+                        } else {
+                            crate::Response::InternalError(error.into())
+                        }
+                    }
+                };
+                let _ = seq.responder().send(response).await;
+            }
+            return Ok(StepSubmission::ready(duration));
+        }
         match backend_metadata {
             CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
                 if !is_prompt && !return_raw_logits {
@@ -2092,19 +2131,11 @@ pub trait Pipeline:
                 let mut embedding_logits = vec![None; input_seqs.len()];
 
                 let mut exec_duration = Duration::ZERO;
-                let mut validation_error = None;
                 for (i, inputs) in inputs_iter.into_iter().enumerate() {
                     let InputProcessorOutput {
                         inputs,
                         seq_indices,
-                    } = match inputs {
-                        Ok(inputs) => inputs,
-                        Err(error) if is_inputs_processor_validation_error(&error) => {
-                            validation_error = Some(error.to_string());
-                            break;
-                        }
-                        Err(error) => return Err(candle_core::Error::msg(error)),
-                    };
+                    } = inputs.map_err(candle_core::Error::msg)?;
                     if i == 0 {
                         match pre_op {
                             CacheInstruction::In => self.clone_in_cache(input_seqs)?,
@@ -2146,17 +2177,6 @@ pub trait Pipeline:
                             logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
                         }
                     }
-                }
-
-                if let Some(error) = validation_error {
-                    for seq in input_seqs.iter_mut() {
-                        let _ = seq
-                            .responder()
-                            .send(crate::Response::ValidationError(error.clone().into()))
-                            .await;
-                        seq.set_state(crate::sequence::SequenceState::Error);
-                    }
-                    return Ok(StepSubmission::ready(exec_duration));
                 }
 
                 match post_op {
@@ -2218,22 +2238,6 @@ pub trait Pipeline:
                     .collect::<Vec<_>>();
 
                 match &logits[0] {
-                    ForwardInputsResult::Decision { .. } => {
-                        for (seq, output) in input_seqs.iter_mut().zip(logits) {
-                            let ForwardInputsResult::Decision { mut results } = output else {
-                                unreachable!("Decision batch must contain decision results")
-                            };
-                            let _ = seq
-                                .responder()
-                                .send(crate::Response::Decision {
-                                    result: results.remove(0),
-                                })
-                                .await;
-                            seq.set_state(crate::sequence::SequenceState::Done(
-                                crate::sequence::StopReason::Length(0),
-                            ));
-                        }
-                    }
                     ForwardInputsResult::RawLogits { .. }
                     | ForwardInputsResult::Embeddings { .. } => unreachable!(),
                     ForwardInputsResult::CausalGeneration { .. } => {
@@ -2900,7 +2904,6 @@ pub trait Pipeline:
                     .collect::<Vec<_>>();
                 match &logits[0] {
                     ForwardInputsResult::RawLogits { .. }
-                    | ForwardInputsResult::Decision { .. }
                     | ForwardInputsResult::Embeddings { .. } => unreachable!(),
                     ForwardInputsResult::CausalGeneration { .. } => {
                         let logits = logits

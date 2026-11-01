@@ -1,10 +1,3 @@
-mod calibration;
-mod inputs;
-pub(crate) use inputs::{DecisionBatch, DecisionProcessor};
-mod parsing;
-mod prompt;
-mod readout;
-
 use anyhow::{ensure, Result};
 use image::DynamicImage;
 use indexmap::IndexMap;
@@ -14,15 +7,8 @@ use serde_json::Value;
 
 use crate::VideoInput;
 
-pub(crate) use calibration::DecisionCalibration;
-pub(crate) use prompt::{DecisionConfig, DecisionPlan, DecisionPrompt, DecisionReadout};
-
-pub(crate) const DEFAULT_BOX_COUNT: usize = 16;
-pub(crate) const MAX_BOX_COUNT: usize = 64;
-pub(crate) const GRID_SIZE: usize = 128;
+const MAX_BOX_COUNT: usize = 64;
 const GRID_STEP_RELATIVE_TOLERANCE: f64 = 1e-9;
-pub(crate) const TEXT_SPAN_LIMIT: usize = 512;
-pub(crate) const VALUE_SPAN_LIMIT: usize = 32;
 
 #[derive(Clone, Debug)]
 pub enum DecisionMedia {

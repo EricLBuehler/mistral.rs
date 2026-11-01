@@ -103,9 +103,11 @@ impl PartialSchema for SystemOneQuestion {
         if let RefOr::T(Schema::OneOf(variants)) = &mut schema {
             for variant in &mut variants.items {
                 if let RefOr::T(Schema::Object(object)) = variant {
-                    object
-                        .properties
-                        .insert("instructions".into(), DecisionInstructionSource::schema());
+                    object.properties.insert(
+                        "instructions".into(),
+                        utoipa::openapi::Ref::from_schema_name(DecisionInstructionSource::name())
+                            .into(),
+                    );
                 }
             }
         }
@@ -115,7 +117,10 @@ impl PartialSchema for SystemOneQuestion {
 
 impl ToSchema for SystemOneQuestion {
     fn schemas(schemas: &mut Vec<(String, RefOr<Schema>)>) {
-        DecisionQuestion::schemas(schemas);
+        schemas.push((
+            DecisionInstructionSource::name().into(),
+            DecisionInstructionSource::schema(),
+        ));
         DecisionInstructionSource::schemas(schemas);
     }
 }

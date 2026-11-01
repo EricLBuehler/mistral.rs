@@ -1,14 +1,14 @@
 use std::{collections::BTreeSet, ops::Range};
 
 use anyhow::{bail, ensure, Context, Result};
-use serde::{Deserialize, Serialize};
 use tokenizers::{Encoding, Tokenizer};
 
-use super::{
-    DecisionCalibration, DecisionInstructions, DecisionMedia, DecisionQuestion, DecisionRequest,
-    DEFAULT_BOX_COUNT, GRID_SIZE,
-};
+use crate::decision::{DecisionInstructions, DecisionMedia, DecisionQuestion, DecisionRequest};
 
+use super::config::DecisionConfig;
+
+const DEFAULT_BOX_COUNT: usize = 16;
+const GRID_SIZE: usize = 128;
 const IM_START: &str = "<|im_start|>";
 const BOS: &str = "<|startoftext|>";
 const VISION_START: &str = "<|vision_start|>";
@@ -18,26 +18,6 @@ const EDGES: [&str; 4] = ["top", "bottom", "left", "right"];
 const COORDINATE_SCALE: usize = 1000;
 const NUMBER_TOLERANCE: f64 = 1e-6;
 const SPECIAL_BREAK: &str = "\u{200b}";
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub(crate) struct DecisionConfig {
-    pub d1_attention: String,
-    pub d1_codes: usize,
-    pub d1_numbers: bool,
-    pub d1_set_size: usize,
-    #[serde(default = "default_prompt")]
-    pub d1_prompt: usize,
-    #[serde(default = "default_edges")]
-    pub d1_box_edges: String,
-    pub d1_calibration: DecisionCalibration,
-}
-
-fn default_prompt() -> usize {
-    1
-}
-fn default_edges() -> String {
-    "median".to_owned()
-}
 
 #[derive(Clone, Debug)]
 pub(super) struct Grid {
@@ -206,11 +186,11 @@ impl DecisionPlan {
 }
 
 impl DecisionPrompt {
-    pub(crate) fn prepare(
-        request: &DecisionRequest,
-        tokenizer: &Tokenizer,
-        config: &DecisionConfig,
-    ) -> Result<Vec<Self>> {
+    pub(crate) fn prepare<'a>(
+        request: &'a DecisionRequest,
+        tokenizer: &'a Tokenizer,
+        config: &'a DecisionConfig,
+    ) -> Result<impl Iterator<Item = Result<Self>> + 'a> {
         request.validate()?;
         config.d1_calibration.validate()?;
         ensure!(
@@ -238,47 +218,51 @@ impl DecisionPrompt {
         };
         let state_json =
             (!request.state.is_null() && !request.state.is_string()).then(|| request.state.clone());
-        let questions = request.questions.iter().collect::<Vec<_>>();
-        let mut prompts = Vec::new();
-        for group in questions.chunks(size) {
-            let mut media = request.media.clone();
-            let mut prefix = vec![Part::Literal(format!("{BOS}{IM_START}user\n"))];
-            prefix.extend((0..media.len()).map(Part::Media));
-            if !request.state.is_null() {
-                prefix.push(Part::State(plain(tokenizer, &state_text)?));
-                prefix.push(Part::Literal("\n\n\nQUESTION:\n".to_owned()));
-            }
-            let mut suffixes = Vec::new();
-            let mut plans = Vec::new();
-            for (index, (name, question)) in group.iter().enumerate() {
-                let (mut parts, plan) =
-                    render_question(name, question, tokenizer, config, &mut media)?;
-                if index > 0 && !request.state.is_null() {
-                    parts.insert(0, Part::Literal("QUESTION:\n".to_owned()));
+        Ok((0..request.questions.len())
+            .step_by(size)
+            .map(move |start| {
+                let group = request.questions.get_range(start..).unwrap();
+                let mut media = request.media.clone();
+                let mut prefix = vec![Part::Literal(format!("{BOS}{IM_START}user\n"))];
+                prefix.extend((0..media.len()).map(Part::Media));
+                if !request.state.is_null() {
+                    prefix.push(Part::State(plain(tokenizer, &state_text)?));
+                    prefix.push(Part::Literal("\n\n\nQUESTION:\n".to_owned()));
                 }
-                suffixes.push(parts);
-                plans.push(plan);
-            }
-            let text = prefix
-                .iter()
-                .chain(suffixes.iter().flatten())
-                .map(|part| initial_part(part, &media))
-                .collect::<String>();
-            prompts.push(Self {
-                text,
-                media,
-                prefix,
-                suffixes,
-                questions: plans,
-                state_text: state_text.clone(),
-                state_json: state_json.clone(),
-                box_edges: config.d1_box_edges.clone(),
-            });
-        }
-        Ok(prompts)
+                let mut suffixes = Vec::new();
+                let mut plans = Vec::new();
+                for (index, (name, question)) in group.iter().take(size).enumerate() {
+                    let (mut parts, plan) =
+                        render_question(name, question, tokenizer, config, &mut media)?;
+                    if index > 0 && !request.state.is_null() {
+                        parts.insert(0, Part::Literal("QUESTION:\n".to_owned()));
+                    }
+                    suffixes.push(parts);
+                    plans.push(plan);
+                }
+                let text = prefix
+                    .iter()
+                    .chain(suffixes.iter().flatten())
+                    .map(|part| initial_part(part, &media))
+                    .collect::<String>();
+                Ok(Self {
+                    text,
+                    media,
+                    prefix,
+                    suffixes,
+                    questions: plans,
+                    state_text: state_text.clone(),
+                    state_json: state_json.clone(),
+                    box_edges: config.d1_box_edges.clone(),
+                })
+            }))
     }
 
-    pub(crate) fn plan(&self, tokenizer: &Tokenizer, expanded_text: &str) -> Result<DecisionPlan> {
+    pub(crate) fn plan(
+        &self,
+        tokenizer: &Tokenizer,
+        expanded_text: &str,
+    ) -> Result<(DecisionPlan, Vec<(usize, usize)>)> {
         let mut cursor = 0;
         let mut state = None;
         let mut ignored = Vec::new();
@@ -332,10 +316,6 @@ impl DecisionPrompt {
             );
             question_ids.resize(ids.len(), i32::try_from(index + 1)?);
         }
-        ensure!(
-            ids == encode(tokenizer, expanded_text)?,
-            "Decision question boundaries changed during whole-prompt tokenization"
-        );
         let mut slot_positions = Vec::new();
         for (range, ends) in ranges.iter().zip(markers) {
             if ends.is_empty() {
@@ -383,17 +363,20 @@ impl DecisionPrompt {
             state_offsets.first().is_some_and(Option::is_none),
             "Decision position zero must be the null pointer"
         );
-        Ok(DecisionPlan {
-            ids,
-            state_len,
-            question_ids,
-            slot_positions,
-            questions: self.questions.clone(),
-            state_text: self.state_text.clone(),
-            state_json: self.state_json.clone(),
-            state_offsets,
-            box_edges: self.box_edges.clone(),
-        })
+        Ok((
+            DecisionPlan {
+                ids,
+                state_len,
+                question_ids,
+                slot_positions,
+                questions: self.questions.clone(),
+                state_text: self.state_text.clone(),
+                state_json: self.state_json.clone(),
+                state_offsets,
+                box_edges: self.box_edges.clone(),
+            },
+            offsets,
+        ))
     }
 }
 

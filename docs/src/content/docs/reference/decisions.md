@@ -82,6 +82,6 @@ print(response.answers["cancel"].noul)
 print(response.to_dict())
 ```
 
-Pass `model_id=` to select another loaded model. Question dictionaries with the HTTP shape are also accepted. Answer attributes depend on their `type`; `to_dict()` returns the complete wire representation. Python `images` and `media` accept URLs, data URLs, or local `file://` URLs.
+Pass `model_id=` to select another loaded model. Question dictionaries with the HTTP shape are also accepted. Answer attributes depend on their `type`; optional attributes for that type return `None` when absent. `to_dict()` preserves the wire representation, including omitted fields. Python `images` and `media` accept URLs, data URLs, or local `file://` URLs.
 
 Runnable examples: [HTTP](/examples/server/lfm3-d1/), [Python](/examples/python/lfm3-d1/), and [Rust](/examples/rust/models/lfm3-d1/).

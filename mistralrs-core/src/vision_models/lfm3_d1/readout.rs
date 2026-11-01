@@ -5,12 +5,14 @@ use candle_core::{DType, Device, Tensor};
 use indexmap::IndexMap;
 
 use super::{
+    calibration::DecisionCalibration,
     parsing::{parse_date, parse_number, written_unit},
     prompt::{DecisionPlan, Grid, PlannedQuestion, Slot},
-    DecisionAnswer, DecisionBox, DecisionCalibration, DecisionFoundBox, DecisionQuestion,
-    TEXT_SPAN_LIMIT, VALUE_SPAN_LIMIT,
 };
+use crate::decision::{DecisionAnswer, DecisionBox, DecisionFoundBox, DecisionQuestion};
 
+const TEXT_SPAN_LIMIT: usize = 512;
+const VALUE_SPAN_LIMIT: usize = 32;
 const BOX_CONFIDENCE_DRAWS: u32 = 512;
 const BOX_SLOTS: usize = 5;
 const BOX_CONFIDENCE_IOU: f64 = 0.5;
@@ -70,35 +72,8 @@ impl DecisionPlan {
         if code_slots.is_empty() {
             return Ok(Vec::new());
         }
-        ensure!(
-            logits.dim(0)? == code_slots.len(),
-            "Decision logit row count differs from its code slots"
-        );
-        let width = code_slots
-            .iter()
-            .map(|(_, groups)| groups.iter().map(Vec::len).sum::<usize>())
-            .max()
-            .unwrap();
-        let mut indices = Vec::with_capacity(width * code_slots.len());
         let token_ids = self.code_readout().token_ids;
-        ensure!(
-            logits.dim(1)? == token_ids.len(),
-            "Decision logit columns differ from its vocabulary readout"
-        );
-        for (_, groups) in &code_slots {
-            let start = indices.len();
-            indices.extend(
-                groups
-                    .iter()
-                    .flatten()
-                    .map(|token| u32::try_from(token_ids.binary_search(token).unwrap()))
-                    .collect::<std::result::Result<Vec<_>, _>>()?,
-            );
-            indices.resize(start + width, 0);
-        }
-        let indices = Tensor::from_vec(indices, (code_slots.len(), width), logits.device())?;
         let gathered = logits
-            .gather(&indices, 1)?
             .to_dtype(DType::F32)?
             .to_device(&Device::Cpu)?
             .to_vec2::<f32>()?;
@@ -116,15 +91,13 @@ impl DecisionPlan {
                     }
                     _ => 1.0,
                 };
-                let mut cursor = 0;
                 let scores = groups
                     .iter()
                     .map(|group| {
-                        let score = values[cursor..cursor + group.len()]
+                        let score = group
                             .iter()
-                            .copied()
+                            .map(|token| values[token_ids.binary_search(token).unwrap()])
                             .fold(f32::NEG_INFINITY, f32::max);
-                        cursor += group.len();
                         f64::from(score) / temperature
                     })
                     .collect::<Vec<_>>();
@@ -165,25 +138,22 @@ impl DecisionPlan {
             .matmul(&states.t()?)?
             .affine(scale, 0.0)?
             .to_device(&Device::Cpu)?
-            .to_vec2::<f32>()?;
-        let distributions = logits
-            .iter()
+            .to_vec2::<f32>()?
+            .into_iter()
             .map(|row| {
-                softmax(
-                    &row.iter()
-                        .enumerate()
-                        .map(|(index, &score)| {
-                            if index == 0 || self.state_offsets[index].is_some() {
-                                f64::from(score)
-                            } else {
-                                f64::NEG_INFINITY
-                            }
-                        })
-                        .collect::<Vec<_>>(),
-                )
+                row.into_iter()
+                    .enumerate()
+                    .map(|(index, score)| {
+                        if index == 0 || self.state_offsets[index].is_some() {
+                            f64::from(score)
+                        } else {
+                            f64::NEG_INFINITY
+                        }
+                    })
+                    .collect::<Vec<_>>()
             })
-            .collect::<Result<Vec<_>>>()?;
-        let raw_found = 1.0 - distributions[0][0];
+            .collect::<Vec<_>>();
+        let raw_found = 1.0 - softmax(&logits[0])?[0];
         let kind = match question.question {
             DecisionQuestion::Text { .. } => "text",
             DecisionQuestion::Date { .. } => "date",
@@ -195,22 +165,7 @@ impl DecisionPlan {
         let mut path = None;
         // The reference gates the raw pointer before applying its calibrated presence threshold.
         if raw_found >= FOUND_THRESHOLD && found >= FOUND_THRESHOLD && width > 1 {
-            let masked = logits
-                .iter()
-                .map(|row| {
-                    row.iter()
-                        .enumerate()
-                        .map(|(index, &value)| {
-                            if index == 0 || self.state_offsets[index].is_some() {
-                                f64::from(value)
-                            } else {
-                                f64::NEG_INFINITY
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .collect::<Vec<_>>();
-            let (first, last) = best_span(&masked[0], &masked[1], limit);
+            let (first, last) = best_span(&logits[0], &logits[1], limit);
             if let (Some(first), Some(last)) =
                 (&self.state_offsets[first], &self.state_offsets[last])
             {

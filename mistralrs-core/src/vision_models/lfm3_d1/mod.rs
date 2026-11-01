@@ -1,108 +1,49 @@
+mod calibration;
 pub(crate) mod config;
+mod inputs;
+mod parsing;
+mod prompt;
+mod readout;
+
+pub(crate) use inputs::DecisionProcessor;
 
 use std::{
     any::Any,
     sync::{Arc, Mutex},
 };
 
+use anyhow::Context;
 use candle_core::{DType, Device, Result, Tensor};
 use mistralrs_quant::ShardedVarBuilder;
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
+    decision::{DecisionResponse, DecisionUsage},
     paged_attention::{
         encoder_cache::{CacheModality, EncoderCacheManager},
         AttentionImplementation, ModelConfigLike, ModelConfigMetadata,
     },
     pipeline::{
-        EitherCache, IsqModel, ModelForwardContext, MultimodalModel, NormalLoadingMetadata,
+        DecisionForwardContext, EitherCache, IsqModel, ModelForwardContext, MultimodalModel,
+        NormalLoadingMetadata,
     },
+    sequence::{MultimodalData, Sequence},
     utils::unvarbuilder::UnVarBuilder,
     vision_models::{
         grid_processor::GridVisionSpecificArgs,
         lfm3_omni::{
             audio::{AudioEncoder, AudioProjector},
             inputs_processor::Lfm3OmniSpecificArgs,
-            memory::AudioMemoryEstimate,
         },
         lfm3_vl::Lfm3VlModel,
     },
 };
 
-#[derive(Clone, Debug)]
-pub struct DecisionAttention {
-    pub sequence_lengths: Vec<usize>,
-    pub state_lengths: Option<Vec<usize>>,
-    pub question_ids: Option<Vec<Vec<i32>>>,
-}
-
-impl DecisionAttention {
-    fn validate(&self, batch: usize, length: usize) -> Result<()> {
-        if self.sequence_lengths.len() != batch
-            || self
-                .sequence_lengths
-                .iter()
-                .any(|&len| len == 0 || len > length)
-            || self.state_lengths.as_ref().is_some_and(|states| {
-                states.len() != batch
-                    || states
-                        .iter()
-                        .zip(&self.sequence_lengths)
-                        .any(|(state, len)| state > len)
-            })
-            || self.question_ids.as_ref().is_some_and(|groups| {
-                self.state_lengths.is_none()
-                    || groups.len() != batch
-                    || groups.iter().any(|row| row.len() != length)
-            })
-        {
-            candle_core::bail!("Invalid d1 attention layout for {batch} rows of {length} tokens");
-        }
-        Ok(())
-    }
-
-    fn rows(
-        &self,
-        start: usize,
-        width: usize,
-        length: usize,
-        dtype: DType,
-        device: &Device,
-    ) -> Result<Tensor> {
-        let mut values = Vec::with_capacity(self.sequence_lengths.len() * width * length);
-        for (row, &real) in self.sequence_lengths.iter().enumerate() {
-            let state = self.state_lengths.as_ref().map(|states| states[row]);
-            let groups = self.question_ids.as_ref().map(|groups| &groups[row]);
-            for query in start..start + width {
-                for key in 0..length {
-                    let visible = match (state, groups) {
-                        (Some(state), Some(groups)) => {
-                            query < state || key < state || groups[query] == groups[key]
-                        }
-                        (Some(state), None) => key <= query || query < state && key < state,
-                        (None, _) => key <= query,
-                    };
-                    values.push(if key < real && visible {
-                        0f32
-                    } else {
-                        f32::NEG_INFINITY
-                    });
-                }
-            }
-        }
-        Tensor::from_vec(
-            values,
-            (self.sequence_lengths.len(), 1, width, length),
-            device,
-        )?
-        .to_dtype(dtype)
-    }
-}
+use prompt::DecisionPlan;
 
 struct AudioInputEncoder {
     encoder: AudioEncoder,
     projector: AudioProjector,
-    memory: AudioMemoryEstimate,
 }
 
 pub(crate) struct Lfm3D1Model {
@@ -134,18 +75,67 @@ impl Lfm3D1Model {
                         config.vision.text_config.hidden_size,
                         audio_vb.pp("audio_projector"),
                     )?,
-                    memory: AudioMemoryEstimate::new(
-                        audio,
-                        config.vision.text_config.hidden_size,
-                        audio_vb.dtype(),
-                        audio_vb.device(),
-                    ),
                 })
             })
             .transpose()?;
         Ok(Self {
             vision: Lfm3VlModel::new(&config.vision, vb, is_gptx, metadata, attention)?,
             audio,
+        })
+    }
+
+    fn run_decision(
+        &self,
+        sequence: &mut Sequence,
+        context: &DecisionForwardContext<'_>,
+    ) -> anyhow::Result<DecisionResponse> {
+        let processor = context
+            .processor
+            .as_any()
+            .downcast_ref::<DecisionProcessor>()
+            .context("Invalid d1 processor")?;
+        let request = sequence
+            .decision
+            .clone()
+            .context("Missing decision request")?;
+        let mut answers = indexmap::IndexMap::new();
+        let mut input_tokens = 0;
+        for prompt in processor.prompts(&request, context.tokenizer)? {
+            if sequence.responder().is_closed() {
+                break;
+            }
+            let row = processor.prepare_row(sequence, prompt?, context)?;
+            sequence.multimodal = MultimodalData::new(None, None, None, None, None, None);
+            let input = self.input_embeddings(
+                &row.inputs.input_ids,
+                row.inputs.pixel_values,
+                row.inputs.model_specific_args,
+            )?;
+            let hidden = self
+                .vision
+                .language_model
+                .forward_decision_hidden(input, |start, width, dtype, device| {
+                    attention_mask(&row.plan, start, width, dtype, device)
+                })?
+                .squeeze(0)?;
+            let readout = row.plan.code_readout();
+            let logits = self.vision.language_model.project_decision_slots(
+                &hidden,
+                &readout.positions,
+                &readout.token_ids,
+            )?;
+            input_tokens += row.plan.ids.len();
+            answers.extend(
+                row.plan
+                    .decode(&hidden, &logits, &processor.config.d1_calibration)?,
+            );
+        }
+        Ok(DecisionResponse {
+            answers,
+            usage: DecisionUsage {
+                input_tokens,
+                output_tokens: 0,
+            },
         })
     }
 
@@ -246,30 +236,12 @@ impl MultimodalModel for Lfm3D1Model {
 
     fn forward_decision(
         &self,
-        input_ids: &Tensor,
-        pixel_values: Option<Tensor>,
-        model_specific_args: Box<dyn Any>,
-        attention: &DecisionAttention,
-        readout: &crate::decision::DecisionReadout,
-    ) -> Result<(Tensor, Tensor)> {
-        let (batch, length) = input_ids.dims2()?;
-        if batch != 1 {
-            candle_core::bail!("A d1 decision forward expects one packed question set");
-        }
-        attention.validate(batch, length)?;
-        let input = self.input_embeddings(input_ids, pixel_values, model_specific_args)?;
-        let hidden = self
-            .vision
-            .language_model
-            .forward_decision_hidden(input, |start, width, dtype, device| {
-                attention.rows(start, width, length, dtype, device)
-            })?
-            .squeeze(0)?;
-        let logits = self
-            .vision
-            .language_model
-            .project_decision_slots(&hidden, readout)?;
-        Ok((hidden, logits))
+        sequence: &mut Sequence,
+        context: DecisionForwardContext<'_>,
+    ) -> anyhow::Result<DecisionResponse> {
+        let result = self.run_decision(sequence, &context);
+        sequence.multimodal = MultimodalData::new(None, None, None, None, None, None);
+        result
     }
 
     fn device(&self) -> &Device {
@@ -290,26 +262,35 @@ impl MultimodalModel for Lfm3D1Model {
     fn supports_mixed_media_batches(&self) -> bool {
         true
     }
-    fn encoder_activation_memory_bytes(
-        &self,
-        seq: &crate::sequence::Sequence,
-    ) -> Result<Option<usize>> {
-        let vision = self
-            .vision
-            .encoder_activation_memory_bytes(seq)?
-            .unwrap_or(0);
-        let audio = self
-            .audio
-            .as_ref()
-            .map(|audio| audio.memory.for_sequence(seq))
-            .transpose()?
-            .unwrap_or(0);
-        Ok(Some(vision + audio))
-    }
     fn default_model_specific_args(&self, input_ids: &Tensor) -> Box<dyn Any> {
         self.vision.default_model_specific_args(input_ids)
     }
     fn encoder_cache(&self) -> Option<&Mutex<EncoderCacheManager>> {
         self.vision.encoder_cache()
     }
+}
+
+fn attention_mask(
+    plan: &DecisionPlan,
+    start: usize,
+    width: usize,
+    dtype: DType,
+    device: &Device,
+) -> Result<Tensor> {
+    let length = plan.ids.len();
+    let values = (start..start + width)
+        .flat_map(|query| {
+            (0..length).map(move |key| {
+                if query < plan.state_len
+                    || key < plan.state_len
+                    || plan.question_ids[query] == plan.question_ids[key]
+                {
+                    0f32
+                } else {
+                    f32::NEG_INFINITY
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    Tensor::from_vec(values, (1, 1, width, length), device)?.to_dtype(dtype)
 }

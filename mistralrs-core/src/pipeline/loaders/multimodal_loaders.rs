@@ -130,13 +130,10 @@ pub trait MultimodalModel:
 {
     fn forward_decision(
         &self,
-        _input_ids: &Tensor,
-        _pixel_values: Option<Tensor>,
-        _model_specific_args: Box<dyn Any>,
-        _attention: &crate::vision_models::lfm3_d1::DecisionAttention,
-        _readout: &crate::decision::DecisionReadout,
-    ) -> candle_core::Result<(Tensor, Tensor)> {
-        candle_core::bail!("This model does not support decision requests")
+        _sequence: &mut crate::sequence::Sequence,
+        _context: crate::pipeline::DecisionForwardContext<'_>,
+    ) -> Result<crate::decision::DecisionResponse> {
+        anyhow::bail!("This model does not support decision requests")
     }
     // pixel_values and pixel_attention_mask only specified for prompt seqs
     fn forward(

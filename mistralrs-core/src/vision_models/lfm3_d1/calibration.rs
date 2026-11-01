@@ -4,7 +4,7 @@ use anyhow::{ensure, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub(crate) struct DecisionCalibration {
+pub(super) struct DecisionCalibration {
     pub default: f64,
     #[serde(default)]
     pub temperatures: HashMap<String, f64>,

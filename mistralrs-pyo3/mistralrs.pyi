@@ -276,18 +276,18 @@ class DecisionRequest:
     ) -> None: ...
 
 class DecisionAnswer:
-    """Fields depend on type; to_dict returns the corresponding SystemOne answer object."""
+    """Fields depend on type; absent optional fields return None. to_dict preserves the wire object."""
     type: Literal["noul", "choice", "score", "text", "number", "date", "box", "boxes"]
     noul: float
-    choice: str
-    choices: list[str]
-    confidence: float
+    choice: str | None
+    choices: list[str] | None
+    confidence: float | None
     probabilities: dict[str, float]
     score: float
     legend: dict[str, str]
     text: str | None
     span: list[int] | None
-    found: float
+    found: float | None
     path: str | None
     number: float | None
     unit: str | None

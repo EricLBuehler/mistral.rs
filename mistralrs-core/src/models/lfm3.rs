@@ -1112,23 +1112,16 @@ impl Model {
     pub(crate) fn project_decision_slots(
         &self,
         hidden: &Tensor,
-        readout: &crate::decision::DecisionReadout,
+        positions: &[usize],
+        token_ids: &[u32],
     ) -> Result<Tensor> {
-        if readout.positions.is_empty() {
-            return Tensor::zeros(
-                (0, readout.token_ids.len()),
-                hidden.dtype(),
-                hidden.device(),
-            );
+        if positions.is_empty() {
+            return Tensor::zeros((0, token_ids.len()), hidden.dtype(), hidden.device());
         }
-        let columns = Tensor::new(readout.token_ids.as_slice(), hidden.device())?;
-        let mut logits = Vec::with_capacity(
-            readout
-                .positions
-                .len()
-                .div_ceil(DECISION_PROJECTION_CHUNK_SIZE),
-        );
-        for positions in readout.positions.chunks(DECISION_PROJECTION_CHUNK_SIZE) {
+        let columns = Tensor::new(token_ids, hidden.device())?;
+        let mut logits =
+            Vec::with_capacity(positions.len().div_ceil(DECISION_PROJECTION_CHUNK_SIZE));
+        for positions in positions.chunks(DECISION_PROJECTION_CHUNK_SIZE) {
             let positions = positions
                 .iter()
                 .map(|&position| u32::try_from(position).map_err(candle_core::Error::wrap))
