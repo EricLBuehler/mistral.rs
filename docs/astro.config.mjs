@@ -229,6 +229,10 @@ export default defineConfig({
         },
       ],
       customCss: ['./src/styles/custom.css'],
+      head: [
+        { tag: 'link', attrs: { rel: 'icon', href: '/favicon-32.png', type: 'image/png', sizes: '32x32' } },
+        { tag: 'link', attrs: { rel: 'apple-touch-icon', href: '/apple-touch-icon.png' } },
+      ],
       components: {
         SiteTitle: './src/components/SiteTitle.astro',
       },

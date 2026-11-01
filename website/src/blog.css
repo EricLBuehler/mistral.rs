@@ -93,8 +93,10 @@ a {
 }
 
 .blog-home {
+  font-family: var(--font-terminal);
   font-size: 18px;
-  letter-spacing: -0.05em;
+  font-weight: 600;
+  letter-spacing: -0.03em;
 }
 
 .blog-home span {

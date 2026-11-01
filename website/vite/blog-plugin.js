@@ -84,7 +84,7 @@ function extractDescription(markdown) {
       flush();
       continue;
     }
-    if (/^(#|\||```|>|-{3,}|\*{3,}|[-*+] |\d+\.\s)/.test(trimmed)) {
+    if (/^(#|\||```|>|!\[|-{3,}|\*{3,}|[-*+] |\d+\.\s)/.test(trimmed)) {
       flush();
       continue;
     }
@@ -203,10 +203,14 @@ function page({ title, head, navLabel, navHref, main }) {
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#070605" />
+    <meta name="theme-color" content="#121110" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
     ${head}
     <title>${escapeHtml(title)}</title>
     <link rel="stylesheet" href="/blog.css" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>

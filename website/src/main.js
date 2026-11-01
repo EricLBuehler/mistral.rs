@@ -1,6 +1,9 @@
+import { renderCharts } from "./charts.js";
 import { copyText } from "./clipboard.js";
 
 const COPY_RESET_MS = 1800;
+// break narrow-screen lines only between arguments, never inside a flag, URL, or pipe
+const ARGUMENT_BREAK = / (?=https:\/\/|\| |-)/;
 
 const commands = {
   unix: "curl -fsSL https://mistralrs.dev/install.sh | sh",
@@ -12,6 +15,16 @@ const panel = document.querySelector("#install-command");
 const command = panel.querySelector("code");
 const copyButton = panel.querySelector(".copy-button");
 let platform = "unix";
+
+function renderCommand(code, text) {
+  const parts = text.split(ARGUMENT_BREAK).map((part) => {
+    const span = document.createElement("span");
+    span.className = "nowrap";
+    span.textContent = part;
+    return span;
+  });
+  code.replaceChildren(...parts.flatMap((part, index) => (index ? [" ", part] : [part])));
+}
 
 function selectPlatform(nextPlatform, moveFocus = false) {
   platform = nextPlatform;
@@ -27,7 +40,7 @@ function selectPlatform(nextPlatform, moveFocus = false) {
     }
   }
 
-  command.textContent = commands[platform];
+  renderCommand(command, commands[platform]);
   copyButton.textContent = "Copy";
   copyButton.setAttribute(
     "aria-label",
@@ -65,4 +78,10 @@ copyButton.addEventListener("click", () => copyWithFeedback(copyButton, commands
 
 for (const button of document.querySelectorAll(".copy-button[data-copy]")) {
   button.addEventListener("click", () => copyWithFeedback(button, button.dataset.copy));
+}
+
+renderCharts();
+
+for (const code of document.querySelectorAll(".command-row code")) {
+  renderCommand(code, code.textContent);
 }
