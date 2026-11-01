@@ -20,9 +20,11 @@ use llguidance::api::TopLevelGrammar;
 
 use crate::Tool;
 
-const REQUIRED_TOOL_CALL_CONTROL_TOKENS: &[&str] = &[
+const TOOL_CALL_CONTROL_TOKENS: &[&str] = &[
     "<tool_call>",
     "</tool_call>",
+    "</function>",
+    "</parameter>",
     "<arg_key>",
     "</arg_key>",
     "<arg_value>",
@@ -172,10 +174,7 @@ pub fn build_required_tool_call_grammar(
     qwen::QwenParser.required_tool_call_grammar(tools)
 }
 
-pub fn specialize_required_tool_call_grammar(
-    grammar: &mut TopLevelGrammar,
-    tok_trie: &toktrie::TokTrie,
-) {
+pub fn specialize_tool_call_grammar(grammar: &mut TopLevelGrammar, tok_trie: &toktrie::TokTrie) {
     let Some(lark) = grammar
         .grammars
         .first_mut()
@@ -184,7 +183,7 @@ pub fn specialize_required_tool_call_grammar(
         return;
     };
 
-    for token in REQUIRED_TOOL_CALL_CONTROL_TOKENS {
+    for token in TOOL_CALL_CONTROL_TOKENS {
         if tok_trie.get_special_token(token).is_some() {
             *lark = lark.replace(&format!(r#""{token}""#), token);
         }

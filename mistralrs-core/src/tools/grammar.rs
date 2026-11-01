@@ -234,7 +234,7 @@ mod tests {
         for (format, expected) in cases {
             let mut grammar =
                 parsers::build_required_tool_call_grammar(Some(format), &sample_tools());
-            parsers::specialize_required_tool_call_grammar(&mut grammar, &trie);
+            parsers::specialize_tool_call_grammar(&mut grammar, &trie);
             let lark = grammar.grammars[0].lark_grammar.as_ref().unwrap();
             assert!(
                 lark.contains(expected),
