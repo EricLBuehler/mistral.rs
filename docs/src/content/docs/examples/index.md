@@ -9,6 +9,6 @@ Every page in this section is generated from a runnable example in the repositor
 
 | Tree | Source | Pages |
 | --- | --- | --- |
-| Rust SDK | [`mistralrs/examples`](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples) | 59 |
-| Python SDK | [`examples/python`](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python) | 77 |
-| HTTP server | [`examples/server`](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server) | 69 |
+| Rust SDK | [`mistralrs/examples`](https://github.com/EricLBuehler/mistral.rs/blob/master/mistralrs/examples) | 60 |
+| Python SDK | [`examples/python`](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/python) | 78 |
+| HTTP server | [`examples/server`](https://github.com/EricLBuehler/mistral.rs/blob/master/examples/server) | 70 |

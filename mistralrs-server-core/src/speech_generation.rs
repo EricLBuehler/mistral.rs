@@ -440,7 +440,7 @@ async fn match_response_with_options(
             Err(error) => handle_error(state, error.into()),
         },
         Response::Raw { .. } => unreachable!(),
-        Response::Embeddings { .. } => unreachable!(),
+        Response::Embeddings { .. } | Response::Decision { .. } => unreachable!(),
         Response::AgenticToolCallProgress { .. } => unreachable!(),
         Response::BlockDenoisingProgress(_) => unreachable!(),
         Response::AgenticToolApprovalRequired { .. } => unreachable!(),

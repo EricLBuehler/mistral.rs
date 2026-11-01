@@ -67,6 +67,7 @@ The `Architecture` column is the `config.json` `architectures` value. Per-family
 | `Lfm3VlForConditionalGeneration` | LFM3-VL | <details><summary><code>LiquidAI/LFM3-VL-2B</code></summary><code>mistralrs run -m LiquidAI/LFM3-VL-2B</code></details> |
 | `Lfm3AudioForConditionalGeneration` | LFM3-Audio | <details><summary><code>LiquidAI/LFM3-Audio-2B</code></summary><code>mistralrs run -m LiquidAI/LFM3-Audio-2B</code></details> |
 | `Lfm3OmniForConditionalGeneration` | LFM3-Omni | <details><summary><code>LiquidAI/LFM3-Omni-2B</code></summary><code>mistralrs run -m LiquidAI/LFM3-Omni-2B</code></details> |
+| `D1Model` | d1, d1-Omni | <details><summary><code>LiquidAI/d1-2B</code>, <code>LiquidAI/d1-Omni-2B</code></summary><code>mistralrs serve -m LiquidAI/d1-2B</code><br><code>mistralrs serve -m LiquidAI/d1-Omni-2B</code></details> |
 | `MllamaForConditionalGeneration` | Llama 3.2 Vision | <details><summary><code>meta-llama/Llama-3.2-11B-Vision-Instruct</code></summary><code>mistralrs run -m meta-llama/Llama-3.2-11B-Vision-Instruct</code></details> |
 | `Qwen2VLForConditionalGeneration` | Qwen2-VL | <details><summary><code>Qwen/Qwen2-VL-7B-Instruct</code></summary><code>mistralrs run -m Qwen/Qwen2-VL-7B-Instruct</code></details> |
 | `Idefics3ForConditionalGeneration` | Idefics3, SmolVLM | <details><summary><code>HuggingFaceM4/Idefics3-8B-Llama3</code></summary><code>mistralrs run -m HuggingFaceM4/Idefics3-8B-Llama3</code></details> |

@@ -111,6 +111,42 @@ impl futures::Stream for Stream<'_> {
 }
 
 impl Model {
+    /// Evaluate named typed questions about a state and optional media.
+    pub async fn send_decision_request(
+        &self,
+        request: DecisionRequest,
+    ) -> crate::error::Result<DecisionResponse> {
+        self.send_decision_request_with_model(request, None).await
+    }
+
+    /// Evaluate decision questions using the selected model, or the default model when omitted.
+    pub async fn send_decision_request_with_model(
+        &self,
+        request: DecisionRequest,
+        model_id: Option<&str>,
+    ) -> crate::error::Result<DecisionResponse> {
+        request
+            .validate()
+            .map_err(|error| SdkError::RequestValidation(error.to_string()))?;
+        let (tx, mut rx) = channel(1);
+        let request = NormalRequest::decision(request, tx, 0, model_id.map(str::to_owned));
+        self.runner
+            .get_sender(model_id)?
+            .send(Request::Normal(Box::new(request)))
+            .await?;
+        let ResponseOk::Decision { result } = rx
+            .recv()
+            .await
+            .ok_or(SdkError::Channel("channel closed unexpectedly".into()))?
+            .as_result()?
+        else {
+            return Err(SdkError::UnexpectedResponse {
+                expected: "Decision",
+            });
+        };
+        Ok(result)
+    }
+
     /// Wrap an existing [`MistralRs`] engine instance.
     /// Prefer using a builder (e.g., [`ModelBuilder`](crate::ModelBuilder)) instead.
     pub fn new(runner: Arc<MistralRs>) -> Self {

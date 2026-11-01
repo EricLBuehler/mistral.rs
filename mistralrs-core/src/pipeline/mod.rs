@@ -75,15 +75,16 @@ pub use loaders::{
     FluxLoader, GLM4Loader, GLM4MoeLiteLoader, GLM4MoeLoader, Gemma2Loader, Gemma3Loader,
     Gemma3nLoader, Gemma4Loader, GemmaLoader, GptOssLoader, GraniteMoeHybridLoader,
     HunYuanDenseV1Loader, HunYuanMoEV1Loader, Idefics2Loader, Idefics3Loader, LLaVALoader,
-    LLaVANextLoader, Lfm2Loader, Lfm2VlLoader, Lfm3AudioLoader, Lfm3Loader, Lfm3OmniLoader,
-    Lfm3VlLoader, LlamaLoader, Loader, LocalModelPaths, MiniCpmOLoader, Mistral3Loader,
-    MistralLoader, MixtralLoader, ModelKind, ModelPaths, MultimodalLoaderType, MultimodalModel,
-    MultimodalModelLoader, MuseGlimmerLoader, NormalLoaderType, NormalLoadingMetadata, NormalModel,
-    NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader, Phi3_5MoELoader, Phi4MMLoader,
-    PrettyName, QuantizationKind, Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader,
-    Qwen3EmbeddingLoader, Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, Qwen3VLLoader,
-    Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader, Qwen3_5TextLoader, Qwen4ExpLoader,
-    SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader, VLlamaLoader, VoxtralLoader,
+    LLaVANextLoader, Lfm2Loader, Lfm2VlLoader, Lfm3AudioLoader, Lfm3D1Loader, Lfm3Loader,
+    Lfm3OmniLoader, Lfm3VlLoader, LlamaLoader, Loader, LocalModelPaths, MiniCpmOLoader,
+    Mistral3Loader, MistralLoader, MixtralLoader, ModelKind, ModelPaths, MultimodalLoaderType,
+    MultimodalModel, MultimodalModelLoader, MuseGlimmerLoader, NormalLoaderType,
+    NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader,
+    Phi3_5MoELoader, Phi4MMLoader, PrettyName, QuantizationKind, Qwen2Loader, Qwen2VLLoader,
+    Qwen2_5VLLoader, Qwen3EmbeddingLoader, Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader,
+    Qwen3VLLoader, Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader, Qwen3_5TextLoader,
+    Qwen4ExpLoader, SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader, VLlamaLoader,
+    VoxtralLoader,
 };
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn get_device_layers_for_loader(
@@ -1274,6 +1275,7 @@ impl LogitsSelection {
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum SupportedModality {
+    Decision,
     Text,
     Audio,
     Vision,
@@ -1284,6 +1286,7 @@ pub enum SupportedModality {
 impl Debug for SupportedModality {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Decision => write!(f, "Decision"),
             Self::Text => write!(f, "📝 Text"),
             Self::Audio => write!(f, "🔊 Audio"),
             Self::Vision => write!(f, "🖼️ Vision"),
@@ -1496,6 +1499,9 @@ pub trait AnyMoePipelineMixin {
 /// such as the multimodal model prompt prefixer.
 #[derive(Clone)]
 pub enum ModelCategory {
+    Decision {
+        video_sampling: crate::VideoFrameSampling,
+    },
     Text,
     Multimodal {
         prefixer: Arc<dyn MultimodalPromptPrefixer>,
@@ -1510,6 +1516,7 @@ pub enum ModelCategory {
 impl std::fmt::Debug for ModelCategory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ModelCategory::Decision { .. } => write!(f, "ModelCategory::Decision"),
             ModelCategory::Text => write!(f, "ModelCategory::Text"),
             ModelCategory::Multimodal { .. } => {
                 write!(f, "ModelCategory::Multimodal {{ prefixer: .. }}")
@@ -1525,6 +1532,7 @@ impl std::fmt::Debug for ModelCategory {
 impl PartialEq for ModelCategory {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
+            (Self::Decision { .. }, Self::Decision { .. }) => true,
             (Self::Text, Self::Text) => true,
             (Self::Multimodal { .. }, Self::Multimodal { .. }) => true,
             (Self::Audio, Self::Audio) => true,
@@ -1533,6 +1541,7 @@ impl PartialEq for ModelCategory {
             (Self::Embedding, Self::Embedding) => true,
             (
                 Self::Text
+                | Self::Decision { .. }
                 | Self::Multimodal { .. }
                 | Self::Diffusion
                 | Self::Audio
@@ -1585,6 +1594,9 @@ pub enum CacheBackendMetadata {
 
 #[derive(Clone, Debug)]
 pub enum ForwardInputsResult {
+    Decision {
+        results: Vec<crate::decision::DecisionResponse>,
+    },
     RawLogits {
         logits: Tensor,
     },
@@ -1611,6 +1623,9 @@ pub enum ForwardInputsResult {
 impl ForwardInputsResult {
     fn index_bs(&self, bs_idx: usize) -> candle_core::Result<Self> {
         match self {
+            Self::Decision { results } => Ok(Self::Decision {
+                results: vec![results[bs_idx].clone()],
+            }),
             Self::CausalGeneration { logits } => Ok(Self::CausalGeneration {
                 logits: logits.i(bs_idx)?,
             }),
@@ -1644,6 +1659,7 @@ impl ForwardInputsResult {
 
     fn to_device(&self, device: &Device) -> candle_core::Result<Self> {
         match self {
+            Self::Decision { .. } => Ok(self.clone()),
             Self::CausalGeneration { logits } => Ok(Self::CausalGeneration {
                 logits: logits.to_device(device)?,
             }),
@@ -2076,11 +2092,19 @@ pub trait Pipeline:
                 let mut embedding_logits = vec![None; input_seqs.len()];
 
                 let mut exec_duration = Duration::ZERO;
+                let mut validation_error = None;
                 for (i, inputs) in inputs_iter.into_iter().enumerate() {
                     let InputProcessorOutput {
                         inputs,
                         seq_indices,
-                    } = inputs.map_err(candle_core::Error::msg)?;
+                    } = match inputs {
+                        Ok(inputs) => inputs,
+                        Err(error) if is_inputs_processor_validation_error(&error) => {
+                            validation_error = Some(error.to_string());
+                            break;
+                        }
+                        Err(error) => return Err(candle_core::Error::msg(error)),
+                    };
                     if i == 0 {
                         match pre_op {
                             CacheInstruction::In => self.clone_in_cache(input_seqs)?,
@@ -2122,6 +2146,17 @@ pub trait Pipeline:
                             logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
                         }
                     }
+                }
+
+                if let Some(error) = validation_error {
+                    for seq in input_seqs.iter_mut() {
+                        let _ = seq
+                            .responder()
+                            .send(crate::Response::ValidationError(error.clone().into()))
+                            .await;
+                        seq.set_state(crate::sequence::SequenceState::Error);
+                    }
+                    return Ok(StepSubmission::ready(exec_duration));
                 }
 
                 match post_op {
@@ -2183,6 +2218,22 @@ pub trait Pipeline:
                     .collect::<Vec<_>>();
 
                 match &logits[0] {
+                    ForwardInputsResult::Decision { .. } => {
+                        for (seq, output) in input_seqs.iter_mut().zip(logits) {
+                            let ForwardInputsResult::Decision { mut results } = output else {
+                                unreachable!("Decision batch must contain decision results")
+                            };
+                            let _ = seq
+                                .responder()
+                                .send(crate::Response::Decision {
+                                    result: results.remove(0),
+                                })
+                                .await;
+                            seq.set_state(crate::sequence::SequenceState::Done(
+                                crate::sequence::StopReason::Length(0),
+                            ));
+                        }
+                    }
                     ForwardInputsResult::RawLogits { .. }
                     | ForwardInputsResult::Embeddings { .. } => unreachable!(),
                     ForwardInputsResult::CausalGeneration { .. } => {
@@ -2849,6 +2900,7 @@ pub trait Pipeline:
                     .collect::<Vec<_>>();
                 match &logits[0] {
                     ForwardInputsResult::RawLogits { .. }
+                    | ForwardInputsResult::Decision { .. }
                     | ForwardInputsResult::Embeddings { .. } => unreachable!(),
                     ForwardInputsResult::CausalGeneration { .. } => {
                         let logits = logits

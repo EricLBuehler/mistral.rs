@@ -266,7 +266,7 @@ mistralrs serve -p 1234 -m LiquidAI/LFM3-Omni-2B --isq q8_0
 
 Audio is downmixed to mono and resampled to 16 kHz. Video uses 2 FPS sampling, with 4 to 384 frames, and requires [FFmpeg](/guides/models/video-setup/) except for animated GIFs. Submit video soundtracks separately as audio; they are not extracted automatically.
 
-Paged attention, chunked prefill, and caching of image, video, and audio embeddings are supported. `--isq q8_0` quantizes the language model and vision projector; the vision encoder, audio encoder, audio projector, speech depth decoder, and audio codec remain unquantized. Unquantized checkpoints are also supported. `d1-Omni-2B` remains unsupported.
+Paged attention, chunked prefill, and caching of image, video, and audio embeddings are supported. `--isq q8_0` quantizes the language model and vision projector; the vision encoder, audio encoder, audio projector, speech depth decoder, and audio codec remain unquantized. Unquantized checkpoints are also supported.
 
 The official [LFM3-Omni GGUF](https://huggingface.co/LiquidAI/LFM3-Omni-2B-GGUF) files support all input modalities and speech output through the same model implementation. Its companion `mmproj` contains both vision and audio components, including the speech decoder and codec:
 
@@ -277,6 +277,19 @@ mistralrs serve -p 1234 -m LiquidAI/LFM3-Omni-2B-GGUF --quant 4
 Both Audio and Omni reconstruct their configuration, tokenizer, and chat template from the GGUF files; separate safetensors assets are not required. Local files use `-f /path/model.gguf` with a companion beside the model, or an explicit `--mmproj`. See [Run GGUF models](/guides/models/run-gguf/).
 
 See the [Python SDK example](/examples/python/lfm3-omni/) and [HTTP API example](/examples/server/lfm3-omni/) for optional audio, image, and video inputs and a `--speech-out answer.wav` option.
+
+## d1 and d1-Omni
+
+`LiquidAI/d1-2B` and `LiquidAI/d1-Omni-2B` load automatically as `D1Model`. These models evaluate named questions about JSON or text state and return probabilities, extracted values, or boxes. Use `POST /v1/systemone` or the native `send_decision_request` methods; chat generation and speech synthesis are not decision operations.
+
+```bash
+mistralrs serve -p 1234 -m LiquidAI/d1-Omni-2B
+python examples/server/lfm3_d1.py
+```
+
+d1-2B accepts text, images, and video. d1-Omni also accepts audio, including spoken question instructions. Both support safetensors, ISQ, and UQFF. d1 GGUF is not supported. Global attention reads the state and packed questions using the checkpoint's set mask; sliding attention and convolutions remain causal. Decision inference does not use paged attention or autoregressive decoding.
+
+See [decision requests](/reference/decisions/) for question types and response semantics, and the [HTTP](/examples/server/lfm3-d1/), [Python](/examples/python/lfm3-d1/), and [Rust](/examples/rust/models/lfm3-d1/) examples.
 
 ### LFM3 speech input and output
 

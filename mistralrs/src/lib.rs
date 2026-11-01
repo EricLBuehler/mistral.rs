@@ -263,6 +263,10 @@ pub use mistralrs_core::{
 };
 pub use mistralrs_core::{CalibrationAction, CalibrationStatus};
 pub use mistralrs_core::{
+    DecisionAnswer, DecisionBox, DecisionFoundBox, DecisionInstructions, DecisionMedia,
+    DecisionQuestion, DecisionRequest, DecisionResponse, DecisionUsage,
+};
+pub use mistralrs_core::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
 };
 pub use mistralrs_core::{

@@ -62,6 +62,7 @@ use pyo3::PyObject;
 use std::fs::File;
 mod anymoe;
 mod code_execution;
+mod decisions;
 mod files;
 mod requests;
 mod stream;
@@ -1686,6 +1687,36 @@ impl Runner {
         })
     }
 
+    /// Evaluate named decision questions without text generation.
+    #[pyo3(signature = (request, model_id = None))]
+    fn send_decision_request(
+        &self,
+        py: Python<'_>,
+        request: Py<decisions::DecisionRequest>,
+        model_id: Option<String>,
+    ) -> PyApiResult<decisions::DecisionResponse> {
+        let request = request.bind(py).borrow().clone();
+        let debug_repr = format!("{request:?}");
+        let runner = self.runner.clone();
+        let response = py
+            .allow_threads(move || -> std::result::Result<Response, String> {
+                let request = request.resolve().map_err(|error| error.to_string())?;
+                let (tx, rx) = channel(1);
+                let request = _Request::Normal(Box::new(NormalRequest::decision(
+                    request,
+                    tx,
+                    next_request_id(),
+                    model_id.clone(),
+                )));
+                send_request_and_wait(runner, model_id, request, rx, debug_repr)
+            })
+            .map_err(PyApiErr::from)?;
+        let ResponseOk::Decision { result } = response.as_result()? else {
+            return Err("Expected a decision response".into());
+        };
+        Ok(result.try_into()?)
+    }
+
     /// Send an embeddings request, returning embedding vectors in the same order they were provided.
     /// This returns the embeddings as [batch size, embedding dim]
     #[pyo3(signature = (request, model_id = None))]
@@ -2781,6 +2812,11 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ChatCompletionRequest>()?;
     m.add_class::<CompletionRequest>()?;
     m.add_class::<EmbeddingRequest>()?;
+    m.add_class::<decisions::DecisionQuestion>()?;
+    m.add_class::<decisions::DecisionRequest>()?;
+    m.add_class::<decisions::DecisionAnswer>()?;
+    m.add_class::<decisions::DecisionUsage>()?;
+    m.add_class::<decisions::DecisionResponse>()?;
     m.add_class::<Architecture>()?;
     m.add_class::<which::EmbeddingArchitecture>()?;
     m.add_class::<MultimodalArchitecture>()?;

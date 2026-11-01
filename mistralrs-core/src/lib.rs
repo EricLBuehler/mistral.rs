@@ -84,9 +84,14 @@ pub use toml_selector::{get_toml_selected_model_device_map_params, get_toml_sele
 mod amoe;
 mod attention;
 mod block_diffusion;
+pub mod decision;
 mod diagnostics;
 mod diffusion_models;
 pub mod distributed;
+pub use decision::{
+    DecisionAnswer, DecisionBox, DecisionFoundBox, DecisionInstructions, DecisionMedia,
+    DecisionQuestion, DecisionRequest, DecisionResponse, DecisionUsage,
+};
 pub mod files;
 mod gdn;
 mod gguf;

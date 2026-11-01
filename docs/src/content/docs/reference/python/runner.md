@@ -109,6 +109,17 @@ Send a completion request to the mistral.rs engine, returning the response objec
 | `request` | `CompletionRequest` | required | The completion request. |
 | `model_id` | `str \| None` | `None` | Optional model ID to send the request to. If None, uses the default model. |
 
+### `Runner.send_decision_request`
+
+```text
+send_decision_request(
+    request: DecisionRequest,
+    model_id: str | None = None,
+) -> DecisionResponse
+```
+
+Evaluate named decision questions with the selected model, without text generation.
+
 ### `Runner.send_embedding_request`
 
 ```text

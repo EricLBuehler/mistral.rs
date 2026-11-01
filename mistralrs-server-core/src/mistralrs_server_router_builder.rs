@@ -21,6 +21,7 @@ use crate::{
     audio_transcription::{audio_transcriptions, audio_translations},
     chat_completion::chatcompletions,
     completions::completions,
+    decisions::systemone,
     embeddings::embeddings,
     files::{
         delete_file, get_container_file, get_container_file_content, get_file, get_file_content,
@@ -48,8 +49,8 @@ use crate::{
         LIST_LORA_ADAPTERS_ROUTE, LOAD_LORA_ADAPTER_ROUTE, MODELS_ROUTE, MODEL_STATUS_ROUTE,
         RELOAD_MODEL_ROUTE, RESPONSES_ROUTE, RESPONSE_ROUTE, RE_ISQ_ROUTE, ROOT_ROUTE,
         SESSION_ROUTE, SKILLS_ROUTE, SKILL_VERSIONS_ROUTE, SPEECH_GENERATION_ROUTE,
-        SYSTEM_DOCTOR_ROUTE, SYSTEM_INFO_ROUTE, TUNE_MODEL_ROUTE, UNLOAD_LORA_ADAPTER_ROUTE,
-        UNLOAD_MODEL_ROUTE,
+        SYSTEMONE_ROUTE, SYSTEM_DOCTOR_ROUTE, SYSTEM_INFO_ROUTE, TUNE_MODEL_ROUTE,
+        UNLOAD_LORA_ADAPTER_ROUTE, UNLOAD_MODEL_ROUTE,
     },
     skills::{list_skill_versions, list_skills, upload_skill, upload_skill_version, SkillStore},
     speech_generation::speech_generation,
@@ -382,6 +383,7 @@ fn init_router(
         )
         .route(COMPLETIONS_ROUTE.path, post(completions))
         .route(EMBEDDINGS_ROUTE.path, post(embeddings))
+        .route(SYSTEMONE_ROUTE.path, post(systemone))
         .route(MODELS_ROUTE.path, get(models))
         .route(LIST_LORA_ADAPTERS_ROUTE.path, get(list_lora_adapters))
         .route(UNLOAD_MODEL_ROUTE.path, post(unload_model))

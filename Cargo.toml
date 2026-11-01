@@ -91,7 +91,7 @@ tempfile = "3"
 half = "2.7.1"
 rayon = "1.11.0"
 url = "2.5.8"
-utoipa = "5.4.0"
+utoipa = { version = "5.4.0", features = ["indexmap"] }
 walkdir = "2.5.0"
 data-url = "0.3.2"
 float8 = "0.7.0"

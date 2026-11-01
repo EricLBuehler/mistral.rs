@@ -4,6 +4,63 @@ description: "Response and streaming types returned by the engine."
 sidebar:
   order: 5
 ---
+## `DecisionResponse`
+
+| Field | Type |
+| --- | --- |
+| `answers` | `dict[str, DecisionAnswer]` |
+| `usage` | `DecisionUsage` |
+
+### `DecisionResponse.to_dict`
+
+```text
+to_dict() -> dict[str, Any]
+```
+
+
+## `DecisionAnswer`
+
+Fields depend on type; to_dict returns the corresponding SystemOne answer object.
+
+| Field | Type |
+| --- | --- |
+| `type` | `Literal['noul', 'choice', 'score', 'text', 'number', 'date', 'box', 'boxes']` |
+| `noul` | `float` |
+| `choice` | `str` |
+| `choices` | `list[str]` |
+| `confidence` | `float` |
+| `probabilities` | `dict[str, float]` |
+| `score` | `float` |
+| `legend` | `dict[str, str]` |
+| `text` | `str \| None` |
+| `span` | `list[int] \| None` |
+| `found` | `float` |
+| `path` | `str \| None` |
+| `number` | `float \| None` |
+| `unit` | `str \| None` |
+| `interval` | `list[float] \| None` |
+| `date` | `str \| None` |
+| `box` | `dict[str, float] \| None` |
+| `boxes` | `list[dict[str, Any]]` |
+| `count` | `int` |
+| `at_least` | `bool` |
+| `presence` | `list[float]` |
+
+### `DecisionAnswer.to_dict`
+
+```text
+to_dict() -> dict[str, Any]
+```
+
+
+## `DecisionUsage`
+
+| Field | Type |
+| --- | --- |
+| `input_tokens` | `int` |
+| `output_tokens` | `int` |
+
+
 ## `ChatCompletionResponse`
 
 | Field | Type | Default |

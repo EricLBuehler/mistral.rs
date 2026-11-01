@@ -96,6 +96,17 @@ pub(crate) fn load_model_config(
 
 fn inject_auxiliary_model_configs(config: &str, config_path: &std::path::Path) -> Result<String> {
     let mut value: serde_json::Value = serde_json::from_str(config)?;
+    if value
+        .get("architectures")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|architectures| {
+            architectures
+                .iter()
+                .any(|architecture| architecture.as_str() == Some("D1Model"))
+        })
+    {
+        return Ok(config.to_owned());
+    }
     match value.get("model_type").and_then(serde_json::Value::as_str) {
         Some("lfm3_audio") => {
             crate::vision_models::lfm3_audio::config::normalize_config(&mut value)?;
@@ -1420,9 +1431,11 @@ mod auto_device_map_quantization_tests {
 
 mod lfm3;
 mod lfm3_audio;
+mod lfm3_d1;
 mod lfm3_omni;
 mod lfm3_vl;
 pub use lfm3::Lfm3Loader;
 pub use lfm3_audio::Lfm3AudioLoader;
+pub use lfm3_d1::Lfm3D1Loader;
 pub use lfm3_omni::Lfm3OmniLoader;
 pub use lfm3_vl::Lfm3VlLoader;

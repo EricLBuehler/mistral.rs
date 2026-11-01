@@ -13,8 +13,9 @@ use super::{
 };
 use super::{
     DiffusionGemmaLoader, Gemma3nLoader, Gemma4Loader, Idefics2Loader, Idefics3Loader, LLaVALoader,
-    LLaVANextLoader, Lfm2VlLoader, Lfm3AudioLoader, Lfm3OmniLoader, Lfm3VlLoader, Mistral3Loader,
-    MultimodalLoaderType, MuseGlimmerLoader, Phi3VLoader, Qwen2_5VLLoader, VoxtralLoader,
+    LLaVANextLoader, Lfm2VlLoader, Lfm3AudioLoader, Lfm3D1Loader, Lfm3OmniLoader, Lfm3VlLoader,
+    Mistral3Loader, MultimodalLoaderType, MuseGlimmerLoader, Phi3VLoader, Qwen2_5VLLoader,
+    VoxtralLoader,
 };
 use crate::attention::ATTENTION_CHUNK_SIZE;
 #[cfg(feature = "cuda")]
@@ -381,6 +382,7 @@ impl MultimodalLoaderBuilder {
             Some(MultimodalLoaderType::Lfm3Vl) => Box::new(Lfm3VlLoader),
             Some(MultimodalLoaderType::Lfm3Audio) => Box::new(Lfm3AudioLoader),
             Some(MultimodalLoaderType::Lfm3Omni) => Box::new(Lfm3OmniLoader),
+            Some(MultimodalLoaderType::Lfm3D1) => Box::new(Lfm3D1Loader),
             Some(MultimodalLoaderType::VLlama) => Box::new(VLlamaLoader),
             Some(MultimodalLoaderType::Qwen2VL) => Box::new(Qwen2VLLoader),
             Some(MultimodalLoaderType::Idefics3) => Box::new(Idefics3Loader),
@@ -570,6 +572,24 @@ impl Loader for MultimodalLoader {
         };
         super::loaders::validate_lora_qk_rope_layout(&config, self.lora_adapters.is_some())?;
         let modalities = self.inner.modalities(&config)?;
+        let is_decision = modalities
+            .output
+            .contains(&crate::SupportedModality::Decision);
+        let config = if is_decision {
+            let mut value: serde_json::Value = serde_json::from_str(&config)?;
+            if value.get("d1_calibration").is_none() {
+                let path = paths
+                    .get_config_filename()
+                    .with_file_name("calibration.json");
+                value["d1_calibration"] = serde_json::from_str(&fs::read_to_string(path)?)?;
+            }
+            let calibration: crate::decision::DecisionCalibration =
+                serde_json::from_value(value["d1_calibration"].clone())?;
+            calibration.validate()?;
+            serde_json::to_string(&value)?
+        } else {
+            config
+        };
         let runtime_config = self
             .inner
             .runtime_config(&config, self.config.max_model_len)?;
@@ -649,7 +669,7 @@ impl Loader for MultimodalLoader {
                 .as_deref()
                 .map(|json| serde_json::from_str(json).unwrap());
             let processor = self.inner.get_processor(
-                &config,
+                &runtime_config,
                 processor_config,
                 preprocessor_config.clone(),
                 self.config.max_edge,
@@ -1601,7 +1621,7 @@ impl Loader for MultimodalLoader {
                 num_hidden_layers,
                 eos_tok: eos,
                 kind: self.kind.clone(),
-                no_kv_cache: false,
+                no_kv_cache: is_decision,
                 no_prefix_cache: !self.inner.supports_prefix_cacher(&config),
                 activation_dtype: dtype,
                 sliding_window,
@@ -1716,6 +1736,9 @@ impl IsqPipelineMixin for MultimodalPipeline {
 
 impl CacheManagerMixin for MultimodalPipeline {
     fn clone_in_cache(&self, seqs: &mut [&mut Sequence]) -> candle_core::Result<()> {
+        if self.metadata.no_kv_cache {
+            return Ok(());
+        }
         match self.model.cache() {
             EitherCache::Full(_) => FullCacheManager.clone_in_cache(self, seqs, false),
             EitherCache::Normal(_) => NormalCacheManager.clone_in_cache(self, seqs, false),
@@ -1723,6 +1746,9 @@ impl CacheManagerMixin for MultimodalPipeline {
         }
     }
     fn clone_out_cache(&self, seqs: &mut [&mut Sequence]) {
+        if self.metadata.no_kv_cache {
+            return;
+        }
         match self.model.cache() {
             EitherCache::Full(_) => FullCacheManager.clone_out_cache(self, seqs, false),
             EitherCache::Normal(_) => NormalCacheManager.clone_out_cache(self, seqs, false),
@@ -1737,23 +1763,25 @@ impl CacheManagerMixin for MultimodalPipeline {
 
         load_preallocated_cache: bool,
     ) -> candle_core::Result<()> {
-        match self.model.cache() {
-            EitherCache::Full(_) => {
-                FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, false)
-            }
-            EitherCache::Normal(_) => NormalCacheManager.set_none_cache(
-                self,
-                seqs,
-                modify_draft_cache,
-                load_preallocated_cache,
-            ),
-            EitherCache::Hybrid(_) => HybridCacheManager.set_none_cache(
-                self,
-                seqs,
-                modify_draft_cache,
-                load_preallocated_cache,
-            ),
-        }?;
+        if !self.metadata.no_kv_cache {
+            match self.model.cache() {
+                EitherCache::Full(_) => {
+                    FullCacheManager.set_none_cache(self, seqs, modify_draft_cache, false)
+                }
+                EitherCache::Normal(_) => NormalCacheManager.set_none_cache(
+                    self,
+                    seqs,
+                    modify_draft_cache,
+                    load_preallocated_cache,
+                ),
+                EitherCache::Hybrid(_) => HybridCacheManager.set_none_cache(
+                    self,
+                    seqs,
+                    modify_draft_cache,
+                    load_preallocated_cache,
+                ),
+            }?;
+        }
         let sequence_ids = seqs.iter().map(|seq| *seq.id()).collect::<Vec<_>>();
         self.model
             .reset_model_specific_state_for_sequences(&sequence_ids);
@@ -2822,6 +2850,41 @@ impl Pipeline for MultimodalPipeline {
         inputs: Box<dyn Any>,
         return_raw_logits: bool,
     ) -> candle_core::Result<ForwardStepResult> {
+        if inputs.is::<crate::decision::DecisionBatch>() {
+            let batch = *inputs
+                .downcast::<crate::decision::DecisionBatch>()
+                .expect("Decision inputs");
+            let mut results = Vec::with_capacity(batch.rows.len());
+            for rows in batch.rows {
+                let mut answers = indexmap::IndexMap::new();
+                let mut input_tokens = 0;
+                for row in rows {
+                    let (hidden, logits) = self.model.forward_decision(
+                        &row.inputs.input_ids,
+                        row.inputs.pixel_values,
+                        row.inputs.model_specific_args,
+                        &row.attention,
+                        &row.plan.code_readout(),
+                    )?;
+                    input_tokens += row.plan.ids.len();
+                    answers.extend(
+                        row.plan
+                            .decode(&hidden, &logits, &batch.calibration)
+                            .map_err(candle_core::Error::msg)?,
+                    );
+                }
+                results.push(crate::decision::DecisionResponse {
+                    answers,
+                    usage: crate::decision::DecisionUsage {
+                        input_tokens,
+                        output_tokens: 0,
+                    },
+                });
+            }
+            return Ok(ForwardStepResult::eager(ForwardInputsResult::Decision {
+                results,
+            }));
+        }
         let ModelInputs {
             input_ids,
             seqlen_offsets,
@@ -3257,7 +3320,16 @@ impl Pipeline for MultimodalPipeline {
         .await
     }
     fn category(&self) -> ModelCategory {
-        if matches!(
+        if self
+            .metadata
+            .modalities
+            .output
+            .contains(&crate::SupportedModality::Decision)
+        {
+            ModelCategory::Decision {
+                video_sampling: self.video_sampling,
+            }
+        } else if matches!(
             self.metadata.modalities.input.as_slice(),
             [crate::SupportedModality::Text]
         ) {

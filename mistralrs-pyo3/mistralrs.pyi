@@ -247,6 +247,68 @@ class CompletionRequest:
     ignore_eos: bool = False
     adapter: str | LoraAdapterGeneration | None = field(default=None, kw_only=True)
 
+class DecisionQuestion:
+    """A typed decision question; spoken instructions accept audio_url/input_audio content parts."""
+    def __init__(
+        self,
+        kind: Literal["noul", "choice", "score", "text", "number", "date", "box", "boxes"],
+        instructions: str | dict[str, Any],
+        *,
+        criteria: dict[str, Any] | list[str] | None = None,
+        multiple: bool = False,
+        range: tuple[float, float] | None = None,
+        step: float | None = None,
+        unit: str | None = None,
+        max: int | None = None,
+    ) -> None: ...
+    def to_dict(self) -> dict[str, Any]: ...
+
+class DecisionRequest:
+    """State is any JSON value. Media accepts image_url, audio_url, input_audio, and video_url parts."""
+    def __init__(
+        self,
+        state: Any,
+        questions: dict[str, DecisionQuestion | dict[str, Any]],
+        *,
+        images: list[str] | None = None,
+        media: list[dict[str, Any]] | None = None,
+        set_size: int | None = None,
+    ) -> None: ...
+
+class DecisionAnswer:
+    """Fields depend on type; to_dict returns the corresponding SystemOne answer object."""
+    type: Literal["noul", "choice", "score", "text", "number", "date", "box", "boxes"]
+    noul: float
+    choice: str
+    choices: list[str]
+    confidence: float
+    probabilities: dict[str, float]
+    score: float
+    legend: dict[str, str]
+    text: str | None
+    span: list[int] | None
+    found: float
+    path: str | None
+    number: float | None
+    unit: str | None
+    interval: list[float] | None
+    date: str | None
+    box: dict[str, float] | None
+    boxes: list[dict[str, Any]]
+    count: int
+    at_least: bool
+    presence: list[float]
+    def to_dict(self) -> dict[str, Any]: ...
+
+class DecisionUsage:
+    input_tokens: int
+    output_tokens: int
+
+class DecisionResponse:
+    answers: dict[str, DecisionAnswer]
+    usage: DecisionUsage
+    def to_dict(self) -> dict[str, Any]: ...
+
 @dataclass
 class EmbeddingRequest:
     """
@@ -299,6 +361,7 @@ class MultimodalArchitecture(Enum):
     Lfm3Vl = "lfm3vl"
     Lfm3Audio = "lfm3audio"
     Lfm3Omni = "lfm3omni"
+    Lfm3D1 = "lfm3d1"
     VLlama = "vllama"
     Qwen2VL = "qwen2vl"
     Idefics3 = "idefics3"
@@ -799,6 +862,11 @@ class Runner:
             request: The completion request.
             model_id: Optional model ID to send the request to. If None, uses the default model.
         """
+
+    def send_decision_request(
+        self, request: DecisionRequest, model_id: str | None = None
+    ) -> DecisionResponse:
+        """Evaluate named decision questions with the selected model, without text generation."""
 
     def send_embedding_request(
         self, request: EmbeddingRequest, model_id: str | None = None

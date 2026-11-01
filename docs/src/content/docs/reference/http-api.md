@@ -19,6 +19,10 @@ There is none. The server accepts and ignores `Authorization: Bearer ...` (OpenA
 
 The request `model` field selects among loaded models. `"default"` (or omitting the field) targets the configured default model; with a single `-m` model that is the only model. `GET /v1/models` lists real ids plus per-model `status` (`loaded`, `unloaded`, `reloading`), `tools_available`, `mcp_tools_count`, and `mcp_servers_connected`. See [multiple models](/guides/serve/multiple-models/).
 
+## Decision models
+
+`POST /v1/systemone` evaluates named typed questions with d1 and d1-Omni models. It accepts arbitrary JSON state and optional image, video, and audio inputs, returning probabilities, extracted values, or boxes. See [decision requests](/reference/decisions/) for the wire format and native SDK equivalents.
+
 ## LoRA adapter routing and management
 
 Chat Completions, Completions, and Responses requests can select dynamic LoRA with the top-level `adapter` field. A string selects a loaded alias; `{"generation":"<generation-id>"}` selects one exact generation. Replacing or unloading an alias does not change an in-flight request.

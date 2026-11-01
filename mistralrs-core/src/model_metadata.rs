@@ -12,7 +12,7 @@ use crate::pipeline::SupportedModality;
 use crate::speech_models::SpeechLoaderType;
 use crate::{DiffusionLoaderType, EmbeddingLoaderType, MultimodalLoaderType, NormalLoaderType};
 
-use SupportedModality::{Audio, Embedding, Text, Video, Vision};
+use SupportedModality::{Audio, Decision, Embedding, Text, Video, Vision};
 
 #[derive(Clone, Copy)]
 pub struct ModelExample {
@@ -252,6 +252,11 @@ impl MultimodalLoaderType {
                 modalities: &[Text, Vision, Video, Audio],
                 examples: &[ex!("LiquidAI/LFM3-Omni-2B")],
             },
+            Self::Lfm3D1 => ArchMetadata {
+                families: &["d1", "d1-Omni"],
+                modalities: &[Text, Vision, Video, Audio, Decision],
+                examples: &[ex!("LiquidAI/d1-2B"), ex!("LiquidAI/d1-Omni-2B")],
+            },
             Self::VLlama => ArchMetadata {
                 families: &["Llama 3.2 Vision"],
                 modalities: &[Text, Vision],
@@ -456,6 +461,7 @@ impl MultimodalLoaderType {
             Self::Lfm3Vl => "Lfm3VlForConditionalGeneration",
             Self::Lfm3Audio => "Lfm3AudioForConditionalGeneration",
             Self::Lfm3Omni => "Lfm3OmniForConditionalGeneration",
+            Self::Lfm3D1 => "D1Model",
             Self::VLlama => "MllamaForConditionalGeneration",
             Self::Qwen2VL => "Qwen2VLForConditionalGeneration",
             Self::Idefics3 => "Idefics3ForConditionalGeneration",
@@ -551,10 +557,15 @@ fn examples_cell(meta: &ArchMetadata) -> String {
         .map(label)
         .collect::<Vec<_>>()
         .join(", ");
+    let command = if meta.modalities.contains(&Decision) {
+        "serve"
+    } else {
+        "run"
+    };
     let body = meta
         .examples
         .iter()
-        .map(|e| format!("<code>mistralrs run -m {}</code>", e.repo))
+        .map(|e| format!("<code>mistralrs {command} -m {}</code>", e.repo))
         .collect::<Vec<_>>()
         .join("<br>");
     md_cell(&format!(

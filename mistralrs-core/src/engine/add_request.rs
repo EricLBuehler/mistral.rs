@@ -271,7 +271,8 @@ impl Engine {
             | RequestMessage::ImageGeneration { .. }
             | RequestMessage::SpeechGeneration { .. }
             | RequestMessage::Embedding { .. }
-            | RequestMessage::EmbeddingTokens { .. } => None,
+            | RequestMessage::EmbeddingTokens { .. }
+            | RequestMessage::Decision(_) => None,
         };
         let truncate_sequence = request.truncate_sequence;
         if is_chat
@@ -304,6 +305,7 @@ impl Engine {
             ) => (),
             (ModelCategory::Diffusion, RequestMessage::ImageGeneration { .. }) => (),
             (ModelCategory::Speech, RequestMessage::SpeechGeneration { .. }) => (),
+            (ModelCategory::Decision { .. }, RequestMessage::Decision(_)) => (),
             (
                 ModelCategory::Embedding,
                 RequestMessage::Embedding { .. } | RequestMessage::EmbeddingTokens { .. },
@@ -366,7 +368,8 @@ impl Engine {
         };
 
         let seq_step_type = match &request.messages {
-            RequestMessage::ImageGeneration { .. }
+            RequestMessage::Decision(_)
+            | RequestMessage::ImageGeneration { .. }
             | RequestMessage::SpeechGeneration { .. }
             | RequestMessage::Embedding { .. }
             | RequestMessage::EmbeddingTokens { .. } => SeqStepType::OneShot,
@@ -386,7 +389,15 @@ impl Engine {
         };
         let mut added_seq = false;
 
+        let decision = if let RequestMessage::Decision(input) = &request.messages {
+            handle_request_error!(input.validate(), request.response);
+            Some(Arc::new(input.clone()))
+        } else {
+            None
+        };
+
         let (mut prompt_tokens, prompt_text) = match request.messages {
+            RequestMessage::Decision(_) => (vec![u32::MAX], String::new()),
             RequestMessage::Chat {
                 messages,
                 enable_thinking,
@@ -877,6 +888,7 @@ impl Engine {
                 choice_seed(request.seed, response_index),
             );
             seq.set_audio_output(request.audio_output);
+            seq.decision = decision.clone();
             if let Some(adapter_lease) = &adapter_lease {
                 seq.bind_adapter(adapter_lease.clone());
             }
@@ -956,7 +968,7 @@ impl Engine {
                 return;
             }
 
-            let prefill_cache = if seq.return_raw_logits {
+            let prefill_cache = if seq.return_raw_logits || seq.decision.is_some() {
                 None
             } else {
                 handle_seq_error!(
