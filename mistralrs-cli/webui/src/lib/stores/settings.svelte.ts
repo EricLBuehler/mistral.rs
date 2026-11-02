@@ -61,14 +61,21 @@ function save(s: StoredSettings) {
   }
 }
 
+const FLOAT_PARAM_PRECISION = 6;
+
+// Older servers widened f32 defaults to f64 (1.100000023841858), and saved settings may still hold them.
+function tidy(value: number | undefined): number | undefined {
+  return value == null ? value : Number(value.toPrecision(FLOAT_PARAM_PRECISION));
+}
+
 const stored = loadStored();
 
 class SettingsStore {
-  temperature = $state(stored.temperature ?? 0.7);
-  topP = $state(stored.topP ?? 0.9);
+  temperature = $state(tidy(stored.temperature) ?? 0.7);
+  topP = $state(tidy(stored.topP) ?? 0.9);
   topK = $state(stored.topK ?? 40);
   maxTokens = $state(stored.maxTokens ?? 8192);
-  repetitionPenalty = $state(stored.repetitionPenalty ?? 1.1);
+  repetitionPenalty = $state(tidy(stored.repetitionPenalty) ?? 1.1);
   systemPrompt = $state(stored.systemPrompt ?? "");
   enableSearch = $state(stored.enableSearch ?? false);
   enableCodeExecution = $state(stored.enableCodeExecution ?? false);

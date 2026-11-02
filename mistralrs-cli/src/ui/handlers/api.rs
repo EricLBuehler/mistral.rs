@@ -595,14 +595,8 @@ pub async fn get_settings(Extension(app): Extension<Arc<AppState>>) -> impl Into
         .unwrap_or_else(|| app.default_params.clone());
 
     Json(json!({
-        "defaults": {
-            "temperature": defaults.temperature,
-            "top_p": defaults.top_p,
-            "top_k": defaults.top_k,
-            "max_tokens": defaults.max_tokens,
-            "repetition_penalty": defaults.repetition_penalty,
-            "system_prompt": defaults.system_prompt,
-        },
+        // Serialized via serde so f32 fields keep their shortest form (1.1, not 1.100000023841858).
+        "defaults": defaults,
         "model": current_model,
         "search_enabled": app.search_enabled,
         "search_embedding_model": app.search_embedding_model.map(|m| m.to_string()),
