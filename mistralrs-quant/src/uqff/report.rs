@@ -1135,6 +1135,27 @@ fn validate_layer(
             errors.push(format!("{prefix}: invalid `weight.shape` payload"));
         }
     }
+    if matches!(
+        declared_serde_type_for_scan(scan, prefix),
+        Ok(QuantizedSerdeType::Gguf)
+    ) {
+        let dims = scan.tensors.get(&shape_key).and_then(scalar_u32_vec);
+        let dtype = scan
+            .tensors
+            .get(&format!("{prefix}.weight.dtype"))
+            .and_then(scalar_u32);
+        let weight = scan.tensors.get(&format!("{prefix}.weight"));
+        if let (Some(dims), Some(dtype), Some(weight)) = (dims, dtype, weight) {
+            match crate::gguf::uqff_gguf_weight_bytes(dtype, &dims) {
+                Ok(expected) if expected == weight.size_bytes => {}
+                Ok(expected) => errors.push(format!(
+                    "{prefix}: GGUF `weight` holds {} bytes, but `weight.shape` {dims:?} needs {expected}",
+                    weight.size_bytes
+                )),
+                Err(err) => errors.push(format!("{prefix}: invalid GGUF weight geometry: {err}")),
+            }
+        }
+    }
 }
 
 fn validate_header_tensor(
@@ -1752,14 +1773,22 @@ mod tests {
     }
 
     fn push_synthetic_gguf_layer(tensors: &mut Vec<UqffTensor>, prefix: &str, dtype: u32) {
+        // One whole block, so the fixture describes a layer the loader can actually open:
+        // `verify` rejects GGUF weights whose byte length disagrees with `weight.shape`.
+        let block = crate::gguf::GgufMatMul::block_size_from_uqff_dtype(dtype).unwrap();
+        let bytes = crate::gguf::uqff_gguf_weight_bytes(dtype, &[block]).unwrap();
         tensors.extend([
             UqffTensor::from_u8_scalar(
                 format!("{prefix}.weight.format"),
                 QuantizedSerdeType::Gguf as u8,
             ),
-            UqffTensor::from_raw_u8(format!("{prefix}.weight"), vec![0], vec![1]),
+            UqffTensor::from_raw_u8(format!("{prefix}.weight"), vec![0; bytes], vec![bytes]),
             UqffTensor::from_u32_scalar(format!("{prefix}.weight.dtype"), dtype),
-            UqffTensor::from_u32_vec(format!("{prefix}.weight.shape"), vec![1], vec![1]),
+            UqffTensor::from_u32_vec(
+                format!("{prefix}.weight.shape"),
+                vec![block as u32],
+                vec![1],
+            ),
         ]);
     }
 
@@ -1984,6 +2013,46 @@ mod tests {
             .errors
             .iter()
             .any(|error| error.contains("invalid `weight.format` header")));
+    }
+
+    #[tokio::test]
+    async fn verify_rejects_gguf_weight_shorter_than_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("q4k-0.uqff");
+        let mut tensors = super::super::uqff_version_tensors();
+        tensors.extend([
+            UqffTensor::from_u8_scalar(
+                "model.layers.0.weight.format",
+                QuantizedSerdeType::Gguf as u8,
+            ),
+            UqffTensor::from_raw_u8("model.layers.0.weight", vec![0; 16], vec![16]),
+            UqffTensor::from_u32_scalar("model.layers.0.weight.dtype", 0),
+            UqffTensor::from_u32_vec("model.layers.0.weight.shape", vec![4, 64], vec![2]),
+        ]);
+        safetensors::serialize_to_file(
+            tensors.iter().map(|tensor| (tensor.name(), tensor)),
+            None,
+            &path,
+        )
+        .unwrap();
+        let result = verify_uqff_path(
+            &path,
+            UqffVerifyOptions {
+                strict: false,
+                allow_newer_minor: false,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(!result.ok);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|error| error.contains("GGUF `weight` holds 16 bytes")),
+            "{:?}",
+            result.errors
+        );
     }
 
     #[tokio::test]
