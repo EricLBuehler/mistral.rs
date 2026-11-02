@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { DisplayMessage } from "../types";
-  import { renderMarkdown } from "../utils/markdown";
+  import { renderMarkdownBlocks } from "../utils/markdown";
   import ThinkingBlock from "./ThinkingBlock.svelte";
   import CodeExecution from "./CodeExecution.svelte";
   import ShellTool from "./ShellTool.svelte";
@@ -9,6 +9,13 @@
   import FileCard from "./FileCard.svelte";
   import AgentApproval from "./AgentApproval.svelte";
   import { chatStore } from "../stores/chat.svelte";
+  import { MESSAGE_ACTION } from "../ui";
+  import Copy from "@lucide/svelte/icons/copy";
+  import Check from "@lucide/svelte/icons/check";
+  import RefreshCw from "@lucide/svelte/icons/refresh-cw";
+  import ChevronLeft from "@lucide/svelte/icons/chevron-left";
+  import ChevronRight from "@lucide/svelte/icons/chevron-right";
+  import CircleAlert from "@lucide/svelte/icons/circle-alert";
 
   let { message, streaming = false }: { message: DisplayMessage; streaming?: boolean } = $props();
 
@@ -52,18 +59,18 @@
     }
   }
 
-  function finishReasonStyle(reason: string): { label: string; color: string } {
+  // Only reasons worth calling out; a normal "stop" stays silent.
+  function finishReasonNote(reason: string): { label: string; tone: string } | null {
     switch (reason) {
       case "stop":
-        return { label: "stop", color: "text-gray-400 dark:text-gray-500" };
-      case "length":
-        return { label: "max tokens reached", color: "text-amber-500 dark:text-amber-400" };
       case "tool_calls":
-        return { label: "tool call", color: "text-blue-500 dark:text-blue-400" };
+        return null;
+      case "length":
+        return { label: "hit max tokens", tone: "text-warning" };
       case "content_filter":
-        return { label: "content filter", color: "text-red-500 dark:text-red-400" };
+        return { label: "content filter", tone: "text-danger" };
       default:
-        return { label: reason, color: "text-gray-400 dark:text-gray-500" };
+        return { label: reason, tone: "text-muted" };
     }
   }
 
@@ -73,21 +80,25 @@
     return `${(ms / 1000).toFixed(2)}s`;
   }
 
-  function fmtDecodeRate(tokens?: number, elapsedMs?: number, ttftMs?: number): string | null {
-    if (!tokens || !elapsedMs) return null;
-    const decodeMs = elapsedMs - (ttftMs ?? 0);
+  function fmtDecodeRate(m: DisplayMessage): string | null {
+    if (m.decodeTokPerSec) return `${m.decodeTokPerSec.toFixed(1)} tok/s`;
+    if (!m.tokens || !m.elapsedMs) return null;
+    const decodeMs = m.elapsedMs - (m.ttftMs ?? 0);
     if (decodeMs <= 0) return null;
-    const r = tokens / (decodeMs / 1000);
-    return `${r.toFixed(1)} tok/s`;
+    return `~${(m.tokens / (decodeMs / 1000)).toFixed(1)} tok/s`;
   }
+
+  let decodeRate = $derived(fmtDecodeRate(message));
+  let lastBlock = $derived(renderedBlocks[renderedBlocks.length - 1]);
+  let waiting = $derived(streaming && lastBlock?.type !== "content" && lastBlock?.type !== "reasoning");
+  let finishNote = $derived(message.finishReason ? finishReasonNote(message.finishReason) : null);
 </script>
 
-<div class="flex w-full justify-start">
-  <div class="w-full max-w-[85%] space-y-2">
-    <!-- Ordered blocks: content, reasoning, and tool calls in arrival sequence -->
+<div class="group w-full">
+  <div class="space-y-3">
     {#each renderedBlocks as block, i (i)}
       {#if block.type === "reasoning"}
-        <ThinkingBlock reasoning={block.content} streaming={streaming && block === renderedBlocks[renderedBlocks.length - 1]} />
+        <ThinkingBlock reasoning={block.content} streaming={streaming && i === renderedBlocks.length - 1} />
       {:else if block.type === "tool_call"}
         {#if block.data.data.tool_type === "code_execution"}
           <CodeExecution data={block.data.data} phase={block.data.phase} />
@@ -99,10 +110,10 @@
           <CustomTool data={block.data.data} phase={block.data.phase} toolName={block.data.tool_name} />
         {/if}
       {:else if block.type === "content"}
-        <div class="rounded-2xl rounded-bl-md bg-gray-100 px-4 py-2.5 shadow-sm dark:bg-gray-800">
-          <div class="markdown-content text-sm leading-relaxed text-gray-900 dark:text-gray-100">
-            {@html renderMarkdown(block.content)}
-          </div>
+        <div class="markdown-content text-[15px]">
+          {#each renderMarkdownBlocks(block.content, streaming && i === renderedBlocks.length - 1) as html, j (j)}
+            {@html html}
+          {/each}
         </div>
       {:else if block.type === "file"}
         <FileCard file={block.data} />
@@ -111,84 +122,52 @@
       {/if}
     {/each}
 
-    <!-- "Working..." spinner: shown until end/stop signal received -->
-    {#if streaming}
-      <div class="flex items-center gap-2 px-1 text-xs text-gray-500 dark:text-gray-400">
-        <svg class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3"></circle>
-          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v3a5 5 0 00-5 5H4z"></path>
-        </svg>
-        <span>Working...</span>
-      </div>
-    {/if}
-
-    <!-- Per-message footer (only shown after streaming completes) -->
-    {#if !streaming && (message.finishReason || message.tokens || message.elapsedMs)}
-      <div class="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 font-mono text-[11px] text-gray-400 dark:text-gray-500">
-        {#if message.tokens}
-          <span><span class="text-gray-500 dark:text-gray-400">{message.tokens}</span> tok</span>
-        {/if}
-        {#if fmtDecodeRate(message.tokens, message.elapsedMs, message.ttftMs)}
-          <span class="text-gray-500 dark:text-gray-400">{fmtDecodeRate(message.tokens, message.elapsedMs, message.ttftMs)}</span>
-        {/if}
-        {#if fmtElapsed(message.ttftMs)}
-          <span><span class="text-gray-400 dark:text-gray-500">ttft</span> {fmtElapsed(message.ttftMs)}</span>
-        {/if}
-        {#if fmtElapsed(message.elapsedMs)}
-          <span>{fmtElapsed(message.elapsedMs)}</span>
-        {/if}
-        {#if message.finishReason}
-          {@const style = finishReasonStyle(message.finishReason)}
-          <span class="{style.color}">· {style.label}</span>
-        {/if}
-        <div class="ml-auto flex items-center gap-1">
-          {#if sibInfo}
-            <button
-              class="inline-flex items-center rounded px-1 py-0.5 hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-200"
-              onclick={prevBranch}
-              aria-label="Previous branch"
-              title="Previous branch"
-            >‹</button>
-            <span>{sibInfo.index + 1}/{sibInfo.total}</span>
-            <button
-              class="inline-flex items-center rounded px-1 py-0.5 hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-200"
-              onclick={nextBranch}
-              aria-label="Next branch"
-              title="Next branch"
-            >›</button>
-          {/if}
-          <button
-            class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-200"
-            onclick={regenerate}
-            title="Regenerate response (creates a new branch)"
-            aria-label="Regenerate response"
-            disabled={chatStore.isStreaming}
-          >
-            <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-            <span>regen</span>
-          </button>
-          <button
-            class="inline-flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-gray-800 dark:hover:text-gray-200"
-            onclick={copyContent}
-            title="Copy message"
-            aria-label="Copy message"
-          >
-            {#if copied}
-              <svg class="h-3 w-3 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-              </svg>
-              <span>copied</span>
-            {:else}
-              <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-              </svg>
-              <span>copy</span>
-            {/if}
-          </button>
+    {#if message.error}
+      <div class="flex gap-2.5 rounded-md border border-danger/30 bg-danger-soft px-3 py-2.5 text-sm" role="alert">
+        <CircleAlert class="mt-0.5 h-4 w-4 shrink-0 text-danger" />
+        <div class="min-w-0">
+          <div class="font-medium text-danger">Request failed</div>
+          <div class="mt-0.5 whitespace-pre-wrap break-words font-mono text-xs text-muted-strong">{message.error}</div>
         </div>
       </div>
     {/if}
+
+    {#if waiting}
+      <div class="flex h-6 items-center gap-1" role="status" aria-label="Waiting for the model">
+        <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-accent"></span>
+        <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-accent [animation-delay:150ms]"></span>
+        <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-accent [animation-delay:300ms]"></span>
+      </div>
+    {/if}
   </div>
+
+  {#if !streaming && (message.finishReason || message.tokens || message.elapsedMs || message.error)}
+    <div class="mt-2 flex flex-wrap items-center gap-x-1 gap-y-1">
+      {#if sibInfo}
+        <div class="flex items-center font-mono text-xs text-muted">
+          <button class={MESSAGE_ACTION} onclick={prevBranch} aria-label="Previous branch" title="Previous branch"><ChevronLeft class="h-3.5 w-3.5" /></button>
+          <span class="tabular-nums">{sibInfo.index + 1}/{sibInfo.total}</span>
+          <button class={MESSAGE_ACTION} onclick={nextBranch} aria-label="Next branch" title="Next branch"><ChevronRight class="h-3.5 w-3.5" /></button>
+        </div>
+      {/if}
+      <button class={MESSAGE_ACTION} onclick={copyContent} title="Copy message" aria-label="Copy message">
+        {#if copied}<Check class="h-3.5 w-3.5 text-success" />{:else}<Copy class="h-3.5 w-3.5" />{/if}
+      </button>
+      <button class={MESSAGE_ACTION} onclick={regenerate} disabled={chatStore.isStreaming} title="Regenerate (creates a new branch)" aria-label="Regenerate response">
+        <RefreshCw class="h-3.5 w-3.5" />
+      </button>
+
+      <div class="ml-2 flex flex-wrap items-center gap-x-3 font-mono text-xs tabular-nums text-muted">
+        {#if decodeRate}<span>{decodeRate}</span>{/if}
+        {#if message.tokens}<span>{message.tokens} tok</span>{/if}
+        {#if fmtElapsed(message.ttftMs)}<span>ttft {fmtElapsed(message.ttftMs)}</span>{/if}
+        {#if message.promptTokens}
+          <span title="Prompt tokens{message.cachedPromptTokens ? `, ${message.cachedPromptTokens} reused from the prefix cache` : ''}">
+            prompt {message.promptTokens}{#if message.cachedPromptTokens}<span class="text-accent"> ({message.cachedPromptTokens} cached)</span>{/if}
+          </span>
+        {/if}
+        {#if finishNote}<span class={finishNote.tone}>{finishNote.label}</span>{/if}
+      </div>
+    </div>
+  {/if}
 </div>

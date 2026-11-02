@@ -1,53 +1,175 @@
 @import "tailwindcss";
-@import "highlight.js/styles/github-dark.css";
 @import "katex/dist/katex.min.css";
 
-@theme {
-  --font-sans: "Inter", "system-ui", "-apple-system", "Segoe UI", "Roboto",
-    "Helvetica Neue", "Arial", sans-serif;
-  --font-mono: "JetBrains Mono", "Fira Code", "Cascadia Code", "Menlo",
-    "Monaco", "Consolas", monospace;
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Palette mirrors website/src/styles.css so the UI and mistralrs.dev read as one product. */
+:root {
+  --background: #ffffff;
+  --surface: #f9f7f6;
+  --surface-raised: #f2f0ee;
+  --foreground: #1c1a17;
+  --code: #1c1a17;
+  --muted: #605c57;
+  --muted-strong: #3f3b37;
+  --line: #e6e2de;
+  --line-strong: #c7c4c1;
+  --accent: #b4461a;
+  --accent-soft: #fbeee6;
+  --fill: #b4461a;
+  --on-fill: #ffffff;
+  --danger: #b42318;
+  --danger-soft: #fdeceb;
+  --warning: #8a5300;
+  --warning-soft: #fdf3e1;
+  --success: #2f7a3a;
+
+  --hl-keyword: #b4461a;
+  --hl-string: #4d7c2f;
+  --hl-number: #9a5b13;
+  --hl-title: #7a3e1d;
+  --hl-type: #49618a;
+  --hl-attr: #6f4a8e;
 }
 
-/* Scrollbar styling */
+.dark {
+  --background: #121110;
+  --surface: #1a1816;
+  --surface-raised: #292623;
+  --foreground: #f8f6f3;
+  --code: #e6e2de;
+  --muted: #948f89;
+  --muted-strong: #c7c4c1;
+  --line: #292623;
+  --line-strong: #3e3b37;
+  --accent: #f0884a;
+  --accent-soft: #3a2418;
+  --fill: #b8481a;
+  --on-fill: #ffffff;
+  --danger: #f2877d;
+  --danger-soft: #3a1d1a;
+  --warning: #e8b462;
+  --warning-soft: #33271a;
+  --success: #8fca8a;
+
+  --hl-keyword: #f0884a;
+  --hl-string: #a8c98c;
+  --hl-number: #e5b06e;
+  --hl-title: #f2c7a6;
+  --hl-type: #a9b8d6;
+  --hl-attr: #c9aee6;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-foreground: var(--foreground);
+  --color-code: var(--code);
+  --color-muted: var(--muted);
+  --color-muted-strong: var(--muted-strong);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-fill: var(--fill);
+  --color-on-fill: var(--on-fill);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-success: var(--success);
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "DejaVu Sans Mono",
+    monospace;
+}
+
+html {
+  color-scheme: light;
+}
+html.dark {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+code,
+pre,
+kbd {
+  font-variant-ligatures: none;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  width: 8px;
+  height: 8px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #cbd5e1;
-  border-radius: 3px;
-}
-.dark ::-webkit-scrollbar-thumb {
-  background: #475569;
+  background: var(--line-strong);
+  border-radius: 4px;
+  border: 2px solid var(--background);
 }
 
-/* Markdown content styles */
+/* Markdown */
+.markdown-content {
+  color: var(--foreground);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.markdown-content > :first-child {
+  margin-top: 0;
+}
+.markdown-content > :last-child {
+  margin-bottom: 0;
+}
+.markdown-content h1,
+.markdown-content h2,
+.markdown-content h3,
+.markdown-content h4 {
+  font-weight: 650;
+  letter-spacing: -0.015em;
+  line-height: 1.3;
+}
 .markdown-content h1 {
   font-size: 1.5rem;
-  font-weight: 700;
-  margin: 1rem 0 0.5rem;
+  margin: 1.5rem 0 0.75rem;
 }
 .markdown-content h2 {
   font-size: 1.25rem;
-  font-weight: 600;
-  margin: 0.875rem 0 0.5rem;
+  margin: 1.375rem 0 0.625rem;
 }
 .markdown-content h3 {
-  font-size: 1.125rem;
-  font-weight: 600;
-  margin: 0.75rem 0 0.375rem;
+  font-size: 1.0625rem;
+  margin: 1.25rem 0 0.5rem;
+}
+.markdown-content h4 {
+  font-size: 1rem;
+  margin: 1rem 0 0.5rem;
 }
 .markdown-content p {
-  margin: 0.5rem 0;
-  line-height: 1.625;
+  margin: 0.75rem 0;
 }
 .markdown-content ul,
 .markdown-content ol {
-  margin: 0.5rem 0;
+  margin: 0.75rem 0;
   padding-left: 1.5rem;
 }
 .markdown-content ul {
@@ -58,118 +180,171 @@
 }
 .markdown-content li {
   margin: 0.25rem 0;
-  line-height: 1.625;
+}
+.markdown-content li::marker {
+  color: var(--muted);
+}
+.markdown-content strong {
+  font-weight: 650;
 }
 .markdown-content blockquote {
-  border-left: 3px solid #6b7280;
+  border-left: 2px solid var(--line-strong);
   padding-left: 1rem;
-  margin: 0.5rem 0;
-  color: #6b7280;
+  margin: 0.75rem 0;
+  color: var(--muted-strong);
 }
 .markdown-content a {
-  color: #3b82f6;
+  color: var(--accent);
   text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  text-underline-offset: 2px;
 }
 .markdown-content a:hover {
-  color: #2563eb;
+  text-decoration-color: var(--accent);
 }
 .markdown-content hr {
-  border-color: #e5e7eb;
-  margin: 1rem 0;
-}
-.dark .markdown-content hr {
-  border-color: #374151;
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 1.5rem 0;
 }
 .markdown-content table {
+  display: block;
+  overflow-x: auto;
   border-collapse: collapse;
-  margin: 0.5rem 0;
-  width: 100%;
+  margin: 0.75rem 0;
+  font-size: 0.875rem;
 }
 .markdown-content th,
 .markdown-content td {
-  border: 1px solid #d1d5db;
-  padding: 0.375rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+  padding: 0.5rem 0.75rem;
   text-align: left;
 }
-.dark .markdown-content th,
-.dark .markdown-content td {
-  border-color: #4b5563;
-}
 .markdown-content th {
-  background: #f3f4f6;
+  border-bottom-color: var(--line-strong);
+  color: var(--muted-strong);
   font-weight: 600;
 }
-.dark .markdown-content th {
-  background: #1f2937;
-}
 .markdown-content code:not(pre code) {
-  background: #f3f4f6;
+  background: var(--surface-raised);
   padding: 0.125rem 0.375rem;
-  border-radius: 0.25rem;
-  font-size: 0.875em;
+  border-radius: 4px;
+  font-size: 0.85em;
   font-family: var(--font-mono);
-}
-.dark .markdown-content code:not(pre code) {
-  background: #1f2937;
+  color: var(--code);
 }
 .markdown-content pre {
   margin: 0;
-  border-radius: 0;
   overflow-x: auto;
 }
 .markdown-content pre code {
   font-family: var(--font-mono);
   font-size: 0.8125rem;
-  line-height: 1.5;
+  line-height: 1.6;
   display: block;
-  padding: 0.75rem 1rem;
+  padding: 0.875rem 1rem;
+  color: var(--code);
 }
 
-/* Code block wrapper with header */
+/* Code blocks, styled after the website's install card */
 .code-block-wrapper {
-  margin: 0.5rem 0;
-  border-radius: 0.5rem;
+  margin: 0.875rem 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
   overflow: hidden;
-  border: 1px solid #374151;
 }
 .code-block-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.375rem 0.75rem;
-  background: #1e293b;
-  border-bottom: 1px solid #374151;
+  border-bottom: 1px solid var(--line);
+  padding-left: 0.875rem;
 }
 .code-block-header .code-lang {
-  font-size: 0.75rem;
-  color: #94a3b8;
   font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--muted);
 }
 .code-block-header .copy-btn {
+  margin-left: auto;
+  padding: 0.375rem 0.875rem;
+  border: 0;
+  border-left: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted-strong);
   font-size: 0.75rem;
-  color: #94a3b8;
-  background: none;
-  border: none;
   cursor: pointer;
-  padding: 0.125rem 0.5rem;
-  border-radius: 0.25rem;
-  transition: color 0.15s, background 0.15s;
+  transition: color 150ms ease, background 150ms ease;
 }
 .code-block-header .copy-btn:hover {
-  color: #e2e8f0;
-  background: #334155;
+  color: var(--foreground);
+  background: var(--surface-raised);
 }
 
-/* KaTeX dark mode: override white backgrounds and ensure text inherits color */
-.dark .katex {
-  color: inherit;
+/* Syntax highlighting on the shared palette */
+.hljs {
+  color: var(--code);
+  background: transparent;
 }
-.dark .katex .katex-html {
-  color: inherit;
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-doctag,
+.hljs-meta .hljs-keyword {
+  color: var(--hl-keyword);
 }
-.dark .katex .base {
-  color: inherit;
+.hljs-string,
+.hljs-regexp,
+.hljs-attr-value,
+.hljs-template-tag,
+.hljs-addition {
+  color: var(--hl-string);
 }
-.dark .katex-display {
+.hljs-number,
+.hljs-literal,
+.hljs-symbol,
+.hljs-bullet {
+  color: var(--hl-number);
+}
+.hljs-title,
+.hljs-title.function_,
+.hljs-section,
+.hljs-name {
+  color: var(--hl-title);
+}
+.hljs-type,
+.hljs-title.class_,
+.hljs-built_in,
+.hljs-selector-class {
+  color: var(--hl-type);
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-property,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-params {
+  color: var(--hl-attr);
+}
+.hljs-comment,
+.hljs-quote {
+  color: var(--muted);
+  font-style: italic;
+}
+.hljs-meta {
+  color: var(--muted-strong);
+}
+.hljs-deletion {
+  color: var(--danger);
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: 650;
+}
+
+.katex,
+.katex-display {
   color: inherit;
 }

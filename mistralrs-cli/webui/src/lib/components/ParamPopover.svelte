@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { FIELD } from "../ui";
+
   interface Props {
     label: string;
     value: number | null;
@@ -66,13 +68,13 @@
 
 <div
   bind:this={rootEl}
-  class="absolute top-full left-0 z-50 mt-1 w-64 rounded-lg border border-gray-200 bg-white p-3 shadow-lg dark:border-gray-700 dark:bg-gray-900"
+  class="absolute top-full left-0 z-50 mt-1 w-64 rounded-md border border-line-strong bg-surface p-3 shadow-lg shadow-black/10"
 >
   <div class="mb-2 flex items-center justify-between">
-    <span class="font-mono text-[11px] uppercase tracking-wide text-gray-500 dark:text-gray-400">{label}</span>
+    <span class="font-mono text-[11px] uppercase tracking-wide text-muted">{label}</span>
     {#if defaultValue != null}
       <button
-        class="font-mono text-[10px] text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+        class="rounded px-1 font-mono text-[11px] text-muted hover:bg-surface-raised hover:text-foreground"
         onclick={reset}
       >
         reset {defaultValue}
@@ -83,7 +85,7 @@
   {#if useSlider}
     <input
       type="range"
-      class="mb-2 w-full accent-blue-500"
+      class="mb-2 w-full accent-[var(--accent)]"
       min={min}
       max={max}
       step={step ?? 0.01}
@@ -98,7 +100,7 @@
 
   <input
     type="number"
-    class="w-full rounded border border-gray-300 bg-white px-2 py-1 font-mono text-sm text-gray-900 outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100"
+    class="{FIELD} w-full px-2 py-1 font-mono text-sm"
     {min}
     {max}
     {step}

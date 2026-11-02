@@ -17,6 +17,21 @@ interface StoredSettings {
   enableThinking?: boolean;
 }
 
+export type Theme = "system" | "light" | "dark";
+const THEME_ORDER: Theme[] = ["system", "light", "dark"];
+// Separate from STORAGE_KEY so picking a theme doesn't mask the model's generation defaults.
+const THEME_KEY = "mistralrs_theme";
+
+function loadTheme(): Theme {
+  try {
+    const t = localStorage.getItem(THEME_KEY);
+    if (t && (THEME_ORDER as string[]).includes(t)) return t as Theme;
+  } catch {
+    // ignore
+  }
+  return "system";
+}
+
 // Stale keys from previous UI versions — clean them up on load
 const LEGACY_KEYS = ["mistralrs-settings", "theme"];
 
@@ -46,14 +61,21 @@ function save(s: StoredSettings) {
   }
 }
 
+const FLOAT_PARAM_PRECISION = 6;
+
+// Older servers widened f32 defaults to f64 (1.100000023841858), and saved settings may still hold them.
+function tidy(value: number | undefined): number | undefined {
+  return value == null ? value : Number(value.toPrecision(FLOAT_PARAM_PRECISION));
+}
+
 const stored = loadStored();
 
 class SettingsStore {
-  temperature = $state(stored.temperature ?? 0.7);
-  topP = $state(stored.topP ?? 0.9);
+  temperature = $state(tidy(stored.temperature) ?? 0.7);
+  topP = $state(tidy(stored.topP) ?? 0.9);
   topK = $state(stored.topK ?? 40);
   maxTokens = $state(stored.maxTokens ?? 8192);
-  repetitionPenalty = $state(stored.repetitionPenalty ?? 1.1);
+  repetitionPenalty = $state(tidy(stored.repetitionPenalty) ?? 1.1);
   systemPrompt = $state(stored.systemPrompt ?? "");
   enableSearch = $state(stored.enableSearch ?? false);
   enableCodeExecution = $state(stored.enableCodeExecution ?? false);
@@ -62,6 +84,7 @@ class SettingsStore {
   reasoningEffort = $state<ReasoningEffort | "">(
     stored.reasoningEffort ?? (stored.enableThinking === false ? "off" : ""),
   );
+  theme = $state<Theme>(loadTheme());
   sidebarOpen = $state(window.innerWidth >= 768);
   settingsOpen = $state(false);
   toolsOpen = $state(false);
@@ -80,6 +103,15 @@ class SettingsStore {
       agentPermission: this.agentPermission,
       reasoningEffort: this.reasoningEffort,
     });
+  }
+
+  cycleTheme() {
+    this.theme = THEME_ORDER[(THEME_ORDER.indexOf(this.theme) + 1) % THEME_ORDER.length];
+    try {
+      localStorage.setItem(THEME_KEY, this.theme);
+    } catch {
+      // ignore
+    }
   }
 
   applyDefaults(defaults: {

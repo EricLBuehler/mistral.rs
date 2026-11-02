@@ -39,6 +39,8 @@ pub(crate) const UI_SELECT_MODEL_ROUTE: RouteInfo =
     RouteInfo::new("/api/select_model", "POST", RouteKind::Ui);
 pub(crate) const UI_LIST_CHATS_ROUTE: RouteInfo =
     RouteInfo::new("/api/list_chats", "GET", RouteKind::Ui);
+pub(crate) const UI_SEARCH_CHATS_ROUTE: RouteInfo =
+    RouteInfo::new("/api/search_chats", "GET", RouteKind::Ui);
 pub(crate) const UI_NEW_CHAT_ROUTE: RouteInfo =
     RouteInfo::new("/api/new_chat", "POST", RouteKind::Ui);
 pub(crate) const UI_DELETE_CHAT_ROUTE: RouteInfo =
@@ -49,8 +51,6 @@ pub(crate) const UI_RENAME_CHAT_ROUTE: RouteInfo =
     RouteInfo::new("/api/rename_chat", "POST", RouteKind::Ui);
 pub(crate) const UI_APPEND_MESSAGE_ROUTE: RouteInfo =
     RouteInfo::new("/api/append_message", "POST", RouteKind::Ui);
-pub(crate) const UI_EDIT_MESSAGE_ROUTE: RouteInfo =
-    RouteInfo::new("/api/edit_message", "POST", RouteKind::Ui);
 pub(crate) const UI_SET_TAIL_ROUTE: RouteInfo =
     RouteInfo::new("/api/set_tail", "POST", RouteKind::Ui);
 pub(crate) const UI_FORK_SESSION_ROUTE: RouteInfo =
@@ -208,6 +208,8 @@ pub async fn build_ui_router(
         speech_dir: speech_dir.to_string_lossy().to_string(),
         current_chat: tokio::sync::RwLock::new(None),
         next_chat_id: tokio::sync::RwLock::new(next_id),
+        chat_write_lock: tokio::sync::Mutex::new(()),
+        chat_index: tokio::sync::Mutex::new(Default::default()),
         default_params: GenerationParams::default(),
         search_enabled: enable_search,
         search_embedding_model,
@@ -224,12 +226,12 @@ pub async fn build_ui_router(
         .route(UI_LIST_MODELS_ROUTE.path, get(list_models))
         .route(UI_SELECT_MODEL_ROUTE.path, post(select_model))
         .route(UI_LIST_CHATS_ROUTE.path, get(list_chats))
+        .route(UI_SEARCH_CHATS_ROUTE.path, get(search_chats))
         .route(UI_NEW_CHAT_ROUTE.path, post(new_chat))
         .route(UI_DELETE_CHAT_ROUTE.path, post(delete_chat))
         .route(UI_LOAD_CHAT_ROUTE.path, post(load_chat))
         .route(UI_RENAME_CHAT_ROUTE.path, post(rename_chat))
         .route(UI_APPEND_MESSAGE_ROUTE.path, post(append_message))
-        .route(UI_EDIT_MESSAGE_ROUTE.path, post(edit_message))
         .route(UI_SET_TAIL_ROUTE.path, post(set_tail))
         .route(UI_FORK_SESSION_ROUTE.path, post(fork_session))
         .route(UI_SAVE_CHAT_SESSION_ROUTE.path, post(save_chat_session))

@@ -5,10 +5,23 @@ export interface ChatCompletionMessage {
 }
 
 export interface MessageContent {
-  type: "text" | "image_url" | "video_url";
+  type: "text" | "image_url" | "video_url" | "audio_url";
   text?: string;
   image_url?: { url: string };
   video_url?: { url: string };
+  audio_url?: { url: string };
+}
+
+export interface TextAttachment {
+  name: string;
+  text: string;
+}
+
+export interface Attachments {
+  images?: string[];
+  videos?: string[];
+  audios?: string[];
+  files?: TextAttachment[];
 }
 
 export interface ChatCompletionChunk {
@@ -44,6 +57,8 @@ export interface Usage {
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
+  prompt_tokens_details?: { cached_tokens: number };
+  avg_compl_tok_per_sec?: number;
 }
 
 export interface AgenticToolCallProgress {
@@ -187,13 +202,28 @@ export interface ChatFile {
   tail?: string | null;
 }
 
+export interface ChatSummary {
+  id: string;
+  title: string | null;
+  model: string;
+  created_at: string;
+  updated_at: string;
+  preview: string | null;
+}
+
+export interface ChatSearchHit extends ChatSummary {
+  snippet: string;
+}
+
 export interface ChatMessageRecord {
   id?: string;
-  parent_id?: string;
+  parent_id?: string | null;
   role: string;
   content: string;
   images?: string[];
   videos?: string[];
+  audios?: string[];
+  files?: TextAttachment[];
   blocks?: StreamBlock[];
   finish_reason?: string;
   elapsed_ms?: number;
@@ -201,6 +231,10 @@ export interface ChatMessageRecord {
   tokens?: number;
   model?: string;
   session_id?: string;
+  prompt_tokens?: number;
+  cached_prompt_tokens?: number;
+  decode_tok_per_sec?: number;
+  error?: string;
 }
 
 export interface Capabilities {
@@ -232,13 +266,21 @@ export interface DisplayMessage {
   blocks?: StreamBlock[];
   images?: string[];
   videos?: string[];
+  audios?: string[];
+  files?: TextAttachment[];
   finishReason?: string | null;
   /** Wall-clock duration of the streaming response in milliseconds (TTFT + decode). */
   elapsedMs?: number;
   /** Time from request send to first token in milliseconds. */
   ttftMs?: number;
-  /** Approximate token count (4 chars per token client-side estimate). */
+  /** Server-reported completion tokens. */
   tokens?: number;
+  promptTokens?: number;
+  cachedPromptTokens?: number;
+  /** Server-reported decode rate. */
+  decodeTokPerSec?: number;
+  /** Request failure; kept out of the history sent to the model. */
+  error?: string;
   /** Server-reported model that produced this message. */
   model?: string;
   /** Agentic session id this assistant message was generated under. Branches each pin their own. */
@@ -285,6 +327,7 @@ export interface StreamCallbacks {
   onFile: (file: File) => void;
   onFinishReason: (reason: string) => void;
   onSessionId: (id: string) => void;
+  onUsage: (usage: Usage) => void;
   onDone: () => void;
   onError: (error: string) => void;
 }

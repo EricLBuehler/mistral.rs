@@ -1,6 +1,9 @@
 import type {
   UiModelInfo,
   ChatFile,
+  ChatMessageRecord,
+  ChatSummary,
+  ChatSearchHit,
   Capabilities,
   Settings,
 } from "../types";
@@ -13,9 +16,14 @@ function apiUrl(path: string): string {
   return `${getBase()}api/${path}`;
 }
 
+async function httpError(method: string, path: string, res: Response): Promise<Error> {
+  const body = await res.text().catch(() => "");
+  return new Error(`${method} ${path}: HTTP ${res.status}${body ? ` ${body}` : ""}`);
+}
+
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(apiUrl(path));
-  if (!res.ok) throw new Error(`GET ${path}: ${res.statusText}`);
+  if (!res.ok) throw await httpError("GET", path, res);
   return res.json();
 }
 
@@ -25,7 +33,7 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
     headers: { "Content-Type": "application/json" },
     body: body != null ? JSON.stringify(body) : undefined,
   });
-  if (!res.ok) throw new Error(`POST ${path}: ${res.statusText}`);
+  if (!res.ok) throw await httpError("POST", path, res);
   return res.json();
 }
 
@@ -35,7 +43,7 @@ async function postVoid(path: string, body?: unknown): Promise<void> {
     headers: { "Content-Type": "application/json" },
     body: body != null ? JSON.stringify(body) : undefined,
   });
-  if (!res.ok) throw new Error(`POST ${path}: ${res.statusText}`);
+  if (!res.ok) throw await httpError("POST", path, res);
 }
 
 // === Model endpoints ===
@@ -52,8 +60,12 @@ export async function selectModel(name: string): Promise<void> {
 
 // === Chat endpoints ===
 
-export async function listChats(): Promise<{ chats: ChatFile[] }> {
+export async function listChats(): Promise<{ chats: ChatSummary[] }> {
   return get("list_chats");
+}
+
+export async function searchChats(query: string): Promise<{ chats: ChatSearchHit[] }> {
+  return get(`search_chats?q=${encodeURIComponent(query)}`);
 }
 
 export async function newChat(model: string): Promise<{ id: string }> {
@@ -75,46 +87,8 @@ export async function renameChat(
   await postVoid("rename_chat", { id, title });
 }
 
-export interface MessageStats {
-  elapsed_ms?: number;
-  ttft_ms?: number;
-  tokens?: number;
-  model?: string;
-  session_id?: string;
-}
-
-export async function appendMessage(
-  id: string,
-  role: string,
-  content: string,
-  images?: string[],
-  videos?: string[],
-  blocks?: unknown[],
-  finishReason?: string,
-  stats?: MessageStats,
-  messageId?: string,
-  parentId?: string | null,
-): Promise<void> {
-  await postVoid("append_message", {
-    id,
-    message_id: messageId,
-    parent_id: parentId ?? undefined,
-    role,
-    content,
-    images,
-    videos,
-    blocks,
-    finish_reason: finishReason,
-    elapsed_ms: stats?.elapsed_ms,
-    ttft_ms: stats?.ttft_ms,
-    tokens: stats?.tokens,
-    model: stats?.model,
-    session_id: stats?.session_id,
-  });
-}
-
-export async function editMessage(chatId: string, messageId: string, content: string): Promise<void> {
-  await postVoid("edit_message", { id: chatId, message_id: messageId, content });
+export async function appendMessage(chatId: string, message: ChatMessageRecord): Promise<void> {
+  await postVoid("append_message", { chat_id: chatId, message });
 }
 
 export async function setTail(chatId: string, tail: string | null): Promise<void> {
