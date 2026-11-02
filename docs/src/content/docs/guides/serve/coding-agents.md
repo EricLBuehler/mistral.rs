@@ -28,7 +28,7 @@ Check that the server is reachable:
 curl http://localhost:1234/v1/models
 ```
 
-Each model in the response has a `max_model_len`: the most tokens one request can use, counting prompt and output. Both agents need it below. Coding agents want at least 64k; if yours is lower, see [context length](/guides/perf/paged-attention/#context-length).
+Each model in the response has a `max_model_len`: the most tokens one request can use, counting prompt and output. Both agents need it below. To raise it, see [context length](/guides/perf/paged-attention/#context-length).
 
 For Codex and Claude Code, let the coding agent own normal file edits, shell
 commands, and repository inspection. Enable mistral.rs server-side agent tools
@@ -85,10 +85,11 @@ project-local `.claude/settings.local.json`:
   "model": "sonnet",
   "env": {
     "ANTHROPIC_BASE_URL": "http://localhost:1234",
-    "ANTHROPIC_API_KEY": "not-used",
+    "ANTHROPIC_AUTH_TOKEN": "not-used",
     "ANTHROPIC_DEFAULT_SONNET_MODEL": "default",
     "ANTHROPIC_DEFAULT_OPUS_MODEL": "default",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "default",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "default",
     "ANTHROPIC_CUSTOM_MODEL_OPTION": "default",
     "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME": "mistral.rs default",
     "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION": "Local model served by mistral.rs",
@@ -98,9 +99,11 @@ project-local `.claude/settings.local.json`:
 }
 ```
 
-Map the Sonnet, Opus, and Haiku defaults to `default` so the `sonnet` setting
-and Claude Code's background and planning calls all use the single loaded
-mistral.rs model. If you serve several models, map each Claude Code default to
+Map the Sonnet, Opus, Haiku, and subagent models to `default` so the `sonnet`
+setting, background and planning calls, and subagents all use the single loaded
+mistral.rs model. Use `ANTHROPIC_AUTH_TOKEN` rather than `ANTHROPIC_API_KEY`:
+Claude Code asks for confirmation before using an API key, but sends a token
+as is. If you serve several models, map each Claude Code default to
 the local model id you want for that role.
 
 Set `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to the server's `max_model_len`. Claude

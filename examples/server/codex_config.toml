@@ -2,7 +2,8 @@
 # Start the server with:
 #   mistralrs serve -p 1234 -m Qwen/Qwen3-Coder-Next
 #
-# Codex provider config belongs in user-level ~/.codex/config.toml.
+# Codex provider config belongs in user-level ~/.codex/config.toml. To keep it switchable,
+# put it in ~/.codex/mistralrs.config.toml instead and run `codex --profile mistralrs`.
 
 model = "default"
 model_provider = "mistralrs"
@@ -20,7 +21,3 @@ stream_idle_timeout_ms = 300000
 
 # If a reverse proxy enforces auth, uncomment this and export MISTRALRS_API_KEY.
 # env_key = "MISTRALRS_API_KEY"
-
-[profiles.mistralrs]
-model = "default"
-model_provider = "mistralrs"

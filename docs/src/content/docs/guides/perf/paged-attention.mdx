@@ -95,7 +95,7 @@ The same number appears as `max_model_len` on each model in `GET /v1/models`.
 
 A prompt over the limit is rejected with the error each API normally uses for this: `context_length_exceeded` on the OpenAI routes and `prompt is too long` on `/v1/messages`. Coding agents recognize these and compact the conversation instead of retrying. A prompt that fits, but leaves less room than `max_tokens` asks for, still runs; generation stops at the limit with finish reason `length`.
 
-Set `--max-model-len` on a shared server so one long request can't fill the whole cache. Around 8k to 32k tokens suits chat, and coding agents want at least 64k. If the value is more than the cache can hold, loading fails and names the fix, such as a smaller `--quant`, `--pa-cache-type f8e4m3`, or a larger `--kv-cache`, rather than starting and failing on the first long request. Going past the model's native window needs RoPE scaling turned on as well; [Qwen3.5](/guides/models/model-family-notes/#qwen35-and-qwen36) shows how.
+Set `--max-model-len` on a shared server so one long request can't fill the whole cache. Around 8k to 32k tokens suits chat; leave coding agents as much as the model and memory allow. If the value is more than the cache can hold, loading fails and names the fix, such as a smaller `--quant`, `--pa-cache-type f8e4m3`, or a larger `--kv-cache`, rather than starting and failing on the first long request. Going past the model's native window needs RoPE scaling turned on as well; [Qwen3.5](/guides/models/model-family-notes/#qwen35-and-qwen36) shows how.
 
 ## FlashAttention and FlashInfer
 
