@@ -84,6 +84,20 @@ pub struct ChatSummary {
     pub preview: Option<String>,
 }
 
+#[derive(Serialize)]
+pub struct ChatSearchHit {
+    #[serde(flatten)]
+    pub summary: ChatSummary,
+    pub snippet: String,
+}
+
+pub struct ChatIndexEntry {
+    pub mtime: SystemTime,
+    pub summary: ChatSummary,
+    /// Title and message text, searched by `/api/search_chats`.
+    pub text: String,
+}
+
 /// Default generation parameters
 #[derive(Clone, Serialize, Deserialize)]
 pub struct GenerationParams {
@@ -164,8 +178,8 @@ pub struct AppState {
     pub next_chat_id: RwLock<u32>,
     /// Serializes read-modify-write of chat files so concurrent saves can't drop each other.
     pub chat_write_lock: tokio::sync::Mutex<()>,
-    /// Sidebar summaries keyed by chat id, invalidated by file mtime.
-    pub chat_summaries: tokio::sync::Mutex<HashMap<String, (SystemTime, ChatSummary)>>,
+    /// Sidebar summaries and search text keyed by chat id, invalidated by file mtime.
+    pub chat_index: tokio::sync::Mutex<HashMap<String, ChatIndexEntry>>,
     /// Default generation parameters
     pub default_params: GenerationParams,
     /// Whether web search is enabled

@@ -1,10 +1,19 @@
 <script lang="ts">
   import { chatStore } from "../stores/chat.svelte";
-  import type { ChatSummary } from "../types";
+  import type { ChatSearchHit, ChatSummary } from "../types";
+  import { highlightSegments } from "../utils/search";
   import { onMount } from "svelte";
 
   let editingId = $state<string | null>(null);
   let editTitle = $state("");
+
+  let visibleChats = $derived<(ChatSummary | ChatSearchHit)[]>(
+    chatStore.searchResults ?? chatStore.chats,
+  );
+
+  function onSearchKey(e: KeyboardEvent) {
+    if (e.key === "Escape") chatStore.setSearchQuery("");
+  }
 
   onMount(() => {
     chatStore.refreshChats();
@@ -46,12 +55,32 @@
     </button>
   </div>
 
+  <div class="px-3 pb-3">
+    <div class="relative">
+      <svg class="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M17 11a6 6 0 11-12 0 6 6 0 0112 0z" />
+      </svg>
+      <input
+        type="search"
+        placeholder="Search chats"
+        aria-label="Search chats"
+        class="w-full rounded-lg border border-gray-300 bg-white py-1.5 pl-8 pr-2 text-sm text-gray-800 placeholder-gray-400 focus:border-blue-400 focus:outline-none dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:placeholder-gray-500"
+        value={chatStore.searchQuery}
+        oninput={(e) => chatStore.setSearchQuery(e.currentTarget.value)}
+        onkeydown={onSearchKey}
+      />
+    </div>
+  </div>
+
   <div class="border-b border-gray-200 dark:border-gray-700"></div>
 
   <!-- Chat list -->
   <div class="flex-1 overflow-y-auto p-2">
     <div class="space-y-0.5">
-      {#each chatStore.chats as chat (chat.id)}
+      {#if chatStore.searchResults?.length === 0}
+        <div class="px-2 py-6 text-center text-xs text-gray-400 dark:text-gray-500">No chats match "{chatStore.searchQuery.trim()}"</div>
+      {/if}
+      {#each visibleChats as chat (chat.id)}
         {@const isActive = chatStore.currentChatId === chat.id}
         <div
           class="group flex items-center rounded-lg px-2 py-1.5 text-sm transition-colors
@@ -75,6 +104,13 @@
               onclick={() => chatStore.loadChat(chat.id)}
             >
               <span class="w-full truncate">{getChatLabel(chat)}</span>
+              {#if "snippet" in chat}
+                <span class="line-clamp-2 w-full text-xs text-gray-500 dark:text-gray-400">
+                  {#each highlightSegments(chat.snippet, chatStore.searchQuery) as seg, k (k)}
+                    {#if seg.match}<mark class="rounded-sm bg-yellow-200 px-0.5 text-gray-900 dark:bg-yellow-500/40 dark:text-gray-100">{seg.text}</mark>{:else}{seg.text}{/if}
+                  {/each}
+                </span>
+              {/if}
               <span class="w-full truncate font-mono text-[10.5px] {isActive ? 'text-blue-600 dark:text-blue-300' : 'text-gray-400 dark:text-gray-500'}">
                 {chat.model}
               </span>

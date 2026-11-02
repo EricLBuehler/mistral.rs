@@ -5,6 +5,7 @@ import type {
   ChatFile,
   ChatMessageRecord,
   ChatSummary,
+  ChatSearchHit,
   StreamOptions,
   StreamBlock,
   File as ProducedFile,
@@ -24,6 +25,7 @@ const UI_UPLOAD_URL =
 const SAVE_RETRY_DELAYS_MS = [300, 1000];
 const TOK_RATE_INTERVAL_MS = 250;
 const CHARS_PER_TOKEN_ESTIMATE = 4;
+const SEARCH_DEBOUNCE_MS = 150;
 export const STOPPED_FINISH_REASON = "stopped";
 
 function inferenceMediaUrl(url: string): string {
@@ -119,6 +121,9 @@ class ChatStore {
   messages = $state<DisplayMessage[]>([]);
 
   chats = $state<ChatSummary[]>([]);
+  searchQuery = $state("");
+  /** Null when no search is active; otherwise hits for `searchQuery`. */
+  searchResults = $state<ChatSearchHit[] | null>(null);
   currentChatId = $state<string | null>(null);
   /** Agentic session ID; survives turns and (via sidecar) server restarts. */
   currentSessionId = $state<string | null>(null);
@@ -145,6 +150,9 @@ class ChatStore {
   private streamingError: string | null = null;
   private streamingUsage: Usage | null = null;
   private tokRateTimer: ReturnType<typeof setInterval> | null = null;
+
+  private searchSeq = 0;
+  private searchTimer: ReturnType<typeof setTimeout> | null = null;
 
   private saveQueue: PendingSave[] = [];
   private drainPromise: Promise<void> | null = null;
@@ -254,6 +262,29 @@ class ChatStore {
       this.chats = (await api.listChats()).chats;
     } catch (e) {
       console.error("Failed to list chats:", e);
+    }
+    if (this.searchQuery.trim()) await this.runSearch();
+  }
+
+  setSearchQuery(query: string) {
+    this.searchQuery = query;
+    if (this.searchTimer) clearTimeout(this.searchTimer);
+    if (!query.trim()) {
+      this.searchSeq++;
+      this.searchResults = null;
+      return;
+    }
+    this.searchTimer = setTimeout(() => void this.runSearch(), SEARCH_DEBOUNCE_MS);
+  }
+
+  private async runSearch() {
+    const seq = ++this.searchSeq;
+    const query = this.searchQuery;
+    try {
+      const { chats } = await api.searchChats(query);
+      if (seq === this.searchSeq) this.searchResults = chats;
+    } catch (e) {
+      if (seq === this.searchSeq) this.lastError = `Search failed: ${errorText(e)}`;
     }
   }
 

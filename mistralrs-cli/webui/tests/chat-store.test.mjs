@@ -73,6 +73,14 @@ class FakeServer {
     if (path.endsWith("api/list_chats")) {
       return json({ chats: [...this.chats].map(([id, c]) => ({ id, title: c.title, model: c.model, created_at: c.created_at, updated_at: c.created_at, preview: null })) });
     }
+    if (path.includes("api/search_chats")) {
+      const q = new URL(path, "http://x").searchParams.get("q");
+      if (this.searchDelays?.[q]) await new Promise((r) => setTimeout(r, this.searchDelays[q]));
+      const hits = [...this.chats]
+        .filter(([, c]) => c.messages.some((m) => m.content.toLowerCase().includes(q.toLowerCase())))
+        .map(([id, c]) => ({ id, title: c.title, model: c.model, created_at: c.created_at, updated_at: c.created_at, preview: null, snippet: q }));
+      return json({ chats: hits });
+    }
     if (path.endsWith("api/delete_chat")) {
       this.chats.delete(body.id);
       return new Response("ok");
@@ -221,4 +229,22 @@ test("failing to create a chat reports it and lets the caller keep the draft", {
   assert.equal(sent, false);
   assert.match(chatStore.lastError, /Couldn't create chat/);
   assert.equal(chatStore.messages.length, 0);
+});
+
+test("search debounces, ignores stale responses, and clears", { timeout: TEST_TIMEOUT_MS }, async () => {
+  await sendAndReply("tell me about llamas", "ok");
+  await chatStore.newChat();
+  await sendAndReply("tell me about alpacas", "ok");
+
+  fake.searchDelays = { l: 200 };
+  chatStore.setSearchQuery("l");
+  await until(() => fake.requests.some((r) => r.path.includes("q=l")), "first search sent");
+  chatStore.setSearchQuery("alpaca");
+  assert.equal(fake.requests.filter((r) => r.path.includes("search_chats")).length, 1);
+  await until(() => chatStore.searchResults?.length === 1, "alpaca results");
+  await new Promise((r) => setTimeout(r, 250));
+  assert.deepEqual(chatStore.searchResults.map((c) => c.id), ["chat_2"]);
+
+  chatStore.setSearchQuery("  ");
+  assert.equal(chatStore.searchResults, null);
 });

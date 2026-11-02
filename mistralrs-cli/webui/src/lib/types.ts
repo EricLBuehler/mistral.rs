@@ -198,6 +198,10 @@ export interface ChatSummary {
   preview: string | null;
 }
 
+export interface ChatSearchHit extends ChatSummary {
+  snippet: string;
+}
+
 export interface ChatMessageRecord {
   id?: string;
   parent_id?: string | null;

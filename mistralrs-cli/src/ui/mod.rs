@@ -39,6 +39,8 @@ pub(crate) const UI_SELECT_MODEL_ROUTE: RouteInfo =
     RouteInfo::new("/api/select_model", "POST", RouteKind::Ui);
 pub(crate) const UI_LIST_CHATS_ROUTE: RouteInfo =
     RouteInfo::new("/api/list_chats", "GET", RouteKind::Ui);
+pub(crate) const UI_SEARCH_CHATS_ROUTE: RouteInfo =
+    RouteInfo::new("/api/search_chats", "GET", RouteKind::Ui);
 pub(crate) const UI_NEW_CHAT_ROUTE: RouteInfo =
     RouteInfo::new("/api/new_chat", "POST", RouteKind::Ui);
 pub(crate) const UI_DELETE_CHAT_ROUTE: RouteInfo =
@@ -207,7 +209,7 @@ pub async fn build_ui_router(
         current_chat: tokio::sync::RwLock::new(None),
         next_chat_id: tokio::sync::RwLock::new(next_id),
         chat_write_lock: tokio::sync::Mutex::new(()),
-        chat_summaries: tokio::sync::Mutex::new(Default::default()),
+        chat_index: tokio::sync::Mutex::new(Default::default()),
         default_params: GenerationParams::default(),
         search_enabled: enable_search,
         search_embedding_model,
@@ -224,6 +226,7 @@ pub async fn build_ui_router(
         .route(UI_LIST_MODELS_ROUTE.path, get(list_models))
         .route(UI_SELECT_MODEL_ROUTE.path, post(select_model))
         .route(UI_LIST_CHATS_ROUTE.path, get(list_chats))
+        .route(UI_SEARCH_CHATS_ROUTE.path, get(search_chats))
         .route(UI_NEW_CHAT_ROUTE.path, post(new_chat))
         .route(UI_DELETE_CHAT_ROUTE.path, post(delete_chat))
         .route(UI_LOAD_CHAT_ROUTE.path, post(load_chat))

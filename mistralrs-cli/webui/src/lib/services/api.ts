@@ -3,6 +3,7 @@ import type {
   ChatFile,
   ChatMessageRecord,
   ChatSummary,
+  ChatSearchHit,
   Capabilities,
   Settings,
 } from "../types";
@@ -61,6 +62,10 @@ export async function selectModel(name: string): Promise<void> {
 
 export async function listChats(): Promise<{ chats: ChatSummary[] }> {
   return get("list_chats");
+}
+
+export async function searchChats(query: string): Promise<{ chats: ChatSearchHit[] }> {
+  return get(`search_chats?q=${encodeURIComponent(query)}`);
 }
 
 export async function newChat(model: string): Promise<{ id: string }> {
