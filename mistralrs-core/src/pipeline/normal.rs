@@ -187,6 +187,11 @@ pub(crate) fn build_normal_pipeline(
 
     let model_metadata =
         crate::paged_attention::with_attention_features(model.model_config(), attention_features);
+    let model_metadata = crate::paged_attention::with_legacy_fp8_backend(
+        model_metadata,
+        paged_attn_config.as_ref(),
+        &device,
+    );
     #[cfg(feature = "metal")]
     if !loaded_for_uqff_write {
         super::metal_warmup::prepare_model(super::metal_warmup::MetalModelWarmup {

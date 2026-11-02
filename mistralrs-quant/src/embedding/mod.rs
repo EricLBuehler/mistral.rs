@@ -33,6 +33,7 @@ const IQ4_VALUES: [i8; 16] = [
 const FP4_VALUES: [f32; 8] = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0];
 const SYM_INT4_OFFSET: i32 = 8;
 const GGUF_IQ4_NL: u32 = 20;
+const GGUF_MXFP4: u32 = 39;
 
 /// Output of an embedding gather: row dtype plus a multiplier fused into the decode (Gemma `sqrt(hidden)`).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -76,6 +77,7 @@ pub enum GgufRowType {
     Q6K,
     Q8K,
     Iq4Nl,
+    Mxfp4 = 18,
 }
 
 impl GgufRowType {
@@ -93,6 +95,7 @@ impl GgufRowType {
             Self::Q5K => (256, 176),
             Self::Q6K => (256, 210),
             Self::Q8K => (256, 292),
+            Self::Mxfp4 => (32, 17),
         }
     }
 }
@@ -208,6 +211,7 @@ impl RowCodec {
             GgmlDType::Q5K => GgufRowType::Q5K,
             GgmlDType::Q6K => GgufRowType::Q6K,
             GgmlDType::Q8K => GgufRowType::Q8K,
+            GgmlDType::Mxfp4 => GgufRowType::Mxfp4,
         };
         Self::Gguf(ty)
     }
@@ -231,6 +235,7 @@ impl RowCodec {
             14 => Self::Gguf(GgufRowType::Q6K),
             15 => Self::Gguf(GgufRowType::Q8K),
             GGUF_IQ4_NL => Self::Gguf(GgufRowType::Iq4Nl),
+            GGUF_MXFP4 => Self::Gguf(GgufRowType::Mxfp4),
             other => candle_core::bail!("unsupported GGUF embedding type {other}"),
         })
     }
@@ -379,6 +384,7 @@ fn decode_gguf(ty: GgufRowType, src: &[u8], out: &mut [f32]) {
         GgufRowType::Q5K => dequantize_blocks::<BlockQ5K>(src, out),
         GgufRowType::Q6K => dequantize_blocks::<BlockQ6K>(src, out),
         GgufRowType::Q8K => dequantize_blocks::<BlockQ8K>(src, out),
+        GgufRowType::Mxfp4 => dequantize_blocks::<BlockMxfp4>(src, out),
         GgufRowType::Iq4Nl => {
             for (block, dst) in src
                 .as_chunks::<IQ4_BLOCK_BYTES>()

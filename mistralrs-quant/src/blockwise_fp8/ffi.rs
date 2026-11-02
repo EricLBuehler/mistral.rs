@@ -32,7 +32,7 @@ extern "C" {
     ) -> i32;
 }
 
-#[cfg(has_blockwise_fp8_kernels)]
+#[cfg(has_fp8_mma_kernels)]
 extern "C" {
     pub(crate) fn mistralrs_fp8_mma_error_string(status: i32) -> *const core::ffi::c_char;
     pub(crate) fn mistralrs_fp8_mma_gemv(

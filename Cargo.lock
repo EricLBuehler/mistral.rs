@@ -141,7 +141,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -152,7 +152,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -691,9 +691,8 @@ checksum = "ade8366b8bd5ba243f0a58f036cc0ca8a2f069cff1a2351ef1cac6b083e16fc0"
 
 [[package]]
 name = "candle-core"
-version = "0.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d11c8be87cfbaef9ebb62fb3f850d1fc8e00cc1d11d393fdbe55a4d5c2cdb325"
+version = "0.11.0"
+source = "git+https://github.com/haricot/candle.git?rev=bfce966ad4d61a48801eb6af4db8b8eabebc01a8#bfce966ad4d61a48801eb6af4db8b8eabebc01a8"
 dependencies = [
  "accelerate-src",
  "byteorder",
@@ -720,14 +719,13 @@ dependencies = [
  "tokenizers 0.23.2",
  "yoke",
  "zerocopy",
- "zip",
+ "zip 9.0.3",
 ]
 
 [[package]]
 name = "candle-flash-attn-v3"
-version = "0.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71644f2fd1a039568e4eeaa99251b2a19df476cfaaa1311074c4d1a8b1fd23af"
+version = "0.11.0"
+source = "git+https://github.com/haricot/candle.git?rev=bfce966ad4d61a48801eb6af4db8b8eabebc01a8#bfce966ad4d61a48801eb6af4db8b8eabebc01a8"
 dependencies = [
  "anyhow",
  "candle-core",
@@ -739,18 +737,16 @@ dependencies = [
 
 [[package]]
 name = "candle-kernels"
-version = "0.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8dc057aec95c3b1a0e595227cd039c1436da596f79ccc9e025ba17d070315851"
+version = "0.11.0"
+source = "git+https://github.com/haricot/candle.git?rev=bfce966ad4d61a48801eb6af4db8b8eabebc01a8#bfce966ad4d61a48801eb6af4db8b8eabebc01a8"
 dependencies = [
  "cudaforge",
 ]
 
 [[package]]
 name = "candle-metal-kernels"
-version = "0.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e9fdf9f3fb13fb677fec22802f85515e4bdf9a2b8fa153efb5454eced755932"
+version = "0.11.0"
+source = "git+https://github.com/haricot/candle.git?rev=bfce966ad4d61a48801eb6af4db8b8eabebc01a8#bfce966ad4d61a48801eb6af4db8b8eabebc01a8"
 dependencies = [
  "block2",
  "half",
@@ -764,9 +760,8 @@ dependencies = [
 
 [[package]]
 name = "candle-nn"
-version = "0.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "437fabe77547c2447c7bdf3cc946e19db29a2832440176b419f77c80b0a9a05e"
+version = "0.11.0"
+source = "git+https://github.com/haricot/candle.git?rev=bfce966ad4d61a48801eb6af4db8b8eabebc01a8#bfce966ad4d61a48801eb6af4db8b8eabebc01a8"
 dependencies = [
  "accelerate-src",
  "candle-core",
@@ -976,7 +971,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1847,7 +1842,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2047,7 +2042,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2528,8 +2523,8 @@ dependencies = [
  "libc",
  "log",
  "rustversion",
- "windows-link 0.2.1",
- "windows-result 0.4.1",
+ "windows-link 0.1.3",
+ "windows-result 0.3.4",
 ]
 
 [[package]]
@@ -3004,7 +2999,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core 0.61.2",
 ]
 
 [[package]]
@@ -4308,7 +4303,7 @@ dependencies = [
  "utoipa",
  "utoipa-swagger-ui",
  "uuid 1.19.0",
- "zip",
+ "zip 9.1.3",
 ]
 
 [[package]]
@@ -4489,7 +4484,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5950,7 +5945,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.11.0",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6009,7 +6004,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6590,7 +6585,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -6644,7 +6639,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "psm",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7047,7 +7042,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.3",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7078,7 +7073,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix 1.1.3",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7697,6 +7692,12 @@ checksum = "86a801b3cea342a06d468c8710662aa29e5e05e4f5c0d62f00bbb7f2ad7941c2"
 
 [[package]]
 name = "typed-path"
+version = "0.12.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54ec2755506471f54baf5e4bb5499d8e510cc1caf271270e778a736bd2d7336c"
+
+[[package]]
+name = "typed-path"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ce898823d8cd0f028662d2f349694b1af0a5cc9be83f1d213a00d3147445e1e"
@@ -7869,7 +7870,7 @@ dependencies = [
  "url",
  "utoipa",
  "utoipa-swagger-ui-vendored",
- "zip",
+ "zip 9.0.3",
 ]
 
 [[package]]
@@ -8222,7 +8223,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -9031,9 +9032,23 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "9.2.1"
+version = "9.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "848dad21639597378c3be94c59fd4de683f0f6d8a5387575896e1245737d4f37"
+checksum = "c2d98561b612a84ae525331a7a094429ef8a5772514ed507ff6db5f54badc971"
+dependencies = [
+ "crc32fast",
+ "flate2",
+ "indexmap 2.13.0",
+ "memchr",
+ "nix 0.31.3",
+ "typed-path 0.12.4",
+ "zopfli",
+]
+
+[[package]]
+name = "zip"
+version = "9.1.3"
+source = "git+https://github.com/zip-rs/zip2.git?rev=af2ed2a3e12af1fdd733b1886b3e9067bf510be5#af2ed2a3e12af1fdd733b1886b3e9067bf510be5"
 dependencies = [
  "crc32fast",
  "flate2",
@@ -9041,7 +9056,7 @@ dependencies = [
  "indexmap 2.13.0",
  "memchr",
  "nix 0.31.3",
- "typed-path",
+ "typed-path 0.13.0",
  "windows-sys 0.61.2",
  "zopfli",
 ]

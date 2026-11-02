@@ -76,8 +76,17 @@ mod tests {
     #[test]
     #[cfg(not(feature = "metal"))]
     fn test_roundtrip_f8e4m3() -> Result<()> {
-        let dev = Device::cuda_if_available(0)?;
+        roundtrip_f8e4m3_on_device(Device::Cpu)
+    }
 
+    #[test]
+    #[cfg(all(feature = "cuda", not(feature = "metal")))]
+    fn cuda_sm61_roundtrip_f8e4m3() -> Result<()> {
+        roundtrip_f8e4m3_on_device(Device::new_cuda(0)?)
+    }
+
+    #[cfg(not(feature = "metal"))]
+    fn roundtrip_f8e4m3_on_device(dev: Device) -> Result<()> {
         let data = Tensor::rand(0f32, 1f32, (32, 32), &dev)?;
 
         let QuantizationResult {

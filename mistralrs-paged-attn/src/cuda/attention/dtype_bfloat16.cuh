@@ -88,7 +88,10 @@ struct FloatVec<bf16_8_t> {
 // Utility functions for type conversions.
 inline __device__ float2 bf1622float2(const __nv_bfloat162 val) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
-  assert(false);
+  float2 res;
+  res.x = __bfloat162float(val.x);
+  res.y = __bfloat162float(val.y);
+  return res;
 #else
   return __bfloat1622float2(val);
 #endif
@@ -96,7 +99,7 @@ inline __device__ float2 bf1622float2(const __nv_bfloat162 val) {
 
 inline __device__ __nv_bfloat162 bf162bf162(const __nv_bfloat16 val) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
-  assert(false);
+  return __nv_bfloat162{val, val};
 #else
   return __bfloat162bfloat162(val);
 #endif
@@ -105,7 +108,7 @@ inline __device__ __nv_bfloat162 bf162bf162(const __nv_bfloat16 val) {
 // Vector addition.
 inline __device__ __nv_bfloat16 add(__nv_bfloat16 a, __nv_bfloat16 b) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
-  assert(false);
+  return __float2bfloat16(__bfloat162float(a) + __bfloat162float(b));
 #else
   #ifndef USE_ROCM
     return a + b;
@@ -117,7 +120,8 @@ inline __device__ __nv_bfloat16 add(__nv_bfloat16 a, __nv_bfloat16 b) {
 
 inline __device__ __nv_bfloat162 add(__nv_bfloat162 a, __nv_bfloat162 b) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
-  assert(false);
+  return __nv_bfloat162{__float2bfloat16(__bfloat162float(a.x) + __bfloat162float(b.x)),
+                        __float2bfloat16(__bfloat162float(a.y) + __bfloat162float(b.y))};
 #else
   return __hadd2(a, b);
 #endif
@@ -164,7 +168,7 @@ inline __device__ Float8_ add(bf16_8_t a, Float8_ fb) {
 template<>
 inline __device__ __nv_bfloat16 mul(__nv_bfloat16 a, __nv_bfloat16 b) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
-  assert(false);
+  return __float2bfloat16(__bfloat162float(a) * __bfloat162float(b));
 #else
   return __hmul(a, b);
 #endif
@@ -173,7 +177,8 @@ inline __device__ __nv_bfloat16 mul(__nv_bfloat16 a, __nv_bfloat16 b) {
 template<>
 inline __device__ __nv_bfloat162 mul(__nv_bfloat162 a, __nv_bfloat162 b) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
-  assert(false);
+  return __nv_bfloat162{__float2bfloat16(__bfloat162float(a.x) * __bfloat162float(b.x)),
+                        __float2bfloat16(__bfloat162float(a.y) * __bfloat162float(b.y))};
 #else
   return __hmul2(a, b);
 #endif
@@ -282,7 +287,9 @@ inline __device__ Float8_ mul(__nv_bfloat16 a, bf16_8_t b) {
 // Vector fused multiply-add.
 inline __device__ __nv_bfloat162 fma(__nv_bfloat162 a, __nv_bfloat162 b, __nv_bfloat162 c) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
-  assert(false);
+  return __nv_bfloat162{
+      __float2bfloat16(__bfloat162float(a.x) * __bfloat162float(b.x) + __bfloat162float(c.x)),
+      __float2bfloat16(__bfloat162float(a.y) * __bfloat162float(b.y) + __bfloat162float(c.y))};
 #else
   return __hfma2(a, b, c);
 #endif
@@ -290,7 +297,7 @@ inline __device__ __nv_bfloat162 fma(__nv_bfloat162 a, __nv_bfloat162 b, __nv_bf
 
 inline __device__ __nv_bfloat162 fma(__nv_bfloat16 a, __nv_bfloat162 b, __nv_bfloat162 c) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
-  assert(false);
+  return fma(bf162bf162(a), b, c);
 #else
   return __hfma2(bf162bf162(a), b, c);
 #endif
@@ -407,7 +414,8 @@ inline __device__ void from_float(__nv_bfloat16& dst, float src) {
 
 inline __device__ void from_float(__nv_bfloat162& dst, float2 src) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
-  assert(false);
+  dst.x = __float2bfloat16(src.x);
+  dst.y = __float2bfloat16(src.y);
 #else
   dst = __float22bfloat162_rn(src);
 #endif
@@ -415,7 +423,8 @@ inline __device__ void from_float(__nv_bfloat162& dst, float2 src) {
 
 inline __device__ void from_float(bf16_4_t& dst, Float4_ src) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
-  assert(false);
+  from_float(dst.x, src.x);
+  from_float(dst.y, src.y);
 #else
   dst.x = __float22bfloat162_rn(src.x);
   dst.y = __float22bfloat162_rn(src.y);
@@ -424,7 +433,10 @@ inline __device__ void from_float(bf16_4_t& dst, Float4_ src) {
 
 inline __device__ void from_float(bf16_8_t& dst, Float8_ src) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
-  assert(false);
+  from_float(dst.x, src.x);
+  from_float(dst.y, src.y);
+  from_float(dst.z, src.z);
+  from_float(dst.w, src.w);
 #else
   dst.x = __float22bfloat162_rn(src.x);
   dst.y = __float22bfloat162_rn(src.y);
@@ -441,7 +453,7 @@ inline __device__ float to_float(__nv_bfloat16 u) {
 // Zero-out a variable.
 inline __device__ void zero(__nv_bfloat16& dst) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
-  assert(false);
+  dst = __float2bfloat16(0.0f);
 #else
   // Same as CUDART_ZERO_BF16 introduced in CUDA 12.2.
   dst = __ushort_as_bfloat16((unsigned short)0x0000U);

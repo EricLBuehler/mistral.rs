@@ -10,6 +10,10 @@ use super::config::{KvCacheLayout, ModelConfigLike};
 #[cfg(all(feature = "cuda", target_family = "unix"))]
 use crate::flashinfer::{register_fa3_prefill_caches, Fa3PrefillWorkspaceRegistration};
 
+#[cfg(any(test, all(feature = "cuda", target_family = "unix")))]
+#[path = "fp8_support.rs"]
+mod fp8_support;
+
 const METAL_PAGED_LAYOUT_ENV: &str = "MISTRALRS_METAL_PAGED_LAYOUT";
 
 fn metal_cache_layout(value: Option<&str>) -> Result<KvCacheLayout> {
@@ -41,13 +45,36 @@ fn cuda_supports_fp8(device: &Device) -> bool {
     let Ok(device) = result::device::get(ordinal as i32) else {
         return false;
     };
-    unsafe {
-        result::device::get_attribute(
-            device,
-            sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
-        )
-        .is_ok_and(|major| major >= 8)
-    }
+    let (Ok(major), Ok(minor)) = (
+        unsafe {
+            result::device::get_attribute(
+                device,
+                sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
+            )
+        },
+        unsafe {
+            result::device::get_attribute(
+                device,
+                sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR,
+            )
+        },
+    ) else {
+        return false;
+    };
+    fp8_support::supports_arch(
+        major,
+        minor,
+        mistralrs_paged_attn::USE_FP8,
+        mistralrs_paged_attn::USE_FP8_LEGACY_SM61,
+    )
+}
+
+#[cfg(all(test, feature = "cuda", target_family = "unix"))]
+#[test]
+fn campaign_cuda_fp8_kv_sm61_device_gate() {
+    let device = Device::new_cuda(0).expect("physical SM61 GPU");
+    assert!(mistralrs_paged_attn::USE_FP8_LEGACY_SM61);
+    assert!(cuda_supports_fp8(&device));
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Default)]
@@ -102,7 +129,7 @@ impl PagedCacheType {
                 #[cfg(all(feature = "cuda", target_family = "unix"))]
                 if !cuda_supports_fp8(layer_device) {
                     return Err(
-                        "FP8 KV cache requires CUDA compute capability 8.0 or newer and a matching CUDA build"
+                        "FP8 KV cache requires CUDA SM80+ or an explicitly enabled SM61 software FP8 build (cuda-legacy-fp8)"
                             .to_string(),
                     );
                 }

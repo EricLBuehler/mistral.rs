@@ -1487,6 +1487,11 @@ impl Loader for MultimodalLoader {
                 .activation_model_config(&runtime_config)?
                 .attention_features,
         );
+        let model_metadata = crate::paged_attention::with_legacy_fp8_backend(
+            model_metadata,
+            paged_attn_config.as_ref(),
+            &device,
+        );
         // Layers past the mapped stack (e.g. an MTP head) live on the non-mapped device.
         while layer_devices.len() < model_metadata.num_layers() {
             layer_devices.push(Some(device.clone()));

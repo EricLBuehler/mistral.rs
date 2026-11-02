@@ -197,14 +197,9 @@ template <>
 __inline__ __device__ uint8_t scaled_vec_conversion<uint8_t, __nv_bfloat16>(
     const __nv_bfloat16& a, const float scale,
     const __nv_fp8_interpretation_t fp8_type) {
-    #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
-  assert(false);
-    #else
   __nv_fp8_storage_t res = __nv_cvt_float_to_fp8(__bfloat162float(a) / scale,
                                                  __NV_SATFINITE, fp8_type);
   return (uint8_t)res;
-    #endif
-  __builtin_unreachable();  // Suppress missing return statement warning
 }
 
 // float -> fp8

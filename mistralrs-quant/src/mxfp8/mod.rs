@@ -286,7 +286,7 @@ impl QuantMethod for Mxfp8Linear {
                 return Ok(output);
             }
         }
-        #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+        #[cfg(all(feature = "cuda", has_fp8_mma_kernels))]
         {
             let view = crate::moe::grouped_fp8::Fp8WeightView {
                 weight: &self.weight,

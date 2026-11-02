@@ -37,6 +37,7 @@ enum Codec : int {
   AFQ = 18,
   SYM_INT4 = 19,
   SYM_INT8 = 20,
+  MXFP4 = 21,
 };
 
 // Scalar encodings mirror `ScaleType` in src/embedding/mod.rs.
@@ -243,6 +244,16 @@ __device__ __forceinline__ void decode(const GatherArgs &a, const Row &r, uint64
       const int lo = quarter >= 2 ? (ql[i] >> 4) : (ql[i] & 0xF);
       v[i] = d * ((lo | (((qh[i] >> (2 * quarter)) & 3) << 4)) - 32);
     }
+  } else if constexpr (C == MXFP4) {
+    const uint8_t *b = r.data + (col / 32) * 17;
+    const uint32_t e = b[0];
+    const float d = __uint_as_float(e < 2 ? (0x00200000u << e) : ((e - 1) << 23));
+#pragma unroll
+    for (int i = 0; i < kUnit; ++i) {
+      const int c = col % 32 + i;
+      const int code = (b[1 + c % 16] >> (c < 16 ? 0 : 4)) & 15;
+      v[i] = (2.0f * e2m1_to_float(code)) * d;
+    }
   } else if constexpr (C == FP4) {
     const uint8_t *q = r.data + col / 2;
     const float s = load_scalar(r.scales, col / a.group, a.scale_type);
@@ -437,6 +448,7 @@ template <typename T> void launch(const GatherArgs &a, bool scalar, cudaStream_t
     GATHER_CASE(Q6K)
     GATHER_CASE(Q8K)
     GATHER_CASE(IQ4_NL)
+    GATHER_CASE(MXFP4)
     GATHER_CASE(FP4)
     GATHER_CASE(FP8)
     GATHER_CASE(AFQ)
