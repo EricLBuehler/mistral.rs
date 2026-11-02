@@ -1,10 +1,16 @@
 <script lang="ts">
   import type { File as ProducedFile } from "../types";
+  import { TOOL_CARD } from "../ui";
+  import FileText from "@lucide/svelte/icons/file-text";
+  import TriangleAlert from "@lucide/svelte/icons/triangle-alert";
+  import Download from "@lucide/svelte/icons/download";
+  import X from "@lucide/svelte/icons/x";
 
   let { file }: { file: ProducedFile } = $props();
 
   const PREVIEW_LINES = 10;
   const PREVIEW_CHARS = 1024;
+  const OVERLAY_BUTTON = "rounded-md bg-black/50 p-2 text-white hover:bg-black/70";
 
   function formatBytes(n: number): string {
     if (n < 1024) return `${n} B`;
@@ -114,40 +120,32 @@
 </script>
 
 {#if isErr}
-  <div class="inline-flex items-center gap-2 rounded-full border border-red-300 bg-red-50 px-3 py-1 text-xs text-red-700 dark:border-red-700/60 dark:bg-red-900/20 dark:text-red-300">
-    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.072 16.5c-.77.833.192 2.5 1.732 2.5z" />
-    </svg>
+  <div class="inline-flex items-center gap-2 rounded-md border border-danger/30 bg-danger-soft px-2.5 py-1 text-xs text-danger">
+    <TriangleAlert class="h-3.5 w-3.5" />
     <span class="font-medium">missing: {file.name}</span>
-    <span class="text-red-500/80 dark:text-red-400/80">({file.error?.code})</span>
+    <span class="font-mono text-[11px] opacity-80">({file.error?.code})</span>
   </div>
 {:else}
-  <div class="overflow-hidden rounded-xl border border-emerald-200 dark:border-emerald-800/50">
-    <!-- Header -->
-    <div class="flex items-center gap-2 bg-emerald-50 px-3 py-1.5 dark:bg-emerald-900/20">
-      <svg class="h-4 w-4 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-      </svg>
-      <span class="text-xs font-medium text-emerald-800 dark:text-emerald-200">{file.name}</span>
-      <span class="text-xs text-emerald-700/70 dark:text-emerald-300/70">
+  <div class={TOOL_CARD}>
+    <div class="flex items-center gap-2 px-3 py-1.5">
+      <FileText class="h-3.5 w-3.5 shrink-0 text-muted" />
+      <span class="min-w-0 truncate font-mono text-xs text-foreground">{file.name}</span>
+      <span class="shrink-0 font-mono text-[11px] text-muted">
         {file.format ?? file.mime_type ?? "file"} &middot; {formatBytes(file.bytes)}
       </span>
       <a
         href={downloadHref}
         onclick={downloadFile}
-        class="ml-auto inline-flex items-center gap-1 rounded-md bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800 hover:bg-emerald-200 dark:bg-emerald-900/40 dark:text-emerald-200 dark:hover:bg-emerald-900/60"
+        class="ml-auto inline-flex shrink-0 items-center gap-1 rounded-md border border-line-strong px-2 py-0.5 text-xs text-muted-strong hover:bg-surface-raised hover:text-foreground"
         title="Download"
       >
-        <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-        </svg>
+        <Download class="h-3.5 w-3.5" />
         Download
       </a>
     </div>
 
-    <!-- Body -->
     {#if isImage}
-      <div class="bg-gray-50 p-3 dark:bg-gray-900/50">
+      <div class="border-t border-line bg-background p-3">
         <button
           class="block w-full text-center"
           onclick={() => expandedImage = imgSrc()}
@@ -157,32 +155,32 @@
           <img
             src={imgSrc() ?? ""}
             alt={file.name}
-            class="mx-auto max-h-64 max-w-full rounded-md object-contain shadow-sm"
+            class="mx-auto max-h-64 max-w-full rounded-md border border-line object-contain"
           />
         </button>
       </div>
     {:else if isVideo}
-      <div class="bg-gray-50 p-3 dark:bg-gray-900/50">
+      <div class="border-t border-line bg-background p-3">
         <video
           src={mediaSrc()}
           controls
-          class="mx-auto max-h-96 max-w-full rounded-md shadow-sm"
+          class="mx-auto max-h-96 max-w-full rounded-md border border-line"
         >
           <track kind="captions" />
         </video>
       </div>
     {:else if isAudio}
-      <div class="bg-gray-50 p-3 dark:bg-gray-900/50">
+      <div class="border-t border-line bg-background p-3">
         <audio src={mediaSrc()} controls class="w-full">
           <track kind="captions" />
         </audio>
       </div>
     {:else if hasText}
-      <div class="bg-gray-50 dark:bg-gray-900">
-        <pre class="overflow-x-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-xs leading-relaxed text-gray-700 dark:text-gray-300">{expanded ? (file.text ?? file.preview ?? "") : previewText()}</pre>
+      <div class="border-t border-line bg-background">
+        <pre class="overflow-x-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-xs leading-relaxed text-code">{expanded ? (file.text ?? file.preview ?? "") : previewText()}</pre>
         {#if truncated()}
           <button
-            class="w-full border-t border-gray-200 bg-gray-100 px-3 py-1 text-xs text-gray-600 hover:bg-gray-200 dark:border-gray-700 dark:bg-gray-800/80 dark:text-gray-300 dark:hover:bg-gray-800"
+            class="w-full border-t border-line bg-surface px-3 py-1 text-xs text-muted hover:bg-surface-raised hover:text-foreground"
             onclick={() => expanded = !expanded}
           >
             {expanded ? "Collapse" : "Show more"}
@@ -190,14 +188,13 @@
         {/if}
       </div>
     {:else}
-      <div class="bg-gray-50 px-3 py-2 text-xs text-gray-500 dark:bg-gray-900 dark:text-gray-400">
+      <div class="border-t border-line px-3 py-2 text-xs text-muted">
         Binary content. Use Download to fetch.
       </div>
     {/if}
   </div>
 {/if}
 
-<!-- Expanded image overlay -->
 {#if expandedImage}
   <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-8 backdrop-blur-sm">
     <button
@@ -208,28 +205,24 @@
     <img
       src={expandedImage}
       alt={file.name}
-      class="relative max-h-full max-w-full rounded-lg shadow-2xl"
+      class="relative max-h-full max-w-full rounded-md"
     />
     <div class="absolute right-4 top-4 flex gap-2">
       <button
-        class="rounded-full bg-black/50 p-2 text-white hover:bg-black/70"
+        class={OVERLAY_BUTTON}
         onclick={downloadFile}
         title="Download"
         aria-label="Download"
       >
-        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-        </svg>
+        <Download class="h-4 w-4" />
       </button>
       <button
-        class="rounded-full bg-black/50 p-2 text-white hover:bg-black/70"
+        class={OVERLAY_BUTTON}
         onclick={() => expandedImage = null}
         title="Close"
         aria-label="Close"
       >
-        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-        </svg>
+        <X class="h-4 w-4" />
       </button>
     </div>
   </div>

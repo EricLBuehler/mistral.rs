@@ -23,7 +23,6 @@ import { modelStore } from "./models.svelte";
 const UI_UPLOAD_URL =
   /^uploads\/(?:[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.(?:jpg|jpeg|png|gif|webp|bmp|svg|mp4|avi|mov|mkv|webm|m4v)$/;
 const SAVE_RETRY_DELAYS_MS = [300, 1000];
-const TOK_RATE_INTERVAL_MS = 250;
 const CHARS_PER_TOKEN_ESTIMATE = 4;
 const SEARCH_DEBOUNCE_MS = 150;
 export const STOPPED_FINISH_REASON = "stopped";
@@ -140,7 +139,6 @@ class ChatStore {
   streamingStart = $state<number | null>(null);
   streamingFirstTokenAt = $state<number | null>(null);
   streamingTokens = $state(0);
-  streamingTokRate = $state(0);
 
   private abortController: AbortController | null = null;
   private streamDone: Promise<void> | null = null;
@@ -149,7 +147,6 @@ class ChatStore {
   private streamingCharCount = 0;
   private streamingError: string | null = null;
   private streamingUsage: Usage | null = null;
-  private tokRateTimer: ReturnType<typeof setInterval> | null = null;
 
   private searchSeq = 0;
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -361,19 +358,11 @@ class ChatStore {
     this.streamingStart = performance.now();
     this.streamingFirstTokenAt = null;
     this.streamingTokens = 0;
-    this.streamingTokRate = 0;
     this.streamingCharCount = 0;
     this.streamingError = null;
     this.streamingUsage = null;
     this.streamingModel = model;
     this.abortController = new AbortController();
-
-    this.tokRateTimer = setInterval(() => {
-      if (this.streamingFirstTokenAt == null) return;
-      const decodeSec = (performance.now() - this.streamingFirstTokenAt) / 1000;
-      if (decodeSec <= 0) return;
-      this.streamingTokRate = this.streamingTokens / decodeSec;
-    }, TOK_RATE_INTERVAL_MS);
 
     const options: StreamOptions = {
       model: model || "default",
@@ -590,16 +579,11 @@ class ChatStore {
       this.saveMessage(ctx.chatId, assistantMsg);
     }
 
-    if (this.tokRateTimer) {
-      clearInterval(this.tokRateTimer);
-      this.tokRateTimer = null;
-    }
     this.streamingBlocks = [];
     this.streamingFinishReason = null;
     this.streamingStart = null;
     this.streamingFirstTokenAt = null;
     this.streamingTokens = 0;
-    this.streamingTokRate = 0;
     this.streamingCharCount = 0;
     this.streamingError = null;
     this.streamingUsage = null;

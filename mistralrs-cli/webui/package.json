@@ -18,6 +18,7 @@
     "vite": "^8.3.5"
   },
   "dependencies": {
+    "@lucide/svelte": "1.58.0",
     "highlight.js": "^11.11.1",
     "katex": "^0.18.2",
     "marked": "^15.0.7",
