@@ -180,11 +180,21 @@ pub struct PrefixCacheManagerV2 {
     paged_recurrent_caches: IndexMap<Vec<BlockHash>, PagedRecurrentCacheEntry>,
     paged_recurrent_sequence_keys: IndexMap<BlockHash, Vec<BlockHash>>,
     paged_recurrent_bytes: usize,
-    paged_recurrent_reported: bool,
     paged_block_retention: Option<PrefixBlockRetention>,
+    #[cfg(any(feature = "cuda", test))]
+    runtime_memory_reservation: Option<Arc<crate::resource_plan::RuntimeMemoryReservation>>,
     n_on_device: usize,
     no_prefix_cache: bool,
     has_paged_attention: bool,
+}
+
+#[cfg(any(feature = "cuda", test))]
+impl Drop for PrefixCacheManagerV2 {
+    fn drop(&mut self) {
+        if let Some(reservation) = &self.runtime_memory_reservation {
+            reservation.set_retained_prefix_snapshots(0);
+        }
+    }
 }
 
 pub trait PagedAuxiliaryPrefixState: Any + Send + Sync {
@@ -228,8 +238,9 @@ impl PrefixCacheManagerV2 {
             paged_recurrent_caches: IndexMap::new(),
             paged_recurrent_sequence_keys: IndexMap::new(),
             paged_recurrent_bytes: 0,
-            paged_recurrent_reported: false,
             paged_block_retention: None,
+            #[cfg(any(feature = "cuda", test))]
+            runtime_memory_reservation: None,
             n_on_device,
             no_prefix_cache,
             has_paged_attention,
@@ -268,6 +279,15 @@ impl PrefixCacheManagerV2 {
         }
     }
 
+    #[cfg(any(feature = "cuda", test))]
+    pub(crate) fn attach_runtime_memory_reservation(
+        &mut self,
+        reservation: Arc<crate::resource_plan::RuntimeMemoryReservation>,
+    ) {
+        self.runtime_memory_reservation = Some(reservation);
+        self.publish_paged_recurrent_metrics();
+    }
+
     fn paged_recurrent_capacity(&self) -> usize {
         self.n_on_device
     }
@@ -286,6 +306,8 @@ impl PrefixCacheManagerV2 {
 
     #[allow(clippy::cast_precision_loss)]
     fn publish_paged_recurrent_metrics(&self) {
+        #[cfg(any(feature = "cuda", test))]
+        self.publish_retained_prefix_snapshots(self.paged_recurrent_caches.len());
         let (used, capacity) = self.paged_recurrent_owner_metric_values();
         metrics::gauge!(PAGED_RECURRENT_PREFIX_OWNERS_USED_METRIC).set(f64::from(used));
         metrics::gauge!(PAGED_RECURRENT_PREFIX_OWNERS_CAPACITY_METRIC).set(f64::from(capacity));
@@ -293,6 +315,14 @@ impl PrefixCacheManagerV2 {
             .set(self.paged_recurrent_caches.len() as f64);
         metrics::gauge!(PAGED_RECURRENT_PREFIX_BYTES_USED_METRIC)
             .set(self.paged_recurrent_bytes as f64);
+    }
+
+    #[cfg(any(feature = "cuda", test))]
+    fn publish_retained_prefix_snapshots(&self, count: usize) {
+        if let Some(reservation) = &self.runtime_memory_reservation {
+            // Multiple owners can share one physical checkpoint.
+            reservation.set_retained_prefix_snapshots(count);
+        }
     }
 
     pub(crate) fn prune_revoked_paged_recurrent_entries(&mut self) -> usize {
@@ -313,6 +343,8 @@ impl PrefixCacheManagerV2 {
             let Some(entry) = self.paged_recurrent_caches.shift_remove(&key) else {
                 continue;
             };
+            #[cfg(any(feature = "cuda", test))]
+            self.publish_retained_prefix_snapshots(self.paged_recurrent_caches.len());
             removed_entries += 1;
             self.paged_recurrent_bytes =
                 self.paged_recurrent_bytes
@@ -472,6 +504,8 @@ impl PrefixCacheManagerV2 {
     pub fn evict_all_caches(&mut self) -> Result<usize> {
         // caches is empty under paged attention, where the prefix cache lives in the block pool
         let len = self.caches.len() + self.paged_recurrent_sequence_keys.len();
+        #[cfg(any(feature = "cuda", test))]
+        self.publish_retained_prefix_snapshots(0);
         self.caches.clear();
         self.paged_recurrent_caches.clear();
         self.paged_recurrent_sequence_keys.clear();
@@ -568,18 +602,6 @@ impl PrefixCacheManagerV2 {
             self.paged_recurrent_caches.len() <= self.paged_recurrent_sequence_keys.len()
                 && self.paged_recurrent_caches.len() <= self.paged_recurrent_capacity()
         );
-
-        if self.paged_recurrent_sequence_keys.len() == self.paged_recurrent_capacity()
-            && !self.paged_recurrent_reported
-        {
-            self.paged_recurrent_reported = true;
-            info!(
-                "Recurrent prefix cache full at {} sequences, {} checkpoints, {} MB. Adjust with `--prefix-cache-n`.",
-                self.paged_recurrent_sequence_keys.len(),
-                self.paged_recurrent_caches.len(),
-                self.paged_recurrent_bytes / (1024 * 1024),
-            );
-        }
     }
 
     /// Lookup a recurrent-state snapshot for a paged-attention block-hash prefix key.
@@ -658,6 +680,8 @@ impl PrefixCacheManagerV2 {
             .paged_recurrent_caches
             .shift_remove(key)
             .expect("empty recurrent checkpoint entry disappeared");
+        #[cfg(any(feature = "cuda", test))]
+        self.publish_retained_prefix_snapshots(self.paged_recurrent_caches.len());
         self.paged_recurrent_bytes =
             self.paged_recurrent_bytes
                 .saturating_sub(Self::checkpoint_bytes(
@@ -956,6 +980,32 @@ mod tests {
         drops: Arc<AtomicUsize>,
     }
 
+    struct PendingReservationOnDrop {
+        reservation: Arc<crate::resource_plan::RuntimeMemoryReservation>,
+        observed: Arc<AtomicUsize>,
+    }
+
+    impl Drop for PendingReservationOnDrop {
+        fn drop(&mut self) {
+            self.observed.store(
+                self.reservation
+                    .pending_prefix_bytes(Device::Cpu.location())
+                    .unwrap(),
+                Ordering::Relaxed,
+            );
+        }
+    }
+
+    impl PagedAuxiliaryPrefixState for PendingReservationOnDrop {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn bytes(&self) -> usize {
+            0
+        }
+    }
+
     impl Drop for TestAuxiliaryPrefixState {
         fn drop(&mut self) {
             self.drops.fetch_add(1, Ordering::Relaxed);
@@ -1210,6 +1260,41 @@ mod tests {
             (0, 0)
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn paged_recurrent_reservation_is_published_before_checkpoint_release() -> anyhow::Result<()> {
+        use crate::resource_plan::{RecurrentPrefixReservation, RuntimeMemoryReservation};
+        use std::collections::HashMap;
+
+        const SNAPSHOT_BYTES: usize = 8;
+        for drop_cache in [false, true] {
+            let device = Device::Cpu.location();
+            let reservation = RuntimeMemoryReservation::standalone(
+                RecurrentPrefixReservation::new(HashMap::from([(device, SNAPSHOT_BYTES)]), 1),
+            );
+            let observed = Arc::new(AtomicUsize::new(0));
+            let hashes = block_hashes(10, 2);
+            let mut cacher = PrefixCacheManagerV2::new(1, false, true);
+            cacher.attach_runtime_memory_reservation(reservation.clone());
+            cacher.add_paged_recurrent_prefix(
+                *hashes.last().unwrap(),
+                hashes,
+                vec![make_recurrent_snapshot()?],
+                Some(Arc::new(PendingReservationOnDrop {
+                    reservation: reservation.clone(),
+                    observed: observed.clone(),
+                })),
+            );
+            assert_eq!(reservation.pending_prefix_bytes(device)?, 0);
+            if drop_cache {
+                drop(cacher);
+            } else {
+                cacher.evict_all_caches()?;
+            }
+            assert_eq!(observed.load(Ordering::Relaxed), SNAPSHOT_BYTES);
+        }
         Ok(())
     }
 

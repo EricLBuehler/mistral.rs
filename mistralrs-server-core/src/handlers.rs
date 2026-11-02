@@ -479,12 +479,6 @@ pub struct TuneModelRequest {
     /// Optional model dtype (auto, f16, bf16, etc)
     #[serde(default)]
     pub dtype: Option<String>,
-    /// Optional max sequence length for tuning
-    #[serde(default)]
-    pub max_seq_len: Option<usize>,
-    /// Optional max batch size for tuning
-    #[serde(default)]
-    pub max_batch_size: Option<usize>,
     /// Optional max num images (multimodal)
     #[serde(default)]
     pub max_num_images: Option<usize>,
@@ -558,13 +552,6 @@ pub async fn tune_model(payload: Result<Json<TuneModelRequest>, JsonRejection>) 
         }
     };
 
-    let max_seq_len = request
-        .max_seq_len
-        .unwrap_or(AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN);
-    let max_batch_size = request
-        .max_batch_size
-        .unwrap_or(AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE);
-
     let model_selected = ModelSelected::Run {
         model_id: request.model_id.clone(),
         tokenizer_json: None,
@@ -576,8 +563,8 @@ pub async fn tune_model(payload: Result<Json<TuneModelRequest>, JsonRejection>) 
         imatrix: None,
         calibration_file: None,
         max_edge: None,
-        max_seq_len,
-        max_batch_size,
+        max_seq_len: AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
+        max_batch_size: AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
         max_num_images: request.max_num_images,
         max_image_length: request.max_image_length,
         hf_cache_path: None,

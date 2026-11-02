@@ -340,6 +340,7 @@ pub type UqffExpertKeys = QuantizedExpertKeys;
 #[derive(Clone)]
 pub struct ShardedVarBuilder {
     base: VarBuilderArgs<'static, ShardedSafeTensors>,
+    tensor_aliases: Option<Arc<HashMap<String, String>>>,
     tracker: Tracker,
     weight_source: Option<Arc<dyn QuantizedWeightSource>>,
     shapes: Option<Arc<HashMap<String, Vec<usize>>>>,
@@ -352,6 +353,7 @@ impl ShardedVarBuilder {
     pub fn from_varbuilder(base: VarBuilderArgs<'static, ShardedSafeTensors>) -> Self {
         Self {
             base,
+            tensor_aliases: None,
             tracker: Tracker::new(),
             weight_source: None,
             shapes: None,
@@ -390,6 +392,31 @@ impl ShardedVarBuilder {
         self
     }
 
+    pub fn with_tensor_aliases(mut self, aliases: HashMap<String, String>) -> Self {
+        if let Some(shapes) = &self.shapes {
+            let mut shapes = (**shapes).clone();
+            for (canonical, stored) in &aliases {
+                if let Some(shape) = shapes.remove(stored) {
+                    shapes.insert(canonical.clone(), shape);
+                }
+            }
+            self.shapes = Some(Arc::new(shapes));
+        }
+        self.tensor_aliases = Some(Arc::new(aliases));
+        self
+    }
+
+    fn aliased_name(&self, name: &str) -> Option<&str> {
+        let aliases = self.tensor_aliases.as_ref()?;
+        let prefix = self.base.prefix();
+        let full = if prefix.is_empty() {
+            name.to_string()
+        } else {
+            format!("{prefix}.{name}")
+        };
+        aliases.get(&full).map(String::as_str)
+    }
+
     /// Shape of `name` under the current prefix, when the backing store exposes an index.
     pub fn tensor_shape(&self, name: &str) -> Option<&[usize]> {
         let prefix = self.base.prefix();
@@ -410,6 +437,7 @@ impl ShardedVarBuilder {
     pub fn from_self(&self, base: VarBuilderArgs<'static, ShardedSafeTensors>) -> Self {
         Self {
             base,
+            tensor_aliases: self.tensor_aliases.clone(),
             tracker: self.tracker.clone(),
             weight_source: self.weight_source.clone(),
             shapes: self.shapes.clone(),
@@ -464,7 +492,10 @@ impl ShardedVarBuilder {
     /// `a`, true is returned if `prefix.a` exists but false is returned if only `prefix.a.b`
     /// exists.
     pub fn contains_tensor(&self, tensor_name: &str) -> bool {
-        self.base.contains_tensor(tensor_name)
+        match self.aliased_name(tensor_name) {
+            Some(name) => self.base.root().contains_tensor(name),
+            None => self.base.contains_tensor(tensor_name),
+        }
     }
 
     /// Retrieve the tensor associated with the given name at the current path.
@@ -474,22 +505,34 @@ impl ShardedVarBuilder {
         name: &str,
         hints: <ShardedSafeTensors as Backend>::Hints,
     ) -> Result<Tensor> {
-        self.base.get_with_hints(s, name, hints)
+        match self.aliased_name(name) {
+            Some(name) => self.base.root().get_with_hints(s, name, hints),
+            None => self.base.get_with_hints(s, name, hints),
+        }
     }
 
     /// Retrieve the tensor associated with the given name at the current path.
     pub fn get<S: Into<Shape>>(&self, s: S, name: &str) -> Result<Tensor> {
-        self.base.get(s, name)
+        match self.aliased_name(name) {
+            Some(name) => self.base.root().get(s, name),
+            None => self.base.get(s, name),
+        }
     }
 
     /// Retrieve the tensor associated with the given name at the current path.
     pub fn get_unchecked(&self, name: &str) -> Result<Tensor> {
-        self.base.get_unchecked(name)
+        match self.aliased_name(name) {
+            Some(name) => self.base.root().get_unchecked(name),
+            None => self.base.get_unchecked(name),
+        }
     }
 
     /// Retrieve the tensor associated with the given name & dtype at the current path.
     pub fn get_unchecked_dtype(&self, name: &str, dtype: DType) -> Result<Tensor> {
-        self.base.get_unchecked_dtype(name, dtype)
+        match self.aliased_name(name) {
+            Some(name) => self.base.root().get_unchecked_dtype(name, dtype),
+            None => self.base.get_unchecked_dtype(name, dtype),
+        }
     }
 
     /// Retrieve the tensor associated with the given name & dtype at the current path.
@@ -500,7 +543,10 @@ impl ShardedVarBuilder {
         hints: <ShardedSafeTensors as Backend>::Hints,
         dtype: DType,
     ) -> Result<Tensor> {
-        self.base.get_with_hints_dtype(s, name, hints, dtype)
+        match self.aliased_name(name) {
+            Some(name) => self.base.root().get_with_hints_dtype(s, name, hints, dtype),
+            None => self.base.get_with_hints_dtype(s, name, hints, dtype),
+        }
     }
 
     /// Set the device of the VarBuilder.
@@ -592,6 +638,65 @@ mod tests {
         assert!(vb
             .weight_source()
             .is_some_and(|source| source.contains("model.weight")));
+    }
+
+    #[test]
+    fn tensor_aliases_preserve_prefixes_shapes_and_sharded_mmap_reads() -> Result<()> {
+        let dir = tempfile::tempdir().map_err(candle_core::Error::wrap)?;
+        let path = dir.path().join("model.safetensors");
+        let weight = Tensor::arange(0f32, 8f32, &Device::Cpu)?
+            .reshape((4, 2))?
+            .to_dtype(DType::BF16)?;
+        candle_core::safetensors::save(
+            &HashMap::from([("legacy.weight".to_string(), weight)]),
+            &path,
+        )?;
+        let vb = unsafe {
+            ShardedSafeTensors::sharded(
+                &[path],
+                DType::BF16,
+                &Device::Cpu,
+                None,
+                Arc::new(|_| true),
+            )?
+        };
+        let baseline = vb.pp("legacy").to_dtype(DType::F32);
+        let vb = vb.with_tensor_aliases(HashMap::from([(
+            "model.layer.weight".to_string(),
+            "legacy.weight".to_string(),
+        )]));
+        assert!(vb.raw_safetensors().is_some());
+        assert_eq!(vb.tensor_names().unwrap(), ["model.layer.weight"]);
+        let vb = vb.pp("model").pp("layer").to_dtype(DType::F32);
+        assert_eq!(vb.prefix(), "model.layer");
+        assert!(vb.contains_tensor("weight"));
+        assert_eq!(vb.tensor_shape("weight"), Some([4, 2].as_slice()));
+        assert_eq!(vb.dtype(), DType::F32);
+        let aliased = vb.get((4, 2), "weight")?;
+        let unaliased = baseline.get((4, 2), "weight")?;
+        assert_eq!(aliased.dtype(), DType::F32);
+        assert_eq!(aliased.dtype(), unaliased.dtype());
+        assert_eq!(aliased.to_vec2::<f32>()?, unaliased.to_vec2::<f32>()?);
+        assert_eq!(vb.get_unchecked("weight")?.dims(), &[4, 2]);
+        assert_eq!(
+            vb.get_unchecked_dtype("weight", DType::BF16)?.dtype(),
+            DType::BF16
+        );
+        let shard = Shard::Simple {
+            dim: 0,
+            rank: 1,
+            world_size: 2,
+        };
+        let values = vb
+            .get_with_hints((2, 2), "weight", shard)?
+            .to_vec2::<f32>()?;
+        assert_eq!(values, [[4.0, 5.0], [6.0, 7.0]]);
+        let explicit = vb.get_with_hints_dtype((2, 2), "weight", shard, DType::BF16)?;
+        assert_eq!(explicit.dtype(), DType::BF16);
+        let values = explicit.to_dtype(DType::F32)?.to_vec2::<f32>()?;
+        assert_eq!(values, [[4.0, 5.0], [6.0, 7.0]]);
+        assert!(vb.root().contains_tensor("model.layer.weight"));
+        Ok(())
     }
 
     #[test]

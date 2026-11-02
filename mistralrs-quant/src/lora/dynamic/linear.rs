@@ -33,6 +33,15 @@ impl DynamicLoraLinear {
         current_lora_execution(self.runtime_id)
             .is_some_and(|execution| execution.site_is_active(&self.site).unwrap_or(true))
     }
+
+    fn base_layer(&self) -> Option<&dyn QuantMethod> {
+        Some(&*self.base)
+    }
+
+    // Without an active adapter the forward is exactly the base forward, so its fast paths apply.
+    fn idle_base(&self) -> Option<&dyn QuantMethod> {
+        (!self.site_is_active()).then_some(&*self.base)
+    }
 }
 
 pub fn maybe_wrap_dynamic_lora(
@@ -79,6 +88,9 @@ impl QuantizedSerde for DynamicLoraLinear {
 }
 
 impl QuantMethod for DynamicLoraLinear {
+    crate::forward_quant_hooks!(meta: Self::base_layer);
+    crate::forward_quant_hooks!(activation, output, weights, group: Self::idle_base);
+
     fn new(_method: QuantMethodConfig) -> Result<Self>
     where
         Self: Sized,
@@ -101,13 +113,13 @@ impl QuantMethod for DynamicLoraLinear {
         add_delta(&execution, &self.site, input, output)
     }
 
-    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
+    fn embedding_forward(&self, ids: &Tensor, out: crate::EmbeddingOutput) -> Result<Tensor> {
         if let Some(execution) = current_lora_execution(self.runtime_id) {
             if execution.site_is_active(&self.site)? {
                 candle_core::bail!("dynamic LoRA does not support embedding linears");
             }
         }
-        self.base.embedding_forward_raw(ids)
+        self.base.embedding_forward(ids, out)
     }
 
     fn gather_forward_raw(&self, input: &Tensor, indices: &Tensor) -> Result<Tensor> {
@@ -117,60 +129,6 @@ impl QuantMethod for DynamicLoraLinear {
             }
         }
         self.base.gather_forward_raw(input, indices)
-    }
-
-    fn get_qtensor(&self) -> Option<Arc<candle_core::quantized::QTensor>> {
-        if self.site_is_active() {
-            None
-        } else {
-            self.base.get_qtensor()
-        }
-    }
-
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
-    fn prepare_gguf_affine_raw(
-        &self,
-        flat_batch: usize,
-        dtype: DType,
-        device: &Device,
-    ) -> Result<bool> {
-        if self.site_is_active() {
-            Ok(false)
-        } else {
-            self.base.prepare_gguf_affine_raw(flat_batch, dtype, device)
-        }
-    }
-
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
-    fn try_gguf_affine_forward_raw(&self, a: &Tensor) -> Result<Option<Tensor>> {
-        if self.site_is_active() {
-            Ok(None)
-        } else {
-            self.base.try_gguf_affine_forward_raw(a)
-        }
-    }
-
-    #[cfg(feature = "cuda")]
-    fn try_forward_fused_split_glu(
-        &self,
-        input: &Tensor,
-        split_size: usize,
-        activation: crate::GluActivationType,
-    ) -> Result<Option<Tensor>> {
-        if self.site_is_active() {
-            Ok(None)
-        } else {
-            self.base
-                .try_forward_fused_split_glu(input, split_size, activation)
-        }
-    }
-
-    fn afq_inner(&self) -> Option<crate::AfqInner> {
-        if self.site_is_active() {
-            None
-        } else {
-            self.base.afq_inner()
-        }
     }
 
     fn quantized_act_type(&self) -> Option<DType> {
@@ -231,22 +189,6 @@ impl QuantMethod for DynamicLoraLinear {
 
     fn has_bias(&self) -> bool {
         self.base.has_bias()
-    }
-
-    fn begin_track_stats(&self) -> Result<()> {
-        self.base.begin_track_stats()
-    }
-
-    fn end_track_stats(&self) -> Result<Tensor> {
-        self.base.end_track_stats()
-    }
-
-    fn stats_snapshot(&self) -> Option<(usize, usize)> {
-        self.base.stats_snapshot()
-    }
-
-    fn process_routed_stats(&self, input: &Tensor, ids: &Tensor) -> Result<()> {
-        self.base.process_routed_stats(input, ids)
     }
 
     fn is_distributed(&self) -> Option<crate::DistributedKind> {
@@ -336,19 +278,29 @@ mod tests {
             Some(self.qtensor.clone())
         }
 
-        #[cfg(all(feature = "cuda", has_marlin_kernels))]
-        fn prepare_gguf_affine_raw(
-            &self,
-            _flat_batch: usize,
-            _dtype: DType,
-            _device: &Device,
-        ) -> Result<bool> {
-            Ok(true)
+        fn activation_quantization_scheme(&self) -> Option<crate::ActivationQuantizationScheme> {
+            Some(crate::ActivationQuantizationScheme {
+                dtype: DType::F8E4M3,
+                scale_encoding: crate::ActivationScaleEncoding::F32,
+                block_shape: [1, 32],
+            })
         }
 
-        #[cfg(all(feature = "cuda", has_marlin_kernels))]
-        fn try_gguf_affine_forward_raw(&self, input: &Tensor) -> Result<Option<Tensor>> {
-            Ok(Some(input.clone()))
+        fn group_member(
+            &self,
+            _xs: &Tensor,
+            _kind: crate::GroupKind<'_>,
+        ) -> Result<Option<crate::GroupMember>> {
+            Ok(Some(crate::GroupMember {
+                key: crate::GroupKey {
+                    format: "probe",
+                    dtype: DType::F32,
+                    shape: [1, 1, 32],
+                    calibration: crate::ActivationCalibration::Dynamic,
+                },
+                forward: |_, _, _| Ok(None),
+                operand: self.qtensor.clone(),
+            }))
         }
 
         fn afq_inner(&self) -> Option<crate::AfqInner> {
@@ -449,7 +401,9 @@ mod tests {
         let expected = vec![vec![5f32, 6.], vec![1., 2.]];
 
         assert_eq!(
-            layer.embedding_forward_raw(&ids)?.to_vec2::<f32>()?,
+            layer
+                .embedding_forward(&ids, candle_core::DType::F32.into())?
+                .to_vec2::<f32>()?,
             expected
         );
 
@@ -463,14 +417,14 @@ mod tests {
         let mut other_execution = LoraExecution::new(registry.runtime_id(), vec![Some(0)]);
         other_execution.insert(&other_site, 0, weights()?)?;
         let output = with_lora_execution(Some(Arc::new(other_execution)), || {
-            layer.embedding_forward_raw(&ids)
+            layer.embedding_forward(&ids, candle_core::DType::F32.into())
         })?;
         assert_eq!(output.to_vec2::<f32>()?, expected);
 
         let mut embedding_execution = LoraExecution::new(registry.runtime_id(), vec![Some(0)]);
         embedding_execution.insert(&embedding_site, 0, weights()?)?;
         let error = with_lora_execution(Some(Arc::new(embedding_execution)), || {
-            layer.embedding_forward_raw(&ids)
+            layer.embedding_forward(&ids, candle_core::DType::F32.into())
         })
         .expect_err("active embedding LoRA should fail");
         assert!(error
@@ -510,14 +464,11 @@ mod tests {
         assert!(targeted_layer.afq_inner().is_some());
         assert!(targeted_layer.unquant_weight_bias().is_some());
         assert!(targeted_layer.get_qtensor().is_some());
-        #[cfg(all(feature = "cuda", has_marlin_kernels))]
-        {
-            let input = Tensor::zeros((1, 32), DType::F32, &Device::Cpu)?;
-            assert!(targeted_layer.prepare_gguf_affine_raw(8, DType::F16, &Device::Cpu)?);
-            assert!(targeted_layer
-                .try_gguf_affine_forward_raw(&input)?
-                .is_some());
-        }
+        let input = Tensor::zeros((1, 32), DType::F32, &Device::Cpu)?;
+        assert!(targeted_layer.activation_quantization_scheme().is_some());
+        assert!(targeted_layer
+            .group_member(&input, crate::GroupKind::Dense)?
+            .is_some());
 
         let mut execution = LoraExecution::new(registry.runtime_id(), vec![Some(0)]);
         execution.insert(
@@ -540,18 +491,14 @@ mod tests {
             assert!(untargeted_layer.unquant_weight_bias().is_some());
             assert!(targeted_layer.get_qtensor().is_none());
             assert!(untargeted_layer.get_qtensor().is_some());
-            #[cfg(all(feature = "cuda", has_marlin_kernels))]
-            {
-                let input = Tensor::zeros((1, 32), DType::F32, &Device::Cpu)?;
-                assert!(!targeted_layer.prepare_gguf_affine_raw(8, DType::F16, &Device::Cpu)?);
-                assert!(targeted_layer
-                    .try_gguf_affine_forward_raw(&input)?
-                    .is_none());
-                assert!(untargeted_layer.prepare_gguf_affine_raw(8, DType::F16, &Device::Cpu)?);
-                assert!(untargeted_layer
-                    .try_gguf_affine_forward_raw(&input)?
-                    .is_some());
-            }
+            assert!(targeted_layer.activation_quantization_scheme().is_none());
+            assert!(targeted_layer
+                .group_member(&input, crate::GroupKind::Dense)?
+                .is_none());
+            assert!(untargeted_layer.activation_quantization_scheme().is_some());
+            assert!(untargeted_layer
+                .group_member(&input, crate::GroupKind::Dense)?
+                .is_some());
             Ok(())
         })?;
         Ok(())

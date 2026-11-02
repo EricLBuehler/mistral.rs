@@ -1030,7 +1030,7 @@ pub fn fp8_blockwise_matmul(
     let input = if input.layout().start_offset() * input.dtype().size_in_bytes() % 16 == 0 {
         input
     } else {
-        input.copy()?
+        input.force_contiguous()?
     };
     let weight = weight.contiguous()?;
     let scales = scales.contiguous()?;
@@ -1404,40 +1404,19 @@ pub(super) fn fp8_tensor_aligned(tensor: &Tensor) -> bool {
         .is_some_and(|offset| offset % FP8_ALIGNMENT_BYTES == 0)
 }
 
+// The SM90 providers ship sm_90a cubins, which load only on exactly compute capability 9.0.
 #[cfg(all(
     feature = "cuda",
     any(has_cutlass_fp8_sm90_kernels, has_deepgemm_fp8_sm90_provider)
 ))]
-static FP8_SM90_DEVICES: OnceLock<Mutex<HashMap<candle_core::cuda::DeviceId, bool>>> =
-    OnceLock::new();
+const SM90A_CAPABILITY: (i32, i32) = (9, 0);
 
 #[cfg(all(
     feature = "cuda",
     any(has_cutlass_fp8_sm90_kernels, has_deepgemm_fp8_sm90_provider)
 ))]
 pub(super) fn is_sm90(dev: &candle_core::CudaDevice) -> bool {
-    use candle_core::cuda::cudarc::driver::{result, sys};
-
-    let devices = FP8_SM90_DEVICES.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(supported) = devices.lock().unwrap().get(&dev.id()).copied() {
-        return supported;
-    }
-    let device = dev.cuda_stream().context().cu_device();
-    let major = unsafe {
-        result::device::get_attribute(
-            device,
-            sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
-        )
-    };
-    let minor = unsafe {
-        result::device::get_attribute(
-            device,
-            sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR,
-        )
-    };
-    let supported = matches!((major, minor), (Ok(9), Ok(0)));
-    devices.lock().unwrap().insert(dev.id(), supported);
-    supported
+    crate::cuda_device::cuda_device_info(dev).capability() == SM90A_CAPABILITY
 }
 
 #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
@@ -1463,8 +1442,6 @@ static PREPARED_CUTLASS_FP8_DEVICES: OnceLock<Mutex<HashMap<candle_core::cuda::D
 
 #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
 pub(super) fn prepare_cutlass_fp8(dev: &candle_core::CudaDevice) -> Result<i32> {
-    use candle_core::cuda::cudarc::driver::{result, sys};
-
     dev.cuda_stream()
         .context()
         .bind_to_thread()
@@ -1479,15 +1456,7 @@ pub(super) fn prepare_cutlass_fp8(dev: &candle_core::CudaDevice) -> Result<i32> 
     if let Some(sm_count) = prepared.get(&dev.id()) {
         return Ok(*sm_count);
     }
-    let sm_count = unsafe {
-        result::device::get_attribute(
-            dev.cuda_stream().context().cu_device(),
-            sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT,
-        )
-    }
-    .map_err(|error| {
-        candle_core::Error::msg(format!("CUDA multiprocessor query failed: {error}"))
-    })?;
+    let sm_count = crate::cuda_device::cuda_device_info(dev).sms as i32;
     let status = unsafe { ffi::mistralrs_cutlass_fp8_blockwise_prepare() };
     check_cutlass_status("CUTLASS FP8 kernel preparation", status)?;
     prepared.insert(dev.id(), sm_count);
@@ -2268,6 +2237,7 @@ mod tests {
 
         let scheme = ActivationQuantizationScheme {
             dtype: DType::F8E4M3,
+            scale_encoding: crate::ActivationScaleEncoding::F32,
             block_shape: [1, GROUP_SIZE],
         };
         let scale_layout = ActivationScaleLayout::GroupMajor {
@@ -2436,6 +2406,7 @@ mod tests {
 
         let scheme = ActivationQuantizationScheme {
             dtype: DType::F8E4M3,
+            scale_encoding: crate::ActivationScaleEncoding::F32,
             block_shape: [1, GROUP_SIZE],
         };
         let scale_layout = ActivationScaleLayout::GroupMajor {

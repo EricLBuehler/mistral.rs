@@ -4,15 +4,15 @@
 using namespace metal;
 
 template <typename T>
-[[kernel]] void copy_blocks(device T *key_cache [[buffer(0)]],
-                            device T *value_cache [[buffer(1)]],
-                            const device int64_t *block_mapping [[buffer(2)]],
-                            device const int &numel_per_block_key,
-                            device const int &numel_per_block_value,
-                            uint gid [[thread_position_in_grid]],
-                            uint tid [[thread_position_in_threadgroup]],
-                            uint threads_per_threadgroup
-                            [[threads_per_threadgroup]]) {
+[[kernel]] void
+copy_blocks(device T *key_cache [[buffer(0)]],
+            device T *value_cache [[buffer(1)]],
+            const device int64_t *block_mapping [[buffer(2)]],
+            constant uint64_t &numel_per_block_key [[buffer(3)]],
+            constant uint64_t &numel_per_block_value [[buffer(4)]],
+            uint gid [[threadgroup_position_in_grid]],
+            uint tid [[thread_position_in_threadgroup]],
+            uint threads_per_threadgroup [[threads_per_threadgroup]]) {
   const int pair_idx = gid;
 
   int64_t src_block_number = block_mapping[2 * pair_idx];
@@ -22,7 +22,8 @@ template <typename T>
   const int64_t dst_block_offset_key = dst_block_number * numel_per_block_key;
 
   // Copy key cache blocks
-  for (int i = tid; i < numel_per_block_key; i += threads_per_threadgroup) {
+  for (uint64_t i = tid; i < numel_per_block_key;
+       i += threads_per_threadgroup) {
     int64_t src_offset = src_block_offset_key + i;
     int64_t dst_offset = dst_block_offset_key + i;
     key_cache[dst_offset] = key_cache[src_offset];
@@ -34,7 +35,8 @@ template <typename T>
       dst_block_number * numel_per_block_value;
 
   // Copy value cache blocks
-  for (int i = tid; i < numel_per_block_value; i += threads_per_threadgroup) {
+  for (uint64_t i = tid; i < numel_per_block_value;
+       i += threads_per_threadgroup) {
     int64_t src_offset = src_block_offset_value + i;
     int64_t dst_offset = dst_block_offset_value + i;
     value_cache[dst_offset] = value_cache[src_offset];
@@ -46,9 +48,9 @@ template <typename T>
   copy_blocks<type>(device type * key_cache_ptrs [[buffer(0)]],                \
                     device type * value_cache_ptrs [[buffer(1)]],              \
                     const device int64_t *block_mapping [[buffer(2)]],         \
-                    device const int &numel_per_block_key,                     \
-                    device const int &numel_per_block_value,                   \
-                    uint gid [[thread_position_in_grid]],                      \
+                    constant uint64_t &numel_per_block_key [[buffer(3)]],      \
+                    constant uint64_t &numel_per_block_value [[buffer(4)]],    \
+                    uint gid [[threadgroup_position_in_grid]],                 \
                     uint tid [[thread_position_in_threadgroup]],               \
                     uint threads_per_threadgroup [[threads_per_threadgroup]]);
 

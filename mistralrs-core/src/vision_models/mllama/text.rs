@@ -322,11 +322,10 @@ impl MLlamaSelfAttentionDecoderLayer {
         hidden_states =
             self.attn
                 .forward(&hidden_states, attention_mask, ctx, kv_cache, layer_idx)?;
-        hidden_states = (residual + hidden_states)?;
-
-        let residual = &hidden_states;
-        let mut hidden_states = self.post_attention_layernorm.forward(&hidden_states)?;
-        hidden_states = self.mlp.forward(&hidden_states)?;
+        let (residual, hidden_states) = self
+            .post_attention_layernorm
+            .forward_add_rms_norm(&hidden_states, residual)?;
+        let hidden_states = self.mlp.forward(&hidden_states)?;
 
         residual + hidden_states
     }
@@ -888,7 +887,9 @@ impl MLlamaTextModel {
         full_text_row_masked_out_mask: Option<&Tensor>,
         ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        let mut hidden_states = self.embed_tokens.embedding_forward(input_ids, self.dtype)?;
+        let mut hidden_states = self
+            .embed_tokens
+            .embedding_forward(input_ids, self.dtype.into())?;
         let packed_query_lens = if ctx.flash_params().packed {
             let (physical_batch, physical_tokens) = input_ids.dims2()?;
             if physical_batch != 1 {

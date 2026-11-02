@@ -1,17 +1,17 @@
 ---
 title: Configure model topology
-description: Per-layer placement and quantization via a YAML topology file.
+description: Choose the device and quantization format for each layer with a YAML file.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Topology is a per-layer placement and [ISQ (in-situ quantization)](/reference/quantization-types/) mechanism. A YAML file specifies, per layer range, the device and quantization to use.
+A topology file sets, layer by layer, which device a model's weights load on and which quantization format they use. Use one to keep sensitive layers at higher precision, to split a model across devices by hand, or to move some layers to the CPU.
 
-Most cases do not need topology. Defaults work for typical hardware; `mistralrs tune` covers common optimization.
+Without a topology, mistral.rs spreads layers across your GPUs automatically and `--isq` applies one format to the whole model. That's the right setup for most people.
 
-## Config
+## Write a topology file
 
-A YAML file keyed by `start-end` layer-range selectors:
+Each key selects some layers, and its value sets `device`, `isq`, or both. This file splits a 40-layer model across two GPUs and the CPU:
 
 ```yaml
 0-16:
@@ -25,14 +25,23 @@ A YAML file keyed by `start-end` layer-range selectors:
   isq: q8_0
 ```
 
-Layers outside any range use defaults. `device` is a CUDA (`cuda[N]`), Metal (`metal[N]`), or CPU (`cpu`) specifier. `isq` accepts any ISQ type name recognized by `--isq`.
+A range includes its start and excludes its end, so `0-16` means layers 0 through 15. A bare number like `12:` selects one layer. The numbers are decoder layer indexes, the `N` in weight names like `model.layers.N.self_attn.q_proj`.
 
-Range selectors match the decoder layer index (the `N` in weight names like `model.layers.N.self_attn.q_proj`). A single layer can be selected with a bare index (`12:`).
+| Key | Values |
+|---|---|
+| `device` | `cpu`, `cuda[N]`, or `metal[N]`, where `N` is the device index starting at 0 |
+| `isq` | A format name that `--isq` accepts, such as `q4k`, `q8_0`, `afq4`, or `fp8`. Use names, not bit widths: a bare `4` here always means `q4k`, even on Metal. |
 
-Selectors wrapped in slashes are regexes instead of ranges:
+What happens to everything the file doesn't set:
 
-- They match against the full weight name, so they can target specific weights instead of whole layers.
-- When multiple regexes match the same weight, the later entry wins.
+- **Device:** a topology replaces automatic placement. Layers without a `device` load on the main device, normally the first GPU. If the model needs more than one GPU, give every layer a device.
+- **Format:** layers without an `isq` use the `--isq` format if you passed one. Otherwise they stay unquantized.
+
+Putting any numbered layer on the CPU turns off [paged attention](/guides/perf/paged-attention/) for that model.
+
+## Target specific weights
+
+Wrap a key in slashes to make it a regular expression. It matches full weight names, so you can target individual weights instead of whole layers. Regexes are also the only way to reach weights outside the numbered layers, such as the embeddings, the LM head, and norms:
 
 ```yaml
 /model\.layers\.\d+\.self_attn\..*/:
@@ -41,15 +50,15 @@ Selectors wrapped in slashes are regexes instead of ranges:
   device: cpu
 ```
 
-Topology ISQ pins also apply when producing [UQFF (Universal Quantized File Format)](/reference/uqff-format/) files: pinned layers keep their type in every written variant, with the `--isq` value as the default for the rest.
+A regex with only `device` moves the matching weights even when it sets no `isq`. When entries overlap, a regex beats a range, and among regexes the last one in the file wins.
 
-## Loading a topology file
+## Load a topology file
 
 <Tabs>
 <TabItem label="CLI">
 
 ```bash
-mistralrs serve --topology topology.yaml -m <model>
+mistralrs serve -m <model> --isq q4k --topology topology.yaml
 ```
 
 </TabItem>
@@ -58,7 +67,10 @@ mistralrs serve --topology topology.yaml -m <model>
 ```python
 from mistralrs import Runner, Which
 
-runner = Runner(which=Which.Plain(model_id="<model>", topology="topology.yaml"))
+runner = Runner(
+    which=Which.Plain(model_id="<model>", topology="topology.yaml"),
+    in_situ_quant="q4k",
+)
 ```
 
 </TabItem>
@@ -66,6 +78,7 @@ runner = Runner(which=Which.Plain(model_id="<model>", topology="topology.yaml"))
 
 ```rust
 let model = mistralrs::ModelBuilder::new("<model>")
+    .with_isq(mistralrs::IsqType::Q4K)
     .with_topology_from_path("topology.yaml")?
     .build()
     .await?;
@@ -74,8 +87,9 @@ let model = mistralrs::ModelBuilder::new("<model>")
 </TabItem>
 </Tabs>
 
-## Notes
+## Topology and UQFF
 
-Range selectors only address numbered decoder layers (the `N` in `model.layers.N.*`). To target embedding layers, the LM head, or pre/post-norm weights, use a regex selector, e.g. `/lm_head\..*/` as shown above; a device-only regex match relocates the matched weight even when no `isq` is set.
+- **Making a UQFF:** pass `--topology` to `mistralrs quantize`. The `isq` pins are kept in every variant it writes, and `--isq` sets the format for the rest. See [make your own UQFF](/guides/quantization/uqff/#make-your-own-uqff).
+- **Loading a UQFF:** the formats are fixed in the file, so `isq` entries are ignored and only `device` applies. This includes UQFFs that `--quant` loads for you.
 
-For an introduction to per-layer quantization tradeoffs, see [the quantization guide](/guides/quantization/quantize-a-model/).
+For choosing formats in the first place, see [quantize a model](/guides/quantization/quantize-a-model/).

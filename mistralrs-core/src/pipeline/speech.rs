@@ -1,3 +1,4 @@
+use super::loaders::ModelDownload;
 use super::text_models_inputs_processor::PagedAttentionMeta;
 use super::{
     AdapterPaths, AnyMoePipelineMixin, Cache, CacheManagerMixin, EitherCache, ForwardInputsResult,
@@ -12,8 +13,8 @@ use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
 use crate::speech_models::{DiaConfig, DiaPipeline, SpeechGenerationOutput, SpeechLoaderType};
 use crate::utils::progress::ProgressScopeGuard;
+use crate::utils::varbuilder_utils::from_mmaped_safetensors;
 use crate::utils::varbuilder_utils::DeviceForLoadTensor;
-use crate::utils::{tokens::get_token, varbuilder_utils::from_mmaped_safetensors};
 use crate::{
     api_get_file, distributed, DeviceMapSetting, MessageContent, PagedAttentionConfig, Pipeline,
     SpeechGenerationConfig, TryIntoDType,
@@ -21,7 +22,6 @@ use crate::{
 use anyhow::Result;
 use candle_core::{Device, Tensor};
 use candle_nn::VarBuilder;
-use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
 use indexmap::IndexMap;
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
@@ -40,6 +40,12 @@ pub struct SpeechModelPaths {
 }
 
 impl ModelPaths for SpeechModelPaths {
+    fn files(&self) -> Vec<PathBuf> {
+        let mut files = self.weights.clone();
+        files.push(self.config.clone());
+        files
+    }
+
     fn get_config_filename(&self) -> &PathBuf {
         &self.config
     }
@@ -157,81 +163,30 @@ pub struct SpeechLoader {
 }
 
 impl Loader for SpeechLoader {
-    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
-    fn load_model_from_hf(
+    fn download_model_from_hf(
         &self,
         revision: Option<String>,
         token_source: TokenSource,
-        dtype: &dyn TryIntoDType,
-        device: &Device,
         silent: bool,
-        mapper: DeviceMapSetting,
-        in_situ_quant: Option<IsqType>,
-        paged_attn_config: Option<PagedAttentionConfig>,
-    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+    ) -> Result<ModelDownload> {
         let _progress_guard = ProgressScopeGuard::new(silent);
-        let paths: anyhow::Result<Box<dyn ModelPaths>> = {
-            // Main weights first, DAC is the final one.
-            let mut weights = Vec::new();
+        let api = crate::pipeline::hf::build_api(&token_source, !silent)?;
+        let revision = revision.as_deref().unwrap_or("main");
+        let repo = api.repo(self.model_id.as_str(), revision);
+        let model_id = std::path::Path::new(&self.model_id);
+        let weight = api_get_file!(repo, "model.safetensors", model_id, revision);
+        let config = api_get_file!(repo, "config.json", model_id, revision);
 
-            // Main model
-            let config = {
-                let api = ApiBuilder::new()
-                    .with_progress(!silent)
-                    .with_token(get_token(&token_source)?)
-                    .build()?;
-                let revision = revision.clone().unwrap_or("main".to_string());
-                let api = api.repo(Repo::with_revision(
-                    self.model_id.to_string(),
-                    RepoType::Model,
-                    revision.clone(),
-                ));
-                let model_id = std::path::Path::new(&self.model_id);
-
-                let weight = api_get_file!(api, "model.safetensors", &model_id, &revision);
-                let config = api_get_file!(api, "config.json", &model_id, &revision);
-                weights.push(weight);
-                config
-            };
-
-            // DAC model
-            {
-                let api = ApiBuilder::new()
-                    .with_progress(!silent)
-                    .with_token(get_token(&token_source)?)
-                    .build()?;
-                let revision = revision.unwrap_or("main".to_string());
-
-                // Apply default here
-                let dac_model = self
-                    .dac_model_id
-                    .clone()
-                    .unwrap_or_else(|| match self.arch {
-                        SpeechLoaderType::Dia => "EricB/dac_44khz".to_string(),
-                    });
-
-                let api = api.repo(Repo::with_revision(
-                    dac_model.clone(),
-                    RepoType::Model,
-                    revision.clone(),
-                ));
-                let model_id = std::path::Path::new(&dac_model);
-
-                let weight = api_get_file!(api, "model.safetensors", &model_id, &revision);
-                weights.push(weight);
-            }
-
-            Ok(Box::new(SpeechModelPaths { weights, config }))
-        };
-        self.load_model_from_path(
-            paths?.as_ref(),
-            dtype,
-            device,
-            silent,
-            mapper,
-            in_situ_quant,
-            paged_attn_config,
-        )
+        let dac_model = self.dac_model_id.as_deref().unwrap_or(match self.arch {
+            SpeechLoaderType::Dia => "EricB/dac_44khz",
+        });
+        let dac_revision = super::hf::model_source_revision(&self.model_id, revision, dac_model);
+        let dac_repo = api.repo(dac_model, dac_revision);
+        let dac_weight = api_get_file!(dac_repo, "model.safetensors", dac_model, dac_revision);
+        Ok(ModelDownload::new(Box::new(SpeechModelPaths {
+            weights: vec![weight, dac_weight],
+            config,
+        })))
     }
 
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
@@ -243,9 +198,10 @@ impl Loader for SpeechLoader {
         silent: bool,
         mapper: DeviceMapSetting,
         in_situ_quant: Option<IsqType>,
-        _paged_attn_config: Option<PagedAttentionConfig>,
+        mut paged_attn_config: Option<PagedAttentionConfig>,
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
+        super::disable_unsupported_paged_attention(&mut paged_attn_config)?;
         let paths = paths
             .as_any()
             .downcast_ref::<SpeechModelPaths>()
@@ -321,6 +277,9 @@ impl Loader for SpeechLoader {
                 sliding_window: None,
                 cache_config: None,
                 cache_engine: None,
+                memory_plan: None,
+                #[cfg(feature = "cuda")]
+                runtime_memory_reservation: None,
                 model_metadata: None,
                 modalities: Modalities {
                     input: vec![SupportedModality::Text],
@@ -448,3 +407,48 @@ impl Pipeline for SpeechPipeline {
 }
 
 impl AnyMoePipelineMixin for SpeechPipeline {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{AutoDeviceMapParams, MemoryGoal, ModelDType, PagedCacheType};
+
+    const TEST_CACHE_TOKENS: usize = 64;
+    const TEST_CACHE_BYTES: usize = 1024 * 1024;
+
+    #[test]
+    fn explicit_memory_goal_fails_before_speech_weights_are_opened() -> Result<()> {
+        let loader = SpeechLoader {
+            model_id: String::new(),
+            dac_model_id: None,
+            arch: SpeechLoaderType::Dia,
+            cfg: None,
+        };
+        let paths = SpeechModelPaths {
+            weights: Vec::new(),
+            config: PathBuf::new(),
+        };
+        for goal in [
+            MemoryGoal::Utilization(0.5),
+            MemoryGoal::KvTokens(TEST_CACHE_TOKENS),
+            MemoryGoal::KvBytes(TEST_CACHE_BYTES),
+        ] {
+            let result = loader.load_model_from_path(
+                &paths,
+                &ModelDType::F32,
+                &Device::Cpu,
+                true,
+                DeviceMapSetting::Auto(AutoDeviceMapParams::default_text()),
+                None,
+                Some(PagedAttentionConfig::new(None, goal, PagedCacheType::Auto)?),
+            );
+            let error = result
+                .err()
+                .expect("speech accepted an explicit memory goal");
+            assert!(error
+                .to_string()
+                .contains("requested memory goal requires paged attention"));
+        }
+        Ok(())
+    }
+}

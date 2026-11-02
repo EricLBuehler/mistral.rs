@@ -162,10 +162,6 @@ impl Attention {
             attention_mask,
             self.sliding_window,
         )?;
-        let attn_mask = match attn_mask {
-            Some(t) => AttentionMask::Custom(t),
-            None => AttentionMask::None,
-        };
 
         let attn_output = Sdpa.run_attention(
             &q,
@@ -523,7 +519,9 @@ impl Model {
         is_scaling_pass: Option<f64>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let mut xs = self.embed_tokens.embedding_forward(input_ids, self.dtype)?;
+        let mut xs = self
+            .embed_tokens
+            .embedding_forward(input_ids, self.dtype.into())?;
         let mut cache = if is_full_pass {
             if no_kv_cache {
                 let mut new_cache = Vec::new();

@@ -601,6 +601,8 @@ impl AnthropicMessagesRequest {
         }
 
         Ok(ChatCompletionRequest {
+            modalities: None,
+            audio: None,
             messages: Either::Left(messages),
             model: self.model,
             adapter: None,
@@ -888,6 +890,7 @@ fn append_anthropic_blocks(
             (!text_parts.is_empty()).then(|| MessageContent::from_text(text_parts.join("\n")));
         let tool_calls = (!tool_calls.is_empty()).then_some(tool_calls);
         out.push(Message {
+            audio: None,
             content,
             role,
             name: None,
@@ -969,6 +972,7 @@ fn flush_user_content(
     };
 
     out.push(Message {
+        audio: None,
         content: Some(content),
         role: role.to_string(),
         name: None,
@@ -980,6 +984,7 @@ fn flush_user_content(
 
 fn message_with_text(role: impl Into<String>, text: String) -> Message {
     Message {
+        audio: None,
         content: Some(MessageContent::from_text(text)),
         role: role.into(),
         name: None,
@@ -1031,6 +1036,7 @@ fn tool_result_message_from_block(block: AnthropicContentBlock) -> Result<Messag
         .context("Anthropic tool_result content block requires `tool_use_id`.")?;
 
     Ok(Message {
+        audio: None,
         content: Some(MessageContent::from_text(content_value_to_text(
             block.content,
         ))),
@@ -1610,7 +1616,8 @@ impl futures::Stream for AnthropicStreamer {
                         | Response::ImageGeneration(_)
                         | Response::Speech { .. }
                         | Response::Raw { .. }
-                        | Response::Embeddings { .. } => unreachable!(),
+                        | Response::Embeddings { .. }
+                        | Response::Decision { .. } => unreachable!(),
                     }
                 }
                 Poll::Ready(None) => {
@@ -2076,6 +2083,7 @@ mod tests {
                 stop_sequence: stop_sequence.map(str::to_string),
                 index: 0,
                 delta: Delta {
+                    audio: None,
                     content: text.map(str::to_string),
                     role: "assistant".to_string(),
                     tool_calls,
@@ -2656,6 +2664,7 @@ mod tests {
                 stop_sequence: Some("END".to_string()),
                 index: 0,
                 message: ResponseMessage {
+                    audio: None,
                     content: Some("done".to_string()),
                     role: "assistant".to_string(),
                     tool_calls: Some(vec![ToolCallResponse {

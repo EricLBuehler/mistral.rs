@@ -6,41 +6,46 @@ sidebar:
 ---
 ## `LoraAdapter`
 
-| Field | Type | Default |
-| --- | --- | --- |
-| `alias` | `str` | required |
-| `source` | `str` | required |
-| `revision` | `str \| None` | `None` |
+A LoRA adapter to load at startup, for `Which.Lora` or `Which.GGUF`.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `alias` | `str` | required | Name that requests use to select the adapter. Case-sensitive, up to 256 bytes. |
+| `source` | `str` | required | Hugging Face repo or local directory holding the adapter. |
+| `revision` | `str \| None` | `None` | Branch, tag, or commit to download for a Hub `source`. Defaults to `main`. |
 
 
 ## `Which`
 
-Which model to select. See the docs for the `Which` enum in API.md for more details.
-Usage:
+Chooses the kind of model to load and where its weights come from. Pass one variant to `Runner(which=...)`.
+
 ```python
->>> Which.Plain(...)
+runner = Runner(which=Which.Plain(model_id="Qwen/Qwen3-4B"))
 ```
 
 ### `Which.Plain`
 
-| Field | Type | Default |
-| --- | --- | --- |
-| `model_id` | `str` | required |
-| `arch` | `Architecture \| None` | `None` |
-| `tokenizer_json` | `str \| None` | `None` |
-| `topology` | `str \| None` | `None` |
-| `organization` | `IsqOrganization \| None` | `None` |
-| `write_uqff` | `str \| None` | `None` |
-| `from_uqff` | `str \| list[str] \| None` | `None` |
-| `dtype` | `ModelDType` | `ModelDType.Auto` |
-| `imatrix` | `str \| None` | `None` |
-| `calibration_file` | `str \| None` | `None` |
-| `auto_map_params` | `TextAutoMapParams \| None` | `None` |
-| `hf_cache_path` | `str \| None` | `None` |
-| `matformer_config_path` | `str \| None` | `None` |
-| `matformer_slice_name` | `str \| None` | `None` |
+A text model from safetensors weights.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `model_id` | `str` | required | Hugging Face model ID or local directory. |
+| `arch` | `Architecture \| None` | `None` | Architecture to load it as. Detected from `config.json` if unset. |
+| `tokenizer_json` | `str \| None` | `None` | Path to a `tokenizer.json` to use instead of the model's own. |
+| `topology` | `str \| None` | `None` | Path to a [topology](/guides/perf/topology/) file that sets the device and quantization for each layer. |
+| `organization` | `IsqOrganization \| None` | `None` | Which layers in-situ quantization touches. See `IsqOrganization`. |
+| `write_uqff` | `str \| None` | `None` | Save the quantized weights to this `.uqff` path while loading. Use with `Runner(in_situ_quant=...)`. |
+| `from_uqff` | `str \| list[str] \| None` | `None` | Pre-quantized [UQFF](/guides/quantization/uqff/) file, or list of files, to load from the model's repo. |
+| `dtype` | `ModelDType` | `ModelDType.Auto` | Data type to load the model in. |
+| `imatrix` | `str \| None` | `None` | Importance matrix (`.imatrix` or `.cimatrix` file) that guides in-situ quantization. |
+| `calibration_file` | `str \| None` | `None` | Text file to run through the model at load time to build an importance matrix. |
+| `hf_cache_path` | `str \| None` | `None` | Hugging Face cache directory to use instead of the default. |
+| `matformer_config_path` | `str \| None` | `None` | [MatFormer](/guides/models/model-family-notes/#matformer) slice table (CSV), for Gemma 3n. |
+| `matformer_slice_name` | `str \| None` | `None` | Slice to load from that table. Without it, the full model loads. |
 
 ### `Which.Embedding`
+
+An embedding model from safetensors weights. Fields match `Which.Plain`.
 
 | Field | Type | Default |
 | --- | --- | --- |
@@ -69,59 +74,59 @@ Usage:
 | `write_uqff` | `str \| None` | `None` |
 | `from_uqff` | `str \| list[str] \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
-| `auto_map_params` | `TextAutoMapParams \| None` | `None` |
 | `hf_cache_path` | `str \| None` | `None` |
 
 ### `Which.Lora`
 
-| Field | Type | Default |
-| --- | --- | --- |
-| `model_id` | `str` | required |
-| `adapters` | `list[LoraAdapter] \| None` | `None` |
-| `arch` | `Architecture \| None` | `None` |
-| `tokenizer_json` | `str \| None` | `None` |
-| `topology` | `str \| None` | `None` |
-| `write_uqff` | `str \| None` | `None` |
-| `from_uqff` | `str \| list[str] \| None` | `None` |
-| `dtype` | `ModelDType` | `ModelDType.Auto` |
-| `auto_map_params` | `TextAutoMapParams \| None` | `None` |
-| `hf_cache_path` | `str \| None` | `None` |
-| `max_adapters` | `int` | `16` |
-| `max_rank` | `int` | `256` |
-| `max_bytes` | `int` | `8589934592` |
+A text model that can switch LoRA adapters per request. See [LoRA adapters](/guides/customize/lora-adapters/).
+
+Other fields match `Which.Plain`.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `model_id` | `str` | required |  |
+| `adapters` | `list[LoraAdapter] \| None` | `None` | Adapters to load at startup. Leave unset to start with none and load them later. |
+| `arch` | `Architecture \| None` | `None` |  |
+| `tokenizer_json` | `str \| None` | `None` |  |
+| `topology` | `str \| None` | `None` |  |
+| `write_uqff` | `str \| None` | `None` |  |
+| `from_uqff` | `str \| list[str] \| None` | `None` |  |
+| `dtype` | `ModelDType` | `ModelDType.Auto` |  |
+| `hf_cache_path` | `str \| None` | `None` |  |
+| `max_adapters` | `int` | `16` | Limit on loaded aliases, and separately on adapter generations in memory, counting old ones still finishing requests. |
+| `max_rank` | `int` | `256` | Highest adapter rank accepted. |
+| `max_bytes` | `int` | `8589934592` | Memory limit for all loaded adapters, in bytes (8 GiB by default). |
 
 ### `Which.GGUF`
 
-Select a GGUF model.
+A model from a GGUF file. See [run GGUF models](/guides/models/run-gguf/).
 
-Pass `adapters=[]` or set a non-default LoRA limit to enable an empty dynamic LoRA runtime.
-With `mmproj_filename`, adapters apply to the language model.
-Pass `in_situ_quant` to `Runner` to requantize compatible GGUF weights while loading.
+- Dynamic LoRA turns on when you pass `adapters`, even `[]`, or change `max_adapters`, `max_rank`, or `max_bytes`.
+- With `mmproj_filename`, adapters apply to the language model only.
+- To re-quantize compatible GGUF weights while loading, pass `in_situ_quant` to `Runner`.
 
-| Field | Type | Default |
-| --- | --- | --- |
-| `quantized_model_id` | `str` | required |
-| `quantized_filename` | `str \| list[str]` | required |
-| `tok_model_id` | `str \| None` | `None` |
-| `topology` | `str \| None` | `None` |
-| `dtype` | `ModelDType` | `ModelDType.Auto` |
-| `auto_map_params` | `TextAutoMapParams \| None` | `None` |
-| `tokenizer_json` | `str \| None` | `None (keyword-only)` |
-| `mmproj_filename` | `str \| list[str] \| None` | `None (keyword-only)` |
-| `organization` | `IsqOrganization \| None` | `None (keyword-only)` |
-| `write_uqff` | `str \| None` | `None (keyword-only)` |
-| `imatrix` | `str \| None` | `None (keyword-only)` |
-| `calibration_file` | `str \| None` | `None (keyword-only)` |
-| `max_edge` | `int \| None` | `None (keyword-only)` |
-| `multimodal_auto_map_params` | `MultimodalAutoMapParams \| None` | `None (keyword-only)` |
-| `adapters` | `list[LoraAdapter] \| None` | `None (keyword-only)` |
-| `max_adapters` | `int` | `16 (keyword-only)` |
-| `max_rank` | `int` | `256 (keyword-only)` |
-| `max_bytes` | `int` | `8589934592 (keyword-only)` |
-| `hf_cache_path` | `str \| None` | `None (keyword-only)` |
-| `matformer_config_path` | `str \| None` | `None (keyword-only)` |
-| `matformer_slice_name` | `str \| None` | `None (keyword-only)` |
-| `encoder_cache_memory_bytes` | `int \| None` | `None (keyword-only)` |
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `quantized_model_id` | `str` | required | Hugging Face repo or local directory holding the GGUF file. |
+| `quantized_filename` | `str \| list[str]` | required | GGUF file name, or a list of names for a split model. |
+| `tok_model_id` | `str \| None` | `None` | The original model's repo or local directory, for config, tokenizer, and processor files the GGUF doesn't include. |
+| `topology` | `str \| None` | `None` | Path to a [topology](/guides/perf/topology/) file that sets the device and quantization for each layer. |
+| `dtype` | `ModelDType` | `ModelDType.Auto` | Data type to load the model in. |
+| `tokenizer_json` | `str \| None` | `None (keyword-only)` | Path to a `tokenizer.json` to use instead of the model's own. |
+| `mmproj_filename` | `str \| list[str] \| None` | `None (keyword-only)` | Projector GGUF file, or files, holding a multimodal model's vision or audio encoder. |
+| `organization` | `IsqOrganization \| None` | `None (keyword-only)` | Which layers to quantize when `in_situ_quant` re-quantizes the weights. |
+| `write_uqff` | `str \| None` | `None (keyword-only)` | Save the re-quantized weights to this `.uqff` path while loading. |
+| `imatrix` | `str \| None` | `None (keyword-only)` | Importance matrix (`.imatrix` or `.cimatrix` file) that guides re-quantization. |
+| `calibration_file` | `str \| None` | `None (keyword-only)` | Text file to run through the model at load time to build an importance matrix. |
+| `max_edge` | `int \| None` | `None (keyword-only)` | Shrink images so their longest edge is at most this many pixels, keeping the aspect ratio. |
+| `adapters` | `list[LoraAdapter] \| None` | `None (keyword-only)` | LoRA adapters to load at startup. Pass `[]` to start with none and load them later. |
+| `max_adapters` | `int` | `16 (keyword-only)` | Limit on loaded aliases, and separately on adapter generations in memory. |
+| `max_rank` | `int` | `256 (keyword-only)` | Highest adapter rank accepted. |
+| `max_bytes` | `int` | `8589934592 (keyword-only)` | Memory limit for all loaded adapters, in bytes (8 GiB by default). |
+| `hf_cache_path` | `str \| None` | `None (keyword-only)` | Hugging Face cache directory to use instead of the default. |
+| `matformer_config_path` | `str \| None` | `None (keyword-only)` | [MatFormer](/guides/models/model-family-notes/#matformer) slice table (CSV), for Gemma 3n. |
+| `matformer_slice_name` | `str \| None` | `None (keyword-only)` | Slice to load from that table. Without it, the full model loads. |
+| `encoder_cache_memory_bytes` | `int \| None` | `None (keyword-only)` | Memory limit, in bytes, for cached image, audio, and video encoder outputs. Unset keeps the model's default entry-count limit. |
 
 ### `Which.XLoraGGUF`
 
@@ -137,7 +142,6 @@ Select X-LoRA for a Phi3 GGUF configuration.
 | `tgt_non_granular_index` | `int \| None` | `None` |
 | `topology` | `str \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
-| `auto_map_params` | `TextAutoMapParams \| None` | `None` |
 
 ### `Which.LoraGGUF`
 
@@ -154,7 +158,6 @@ For dynamic adapters on a supported GGUF, pass `adapters` to `Which.GGUF`.
 | `tok_model_id` | `str \| None` | `None` |
 | `topology` | `str \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
-| `auto_map_params` | `TextAutoMapParams \| None` | `None` |
 
 ### `Which.GGML`
 
@@ -167,7 +170,6 @@ For dynamic adapters on a supported GGUF, pass `adapters` to `Which.GGUF`.
 | `gqa` | `int` | `1` |
 | `topology` | `str \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
-| `auto_map_params` | `TextAutoMapParams \| None` | `None` |
 
 ### `Which.XLoraGGML`
 
@@ -183,7 +185,6 @@ For dynamic adapters on a supported GGUF, pass `adapters` to `Which.GGUF`.
 | `gqa` | `int` | `1` |
 | `topology` | `str \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
-| `auto_map_params` | `TextAutoMapParams \| None` | `None` |
 
 ### `Which.LoraGGML`
 
@@ -198,30 +199,32 @@ For dynamic adapters on a supported GGUF, pass `adapters` to `Which.GGUF`.
 | `gqa` | `int` | `1` |
 | `topology` | `str \| None` | `None` |
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
-| `auto_map_params` | `TextAutoMapParams \| None` | `None` |
 
 ### `Which.MultimodalPlain`
 
-| Field | Type | Default |
-| --- | --- | --- |
-| `model_id` | `str` | required |
-| `arch` | `MultimodalArchitecture \| None` | `None` |
-| `tokenizer_json` | `str \| None` | `None` |
-| `topology` | `str \| None` | `None` |
-| `write_uqff` | `str \| None` | `None` |
-| `from_uqff` | `str \| list[str] \| None` | `None` |
-| `dtype` | `ModelDType` | `ModelDType.Auto` |
-| `max_edge` | `int \| None` | `None` |
-| `calibration_file` | `str \| None` | `None` |
-| `imatrix` | `str \| None` | `None` |
-| `auto_map_params` | `MultimodalAutoMapParams \| None` | `None` |
-| `hf_cache_path` | `str \| None` | `None` |
-| `matformer_config_path` | `str \| None` | `None` |
-| `matformer_slice_name` | `str \| None` | `None` |
-| `organization` | `IsqOrganization \| None` | `None` |
-| `encoder_cache_memory_bytes` | `int \| None` | `None` |
+A model that takes images, audio, or video, from safetensors weights.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `model_id` | `str` | required | Hugging Face model ID or local directory. |
+| `arch` | `MultimodalArchitecture \| None` | `None` | Architecture to load it as. Detected from `config.json` if unset. |
+| `tokenizer_json` | `str \| None` | `None` | Path to a `tokenizer.json` to use instead of the model's own. |
+| `topology` | `str \| None` | `None` | Path to a [topology](/guides/perf/topology/) file that sets the device and quantization for each layer. |
+| `write_uqff` | `str \| None` | `None` | Save the quantized weights to this `.uqff` path while loading. Use with `Runner(in_situ_quant=...)`. |
+| `from_uqff` | `str \| list[str] \| None` | `None` | Pre-quantized [UQFF](/guides/quantization/uqff/) file, or list of files, to load from the model's repo. |
+| `dtype` | `ModelDType` | `ModelDType.Auto` | Data type to load the model in. |
+| `max_edge` | `int \| None` | `None` | Shrink images so their longest edge is at most this many pixels, keeping the aspect ratio. |
+| `calibration_file` | `str \| None` | `None` | Text file to run through the model at load time to build an importance matrix. |
+| `imatrix` | `str \| None` | `None` | Importance matrix (`.imatrix` or `.cimatrix` file) that guides in-situ quantization. |
+| `hf_cache_path` | `str \| None` | `None` | Hugging Face cache directory to use instead of the default. |
+| `matformer_config_path` | `str \| None` | `None` | [MatFormer](/guides/models/model-family-notes/#matformer) slice table (CSV), for Gemma 3n. |
+| `matformer_slice_name` | `str \| None` | `None` | Slice to load from that table. Without it, the full model loads. |
+| `organization` | `IsqOrganization \| None` | `None` | Which layers in-situ quantization touches. See `IsqOrganization`. |
+| `encoder_cache_memory_bytes` | `int \| None` | `None` | Memory limit, in bytes, for cached image, audio, and video encoder outputs. Unset keeps the model's default entry-count limit. |
 
 ### `Which.DiffusionPlain`
+
+An image generation model.
 
 | Field | Type | Default |
 | --- | --- | --- |
@@ -230,6 +233,8 @@ For dynamic adapters on a supported GGUF, pass `adapters` to `Which.GGUF`.
 | `dtype` | `ModelDType` | `ModelDType.Auto` |
 
 ### `Which.Speech`
+
+A dedicated speech generation model, such as Dia.
 
 | Field | Type | Default |
 | --- | --- | --- |

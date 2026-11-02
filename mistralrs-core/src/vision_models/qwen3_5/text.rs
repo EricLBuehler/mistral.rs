@@ -221,8 +221,10 @@ impl FullAttention {
             vb_sa.pp("o_proj"),
         )?;
 
-        let q_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("q_norm"))?;
-        let k_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("k_norm"))?;
+        let q_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("q_norm"))?
+            .with_storage(cfg.norm_storage)?;
+        let k_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("k_norm"))?
+            .with_storage(cfg.norm_storage)?;
 
         Ok(Self {
             q_proj,
@@ -590,12 +592,14 @@ impl DecoderLayer {
             cfg.hidden_size,
             cfg.rms_norm_eps,
             vb_plain.pp("input_layernorm"),
-        )?;
+        )?
+        .with_storage(cfg.norm_storage)?;
         let post_attention_layernorm = GemmaRmsNorm::new(
             cfg.hidden_size,
             cfg.rms_norm_eps,
             vb_plain.pp("post_attention_layernorm"),
-        )?;
+        )?
+        .with_storage(cfg.norm_storage)?;
         let mlp = Mlp::new(
             vb_quant.pp("mlp"),
             cfg.hidden_size,
@@ -845,12 +849,30 @@ impl Qwen3_5TextModel {
                 (vb.pp("model"), TextWeightPrefix::Model)
             };
 
+        let mut cfg = cfg.clone();
+        if let Some(linear) = cfg
+            .layer_types()
+            .iter()
+            .position(|t| *t == LayerType::LinearAttention)
+        {
+            cfg.norm_storage = crate::gdn::checkpoint_norm_storage(
+                &vb_m.pp("layers").pp(linear).pp("linear_attn"),
+            );
+        }
+        let cfg = &cfg;
+        // MLX conversions nest the head under the language model like the rest of the text weights
+        let vb_head = if layers::contains_tensor_or_uqff(&vb, "language_model.lm_head.weight") {
+            vb.pp("language_model")
+        } else {
+            vb.clone()
+        };
+
         let embed_tokens = layers::embedding_with_legacy_tied_uqff(
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
             tie.then(|| {
-                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq)
+                mapper.set_nm_device(vb_head.pp("lm_head"), normal_loading_metadata.loading_isq)
             }),
             &cfg.quantization_config,
         )?;
@@ -931,7 +953,8 @@ impl Qwen3_5TextModel {
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
                 mapper.set_device(layer_idx, vb_l.pp(layer_idx).pp("input_layernorm"), false),
-            )?;
+            )?
+            .with_storage(cfg.norm_storage)?;
             let post_attention_layernorm = GemmaRmsNorm::new(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
@@ -940,7 +963,8 @@ impl Qwen3_5TextModel {
                     vb_l.pp(layer_idx).pp("post_attention_layernorm"),
                     false,
                 ),
-            )?;
+            )?
+            .with_storage(cfg.norm_storage)?;
 
             let mlp = Mlp::new(
                 mapper.set_device(
@@ -967,14 +991,15 @@ impl Qwen3_5TextModel {
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
-        )?;
+        )?
+        .with_storage(cfg.norm_storage)?;
         let lm_head = if !tie {
             ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
                 &cfg.quantization_config,
                 false,
-                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+                mapper.set_nm_device(vb_head.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
             embed_tokens.clone()
@@ -1089,32 +1114,11 @@ impl Qwen3_5TextModel {
     }
 
     pub(super) fn reserve_recurrent_decode_deferred_storage(&self) -> Result<bool> {
-        let mut cache = self.cache.hybrid();
-        let mut spec = None;
-        for (layer_idx, layer_type) in self.layer_types.iter().enumerate() {
-            if *layer_type != LayerType::LinearAttention {
-                continue;
-            }
-            let (LayerImpl::LinearAttention(gdn), Some(HybridLayerCache::Recurrent(pool))) =
-                (&self.layers[layer_idx].layer_impl, cache.get(layer_idx))
-            else {
-                candle_core::bail!("Qwen3.5 GDN layer has no recurrent state pool");
-            };
-            if !gdn.deferred_decode_supported(pool, self.dtype) {
-                return Ok(false);
-            }
-            let layer_spec = gdn.deferred_state_spec();
-            if spec
-                .replace(layer_spec)
-                .is_some_and(|spec| spec != layer_spec)
-            {
-                candle_core::bail!("Qwen3.5 GDN deferred-state dimensions diverge across layers");
-            }
-        }
-        let Some(spec) = spec else {
-            return Ok(false);
-        };
-        cache.reserve_gdn_deferred_state(spec)
+        crate::gdn::reserve_deferred_decode_state(
+            &mut self.cache.hybrid(),
+            self.gdn_transition_layers().layers,
+            self.dtype,
+        )
     }
 
     pub(super) fn disable_recurrent_decode_deferred_storage(&self) -> Result<bool> {
@@ -1143,55 +1147,6 @@ impl Qwen3_5TextModel {
         self.apply_pending_recurrent_transitions_for_current_batch(&cache)
     }
 
-    fn flush_deferred_recurrent_state(
-        &self,
-        cache: &HybridCache,
-        slots: Option<&[u32]>,
-    ) -> Result<bool> {
-        if !cache.uses_gdn_deferred_state() {
-            return Ok(false);
-        }
-        let host_slots = slots.map(|slots| {
-            let mut slots = slots
-                .iter()
-                .copied()
-                .filter(|slot| *slot != crate::cuda::gdn::GDN_PAD_SLOT)
-                .collect::<Vec<_>>();
-            slots.sort_unstable();
-            slots.dedup();
-            slots
-        });
-        if host_slots.as_ref().is_some_and(Vec::is_empty) {
-            return Ok(true);
-        }
-        let mut flushed = false;
-        for (layer_idx, layer_type) in self.layer_types.iter().enumerate() {
-            if *layer_type != LayerType::LinearAttention {
-                continue;
-            }
-            let (LayerImpl::LinearAttention(gdn), Some(HybridLayerCache::Recurrent(pool))) =
-                (&self.layers[layer_idx].layer_impl, cache.get(layer_idx))
-            else {
-                return Ok(false);
-            };
-            let active_slots = match &host_slots {
-                Some(slots) => Tensor::from_vec(slots.clone(), (slots.len(),), pool.device())?,
-                None => cache
-                    .state_indices_for_device(pool.device())
-                    .ok_or_else(|| {
-                        candle_core::Error::msg(
-                            "GDN deferred-state flush has no device-local state slots",
-                        )
-                    })?,
-            };
-            if !gdn.flush_deferred_state(pool, &active_slots, self.dtype)? {
-                return Ok(false);
-            }
-            flushed = true;
-        }
-        Ok(flushed)
-    }
-
     pub(super) fn flush_current_recurrent_state(&self) -> Result<()> {
         let cache = self.cache.hybrid();
         let has_slots = cache
@@ -1205,9 +1160,7 @@ impl Qwen3_5TextModel {
         {
             candle_core::bail!("Qwen3.5 pending recurrent transitions cannot be applied");
         }
-        if cache.uses_gdn_deferred_state() && !self.flush_deferred_recurrent_state(&cache, None)? {
-            candle_core::bail!("Qwen3.5 deferred recurrent state cannot be materialized");
-        }
+        cache.materialize_deferred_state_for_current_batch()?;
         Ok(())
     }
 
@@ -1223,12 +1176,7 @@ impl Qwen3_5TextModel {
         {
             candle_core::bail!("Qwen3.5 pending recurrent transitions cannot be applied");
         }
-        if cache.uses_gdn_deferred_state()
-            && !self.flush_deferred_recurrent_state(&cache, Some(&slots))?
-            && !slots.is_empty()
-        {
-            candle_core::bail!("Qwen3.5 deferred recurrent state cannot be materialized");
-        }
+        cache.materialize_deferred_state_for_slots(&slots)?;
         Ok(())
     }
 
@@ -1402,7 +1350,8 @@ impl Qwen3_5TextModel {
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.embedding_forward(input_ids, self.dtype)
+        self.embed_tokens
+            .embedding_forward(input_ids, self.dtype.into())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1418,7 +1367,6 @@ impl Qwen3_5TextModel {
     ) -> Result<Tensor> {
         let mut hybrid_cache = self.cache.hybrid();
         let checkpoint_lanes = hybrid_cache.checkpoint_lanes();
-        let batch_size = xs.dim(0)?;
         let query_len = xs.dim(1)?;
         let recurrent_metadata = ctx.recurrent_metadata().cloned();
         let has_linear_attention = self
@@ -1476,21 +1424,6 @@ impl Qwen3_5TextModel {
                 && has_slots
             {
                 candle_core::bail!("Qwen3.5 pending recurrent transitions cannot be applied");
-            }
-        }
-        let deferred_gdn = query_len == 1
-            && crate::cuda::gdn::deferred_decode_batch_supported(batch_size)
-            && packed_layout.is_none()
-            && recurrent_metadata
-                .as_ref()
-                .is_some_and(|metadata| metadata.batch_kind() == RecurrentBatchKind::Decode)
-            && hybrid_cache.uses_gdn_deferred_state();
-        if !deferred_gdn && hybrid_cache.uses_gdn_deferred_state() {
-            let has_slots = hybrid_cache
-                .state_indices()
-                .is_some_and(|slots| slots.elem_count() != 0);
-            if has_slots && !self.flush_deferred_recurrent_state(&hybrid_cache, None)? {
-                candle_core::bail!("Qwen3.5 deferred recurrent state cannot be materialized");
             }
         }
         let checkpoint_gdn = speculative_gdn
@@ -1622,7 +1555,11 @@ impl Qwen3_5TextModel {
                                 pool.state_layout(),
                             )
                         } else {
-                            GdnLayerCache::checkout(pool, &indices)?
+                            GdnLayerCache::checkout(
+                                pool,
+                                &indices,
+                                recurrent_metadata.batch_kind(),
+                            )?
                         };
 
                         let mut projected_stash = None;

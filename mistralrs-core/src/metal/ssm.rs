@@ -12,11 +12,11 @@ use candle_core::{DType, Device, Result, Storage, Tensor};
 
 #[cfg(feature = "metal")]
 use candle_metal_kernels::metal::{
-    Buffer, ComputeCommandEncoder, ComputePipeline, Device as MetalRawDevice, Library,
+    Buffer, ComputeCommandEncoder, ComputePipeline, Device as MetalRawDevice,
 };
 
 #[cfg(feature = "metal")]
-use objc2_metal::{MTLCompileOptions, MTLMathMode, MTLSize};
+use objc2_metal::MTLSize;
 
 #[cfg(feature = "metal")]
 use std::collections::HashMap;
@@ -25,49 +25,39 @@ use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
 
 #[cfg(feature = "metal")]
-static SSM_LIBRARY: OnceLock<Library> = OnceLock::new();
+use super::kernels::{device_key, RecurrentLibrary};
 
 #[cfg(feature = "metal")]
-type Pipelines = HashMap<String, ComputePipeline>;
+type Pipelines = HashMap<u64, HashMap<String, ComputePipeline>>;
 
 #[cfg(feature = "metal")]
 static SSM_PIPELINES: OnceLock<RwLock<Pipelines>> = OnceLock::new();
 
 #[cfg(feature = "metal")]
-const SSM_METAL_SOURCE: &str = include_str!("kernels/ssm.metal");
-
-#[cfg(feature = "metal")]
-fn load_ssm_library(device: &MetalRawDevice) -> Result<Library> {
-    if let Some(lib) = SSM_LIBRARY.get() {
-        return Ok(lib.clone());
-    }
-    let compile_options = {
-        let opts = MTLCompileOptions::new();
-        opts.setMathMode(MTLMathMode::Fast);
-        opts
-    };
-    let lib = device
-        .new_library_with_source(SSM_METAL_SOURCE, Some(&compile_options))
-        .map_err(|e| {
-            candle_core::Error::Msg(format!("Failed to compile SSM Metal kernels: {e}"))
-        })?;
-    Ok(SSM_LIBRARY.get_or_init(|| lib).clone())
-}
-
-#[cfg(feature = "metal")]
 fn load_pipeline(device: &MetalRawDevice, name: &str) -> Result<ComputePipeline> {
     let pipelines_lock = SSM_PIPELINES.get_or_init(|| RwLock::new(Pipelines::new()));
+    let key = device_key(device);
 
     {
         let pipelines = pipelines_lock.read().map_err(|e| {
             candle_core::Error::Msg(format!("Failed to lock SSM pipeline cache: {e}"))
         })?;
-        if let Some(pipeline) = pipelines.get(name) {
+        if let Some(pipeline) = pipelines
+            .get(&key)
+            .and_then(|pipelines| pipelines.get(name))
+        {
             return Ok(pipeline.clone());
         }
     }
 
-    let lib = load_ssm_library(device)?;
+    let mut pipelines = pipelines_lock.write().map_err(|e| {
+        candle_core::Error::Msg(format!("Failed to lock SSM pipeline cache for write: {e}"))
+    })?;
+    let pipelines = pipelines.entry(key).or_default();
+    if let Some(pipeline) = pipelines.get(name) {
+        return Ok(pipeline.clone());
+    }
+    let lib = RecurrentLibrary::Ssm.load(device)?;
     let func = lib.get_function(name, None).map_err(|e| {
         candle_core::Error::Msg(format!("Failed to load SSM Metal function '{name}': {e}"))
     })?;
@@ -77,11 +67,27 @@ fn load_pipeline(device: &MetalRawDevice, name: &str) -> Result<ComputePipeline>
             candle_core::Error::Msg(format!("Failed to create SSM pipeline for '{name}': {e}"))
         })?;
 
-    let mut pipelines = pipelines_lock.write().map_err(|e| {
-        candle_core::Error::Msg(format!("Failed to lock SSM pipeline cache for write: {e}"))
-    })?;
-    pipelines.insert(name.to_string(), pipeline.clone());
+    pipelines.insert(name.to_owned(), pipeline.clone());
     Ok(pipeline)
+}
+
+#[cfg(feature = "metal")]
+const SIMD_WIDTH: usize = 32;
+
+#[cfg(feature = "metal")]
+fn scan_kernel_name(state_dim: usize) -> &'static str {
+    match state_dim.div_ceil(SIMD_WIDTH) {
+        1 => "ssm_scan_c1",
+        2 => "ssm_scan_c2",
+        3 | 4 => "ssm_scan_c4",
+        _ => "ssm_scan_c8",
+    }
+}
+
+#[cfg(feature = "metal")]
+pub(crate) fn warmup_kernels(device: &MetalRawDevice, state_dim: usize) -> Result<()> {
+    load_pipeline(device, scan_kernel_name(state_dim))?;
+    Ok(())
 }
 
 #[cfg(feature = "metal")]
@@ -144,16 +150,7 @@ pub fn selective_scan_metal(
         candle_core::bail!("selective_scan_metal: expected Metal device");
     };
 
-    // Select kernel based on c_factor = ceil(d_state / 32)
-    let c_factor = d_state.div_ceil(32);
-    let kernel_name = match c_factor {
-        1 => "ssm_scan_c1",
-        2 => "ssm_scan_c2",
-        3 | 4 => "ssm_scan_c4",
-        _ => "ssm_scan_c8",
-    };
-
-    let pipeline = load_pipeline(dev.device(), kernel_name)?;
+    let pipeline = load_pipeline(dev.device(), scan_kernel_name(d_state))?;
 
     // Allocate output
     let y = Tensor::zeros(
@@ -229,4 +226,23 @@ pub fn selective_scan_metal(
     _dt_max: f32,
 ) -> candle_core::Result<candle_core::Tensor> {
     candle_core::bail!("selective_scan_metal requires the metal feature")
+}
+
+#[cfg(all(test, feature = "metal"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[ignore = "requires a Metal device"]
+    fn warmup_covers_scan_variants_and_reuses_pipelines() -> Result<()> {
+        let device = Device::new_metal(0)?;
+        let raw = device.as_metal_device()?.device();
+        for state_dim in [32, 64, 96, 256] {
+            warmup_kernels(raw, state_dim)?;
+        }
+        let first = load_pipeline(raw, "ssm_scan_c4")?;
+        let second = load_pipeline(raw, "ssm_scan_c4")?;
+        assert!(std::ptr::eq(first.as_ref(), second.as_ref()));
+        Ok(())
+    }
 }

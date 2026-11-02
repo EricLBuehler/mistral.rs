@@ -24,6 +24,37 @@ use mistralrs_core::{
 use serde::Deserialize;
 use std::{num::NonZeroUsize, path::PathBuf};
 
+const DEFAULT_RUN_MAX_SEQS: usize = 1;
+
+// tune rejects adapters since its memory estimate ignores them
+const TUNE_HIDDEN_ARG_IDS: &[&str] = &[
+    "enable_lora",
+    "lora",
+    "lora_max_adapters",
+    "lora_max_rank",
+    "lora_max_bytes",
+    "legacy_lora",
+    "legacy_lora_order",
+    "xlora",
+    "xlora_order",
+    "tgt_non_granular_index",
+];
+const TUNE_QUANT_ARG_IDS: &[&str] = &["quant", "in_situ_quant"];
+const TUNE_QUANT_HELP: &str =
+    "Level to recommend if it fits: a bit width (`2`, `3`, `4`, `5`, `6`, `8`) \
+    or a named type such as `q4k`. `auto` is not accepted";
+
+fn tune_arg(arg: clap::Arg) -> clap::Arg {
+    let id = arg.get_id().as_str();
+    if TUNE_HIDDEN_ARG_IDS.contains(&id) {
+        arg.hide(true)
+    } else if TUNE_QUANT_ARG_IDS.contains(&id) {
+        arg.help(TUNE_QUANT_HELP)
+    } else {
+        arg
+    }
+}
+
 /// Fast LLM inference engine
 #[derive(Parser)]
 #[command(name = "mistralrs")]
@@ -39,7 +70,7 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Command {
-    /// Start HTTP/MCP server and (optionally) the UI at /ui
+    /// Start an OpenAI-compatible HTTP server, with a web UI at /ui
     Serve {
         #[command(subcommand)]
         model_type: Option<ModelType>,
@@ -61,7 +92,7 @@ pub enum Command {
         sandbox: SandboxOptions,
     },
 
-    /// Run model in interactive mode, or one-shot mode with `-i`
+    /// Chat with a model interactively, or send a single prompt with `-i`
     Run {
         #[command(subcommand)]
         model_type: Option<ModelType>,
@@ -79,9 +110,8 @@ pub enum Command {
         #[command(flatten)]
         sandbox: SandboxOptions,
 
-        /// Control thinking mode for models that support it.
-        /// Use --thinking or --thinking true to force on, --thinking false to force off.
-        /// If both reasoning controls are omitted, effort is unspecified and thinking is enabled.
+        /// Turn thinking on or off for models that support it; `--thinking` alone means `true`.
+        /// Thinking is on unless this or `--reasoning-effort` turns it off.
         #[arg(long, num_args = 0..=1, default_missing_value = "true", value_parser = clap::value_parser!(bool))]
         thinking: Option<bool>,
 
@@ -123,7 +153,7 @@ pub enum Command {
         shell: Shell,
     },
 
-    /// Generate UQFF quantized model file
+    /// Quantize a model and save it as UQFF files
     Quantize {
         #[command(subcommand)]
         model_type: Option<QuantizeModelType>,
@@ -146,10 +176,8 @@ pub enum Command {
         json: bool,
     },
 
-    /// Recommend quantization + device mapping for a model.
-    /// Rejects `--quant auto`; pass `--quant <level>` or `--isq <level>` to bias
-    /// the recommendation toward a specific quantization target. Adapter options
-    /// are rejected because adapter memory is not included in the estimate.
+    /// Recommend a quantization level and device mapping that fit your hardware
+    #[command(mut_args(tune_arg), mut_subcommands(|sub| sub.mut_args(tune_arg)))]
     Tune {
         #[command(subcommand)]
         model_type: Option<ModelType>,
@@ -158,7 +186,7 @@ pub enum Command {
         #[command(flatten)]
         default_model: DefaultModelOptions,
 
-        /// Tuning profile (quality, balanced, fast)
+        /// What to favor when picking a quantization level
         #[arg(long, value_enum, default_value = "balanced")]
         profile: TuneProfileArg,
 
@@ -166,16 +194,25 @@ pub enum Command {
         #[arg(long)]
         json: bool,
 
-        /// Emit a TOML config file with the recommended settings
+        /// Write the recommended settings to this TOML file, for use with `mistralrs from-config`
         #[arg(long)]
         emit_config: Option<PathBuf>,
     },
 
-    /// Authenticate with Hugging Face Hub
-    Login {
-        /// Provide token directly (non-interactive)
-        #[arg(long)]
-        token: Option<String>,
+    /// Download the files needed to run a model without loading it
+    #[command(
+        long_about = "Download the files needed to run a model without loading it or initializing a GPU.\n\nUse an explicit --quant level; --quant auto is not supported. In-situ quantization happens when the model is loaded."
+    )]
+    Download {
+        #[command(subcommand)]
+        model_type: Option<ModelType>,
+
+        #[command(flatten)]
+        default_model: DefaultModelOptions,
+
+        /// Hugging Face revision to download (defaults to main)
+        #[arg(long, global = true)]
+        revision: Option<String>,
     },
 
     /// Manage the Hugging Face model cache
@@ -200,7 +237,7 @@ pub enum Command {
         #[arg(long)]
         adapter: Option<String>,
 
-        /// Input lengths used to measure time to first token. Zero skips TTFT. Accepts comma-separated values for sweeps.
+        /// Prompt lengths for measuring time to first token (TTFT); `0` skips it. Comma-separate for sweeps.
         #[arg(long, value_delimiter = ',', default_value = "512")]
         prompt_len: Vec<usize>,
 
@@ -208,7 +245,7 @@ pub enum Command {
         #[arg(long, default_value = "128")]
         gen_len: usize,
 
-        /// Input context lengths used to measure decode TPOT. Accepts comma-separated values for sweeps.
+        /// Context lengths for measuring decode time per output token (TPOT). Comma-separate for sweeps.
         #[arg(long, value_delimiter = ',', default_value = "4")]
         depth: Vec<usize>,
 
@@ -231,7 +268,7 @@ pub enum Command {
 
     /// Update or migrate an install using the installer
     Update {
-        /// Install a specific release tag instead of the latest (e.g. v0.9.2)
+        /// Install a specific release tag instead of the latest (e.g. v0.9.5)
         #[arg(long)]
         tag: Option<String>,
     },
@@ -350,15 +387,15 @@ pub struct DefaultModelOptions {
     #[arg(short = 'a', long, value_parser = parse_arch)]
     pub arch: Option<mistralrs_core::NormalLoaderType>,
 
-    /// Model data type
+    /// Weight data type: `auto`, `bf16`, `f16`, or `f32`. `auto` picks the best one for the device.
     #[arg(long, default_value = "auto", value_parser = parse_dtype)]
     pub dtype: mistralrs_core::ModelDType,
 
-    /// Recursively merged JSON overrides for the Hugging Face model config
+    /// JSON to merge into the model's `config.json`; nested objects merge key by key
     #[arg(long)]
     pub hf_overrides: Option<mistralrs_core::HfConfigOverrides>,
 
-    /// Runtime model context length
+    /// Maximum context length, in tokens
     #[arg(long, value_parser = crate::args::model::parse_positive_usize)]
     pub max_model_len: Option<usize>,
 
@@ -580,22 +617,25 @@ pub struct GlobalOptions {
 /// Runtime options for inference
 #[derive(clap::Args, Clone, Deserialize)]
 pub struct RuntimeOptions {
-    /// Maximum concurrent sequences
-    #[arg(long, default_value_t = 32)]
-    #[serde(default = "default_max_seqs")]
-    pub max_seqs: usize,
+    /// Maximum concurrent sequences (defaults to 1 for run and 32 for serve)
+    #[arg(long)]
+    #[serde(default)]
+    pub max_seqs: Option<usize>,
 
-    /// Maximum tokens processed in one paged-attention scheduler step
+    /// Maximum tokens processed per step when PagedAttention is on
     #[arg(long, default_value_t = default_max_num_batched_tokens())]
     #[serde(default = "default_max_num_batched_tokens")]
     pub max_num_batched_tokens: NonZeroUsize,
 
-    /// CUDA prompt-token quantum used while decode is resident and for recurrent prefill batching
+    /// Largest prompt chunk processed per step while other requests are generating (CUDA and Metal).
+    /// Lower values keep running generations smooth; higher values give new requests a faster first
+    /// token. Recurrent models always prefill in chunks of this size.
     #[arg(long, default_value_t = default_max_prefill_chunk_tokens())]
     #[serde(default = "default_max_prefill_chunk_tokens")]
     pub max_prefill_chunk_tokens: NonZeroUsize,
 
-    /// Maximum decode steps before a waiting prefill batch is admitted
+    /// Generation steps to run before pausing to process a waiting prompt. Higher values keep running
+    /// generations smooth; lower values give new requests a faster first token.
     #[arg(long, default_value_t = default_max_decode_steps_before_prefill())]
     #[serde(default = "default_max_decode_steps_before_prefill")]
     pub max_decode_steps_before_prefill: NonZeroUsize,
@@ -605,17 +645,17 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub no_kv_cache: bool,
 
-    /// Number of prefix caches to hold (0 to disable)
-    #[arg(long, default_value_t = 16)]
-    #[serde(default = "default_prefix_cache_n")]
-    pub prefix_cache_n: usize,
+    /// Number of prefix caches to hold (0 to disable; defaults to up to 16 within the memory budget)
+    #[arg(long)]
+    #[serde(default)]
+    pub prefix_cache_n: Option<usize>,
 
     /// Custom chat template file (.json or .jinja)
     #[arg(long, short)]
     #[serde(default)]
     pub chat_template: Option<PathBuf>,
 
-    /// Explicit JINJA template override
+    /// `.jinja` chat template file that always replaces the model's own template
     #[arg(long, short)]
     #[serde(default)]
     pub jinja_explicit: Option<PathBuf>,
@@ -630,12 +670,12 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub matformer_slice_name: Option<String>,
 
-    /// Enable MTP speculative decoding with the head built into the model checkpoint.
+    /// Speed up generation with multi-token prediction (MTP), using the draft head built into the checkpoint.
     #[arg(long, conflicts_with = "mtp_model")]
     #[serde(default)]
     pub mtp: bool,
 
-    /// MTP assistant model id or path.
+    /// Separate MTP draft model, as a Hugging Face ID or local path.
     #[arg(long)]
     #[serde(default)]
     pub mtp_model: Option<String>,
@@ -645,7 +685,7 @@ pub struct RuntimeOptions {
     #[serde(default)]
     pub mtp_n_predict: Option<usize>,
 
-    /// MTP draft sampling policy. Auto uses probabilistic DFlash2 drafting when supported.
+    /// How the MTP drafter picks the tokens it proposes.
     #[arg(long, value_enum, default_value_t)]
     #[serde(default)]
     pub mtp_draft_sampling: MtpDraftSamplingArg,
@@ -719,17 +759,16 @@ pub struct RuntimeOptions {
 
 #[derive(clap::Args, Clone, Default)]
 pub struct AgentCliOptions {
-    /// Build a local agent: enables web search, Python code execution, and shell execution, runs the agentic
-    /// tool loop with a per-session temp workdir. Equivalent to passing
-    /// `--enable-search --enable-code-execution --enable-shell` together.
+    /// Run as a local agent that can search the web and run Python and shell commands, each session in
+    /// its own temp directory. Same as `--enable-search --enable-code-execution --enable-shell`.
     #[arg(long, alias = "agentic")]
     pub agent: bool,
 
-    /// Enable web search (requires embedding model)
+    /// Give the model a web search tool. Also loads a small embedding model to rank results.
     #[arg(long)]
     pub enable_search: bool,
 
-    /// Search embedding model to use. Requires `--enable-search` or `--agent`.
+    /// Embedding model that ranks search results. Requires `--enable-search` or `--agent`.
     #[arg(long)]
     pub search_embedding_model: Option<SearchEmbeddingModelArg>,
 
@@ -780,7 +819,7 @@ pub struct AgentCliOptions {
     #[arg(long)]
     pub skills_dir: Option<PathBuf>,
 
-    /// Agent action permission mode.
+    /// Approval policy for the agent's tool calls.
     #[arg(long = "agent-permission", alias = "code-exec-permission", value_name = "PERMISSION", value_enum, default_value_t = CodeExecPermissionArg::Auto)]
     pub code_exec_permission: CodeExecPermissionArg,
 }
@@ -820,11 +859,11 @@ pub struct BenchRuntimeOptions {
     #[arg(long, requires = "matformer_config_path")]
     pub matformer_slice_name: Option<String>,
 
-    /// Enable MTP speculative decoding with the head built into the model checkpoint.
+    /// Speed up generation with multi-token prediction (MTP), using the draft head built into the checkpoint.
     #[arg(long, conflicts_with = "mtp_model")]
     pub mtp: bool,
 
-    /// MTP assistant model id or path.
+    /// Separate MTP draft model, as a Hugging Face ID or local path.
     #[arg(long)]
     pub mtp_model: Option<String>,
 
@@ -832,7 +871,7 @@ pub struct BenchRuntimeOptions {
     #[arg(long, value_parser = model::parse_positive_usize)]
     pub mtp_n_predict: Option<usize>,
 
-    /// MTP draft sampling policy. Auto uses probabilistic DFlash2 drafting when supported.
+    /// How the MTP drafter picks the tokens it proposes.
     #[arg(long, value_enum, default_value_t)]
     pub mtp_draft_sampling: MtpDraftSamplingArg,
 }
@@ -869,9 +908,12 @@ pub enum SearchEmbeddingModelArg {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum MtpDraftSamplingArg {
+    /// Probabilistic when the drafter supports it, otherwise greedy
     #[default]
     Auto,
+    /// Always propose the most likely token
     Greedy,
+    /// Sample proposals from the draft distribution; fails if unsupported
     Probabilistic,
 }
 
@@ -888,17 +930,23 @@ impl From<MtpDraftSamplingArg> for mistralrs_core::MtpDraftSamplingMethod {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CodeExecPermissionArg {
+    /// Run tool calls without asking
     #[default]
     Auto,
+    /// Ask for approval before each tool call
     Ask,
+    /// Block all tool calls
     Deny,
 }
 
 /// Tuning profile options
 #[derive(Clone, Copy, ValueEnum)]
 pub enum TuneProfileArg {
+    /// Most precise level that fits, starting from 8-bit
     Quality,
+    /// Start from 6-bit, trading a little quality for memory and speed
     Balanced,
+    /// Start from 4-bit for the smallest, fastest model
     Fast,
 }
 
@@ -911,6 +959,15 @@ pub struct MatformerSelection {
 }
 
 impl RuntimeOptions {
+    pub fn max_seqs_for_run(&self) -> usize {
+        self.max_seqs.unwrap_or(DEFAULT_RUN_MAX_SEQS)
+    }
+
+    pub fn max_seqs_for_serve(&self) -> usize {
+        self.max_seqs
+            .unwrap_or(mistralrs_core::memory_plan::DEFAULT_MAX_NUM_SEQS)
+    }
+
     pub fn matformer_selection(&self) -> MatformerSelection {
         MatformerSelection {
             config_path: self.matformer_config_path.clone(),
@@ -986,12 +1043,12 @@ impl Default for GlobalOptions {
 impl Default for RuntimeOptions {
     fn default() -> Self {
         Self {
-            max_seqs: 32,
+            max_seqs: None,
             max_num_batched_tokens: default_max_num_batched_tokens(),
             max_prefill_chunk_tokens: default_max_prefill_chunk_tokens(),
             max_decode_steps_before_prefill: default_max_decode_steps_before_prefill(),
             no_kv_cache: false,
-            prefix_cache_n: 16,
+            prefix_cache_n: None,
             chat_template: None,
             jinja_explicit: None,
             matformer_config_path: None,
@@ -1035,10 +1092,6 @@ fn default_token_source() -> TokenSource {
     TokenSource::CacheToken
 }
 
-fn default_max_seqs() -> usize {
-    32
-}
-
 fn default_max_num_batched_tokens() -> NonZeroUsize {
     NonZeroUsize::new(DEFAULT_MAX_NUM_BATCHED_TOKENS).unwrap()
 }
@@ -1051,15 +1104,75 @@ fn default_max_decode_steps_before_prefill() -> NonZeroUsize {
     NonZeroUsize::new(DEFAULT_MAX_DECODE_STEPS_BEFORE_PREFILL).unwrap()
 }
 
-fn default_prefix_cache_n() -> usize {
-    16
-}
-
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::{fs, path::Path};
 
-    use super::*;
+    #[test]
+    fn prefix_cache_defaults_preserve_explicit_counts() {
+        for command in ["run", "serve"] {
+            for explicit in [None, Some(0), Some(4), Some(16)] {
+                let mut args = vec!["mistralrs".to_owned(), command.to_owned()];
+                if let Some(capacity) = explicit {
+                    args.extend(["--prefix-cache-n".to_owned(), capacity.to_string()]);
+                }
+                let runtime = match Cli::try_parse_from(args).unwrap().command {
+                    Command::Run { runtime, .. } | Command::Serve { runtime, .. } => runtime,
+                    _ => unreachable!(),
+                };
+                assert_eq!(runtime.prefix_cache_n, explicit);
+            }
+        }
+        assert_eq!(RuntimeOptions::default().prefix_cache_n, None);
+        for (config, expected) in [
+            ("", None),
+            ("prefix_cache_n = 0", Some(0)),
+            ("prefix_cache_n = 16", Some(16)),
+        ] {
+            assert_eq!(
+                toml::from_str::<RuntimeOptions>(config)
+                    .unwrap()
+                    .prefix_cache_n,
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn sequence_defaults_follow_command_and_preserve_explicit_limits() {
+        for (command, default) in [
+            ("run", DEFAULT_RUN_MAX_SEQS),
+            ("serve", mistralrs_core::memory_plan::DEFAULT_MAX_NUM_SEQS),
+        ] {
+            for explicit in [None, Some(1), Some(8), Some(32)] {
+                let mut args = vec!["mistralrs".to_owned(), command.to_owned()];
+                if let Some(limit) = explicit {
+                    args.extend(["--max-seqs".to_owned(), limit.to_string()]);
+                }
+                let cli = Cli::try_parse_from(args).unwrap();
+                let (runtime, resolved) = match cli.command {
+                    Command::Run { runtime, .. } => {
+                        let resolved = runtime.max_seqs_for_run();
+                        (runtime, resolved)
+                    }
+                    Command::Serve { runtime, .. } => {
+                        let resolved = runtime.max_seqs_for_serve();
+                        (runtime, resolved)
+                    }
+                    _ => unreachable!(),
+                };
+                assert_eq!(runtime.max_seqs, explicit);
+                assert_eq!(resolved, explicit.unwrap_or(default));
+            }
+        }
+        let runtime = RuntimeOptions::default();
+        assert_eq!(runtime.max_seqs_for_run(), DEFAULT_RUN_MAX_SEQS);
+        assert_eq!(
+            runtime.max_seqs_for_serve(),
+            mistralrs_core::memory_plan::DEFAULT_MAX_NUM_SEQS
+        );
+    }
 
     fn resolve_default_command(command: &str, args: &[&str]) -> anyhow::Result<ModelType> {
         let cli = Cli::try_parse_from(

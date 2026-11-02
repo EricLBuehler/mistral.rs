@@ -28,8 +28,11 @@ class CodeExecutionPermission(Enum):
 
 class NetworkMode(Enum):
     NoNetwork = "none"
+    """No network access. On Linux, opening a socket fails."""
     Loopback = "loopback"
+    """Only `localhost` is reachable."""
     Full = "full"
+    """No network restrictions."""
 
 class AgentToolSource(Enum):
     BuiltIn = "built_in"
@@ -72,176 +75,354 @@ class WebSearchOptions:
 @dataclass
 class ToolChoice(Enum):
     NoTools = "None"
+    """The model can't call tools."""
     Auto = "Auto"
+    """The model decides whether to call a tool."""
 
 @dataclass
 class AgentToolMetadata:
     """
-    Stable metadata for the agent action being approved.
+    Describes the tool behind an agent action that is waiting for approval.
     """
 
     source: AgentToolSource
+    """Where the tool comes from: built in, registered by your app, an MCP server, or an external dispatch URL."""
     kind: AgentToolKind
+    """What the tool does, such as code execution, shell, or web search."""
     label: str
+    """Display name, such as `"Python code"`, `"Shell command"`, or the tool's own name."""
 
 @dataclass
 class AgentToolApproval:
     """
-    Approval request passed to `ChatCompletionRequest.agent_approval_callback`.
+    An agent action waiting for approval. Your `ChatCompletionRequest.agent_approval_callback` receives one.
     """
 
     approval_id: str
+    """ID of this approval request."""
     session_id: str
+    """Agent session the action belongs to."""
     round: int
+    """Tool-call round within the request."""
     tool: AgentToolMetadata
+    """The tool the model wants to run."""
     arguments_json: str
+    """The tool call's arguments, as a JSON string."""
     code: str | None = None
+    """The `code` argument when it is a string, as it is for Python code execution. Otherwise `None`."""
 
-    def arguments(self) -> Any: ...
+    def arguments(self) -> Any:
+        """Parse `arguments_json` and return the result as Python objects."""
 
 @dataclass
 class AgentToolApprovalDecision:
     """
-    Approval callback return value with HTTP/Rust parity.
+    A richer answer for an approval callback than `True` or `False`. Use it to send the model a reason
+    for a denial, or to approve every later action in the session.
     """
 
     decision: AgentToolApprovalDecisionKind
+    """Approve or deny."""
     remember_for_session: bool = False
+    """On approve, skip approval for later actions in the same `session_id`."""
     message: str | None = None
+    """On deny, text returned to the model as the tool result."""
 
     @staticmethod
-    def approve(remember_for_session: bool = False) -> "AgentToolApprovalDecision": ...
+    def approve(remember_for_session: bool = False) -> "AgentToolApprovalDecision":
+        """Approve the action."""
     @staticmethod
-    def deny(message: str | None = None) -> "AgentToolApprovalDecision": ...
+    def deny(message: str | None = None) -> "AgentToolApprovalDecision":
+        """Deny the action, optionally with a message for the model."""
 
 @dataclass(frozen=True)
 class LoraAdapterGeneration:
-    """Select one exact immutable LoRA adapter generation by its 64-character ID."""
+    """
+    Pins a request to one exact version of a LoRA adapter, instead of whatever its alias points to now.
+
+    Each set of adapter files you load is a generation, identified by a 64-character hash of its config
+    and weights. Loading different files under an alias gives it a new generation. Loading the same
+    files again gives the same one. See
+    [pin an exact adapter version](/guides/customize/lora-adapters/#pin-an-exact-adapter-version).
+
+    Get one from `LoraAdapterInfo.exact()`, or pass a generation ID. A malformed ID raises `ValueError`.
+    """
 
     generation: str
+    """The 64-character generation ID."""
 
 class LoraAdapterError(ValueError):
-    """A dynamic LoRA lifecycle operation failed."""
+    """
+    Raised when a dynamic LoRA operation fails. See the
+    [error codes](/guides/customize/lora-adapters/#troubleshooting).
+    """
 
     code: str
+    """Why it failed, such as `lora_generation_mismatch` or `lora_adapter_not_found`."""
 
 @dataclass
 class ChatCompletionRequest:
     """
-    A ChatCompletionRequest represents a request sent to the mistral.rs engine. It encodes information
-    about input data, sampling, and how to return the response.
+    A chat request. Send it with `Runner.send_chat_completion_request`.
 
-    The messages type is as follows: (for normal chat completion, for chat completion with images, pretemplated prompt)
+    `messages` takes one of three forms:
 
-    Agent permission fields:
+    - A list of `{"role": ..., "content": "..."}` dicts.
+    - A list of dicts whose `content` is a list of parts, for images, audio, or video. Part types are
+      `text`, `image_url`, `input_audio`, `audio_url`, and `video_url`. Only `user` messages can hold media.
+    - A plain string, sent as a single user message.
 
-    - `agent_permission`: `AgentPermission.Auto`, `.Ask`, or `.Deny`. Applies to server-executed
-      agent actions such as code execution, shell, web search, file tools, callbacks,
-      and external tool dispatch.
-    - `agent_approval_callback`: called when `agent_permission=AgentPermission.Ask` with an
-      `AgentToolApproval`. Return `True`, `False`, or
-      `AgentToolApprovalDecision`.
+    Sampling fields left as `None` use the model's `generation_config.json` values when it has them.
 
-    See [agent permissions](/guides/agents/permissions-and-approvals/)
-    for the shared CLI, HTTP, Python, and Rust behavior.
+    Reasoning controls:
 
-    `reasoning_effort` accepts `off`, `low`, `medium`, `high`, and `xhigh`; `none`
-    aliases `off`. Values are trimmed and case-insensitive. If both reasoning controls
-    are omitted, thinking is enabled with no selected effort. Contradictory
-    `enable_thinking` and `reasoning_effort` values raise `ValueError`.
+    - `reasoning_effort` accepts `off`, `low`, `medium`, `high`, and `xhigh`. `none` means `off` and
+      `max` means `xhigh`. Case and surrounding spaces are ignored.
+    - If you set neither control, thinking is on for text output and off for speech output.
+    - Contradictory values, such as `enable_thinking=False` with `reasoning_effort="high"`, raise `ValueError`.
+
+    Audio:
+
+    - Input: add a part `{"type": "input_audio", "input_audio": {"data": "<base64>", "format": "wav"}}`.
+      `format` is `wav` or `mp3`. For other formats, use an `audio_url` part.
+    - Speech output: set `modalities=["audio"]` or `["text", "audio"]`, and `audio={"format": ...}`.
+      Formats are `wav`, `pcm16`, `mp3`, `flac`, `opus`, and `aac`. All but `wav` and `pcm16` need FFmpeg.
+      `voice` can be omitted or set to `"default"`.
+    - Streaming speech requires `pcm16` and arrives as `delta.audio.data` chunks.
+    - The HTTP API's `audio.id` history replay isn't available here.
+    - Text sampling fields don't change LFM3's separate speech sampler.
+
+    For the agent fields, see [agent permissions](/guides/agents/permissions-and-approvals/).
     """
 
     messages: (
         list[dict[str, str]] | list[dict[str, list[dict[str, str | dict[str, str]]]]]
     ) | str
+    """The conversation, in one of the forms above."""
     model: str
+    """Not used to choose a model. Pass `model_id` to the `Runner` method instead."""
     logprobs: bool = False
+    """Return the log probability of each output token."""
     n_choices: int = 1
+    """Number of completions to generate."""
     logit_bias: dict[int, float] | None = None
+    """Map of token ID to a bias added to that token's logit before sampling."""
     top_logprobs: int | None = None
+    """With `logprobs`, how many of the most likely tokens to return at each step. Defaults to 1."""
     max_tokens: int | None = None
+    """Maximum number of tokens to generate."""
     presence_penalty: float | None = None
+    """Flat penalty on any token already generated. 0 turns it off."""
     frequency_penalty: float | None = None
+    """Penalty that grows each time a token is generated again. 0 turns it off."""
     repetition_penalty: float | None = None
+    """Penalty on tokens already in the prompt or output. 1.0 turns it off."""
     stop_seqs: list[str] | None = None
+    """Stop generating when any of these strings appears."""
     temperature: float | None = None
+    """Sampling temperature. 0 picks the most likely token every time."""
     top_p: float | None = None
+    """Sample only from the most likely tokens whose probabilities add up to `top_p`."""
     top_k: int | None = None
+    """Sample only from the `top_k` most likely tokens."""
     stream: bool = False
+    """Return an iterator of `ChatCompletionChunkResponse` instead of one response."""
     grammar: str | None = None
+    """Constraint that the output must match. Set `grammar_type` with it."""
     grammar_type: str | None = None
+    """How to read `grammar`: `"regex"`, `"lark"`, `"json_schema"`, or `"llguidance"`."""
     min_p: float | None = None
+    """Drop tokens less likely than `min_p` times the most likely token."""
     tool_schemas: list[str] | None = None
+    """Tools the model may call, each a JSON string in the OpenAI format (`{"type": "function", "function": {...}}`)."""
     tool_choice: ToolChoice | None = None
+    """`ToolChoice.Auto` lets the model decide whether to call a tool. `ToolChoice.NoTools` turns tool calls off."""
     dry_multiplier: float | None = None
+    """Turns on DRY ("don't repeat yourself") sampling, which penalizes continuing a sequence that already appeared. Higher is stronger."""
     dry_base: float | None = None
+    """How fast the DRY penalty grows with the length of the repeat. Defaults to 1.75."""
     dry_allowed_length: int | None = None
+    """Repeats up to this many tokens long aren't penalized. Defaults to 2."""
     dry_sequence_breakers: list[str] | None = None
+    """Strings that end a repeat for DRY. Defaults to newline, `:`, `"`, and `*`."""
     web_search_options: WebSearchOptions | None = None
+    """Turns on web search for this request."""
     enable_thinking: bool | None = None
+    """Turn the model's thinking on or off. See the reasoning controls above."""
     truncate_sequence: bool = False
+    """If the prompt is too long for the model, drop tokens from its start instead of failing."""
     reasoning_effort: (
-        Literal["off", "none", "low", "medium", "high", "xhigh"] | None
+        Literal["off", "none", "low", "medium", "high", "xhigh", "max"] | None
     ) = None
+    """How much a reasoning model thinks. See the reasoning controls above."""
     max_tool_rounds: int | None = None
+    """Most tool-call rounds the server runs by itself. Setting it turns on the agent loop. Defaults to 256."""
     tool_dispatch_url: str | None = None
+    """URL that receives, as a POST, any tool call that no built-in tool or `tool_callbacks` entry handles."""
     enable_code_execution: bool = False
+    """Let the model run Python. The `Runner` needs a `code_execution_config`."""
     enable_shell: bool = False
+    """Let the model run shell commands. The `Runner` needs a `shell_config`. Non-empty `shell_skills` also turns it on."""
     shell_skills: list[ShellSkillMount] | None = None
+    """Skill directories to mount for the shell tool."""
     agent_permission: AgentPermission | None = None
+    """Whether agent actions run (`Auto`), wait for approval (`Ask`), or are refused (`Deny`)."""
     agent_approval_callback: (
         Callable[[AgentToolApproval], bool | AgentToolApprovalDecision] | None
     ) = None
+    """Called when `agent_permission` is `Ask`. Return `True`, `False`, or an `AgentToolApprovalDecision`. Raising or returning anything else denies the action."""
     code_execution_permission: CodeExecutionPermission | None = None
+    """Older, code-only form of `agent_permission`. Used when `agent_permission` is unset."""
     session_id: str | None = None
+    """Agent session to continue. If unset, the server matches an earlier session by its messages or starts a new one."""
     files: list[RequestedFile] | None = None
+    """Output files the model must produce."""
     input_files: list[InputFile] | None = None
+    """Files to give the model."""
     ignore_eos: bool = False
+    """Keep generating past the end-of-sequence token, until `max_tokens` or a stop string."""
     adapter: str | LoraAdapterGeneration | None = field(default=None, kw_only=True)
+    """LoRA adapter to use: an alias, or a `LoraAdapterGeneration` for one exact version."""
+    modalities: list[Literal["text", "audio"]] | None = field(default=None, kw_only=True)
+    """Output types for a speech model: `["text"]`, `["audio"]`, or `["text", "audio"]`."""
+    audio: dict[str, str] | None = field(default=None, kw_only=True)
+    """Speech output settings: `format`, and optionally `voice`. Requires `"audio"` in `modalities`."""
 
 @dataclass
 class CompletionRequest:
     """
-    A CompletionRequest represents a request sent to the mistral.rs engine. It encodes information
-    about input data, sampling, and how to return the response.
+    A raw text completion request, with no chat template. Send it with `Runner.send_completion_request`.
+
+    Fields shared with `ChatCompletionRequest` work the same way.
     """
 
     prompt: str
+    """Text to continue."""
     model: str
+    """Not used to choose a model. Pass `model_id` to the `Runner` method instead."""
     best_of: int = 1
+    """How many of the `n_choices` completions to return, keeping those with the highest log probability."""
     echo_prompt: bool = False
+    """Put the prompt at the start of each returned completion."""
     presence_penalty: float | None = None
+    """Flat penalty on any token already generated. 0 turns it off."""
     frequency_penalty: float | None = None
+    """Penalty that grows each time a token is generated again. 0 turns it off."""
     repetition_penalty: float | None = None
+    """Penalty on tokens already in the prompt or output. 1.0 turns it off."""
     logit_bias: dict[int, float] | None = None
+    """Map of token ID to a bias added to that token's logit before sampling."""
     max_tokens: int | None = None
+    """Maximum number of tokens to generate."""
     n_choices: int = 1
+    """Number of completions to generate."""
     stop_seqs: list[str] | None = None
+    """Stop generating when any of these strings appears."""
     temperature: float | None = None
+    """Sampling temperature. 0 picks the most likely token every time."""
     top_p: float | None = None
+    """Sample only from the most likely tokens whose probabilities add up to `top_p`."""
     suffix: str | None = None
+    """Text appended to each returned completion."""
     top_k: int | None = None
+    """Sample only from the `top_k` most likely tokens."""
     grammar: str | None = None
+    """Constraint that the output must match. Set `grammar_type` with it."""
     grammar_type: str | None = None
+    """How to read `grammar`: `"regex"`, `"lark"`, `"json_schema"`, or `"llguidance"`."""
     min_p: float | None = None
+    """Drop tokens less likely than `min_p` times the most likely token."""
     tool_schemas: list[str] | None = None
+    """Tools the model may call, each a JSON string in the OpenAI format."""
     tool_choice: ToolChoice | None = None
+    """`ToolChoice.Auto` lets the model decide whether to call a tool. `ToolChoice.NoTools` turns tool calls off."""
     dry_multiplier: float | None = None
+    """Turns on DRY ("don't repeat yourself") sampling. Higher is stronger."""
     dry_base: float | None = None
+    """How fast the DRY penalty grows with the length of the repeat. Defaults to 1.75."""
     dry_allowed_length: int | None = None
+    """Repeats up to this many tokens long aren't penalized. Defaults to 2."""
     dry_sequence_breakers: list[str] | None = None
+    """Strings that end a repeat for DRY. Defaults to newline, `:`, `"`, and `*`."""
     truncate_sequence: bool = False
+    """If the prompt is too long for the model, drop tokens from its start instead of failing."""
     ignore_eos: bool = False
+    """Keep generating past the end-of-sequence token, until `max_tokens` or a stop string."""
     adapter: str | LoraAdapterGeneration | None = field(default=None, kw_only=True)
+    """LoRA adapter to use: an alias, or a `LoraAdapterGeneration` for one exact version."""
+
+class DecisionQuestion:
+    """A typed decision question; spoken instructions accept audio_url/input_audio content parts."""
+    def __init__(
+        self,
+        kind: Literal["noul", "choice", "score", "text", "number", "date", "box", "boxes"],
+        instructions: str | dict[str, Any],
+        *,
+        criteria: dict[str, Any] | list[str] | None = None,
+        multiple: bool = False,
+        range: tuple[float, float] | None = None,
+        step: float | None = None,
+        unit: str | None = None,
+        max: int | None = None,
+    ) -> None: ...
+    def to_dict(self) -> dict[str, Any]: ...
+
+class DecisionRequest:
+    """State is any JSON value. Media accepts image_url, audio_url, input_audio, and video_url parts."""
+    def __init__(
+        self,
+        state: Any,
+        questions: dict[str, DecisionQuestion | dict[str, Any]],
+        *,
+        images: list[str] | None = None,
+        media: list[dict[str, Any]] | None = None,
+        set_size: int | None = None,
+    ) -> None: ...
+
+class DecisionAnswer:
+    """Fields depend on type; absent optional fields return None. to_dict preserves the wire object."""
+    type: Literal["noul", "choice", "score", "text", "number", "date", "box", "boxes"]
+    noul: float
+    choice: str | None
+    choices: list[str] | None
+    confidence: float | None
+    probabilities: dict[str, float]
+    score: float
+    legend: dict[str, str]
+    text: str | None
+    span: list[int] | None
+    found: float | None
+    path: str | None
+    number: float | None
+    unit: str | None
+    interval: list[float] | None
+    date: str | None
+    box: dict[str, float] | None
+    boxes: list[dict[str, Any]]
+    count: int
+    at_least: bool
+    presence: list[float]
+    def to_dict(self) -> dict[str, Any]: ...
+
+class DecisionUsage:
+    input_tokens: int
+    output_tokens: int
+
+class DecisionResponse:
+    answers: dict[str, DecisionAnswer]
+    usage: DecisionUsage
+    def to_dict(self) -> dict[str, Any]: ...
 
 @dataclass
 class EmbeddingRequest:
     """
-    An EmbeddingRequest represents a request to compute embeddings for the provided input text.
+    Text or token IDs to embed. Send it with `Runner.send_embedding_request`, which returns one vector per input.
     """
 
     input: str | list[str] | list[int] | list[list[int]]
+    """A string, a list of strings, a list of token IDs, or a list of token-ID lists."""
     truncate_sequence: bool = False
+    """If an input is too long for the model, drop tokens from its end instead of failing."""
 
 @dataclass
 class Architecture(Enum):
@@ -262,11 +443,15 @@ class Architecture(Enum):
     GLM4Moe = "glm4moe"
     GLM4MoeLite = "glm4moelite"
     Qwen3Moe = "qwen3moe"
+    Flint = "flint"
     SmolLm3 = "smollm3"
     GraniteMoeHybrid = "granitemoehybrid"
     GptOss = "gptoss"
+    HunYuanDenseV1 = "hunyuanv1dense"
+    HunYuanMoEV1 = "hunyuanv1moe"
     Qwen3Next = "qwen3next"
     Lfm2 = "lfm2"
+    Lfm3 = "lfm3"
     Lfm2Moe = "lfm2_moe"
 
 @dataclass
@@ -281,6 +466,10 @@ class MultimodalArchitecture(Enum):
     LLaVANext = "llava-next"
     LLaVA = "llava"
     Lfm2Vl = "lfm2vl"
+    Lfm3Vl = "lfm3vl"
+    Lfm3Audio = "lfm3audio"
+    Lfm3Omni = "lfm3omni"
+    Lfm3D1 = "lfm3d1"
     VLlama = "vllama"
     Qwen2VL = "qwen2vl"
     Idefics3 = "idefics3"
@@ -313,11 +502,14 @@ class SpeechLoaderType(Enum):
 @dataclass
 class IsqOrganization(Enum):
     Default = "default"
+    """Quantize every layer that in-situ quantization can quantize."""
     MoQE = "moqe"
+    """Quantize only the MoE expert weights and leave the other layers as they are."""
 
 @dataclass
 class ModelDType(Enum):
     Auto = "auto"
+    """Pick a type the device supports."""
     BF16 = "bf16"
     F16 = "f16"
     F32 = "f32"
@@ -337,56 +529,28 @@ class SpeechGenerationResponse:
     rate: int
     channels: int
 
-@dataclass
-class TextAutoMapParams:
-    """
-    Auto-mapping parameters for a text model.
-    These affect automatic device mapping but are not a hard limit.
-    """
-
-    max_seq_len: int = 4 * 1024
-    max_batch_size: int = 1
-
-@dataclass
-class MultimodalAutoMapParams:
-    """
-    Auto-mapping parameters for a multimodal model.
-    These affect automatic device mapping but are not a hard limit.
-    """
-
-    max_seq_len: int = 4 * 1024
-    max_batch_size: int = 1
-    max_num_images: int = 1
-    max_image_length: int = 1024
-
 class SandboxPolicy:
     """
-    OS-level sandbox applied to code-execution and shell subprocesses on Linux/macOS.
+    Limits on the processes that the Python and shell tools start, on Linux and macOS.
 
-    Pass to `CodeExecutionConfig(sandbox_policy=...)` or
-    `ShellConfig(sandbox_policy=...)` to enable the sandbox; omit (or pass
-    `None`) to disable it. See the sandbox reference for the layered defenses:
-    env scrub, namespaces, Landlock FS allowlist, rlimits, seccomp deny-list,
-    and optional cgroup v2 on Linux.
+    Pass one as `CodeExecutionConfig(sandbox_policy=...)` or `ShellConfig(sandbox_policy=...)`. Without
+    one, those processes run with no sandbox. The sandbox controls:
 
-    - `max_memory_mb`: per-session memory cap (default 2048).
-    - `max_cpu_secs`: per-session CPU time cap (default 300). When rlimits
-      apply, this is raised to at least the configured tool timeout.
-    - `max_procs`: per-session process/thread cap (default 64).
-    - `max_open_fds`: per-session open-fd cap (default 1024).
-    - `max_file_sz_mb`: per-session max written-file size (default 256).
-    - `network`: `NetworkMode.NoNetwork`, `.Loopback`, or `.Full`.
-    - `extra_fs_read`: additional paths the sandboxed process may read.
-    - `extra_fs_write`: additional paths the sandboxed process may read/write.
-    - `extra_env`: additional environment variable names allowed through.
-    - `strict`: fail initialization if requested filesystem or network
-      isolation is unavailable.
+    - which files they can read and write
+    - which network they can reach
+    - which environment variables they see
+    - how much memory, CPU time, and how many processes they can use
+
+    macOS applies the file and network rules but not the resource limits. The
+    [sandbox reference](/reference/sandbox/) explains how each rule is enforced.
+
+    The defaults match the CLI's `restricted` profile.
     """
 
     def __init__(
         self,
         max_memory_mb: int = 2048,
-        max_cpu_secs: int = 300,
+        max_cpu_secs: int = 600,
         max_procs: int = 64,
         max_open_fds: int = 1024,
         max_file_sz_mb: int = 256,
@@ -395,30 +559,27 @@ class SandboxPolicy:
         extra_fs_write: list[str] = [],
         extra_env: list[str] = [],
         strict: bool = False,
-    ) -> None: ...
+    ) -> None:
+        """
+        Args:
+            max_memory_mb: Memory (address space) limit, in MB.
+            max_cpu_secs: CPU time limit, in seconds. On Linux, a limit shorter than the tool's timeout is raised to match it.
+            max_procs: Limit on processes and threads.
+            max_open_fds: Limit on open file descriptors.
+            max_file_sz_mb: Largest file a process can write, in MB.
+            network: Network access. See `NetworkMode`.
+            extra_fs_read: More paths the process can read.
+            extra_fs_write: More paths the process can read and write.
+            extra_env: More environment variable names to pass through. Their values come from the current environment.
+            strict: Fail at startup if a requested file or network restriction isn't available, instead of skipping it.
+        """
 
 class CodeExecutionConfig:
     """
-    Configuration for the built-in Python code execution tool.
+    Turns on the built-in Python tool, `execute_python`.
 
-    Pass to `Runner(code_execution_config=...)` to enable the `execute_python`
-    tool. Per-request, set `ChatCompletionRequest.enable_code_execution=True`.
-
-    All fields are optional:
-
-    - `python_path`: interpreter to run. Defaults to `python` on Windows,
-      `python3` elsewhere.
-    - `timeout_secs`: per-call timeout. Defaults to 60.
-    - `working_directory`: shared working directory. Defaults to a per-session
-      temp directory.
-    - `sandbox_policy`: an OS-level sandbox to apply to the spawned interpreter
-      on Linux/macOS. `None` (default) disables the sandbox; passing a
-      `SandboxPolicy` enables it with the configured limits.
-    - `permission`: `CodeExecutionPermission.Auto`, `.Ask`, or `.Deny`. For
-      new code, prefer `ChatCompletionRequest.agent_permission`.
-    - `approval_callback`: code-execution-specific callback. For new code,
-      prefer `ChatCompletionRequest.agent_approval_callback`, which applies to
-      all agent actions.
+    Pass it as `Runner(code_execution_config=...)`, then set
+    `ChatCompletionRequest.enable_code_execution=True` on each request that may run code.
     """
 
     def __init__(
@@ -429,28 +590,25 @@ class CodeExecutionConfig:
         sandbox_policy: SandboxPolicy | None = None,
         permission: CodeExecutionPermission | None = None,
         approval_callback: Callable[[dict[str, object]], bool] | None = None,
-    ) -> None: ...
+    ) -> None:
+        """
+        Args:
+            python_path: Interpreter to run. Defaults to `python` on Windows and `python3` elsewhere.
+            timeout_secs: Time limit per call, in seconds. Defaults to 60.
+            working_directory: One directory that every session runs in. Defaults to a new temporary directory per session.
+            sandbox_policy: Sandbox for the interpreter. `None` runs it without one.
+            permission: Older form of `ChatCompletionRequest.agent_permission`, which you should prefer. Defaults to `Auto`.
+            approval_callback: Older, code-only approval callback. Prefer `ChatCompletionRequest.agent_approval_callback`.
+                It receives a dict with `approval_id`, `session_id`, `code`, `outputs`, and `working_directory`,
+                and returns `True` to run the code. An exception counts as a denial.
+        """
 
 class ShellConfig:
     """
-    Configuration for the built-in shell execution tool.
+    Turns on the built-in shell tool.
 
-    Pass to `Runner(shell_config=...)` to enable the shell tool. Per-request,
-    set `ChatCompletionRequest.enable_shell=True` or provide
-    `ChatCompletionRequest.shell_skills`.
-
-    All fields are optional:
-
-    - `shell_path`: shell executable. Defaults to `cmd` on Windows, `/bin/sh`
-      elsewhere.
-    - `timeout_secs`: per-call timeout. Defaults to 600.
-    - `working_directory`: shared working directory. Defaults to a per-session
-      temp directory.
-    - `sandbox_policy`: an OS-level sandbox to apply to the spawned shell on
-      Linux/macOS. `None` (default) disables the sandbox; passing a
-      `SandboxPolicy` enables it with the configured limits.
-    - `permission`: `AgentPermission.Auto`, `.Ask`, or `.Deny`. For per-request
-      control, prefer `ChatCompletionRequest.agent_permission`.
+    Pass it as `Runner(shell_config=...)`, then set `ChatCompletionRequest.enable_shell=True` or pass
+    `shell_skills` on each request that may run commands.
     """
 
     def __init__(
@@ -460,14 +618,23 @@ class ShellConfig:
         working_directory: str | None = None,
         sandbox_policy: SandboxPolicy | None = None,
         permission: AgentPermission | None = None,
-    ) -> None: ...
+    ) -> None:
+        """
+        Args:
+            shell_path: Shell to run. Defaults to `cmd` on Windows and `/bin/sh` elsewhere.
+            timeout_secs: Time limit per call, in seconds. Defaults to 600.
+            working_directory: Parent directory for sessions. Each session runs in its own `<working_directory>/<session_id>`.
+                Defaults to a new temporary directory per session.
+            sandbox_policy: Sandbox for the shell. `None` runs it without one.
+            permission: Default permission for shell commands. Defaults to `Auto`. For per-request control, use `ChatCompletionRequest.agent_permission`.
+        """
 
 class ShellSkillMount:
     """
-    Local skill directory mount using the OpenAI-compatible Skill directory shape.
+    A local skill directory to mount for the shell tool, in the OpenAI Skill layout (a folder with a `SKILL.md`).
 
-    Pass instances in `ChatCompletionRequest.shell_skills` for in-process
-    requests. Server users normally upload Skills through `/v1/skills`.
+    Pass instances in `ChatCompletionRequest.shell_skills`. With the HTTP server, upload skills through
+    `/v1/skills` instead. Each skill appears at `skills/<name>` in the shell's working directory.
     """
 
     def __init__(
@@ -475,41 +642,68 @@ class ShellSkillMount:
         name: str,
         description: str,
         source_path: str,
-    ) -> None: ...
+    ) -> None:
+        """
+        Args:
+            name: Skill name, shown to the model.
+            description: What the skill does, shown to the model.
+            source_path: Local directory that holds the skill.
+        """
 
 @dataclass
 class LoraAdapter:
+    """A LoRA adapter to load at startup, for `Which.Lora` or `Which.GGUF`."""
+
     alias: str
+    """Name that requests use to select the adapter. Case-sensitive, up to 256 bytes."""
     source: str
+    """Hugging Face repo or local directory holding the adapter."""
     revision: str | None = None
+    """Branch, tag, or commit to download for a Hub `source`. Defaults to `main`."""
 
 class Which(Enum):
     """
-    Which model to select. See the docs for the `Which` enum in API.md for more details.
-    Usage:
+    Chooses the kind of model to load and where its weights come from. Pass one variant to `Runner(which=...)`.
+
     ```python
-    >>> Which.Plain(...)
+    runner = Runner(which=Which.Plain(model_id="Qwen/Qwen3-4B"))
     ```
     """
     @dataclass
     class Plain:
+        """A text model from safetensors weights."""
+
         model_id: str
+        """Hugging Face model ID or local directory."""
         arch: Architecture | None = None
+        """Architecture to load it as. Detected from `config.json` if unset."""
         tokenizer_json: str | None = None
+        """Path to a `tokenizer.json` to use instead of the model's own."""
         topology: str | None = None
+        """Path to a [topology](/guides/perf/topology/) file that sets the device and quantization for each layer."""
         organization: IsqOrganization | None = None
+        """Which layers in-situ quantization touches. See `IsqOrganization`."""
         write_uqff: str | None = None
+        """Save the quantized weights to this `.uqff` path while loading. Use with `Runner(in_situ_quant=...)`."""
         from_uqff: str | list[str] | None = None
+        """Pre-quantized [UQFF](/guides/quantization/uqff/) file, or list of files, to load from the model's repo."""
         dtype: ModelDType = ModelDType.Auto
+        """Data type to load the model in."""
         imatrix: str | None = None
+        """Importance matrix (`.imatrix` or `.cimatrix` file) that guides in-situ quantization."""
         calibration_file: str | None = None
-        auto_map_params: TextAutoMapParams | None = None
+        """Text file to run through the model at load time to build an importance matrix."""
         hf_cache_path: str | None = None
+        """Hugging Face cache directory to use instead of the default."""
         matformer_config_path: str | None = None
+        """[MatFormer](/guides/models/model-family-notes/#matformer) slice table (CSV), for Gemma 3n."""
         matformer_slice_name: str | None = None
+        """Slice to load from that table. Without it, the full model loads."""
 
     @dataclass
     class Embedding:
+        """An embedding model from safetensors weights. Fields match `Which.Plain`."""
+
         model_id: str
         arch: EmbeddingArchitecture | None = None
         tokenizer_json: str | None = None
@@ -533,58 +727,83 @@ class Which(Enum):
         write_uqff: str | None = None
         from_uqff: str | list[str] | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = None
         hf_cache_path: str | None = None
 
     @dataclass
     class Lora:
+        """
+        A text model that can switch LoRA adapters per request. See [LoRA adapters](/guides/customize/lora-adapters/).
+
+        Other fields match `Which.Plain`.
+        """
+
         model_id: str
         adapters: list[LoraAdapter] | None = None
+        """Adapters to load at startup. Leave unset to start with none and load them later."""
         arch: Architecture | None = None
         tokenizer_json: str | None = None
         topology: str | None = None
         write_uqff: str | None = None
         from_uqff: str | list[str] | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = None
         hf_cache_path: str | None = None
         max_adapters: int = 16
+        """Limit on loaded aliases, and separately on adapter generations in memory, counting old ones still finishing requests."""
         max_rank: int = 256
+        """Highest adapter rank accepted."""
         max_bytes: int = 8589934592
+        """Memory limit for all loaded adapters, in bytes (8 GiB by default)."""
 
     @dataclass
     class GGUF:
-        """Select a GGUF model.
+        """
+        A model from a GGUF file. See [run GGUF models](/guides/models/run-gguf/).
 
-        Pass `adapters=[]` or set a non-default LoRA limit to enable an empty dynamic LoRA runtime.
-        With `mmproj_filename`, adapters apply to the language model.
-        Pass `in_situ_quant` to `Runner` to requantize compatible GGUF weights while loading.
+        - Dynamic LoRA turns on when you pass `adapters`, even `[]`, or change `max_adapters`, `max_rank`, or `max_bytes`.
+        - With `mmproj_filename`, adapters apply to the language model only.
+        - To re-quantize compatible GGUF weights while loading, pass `in_situ_quant` to `Runner`.
         """
 
         quantized_model_id: str
+        """Hugging Face repo or local directory holding the GGUF file."""
         quantized_filename: str | list[str]
+        """GGUF file name, or a list of names for a split model."""
         tok_model_id: str | None = None
+        """The original model's repo or local directory, for config, tokenizer, and processor files the GGUF doesn't include."""
         topology: str | None = None
+        """Path to a [topology](/guides/perf/topology/) file that sets the device and quantization for each layer."""
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = None
+        """Data type to load the model in."""
         tokenizer_json: str | None = field(default=None, kw_only=True)
+        """Path to a `tokenizer.json` to use instead of the model's own."""
         mmproj_filename: str | list[str] | None = field(default=None, kw_only=True)
+        """Projector GGUF file, or files, holding a multimodal model's vision or audio encoder."""
         organization: IsqOrganization | None = field(default=None, kw_only=True)
+        """Which layers to quantize when `in_situ_quant` re-quantizes the weights."""
         write_uqff: str | None = field(default=None, kw_only=True)
+        """Save the re-quantized weights to this `.uqff` path while loading."""
         imatrix: str | None = field(default=None, kw_only=True)
+        """Importance matrix (`.imatrix` or `.cimatrix` file) that guides re-quantization."""
         calibration_file: str | None = field(default=None, kw_only=True)
+        """Text file to run through the model at load time to build an importance matrix."""
         max_edge: int | None = field(default=None, kw_only=True)
-        multimodal_auto_map_params: MultimodalAutoMapParams | None = field(
-            default=None, kw_only=True
-        )
+        """Shrink images so their longest edge is at most this many pixels, keeping the aspect ratio."""
         adapters: list[LoraAdapter] | None = field(default=None, kw_only=True)
+        """LoRA adapters to load at startup. Pass `[]` to start with none and load them later."""
         max_adapters: int = field(default=16, kw_only=True)
+        """Limit on loaded aliases, and separately on adapter generations in memory."""
         max_rank: int = field(default=256, kw_only=True)
+        """Highest adapter rank accepted."""
         max_bytes: int = field(default=8589934592, kw_only=True)
+        """Memory limit for all loaded adapters, in bytes (8 GiB by default)."""
         hf_cache_path: str | None = field(default=None, kw_only=True)
+        """Hugging Face cache directory to use instead of the default."""
         matformer_config_path: str | None = field(default=None, kw_only=True)
+        """[MatFormer](/guides/models/model-family-notes/#matformer) slice table (CSV), for Gemma 3n."""
         matformer_slice_name: str | None = field(default=None, kw_only=True)
+        """Slice to load from that table. Without it, the full model loads."""
         encoder_cache_memory_bytes: int | None = field(default=None, kw_only=True)
+        """Memory limit, in bytes, for cached image, audio, and video encoder outputs. Unset keeps the model's default entry-count limit."""
 
     @dataclass
     class XLoraGGUF:
@@ -598,7 +817,6 @@ class Which(Enum):
         tgt_non_granular_index: int | None = None
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = None
 
     @dataclass
     class LoraGGUF:
@@ -614,7 +832,6 @@ class Which(Enum):
         tok_model_id: str | None = None
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = None
 
     @dataclass
     class GGML:
@@ -625,7 +842,6 @@ class Which(Enum):
         gqa: int = 1
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = None
 
     @dataclass
     class XLoraGGML:
@@ -639,7 +855,6 @@ class Which(Enum):
         gqa: int = 1
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = None
 
     @dataclass
     class LoraGGML:
@@ -652,35 +867,54 @@ class Which(Enum):
         gqa: int = 1
         topology: str | None = None
         dtype: ModelDType = ModelDType.Auto
-        auto_map_params: TextAutoMapParams | None = None
 
     @dataclass
     class MultimodalPlain:
+        """A model that takes images, audio, or video, from safetensors weights."""
+
         model_id: str
+        """Hugging Face model ID or local directory."""
         arch: MultimodalArchitecture | None = None
+        """Architecture to load it as. Detected from `config.json` if unset."""
         tokenizer_json: str | None = None
+        """Path to a `tokenizer.json` to use instead of the model's own."""
         topology: str | None = None
+        """Path to a [topology](/guides/perf/topology/) file that sets the device and quantization for each layer."""
         write_uqff: str | None = None
+        """Save the quantized weights to this `.uqff` path while loading. Use with `Runner(in_situ_quant=...)`."""
         from_uqff: str | list[str] | None = None
+        """Pre-quantized [UQFF](/guides/quantization/uqff/) file, or list of files, to load from the model's repo."""
         dtype: ModelDType = ModelDType.Auto
+        """Data type to load the model in."""
         max_edge: int | None = None
+        """Shrink images so their longest edge is at most this many pixels, keeping the aspect ratio."""
         calibration_file: str | None = None
+        """Text file to run through the model at load time to build an importance matrix."""
         imatrix: str | None = None
-        auto_map_params: MultimodalAutoMapParams | None = None
+        """Importance matrix (`.imatrix` or `.cimatrix` file) that guides in-situ quantization."""
         hf_cache_path: str | None = None
+        """Hugging Face cache directory to use instead of the default."""
         matformer_config_path: str | None = None
+        """[MatFormer](/guides/models/model-family-notes/#matformer) slice table (CSV), for Gemma 3n."""
         matformer_slice_name: str | None = None
+        """Slice to load from that table. Without it, the full model loads."""
         organization: IsqOrganization | None = None
+        """Which layers in-situ quantization touches. See `IsqOrganization`."""
         encoder_cache_memory_bytes: int | None = None
+        """Memory limit, in bytes, for cached image, audio, and video encoder outputs. Unset keeps the model's default entry-count limit."""
 
     @dataclass
     class DiffusionPlain:
+        """An image generation model."""
+
         model_id: str
         arch: DiffusionArchitecture
         dtype: ModelDType = ModelDType.Auto
 
     @dataclass
     class Speech:
+        """A dedicated speech generation model, such as Dia."""
+
         model_id: str
         arch: SpeechLoaderType
         dac_model_id: str | None = None
@@ -688,53 +922,81 @@ class Which(Enum):
 
 class PagedCacheType(Enum):
     Auto: int = 0
+    """Store the KV cache in the model's activation type."""
     F8E4M3: int = 1
+    """Store the KV cache in FP8 (E4M3), half the memory of BF16. Needs F16, BF16, or F32 activations."""
 
 @dataclass
 class LoraAdapterInfo:
-    """A loaded alias and the immutable generation it currently selects."""
+    """
+    A loaded adapter alias and the generation it points to now. A generation is one exact set of
+    adapter files, identified by a hash of its config and weights. See `LoraAdapterGeneration`.
+    """
 
     alias: str
+    """Name that requests use to select the adapter."""
     source: str
+    """Repo or directory the adapter was loaded from."""
     revision: str | None
+    """Hub revision requested at load, if any."""
     generation: str
+    """64-character ID of the generation the alias points to now."""
     rank: int
+    """Highest LoRA rank in the adapter's config."""
     bytes: int
+    """Memory used by this generation's adapter tensors, in bytes."""
 
     def exact(self) -> LoraAdapterGeneration:
-        """Select this exact immutable generation in a request."""
+        """Return a selector for this exact generation, to pass as a request's `adapter`."""
 
 @dataclass
 class LoraResidentGenerationInfo:
-    """One device-resident generation, including retired generations still leased."""
+    """
+    One adapter generation held in memory. When an alias is replaced or unloaded, its old generation
+    is retired: no alias points to it, but it stays in memory until the requests using it finish.
+    """
 
     generation: str
+    """64-character generation ID."""
     aliases: list[str]
+    """Aliases that point to this generation now."""
     rank: int
+    """Highest LoRA rank in the adapter's config."""
     bytes: int
+    """Memory used by this generation's adapter tensors, in bytes."""
     retired: bool
+    """True if no alias points to it and it stays only for requests still using it."""
     active_leases: int
+    """How many in-flight requests are using it."""
 
 @dataclass
 class LoraRuntimeStatus:
-    """Loaded aliases, resident generations, active leases, and capacity limits."""
+    """Adapter memory use and limits for one model."""
 
     adapters: list[LoraAdapterInfo]
+    """Loaded aliases."""
     generations: list[LoraResidentGenerationInfo]
+    """Every generation in memory, including retired ones."""
     resident_generations: int
+    """Number of generations in memory."""
     retired_generations: int
+    """How many of those are retired and kept only for running requests."""
     resident_bytes: int
+    """Memory used by all adapter tensors, in bytes."""
     max_adapters: int
+    """`max_adapters` limit set on `Which.Lora` or `Which.GGUF`."""
     max_rank: int
+    """`max_rank` limit set on `Which.Lora` or `Which.GGUF`."""
     max_bytes: int
+    """`max_bytes` limit set on `Which.Lora` or `Which.GGUF`."""
 
 class Runner:
     def __init__(
         self,
         which: Which,
-        max_seqs: int = 16,
+        max_seqs: int = 32,
         no_kv_cache: bool = False,
-        prefix_cache_n: int = 16,
+        prefix_cache_n: int | None = None,
         token_source: str = "cache",
         mtp_model: str | None = None,
         mtp_n_predict: int | None = None,
@@ -743,9 +1005,7 @@ class Runner:
         num_device_layers: list[str] | None = None,
         in_situ_quant: str | None = None,
         anymoe_config: AnyMoeConfig | None = None,
-        pa_gpu_mem: int | None = None,
-        pa_gpu_mem_usage: float | None = None,
-        pa_ctxt_len: int | None = None,
+        memory_goal: str | float | None = None,
         pa_blk_size: int | None = None,
         pa_cache_type: PagedCacheType | None = None,
         no_paged_attn: bool = False,
@@ -762,46 +1022,49 @@ class Runner:
         """
         Load a model.
 
-        - `which` specifies which model to load.
-        - `max_seqs` specifies how many sequences may be running at any time.
-        - `no_kv_cache` disables the KV cache.
-        - `prefix_cache_n` sets the number of sequences to hold in the device prefix cache; older ones are evicted (dropped) and re-prefilled on a later match.
-        - `token_source` specifies where to load the HF token from.
-            The token source follows the following format: "literal:<value>", "env:<value>", "path:<value>", "cache" to use a cached token or "none" to use no token.
-        - `mtp_model` attaches an MTP assistant from a model id or path.
-        - `mtp_n_predict` controls the number of assistant tokens proposed per speculative step. If unset, the assistant generation config is used.
-        - `chat_template` specifies an optional JINJA chat template as a JSON file.
-            This chat template should have `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs.
-            It is used if the automatic deserialization fails. If this ends with `.json` (i.e., it is a file) then that template is loaded.
-        - `jinja_explicit` allows an explicit JINJA chat template file to be used. If specified, this overrides all other chat templates.
-        - `num_device_layers` sets the number of layers to load and run on each device.
-            Each element follows the format ORD:NUM where ORD is the device ordinal and NUM is
-            the corresponding number of layers. Note: this is deprecated in favor of automatic device mapping.
-        - `in_situ_quant` sets the optional in-situ quantization for a model.
-        - `anymoe_config` specifies the AnyMoE config. If this is set, then the model will be loaded as an AnyMoE model.
-        - `pa_gpu_mem`: GPU memory to allocate for KV cache with PagedAttention in MBs.
-            PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-            The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
-        - `pa_gpu_mem_usage`: Percentage of GPU memory to utilize after allocation of KV cache with PagedAttention, from 0 to 1.
-            If this is not set and the device is CUDA, it will default to `0.9`.
-            PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-            The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
-        - `pa_ctxt_len`: Total context length to allocate the KV cache for (total number of tokens which the KV cache can hold).
-            PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-            The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
-            This is the default setting, and it defaults to the `max-seq-len` specified in after the model type.
-        - `pa_blk_size` sets the block size (number of tokens per block) for PagedAttention. If this is not set and the device is CUDA,
-            it will default to 32. PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-        - `pa_cache_type` sets the PagedAttention KV cache type (auto or f8e4m3). Defaults to `auto`.
-        - `no_paged_attn` disables PagedAttention on CUDA. Because PagedAttention is already disabled on Metal, this is only applicable on CUDA.
-        - `paged_attn` enables PagedAttention on Metal. Because PagedAttention is already enabled on CUDA, this is only applicable on Metal.
-        - `seed`, used to ensure reproducible random number generation.
-        - `enable_search`: Enable searching compatible with the OpenAI `web_search_options` setting. This loads the selected search embedding reranker (EmbeddingGemma by default).
-        - `search_embedding_model`: select which built-in search embedding model to load (currently `"embedding_gemma"`).
-        - `search_callback`: Custom Python callable to perform web searches. Should accept a query string and return a list of dicts with keys "title", "description", "url", and "content".
-        - `tool_callbacks`: Mapping from tool name to Python callable invoked for generic tool calls. Each callable receives the tool name and a dict of arguments and should return the tool output as a string.
-        - `code_execution_config`: enables the built-in Python code execution tool. Pass a `CodeExecutionConfig` to configure the interpreter, per-call timeout, and working directory. Per-request, set `ChatCompletionRequest.enable_code_execution=True`.
-        - `shell_config`: enables the built-in shell tool. Pass a `ShellConfig` to configure the shell, per-call timeout, and working directory. Per-request, set `ChatCompletionRequest.enable_shell=True` or provide `ChatCompletionRequest.shell_skills`.
+        - `which`: the model to load. See [Which](/reference/python/which/).
+        - `max_seqs`: how many requests can run at once.
+        - `no_kv_cache`: turn off the KV cache, and paged attention with it.
+        - `prefix_cache_n`: how many finished requests' caches to keep, so a later request that starts
+          with the same prompt can skip recomputing it.
+            - `None` (default): keep up to 16. Models with recurrent layers may keep fewer to fit memory.
+            - A number: keep exactly that many.
+            - `0`: turn prefix caching off.
+        - `token_source`: where to read the Hugging Face token. One of `"cache"`, `"none"`,
+          `"literal:<token>"`, `"env:<VAR>"`, or `"path:<file>"`.
+        - `mtp_model`: a separate drafter model, by ID or path, for
+          [speculative decoding](/guides/perf/speculative-decoding/).
+        - `mtp_n_predict`: how many tokens the drafter proposes per step. If unset, mistral.rs picks the
+          depth as it runs. See [draft depth](/guides/perf/speculative-decoding/#draft-depth).
+        - `chat_template`: fallback chat template, used only when the model's files don't include one. A JSON
+          file with a `chat_template` key, plus optional `bos_token`, `eos_token`, and `unk_token`.
+        - `jinja_explicit`: a `.jinja` chat template file. It overrides every other template source.
+        - `num_device_layers`: place layers by hand instead of mapping them automatically. Each entry is
+          `"ORD:NUM"`, putting `NUM` layers on device `ORD`. A single number puts that many on device 0.
+        - `in_situ_quant`: quantize the weights while loading. Takes a format such as `"q4k"`, or a bit width
+          such as `"4"` that picks a format for the device. See
+          [quantize a model](/guides/quantization/quantize-a-model/).
+        - `anymoe_config`: load the model as an AnyMoE model. See `AnyMoeConfig`.
+        - `memory_goal`: how much memory to plan for. A fraction or a size requires paged attention.
+          See [paged attention](/guides/perf/paged-attention/#memory-budget).
+            - `None` (default): size the KV cache from the memory left after loading.
+            - A fraction such as `0.9`: keep weights, working memory, and cache under that share of GPU memory.
+            - A size such as `"8GiB"` or `"65536tokens"`: give the KV cache exactly that much.
+        - `pa_blk_size`: tokens per paged attention block: 8, 16, or 32. Defaults to 32.
+        - `pa_cache_type`: KV cache storage type. See `PagedCacheType`.
+        - `no_paged_attn`: turn paged attention off. It's on by default on CUDA and Metal.
+        - `paged_attn`: require paged attention, failing if the device doesn't support it. Can't be combined
+          with `no_paged_attn`.
+        - `seed`: random seed, for reproducible sampling.
+        - `enable_search`: load a reranker for web search results. The default is EmbeddingGemma.
+        - `search_embedding_model`: which reranker to load. The only option is `"embedding_gemma"`.
+        - `search_callback`: a function to run web searches yourself. It takes the query string and returns
+          a list of dicts with `"title"`, `"description"`, `"url"`, and `"content"`.
+        - `tool_callbacks`: map of tool name to a Python function that runs that tool. The function gets the
+          tool name and a dict of arguments, and returns the result as a string.
+        - `mcp_client_config`: connect to MCP servers and give the model their tools. See [MCP](/reference/python/mcp/).
+        - `code_execution_config`: turn on the built-in Python tool. See `CodeExecutionConfig`.
+        - `shell_config`: turn on the built-in shell tool. See `ShellConfig`.
         """
         ...
 
@@ -827,6 +1090,11 @@ class Runner:
             request: The completion request.
             model_id: Optional model ID to send the request to. If None, uses the default model.
         """
+
+    def send_decision_request(
+        self, request: DecisionRequest, model_id: str | None = None
+    ) -> DecisionResponse:
+        """Evaluate named decision questions with the selected model, without text generation."""
 
     def send_embedding_request(
         self, request: EmbeddingRequest, model_id: str | None = None
@@ -864,7 +1132,13 @@ class Runner:
         self, prompt: str, model_id: str | None = None
     ) -> SpeechGenerationResponse:
         """
-        Generate audio given a (model specific) prompt. PCM and sampling rate as well as the number of channels is returned.
+        Generate speech with a dedicated speech model such as Dia or a chat speech
+        model such as LFM3-Audio or LFM3-Omni. Returns PCM samples, sample rate, and
+        channel count. LFM3 uses audio-only synthesis with its default voice.
+
+        Use send_chat_completion_request with modalities and audio for custom chat
+        prompts, mixed text/speech output, encoded formats, or PCM16 streaming.
+        HTTP instructions, speed, and audio.id history are not options on this helper.
 
         Args:
             prompt: The audio generation prompt.
@@ -1013,10 +1287,28 @@ class Runner:
         load_inplace: bool = False,
         expected_generation: str | None = None,
     ) -> LoraAdapterInfo:
-        """Load a local LoRA adapter, optionally replacing with generation CAS.
+        """
+        Load a LoRA adapter from a local directory under the name `alias`.
+
+        By default this fails if `alias` is already loaded. With `load_inplace=True`, it replaces the
+        alias instead. Requests already running keep the adapter version they started with.
+
+        To avoid overwriting someone else's change, also pass `expected_generation`, the generation you
+        last saw for the alias. The replace then happens only if the alias still points at it. If it was
+        changed first, the call fails with code `lora_generation_mismatch` and nothing changes.
+
+        Args:
+            alias: Name that requests use to select the adapter.
+            adapter_dir: Directory with `adapter_config.json` and `adapter_model.safetensors`.
+            model_id: Model to load it into. If None, uses the default model.
+            load_inplace: Replace `alias` if it's already loaded.
+            expected_generation: Replace only if the alias still points at this generation. Requires `load_inplace=True`.
+
+        Returns:
+            The alias and its new generation.
 
         Raises:
-            LoraAdapterError: The operation failed; inspect `error.code` for recovery.
+            LoraAdapterError: The load failed. `code` says why.
         """
 
     def unload_lora_adapter(
@@ -1025,30 +1317,42 @@ class Runner:
         model_id: str | None = None,
         expected_generation: str | None = None,
     ) -> LoraAdapterInfo:
-        """Unregister a LoRA alias while in-flight requests retain their generation.
+        """
+        Remove `alias`. Requests already running keep using its adapter until they finish.
+
+        Args:
+            alias: Alias to remove.
+            model_id: Model to remove it from. If None, uses the default model.
+            expected_generation: Remove only if the alias still points at this generation. If it was
+                changed first, the call fails with code `lora_generation_mismatch`.
+
+        Returns:
+            The removed alias.
 
         Raises:
-            LoraAdapterError: The operation failed; inspect `error.code` for recovery.
+            LoraAdapterError: The unload failed. `code` says why.
         """
 
     def list_lora_adapters(
         self,
         model_id: str | None = None,
     ) -> list[LoraAdapterInfo]:
-        """List loaded LoRA adapters for a model.
+        """
+        List the loaded adapter aliases for a model.
 
         Raises:
-            LoraAdapterError: The operation failed; inspect `error.code` for recovery.
+            LoraAdapterError: The call failed, for example because the model has no LoRA runtime. `code` says why.
         """
 
     def lora_adapter_status(
         self,
         model_id: str | None = None,
     ) -> LoraRuntimeStatus:
-        """Return loaded aliases and complete resident-generation capacity usage.
+        """
+        Report loaded aliases, adapter generations in memory, and the adapter limits for a model.
 
         Raises:
-            LoraAdapterError: The operation failed; inspect `error.code` for recovery.
+            LoraAdapterError: The call failed, for example because the model has no LoRA runtime. `code` says why.
         """
 
     def list_models_with_status(self) -> list[tuple[str, str]]:
@@ -1129,27 +1433,36 @@ class Runner:
 
     def find_file(self, file_id: str) -> File | None:
         """
-        Look up a produced file by id. Returns the full body even if the
-        file was wire-truncated in the response payload.
+        Look up a file by ID and return it with its full body, even if the response left the body out.
+        Returns None if no file has that ID. Files are kept for 30 minutes.
         """
 
 class AnyMoeExpertType(Enum):
     """
-    Expert type for an AnyMoE model. May be:
-    - `AnyMoeExpertType.FineTuned()`
-    - `AnyMoeExpertType.LoraAdapter(rank: int, alpha: float, target_modules: list[str])`
+    What each AnyMoE expert in `AnyMoeConfig.model_ids` is: a full fine-tune or a LoRA adapter.
     """
     @dataclass
     class FineTuned:
-        pass
+        """Each expert is a full fine-tune of the base model. Its MLP weights become the expert."""
 
     @dataclass
     class LoraAdapter:
+        """Each expert is a LoRA adapter, applied to the base model's MLP."""
+
         rank: int
+        """LoRA rank of the adapters."""
         alpha: float
+        """LoRA alpha of the adapters."""
         target_modules: list[str]
+        """MLP modules the adapters change."""
 
 class AnyMoeConfig:
+    """
+    Builds a mixture of experts from a base model and fine-tunes of it, with a small gate that learns
+    which expert should handle each token. Pass it as `Runner(anymoe_config=...)`. See
+    [AnyMoE](/guides/customize/lora-adapters/#anymoe).
+    """
+
     def __init__(
         self,
         hidden_size: int,
@@ -1167,20 +1480,26 @@ class AnyMoeConfig:
         loss_csv_path: str | None = None,
     ) -> None:
         """
-        Create an AnyMoE config from the hidden size, dataset, and other metadata. The model IDs may be local paths.
+        To find `prefix` and `mlp`, open the model's `model.safetensors.index.json` and find an MLP weight.
+        For example, `model.layers.27.mlp.down_proj.weight` means `prefix` is `model.layers` and `mlp` is `mlp`.
+        `hidden_size` is in the base model's `config.json`.
 
-        To find the prefix/mlp values:
-
-        - Go to `https://huggingface.co/<MODEL ID>/tree/main?show_file_info=model.safetensors.index.json`
-        - Look for the mlp layers: for example `model.layers.27.mlp.down_proj.weight` means the prefix is `model.layers` and the mlp is `mlp`.
-
-        To find the hidden size:
-
-        - Look it up in `https://huggingface.co/<BASE MODEL ID>/blob/main/config.json`.
-
-        Note: `gate_model_id` specifies the gating model ID. If `training == True`, safetensors are written here; otherwise the pretrained safetensors are loaded and no training occurs.
-
-        Note: if `training == True`, `loss_csv_path` has no effect. Otherwise, a CSV loss file is saved at that path.
+        Args:
+            hidden_size: The base model's hidden size.
+            dataset_json: Training data: a JSON file with a `rows` list of `{"prompt": ..., "expert": N}` objects.
+                Expert `0` is the base model, `1` the first entry in `model_ids`, and so on.
+            prefix: Weight name prefix before the layer number, such as `model.layers`.
+            mlp: Name of the MLP module within each layer, such as `mlp`.
+            model_ids: One Hugging Face ID or local path per expert.
+            expert_type: Whether the experts are full fine-tunes or LoRA adapters.
+            layers: Layers to turn into mixtures. Empty means every layer.
+            lr: Learning rate for training the gate.
+            epochs: Training epochs.
+            batch_size: Training batch size.
+            gate_model_id: With `training=True`, a directory to save the trained gate to, as `gate.safetensors`.
+                With `training=False`, a Hub ID or local directory to load a trained gate from.
+            training: Train the gate at load time. Set it to False to load a saved gate from `gate_model_id`.
+            loss_csv_path: With `training=True`, save each step's training loss to this `.csv` file. Ignored when not training.
         """
         ...
 
@@ -1213,11 +1532,19 @@ class ToolCallResponse:
     function: CalledFunction
 
 @dataclass
+class ChatAudioResponse:
+    id: str | None = None
+    data: str | None = None
+    expires_at: int | None = None
+    transcript: str | None = None
+
+@dataclass
 class ResponseMessage:
     content: str | None
     role: str
     tool_calls: list[ToolCallResponse] | None
     reasoning_content: str | None = None
+    audio: ChatAudioResponse | None = None
 
 @dataclass
 class TopLogprob:
@@ -1272,6 +1599,7 @@ class Delta:
     role: str
     tool_calls: list[ToolCallResponse] | None = None
     reasoning_content: str | None = None
+    audio: ChatAudioResponse | None = None
 
 @dataclass
 class ChunkChoice:
@@ -1323,14 +1651,21 @@ class ImageGenerationResponse:
 # Files
 
 class RequestedFile:
-    """A required output file declared on a request. The runtime tells the
-    model about declared files; if produced by a tool, they surface in
-    `ChatCompletionResponse.files`. If missing, an error placeholder is
-    surfaced instead."""
+    """
+    An output file the model must produce. Pass a list of them as `ChatCompletionRequest.files`.
+
+    The model is told to write each file with a tool, so the request also needs a tool that can, such
+    as code execution or the shell. Otherwise the request fails. Written files appear in
+    `ChatCompletionResponse.files`. A file the model never wrote appears there as an error placeholder,
+    for which `File.is_error()` returns True.
+    """
 
     name: str
+    """File name the model must write."""
     format: str | None
+    """File format, such as `csv`. Inferred from the name's extension if unset."""
     description: str | None
+    """What the file should contain, shown to the model."""
     def __init__(
         self,
         name: str,
@@ -1340,18 +1675,24 @@ class RequestedFile:
 
 class InputFile:
     """
-    User-provided input file attached to a chat request.
+    A file you give the model. Pass a list of them as `ChatCompletionRequest.input_files`.
 
-    Text-like files are previewed in prompt context and can be paginated by
-    the built-in file tools when the agentic runtime is active. Binary files
-    are stored and mounted into shell/code workdirs, but are metadata-only in
-    prompt context.
+    - The model sees each file's name, ID, MIME type, and size.
+    - For a text file, it also sees the first 4,096 characters, and up to 32,768 across all files. It can
+      read the rest with the built-in `mistralrs_read_file` tool.
+    - When the Python or shell tool runs, every file, text or binary, is copied into its working directory.
+
+    See [file inputs](/guides/agents/file-inputs/).
     """
 
     id: str
+    """ID assigned when the object is created."""
     name: str
+    """File name shown to the model."""
     mime_type: str | None
+    """MIME type. Inferred from the name's extension if unset."""
     bytes: int
+    """Size in bytes."""
 
     def __init__(
         self,
@@ -1377,33 +1718,54 @@ class FileSource:
     """Where a file was produced."""
 
     tool: str
+    """Name of the tool that wrote it."""
     round: int
+    """Tool-call round within the turn, counting from 0."""
     turn: int
+    """Turn within the session, counting from 0. Always 0 without a session."""
 
 class File:
-    """First-class output from an agentic run.
+    """
+    A file that the model wrote during an agent run, such as a CSV from the Python tool. Read them from
+    `ChatCompletionResponse.files`.
 
-    Files exist independently of the transcript. The body is inline for
-    small files (`text` for text content, `data_base64` for binary). Large
-    files have a server-side url and `text`/`data_base64` will be `None` -
-    use `is_truncated()` to detect."""
+    A file's body is in `text` for text files and in `data_base64` for binary ones. Bodies over 8 MiB
+    are left out of the response: `text` and `data_base64` are `None` and `is_truncated()` returns True.
+    Fetch the full file with `Runner.find_file(file.id)`.
+    """
 
     id: str
+    """File ID, for `Runner.find_file`."""
     name: str
+    """File name."""
     format: str | None
+    """File format, such as `csv`, from the name's extension."""
     mime_type: str | None
+    """MIME type."""
     bytes: int
+    """Size in bytes."""
     source: FileSource
+    """Which tool wrote the file, and when."""
     text: str | None
+    """Body of a text file. `None` for binary files and truncated bodies."""
     data_base64: str | None
+    """Base64 body of a binary file. `None` for text files and truncated bodies."""
     preview: str | None
-    def is_text(self) -> bool: ...
-    def is_binary(self) -> bool: ...
-    def is_image(self) -> bool: ...
-    def is_video(self) -> bool: ...
-    def is_error(self) -> bool: ...
-    def is_truncated(self) -> bool: ...
-    def save(self, path: str) -> None: ...
+    """Short preview of a text file, or the full text when there is no preview."""
+    def is_text(self) -> bool:
+        """True for a text file."""
+    def is_binary(self) -> bool:
+        """True for a binary file."""
+    def is_image(self) -> bool:
+        """True if the MIME type starts with `image/`."""
+    def is_video(self) -> bool:
+        """True if the MIME type starts with `video/`."""
+    def is_error(self) -> bool:
+        """True for the placeholder of a requested file the model never wrote."""
+    def is_truncated(self) -> bool:
+        """True if the body was left out of the response because it was too large."""
+    def save(self, path: str) -> None:
+        """Write the body to `path`. Raises `OSError` for a truncated body or an error placeholder."""
 
 # MCP (Model Context Protocol) Client Types
 

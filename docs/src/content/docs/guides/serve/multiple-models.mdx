@@ -5,7 +5,7 @@ description: Load several models into one mistralrs server. Route requests by th
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-`mistralrs serve -m <model>` loads exactly one model. To host multiple models in one server, use a TOML config and `mistralrs from-config`.
+`mistralrs serve -m <model>` loads one model. To serve several from one process, list them in a TOML file and start it with `mistralrs from-config`. Each model runs on its own engine, and every request picks a model with its `model` field.
 
 ## Starting a multi-model server
 
@@ -32,34 +32,29 @@ model_id = "google/gemma-4-E4B-it"
 quant = "4"
 ```
 
-`quant = "4"` has the same behavior as `--quant 4`: it selects a matching artifact for a GGUF
-repository. For other repositories, it prefers a prebuilt UQFF and falls back to 4-bit
-[ISQ (in-situ quantization)](/reference/quantization-types/) during loading. Use
-`isq = "4"` to force ISQ, or omit both settings to load at the source precision.
+`quant` takes the same values as the `--quant` flag: a bit width from `2` to `8` for a smaller version of the model, `auto` to fit your hardware, or a format name like `q4k`. Leave it out to load the original weights. See [quantize a model](/guides/quantization/quantize-a-model/).
 
-Start with `from-config`:
+Start the server:
 
 ```bash
 mistralrs from-config -f models.toml
 ```
 
-Routing rules:
+- Each `[[models]]` entry loads one model. It takes the same settings as the CLI flags, grouped into tables such as `[models.quantization]`, `[models.format]`, and `[models.device]`. The [TOML reference](/reference/cli-toml-config/) lists them all.
+- `default_model_id` must match one of the `model_id`s. Requests that leave out `model`, or send `"default"`, go to that model.
+- Each entry's model type is detected the same way as on the command line. If detection gets it wrong, set `kind` to `text`, `multimodal`, `embedding`, `speech`, or `diffusion`.
+- CPU mode applies to the whole server. Setting `cpu = true` in any entry's `[models.device]` runs every model on CPU, and setting `true` on one entry and `false` on another is an error.
 
-- Each `[[models]]` entry is one loaded model, running on its own engine.
-- A request targets a model by its `model_id`.
-- `default_model_id` (if set) must match one of the `model_id`s.
-- It is used when a request omits `model` or sends `"default"`.
-
-`kind` is optional and defaults to `auto`; set it only when you need to force a loader.
+All models share the GPU, and mistral.rs divides the memory budget between them. See [paged attention](/guides/perf/paged-attention/#multiple-models) for how the split works.
 
 ## Routing a request to a specific model
 
-Target a model by id. Omitting it (or passing `"default"`) selects the `default_model_id`, or fails if none is configured.
+A request picks a model by its ID. If it leaves the model out or sends `"default"`, it goes to `default_model_id`, and fails if you didn't set one.
 
 <Tabs>
 <TabItem label="HTTP">
 
-The `model` field selects the target:
+Set the `model` field:
 
 ```bash
 curl http://localhost:1234/v1/chat/completions \
@@ -73,7 +68,7 @@ curl http://localhost:1234/v1/chat/completions \
 </TabItem>
 <TabItem label="Python">
 
-Against a running multi-model server, an OpenAI client sets `model` to the target id:
+Point an OpenAI client at the server and set `model` to the target ID:
 
 ```python
 from openai import OpenAI
@@ -87,12 +82,12 @@ response = client.chat.completions.create(
 print(response.choices[0].message.content)
 ```
 
-The in-process Python `Runner` loads a single model; multi-model loading is server-only.
+The in-process Python `Runner` loads one model, so use the server to host several from Python.
 
 </TabItem>
 <TabItem label="Rust">
 
-Every request method on `Model` has a `_with_model` variant taking an optional id; `None` selects the default:
+Every request method on `Model` has a `_with_model` variant that takes an optional ID; `None` uses the default model:
 
 ```rust
 let response = model
@@ -100,7 +95,7 @@ let response = model
     .await?;
 ```
 
-The id is the model's `model_id`, or its alias when added with `add_model_with_alias`. See the `MultiModelBuilder` below for loading the models.
+The ID is the model's `model_id`, or its alias if you added it with `add_model_with_alias`. See [multi-model from code](#multi-model-from-code-rust) for loading the models.
 
 </TabItem>
 </Tabs>
@@ -111,15 +106,35 @@ The id is the model's `model_id`, or its alias when added with `add_model_with_a
 curl http://localhost:1234/v1/models
 ```
 
-Each entry includes `id`, `object`, `created`, `owned_by`, plus optional `status` (`loaded`/`unloaded`/`reloading`), `tools_available`, and `mcp_tools_count`/`mcp_servers_connected` for [MCP (Model Context Protocol)](/guides/agents/connect-mcp-server/) servers.
+Each entry has the usual OpenAI fields (`id`, `object`, `created`, `owned_by`), plus:
+
+| Field | Meaning |
+| --- | --- |
+| `status` | `loaded`, `unloaded`, or `reloading`. |
+| `tools_available` | Whether the model has tools from MCP or tool callbacks. |
+| `mcp_tools_count`, `mcp_servers_connected` | How many tools and servers it has from [MCP (Model Context Protocol)](/guides/agents/connect-mcp-server/). |
 
 ## Unloading and reloading on demand
 
-`POST /v1/models/unload` frees a model's memory, `POST /v1/models/reload` brings it back, and `POST /v1/models/status` queries its state; each takes `{"model_id": "..."}`. Request and response schemas are in the [generated HTTP API reference](/reference/http-api-generated/).
+Unload a model to free its memory. It stays in the model list with status `unloaded`:
+
+```bash
+curl http://localhost:1234/v1/models/unload \
+  -H "Content-Type: application/json" \
+  -d '{"model_id": "google/gemma-4-E4B-it"}'
+```
+
+| Endpoint | What it does |
+| --- | --- |
+| `POST /v1/models/unload` | Frees the model's memory. |
+| `POST /v1/models/reload` | Loads it back. |
+| `POST /v1/models/status` | Returns whether it's `loaded`, `unloaded`, or `reloading`. |
+
+All three take `{"model_id": "..."}`. You don't have to reload by hand: a request sent to an unloaded model reloads it first, so that request waits for the load to finish. Request and response schemas are in the [generated HTTP API reference](/reference/http-api-generated/).
 
 ## Multi-model from code (Rust)
 
-In-process multi-model loading is Rust-only (`MultiModelBuilder`); the Python `Runner` and CLI load a single model. Route per request with the `_with_model` methods shown above.
+Load several models in one process with `MultiModelBuilder`, then route each request with the `_with_model` methods shown above:
 
 ```rust
 use mistralrs::{IsqType, MultiModelBuilder, TextModelBuilder, MultimodalModelBuilder};
@@ -134,5 +149,3 @@ let model = MultiModelBuilder::new()
     .build()
     .await?;
 ```
-
-When setting `[models.device]` in TOML, `cpu` must be consistent across every model entry.

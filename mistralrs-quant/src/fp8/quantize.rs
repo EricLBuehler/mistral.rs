@@ -112,7 +112,7 @@ mod tests {
             dtype: DType::F8E4M3,
         })?;
         let ids = Tensor::new(&[[4u32, 1], [3, 1]], &Device::Cpu)?;
-        let actual = linear.embedding_forward_raw(&ids)?;
+        let actual = linear.embedding_forward(&ids, candle_core::DType::F32.into())?;
         let expected = linear
             .dequantize_w()?
             .index_select(&ids.flatten_all()?, 0)?
@@ -253,14 +253,14 @@ mod metal_tests {
             dtype: DType::F8E4M3,
         })?;
         let ids = Tensor::new(&[[4u32, 1], [3, 1]], &device)?;
-        let actual = linear.embedding_forward_raw(&ids)?;
+        let actual = linear.embedding_forward(&ids, candle_core::DType::F32.into())?;
         let expected = linear
             .dequantize_w()?
             .index_select(&ids.flatten_all()?, 0)?
             .reshape((2, 2, 37))?;
         let max_diff = (actual - expected)?.abs()?.max_all()?.to_scalar::<f32>()?;
         let empty_ids = ids.narrow(1, 0, 0)?;
-        let empty = linear.embedding_forward_raw(&empty_ids)?;
+        let empty = linear.embedding_forward(&empty_ids, candle_core::DType::F32.into())?;
 
         assert!(max_diff <= 1e-6, "max_diff={max_diff}");
         assert_eq!(empty.dims(), &[2, 0, 37]);

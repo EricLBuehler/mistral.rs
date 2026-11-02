@@ -9,9 +9,9 @@ use crate::pipeline::RecurrentBatchKind;
 
 use super::backend;
 use super::cache::GdnLayerCache;
+use super::config::{GdnConfig, GdnDims};
 #[cfg(feature = "cuda")]
-use super::config::GdnVHeadLayout;
-use super::config::{GdnConfig, GdnDims, GdnGateActivation};
+use super::config::{GdnGateActivation, GdnVHeadLayout};
 use super::norm::RmsNormGated;
 use super::packed::PackedGdnLayout;
 use super::projection::{GdnCoreProjection, GdnInputProjection, GdnProjection};
@@ -279,7 +279,7 @@ impl GatedDeltaNet {
             && pool.recurrent_dtype() == DType::F32
             && self.dims.head_k_dim == crate::cuda::gdn::GDN_DECODE_K_DIM
             && self.dims.head_v_dim == crate::cuda::gdn::GDN_DECODE_V_DIM
-            && self.norm.activation() == GdnGateActivation::Silu
+            && activation_dtype == DType::BF16
             && self.norm.weight.dtype() == activation_dtype
             && self.norm.weight.device().same_device(pool.device())
     }
@@ -310,6 +310,7 @@ impl GatedDeltaNet {
     pub(crate) fn deferred_state_spec(&self) -> GdnDeferredStateSpec {
         GdnDeferredStateSpec {
             num_k_heads: self.dims.num_k_heads,
+            tiled_v_heads: self.dims.v_head_layout == super::config::GdnVHeadLayout::Tiled,
             depth: crate::cuda::gdn::GDN_DEFERRED_STATE_DEPTH,
         }
     }
@@ -419,6 +420,14 @@ impl GatedDeltaNet {
                 input_projection_kind,
             },
         )?;
+        #[cfg(feature = "metal")]
+        if let candle_core::Device::Metal(device) = weights.conv1d_weight.device() {
+            crate::metal::gdn::warmup_kernels(
+                device.device(),
+                weights.conv1d_weight.dtype(),
+                dims.head_k_dim,
+            )?;
+        }
         let out_proj_input_shard = (comm.world_size() > 1).then_some(Shard::Simple {
             dim: 2,
             rank: comm.rank(),
@@ -534,6 +543,7 @@ impl GatedDeltaNet {
             && mixed_qkv.device().is_cuda()
             && cache.slots.is_some()
         {
+            cache.materialize_deferred_state()?;
             Some(self.forward_speculative_checkpoints(
                 &mixed_qkv,
                 &projected,
@@ -541,8 +551,7 @@ impl GatedDeltaNet {
                 checkpoint_lanes,
                 transition_checkpoints,
             )?)
-        } else if crate::cuda::gdn::deferred_decode_batch_supported(batch_size)
-            && batch_kind == RecurrentBatchKind::Decode
+        } else if batch_kind == RecurrentBatchKind::Decode
             && seq_len == 1
             && mixed_qkv.dtype() == DType::BF16
             && cache.slots.is_some()
@@ -551,6 +560,11 @@ impl GatedDeltaNet {
             && cache.recurrent_state.dtype() == DType::F32
             && self.dims.head_k_dim == crate::cuda::gdn::GDN_DECODE_K_DIM
             && self.dims.head_v_dim == crate::cuda::gdn::GDN_DECODE_V_DIM
+            && crate::cuda::gdn::deferred_decode_supported(
+                mixed_qkv.device(),
+                batch_size,
+                self.dims.num_v_heads,
+            )?
         {
             Some(self.forward_deferred_decode(&mixed_qkv, &projected, cache)?)
         } else {
@@ -598,6 +612,8 @@ impl GatedDeltaNet {
         cache: &mut GdnLayerCache,
         ctx: GdnCoreContext,
     ) -> Result<(Tensor, Tensor)> {
+        // Keep the flush in fallback graphs even when the journal is empty during capture.
+        cache.materialize_deferred_state()?;
         let convolved_qkv = backend::causal_conv1d(
             mixed_qkv,
             &self.conv1d_weight,
@@ -700,6 +716,7 @@ impl GatedDeltaNet {
             gate: &projected.z,
             norm_weight: &self.norm.weight,
             norm_eps: self.norm.eps(),
+            gate_activation: self.norm.activation(),
             num_k_heads: self.dims.num_k_heads,
             num_v_heads: self.dims.num_v_heads,
             head_k_dim: self.dims.head_k_dim,
@@ -739,46 +756,6 @@ impl GatedDeltaNet {
         )?;
         let output = Self::deferred_output(output);
         Ok((convolved_qkv, output, None))
-    }
-
-    #[cfg(feature = "cuda")]
-    pub(crate) fn flush_deferred_state(
-        &self,
-        pool: &RecurrentStatePool,
-        active_slots: &Tensor,
-        activation_dtype: DType,
-    ) -> Result<bool> {
-        if !self.deferred_decode_supported(pool, activation_dtype) {
-            return Ok(false);
-        }
-        let Some(deferred) = pool.deferred_state() else {
-            return Ok(false);
-        };
-        crate::cuda::gdn::flush_deferred_state_cuda(crate::cuda::gdn::GdnDeferredStateFlush {
-            state_pool: &pool.recurrent_state,
-            active_slots,
-            deferred_key: &deferred.key,
-            deferred_delta: &deferred.delta,
-            deferred_decay: &deferred.decay,
-            deferred_cursor: &deferred.pending_rows,
-            num_k_heads: self.dims.num_k_heads,
-            num_v_heads: self.dims.num_v_heads,
-            head_k_dim: self.dims.head_k_dim,
-            head_v_dim: self.dims.head_v_dim,
-            tiled_v_heads: self.dims.v_head_layout == GdnVHeadLayout::Tiled,
-            state_layout: pool.state_layout(),
-        })?;
-        Ok(true)
-    }
-
-    #[cfg(not(feature = "cuda"))]
-    pub(crate) fn flush_deferred_state(
-        &self,
-        _pool: &RecurrentStatePool,
-        _active_slots: &Tensor,
-        _activation_dtype: DType,
-    ) -> Result<bool> {
-        Ok(false)
     }
 
     #[cfg(feature = "cuda")]
@@ -904,6 +881,7 @@ impl GatedDeltaNet {
         rows: usize,
         cache: &mut GdnLayerCache,
     ) -> Result<()> {
+        cache.materialize_deferred_state()?;
         let batch_size = batch_indices.dim(0)?;
         let mixed_qkv = index_select_rows(&stash.mixed_qkv.narrow(1, 0, rows)?, batch_indices)?;
         let b = index_select_rows(&stash.b.narrow(1, 0, rows)?, batch_indices)?;
@@ -1100,7 +1078,7 @@ mod tests {
     use candle_nn::Linear;
     use mistralrs_quant::{QuantMethod, QuantMethodConfig, Shard, UnquantLinear};
 
-    use super::super::config::GdnVHeadLayout;
+    use super::super::config::{GdnGateActivation, GdnVHeadLayout};
     use super::super::norm::RmsNormGated;
     use super::super::projection::GdnInputProjection;
     use super::super::{try_forward_grouped_packed_gdn, GdnLayerCache, PackedGdnLayout};
@@ -1197,6 +1175,7 @@ mod tests {
             norm: RmsNormGated::from_parts(
                 Tensor::ones(dims.value_dim, DType::F32, &Device::Cpu)?,
                 1e-6,
+                GdnGateActivation::Silu,
             ),
             out_proj: out,
             out_proj_input_shard: None,
@@ -1518,3 +1497,7 @@ mod tests {
         Ok(())
     }
 }
+
+#[cfg(all(test, feature = "cuda"))]
+#[path = "deferred_tests.rs"]
+mod deferred_tests;

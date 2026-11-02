@@ -114,16 +114,16 @@ pub unsafe fn swap_blocks(
     dst: &Tensor,
     block_mapping: HashMap<usize, usize>,
 ) -> Result<()> {
-    let block_size_in_bytes = src.dtype().size_in_bytes() * src.dims()[0];
-    if src.device().location() != dst.device().location() {
-        candle_core::bail!(
-            "Tensors must be on the same device to copy, got locations {:?} (src) and {:?} (dst).",
-            src.device().location(),
-            dst.device().location()
-        );
+    if src.dtype() != dst.dtype() || src.dims()[1..] != dst.dims()[1..] {
+        candle_core::bail!("source and destination block shapes and dtypes must match");
     }
+    let block_size_in_bytes =
+        src.dtype().size_in_bytes() * src.dims()[1..].iter().product::<usize>();
     match (src.device(), dst.device()) {
         (Device::Metal(src_dev), Device::Metal(_)) => {
+            if !src.device().same_device(dst.device()) {
+                candle_core::bail!("Metal block copies require the same device");
+            }
             let (src_storage, src_layout) = src.storage_and_layout();
             let (dst_storage, dst_layout) = dst.storage_and_layout();
             assert!(matches!(&*src_storage, Storage::Metal(_)));
@@ -144,13 +144,12 @@ pub unsafe fn swap_blocks(
 
                 let mut blit = src_dev.blit_command_encoder()?;
                 blit.set_label("swap-blocks-gpu-gpu");
-                let length = src_layout.shape().elem_count() * src_storage.dtype().size_in_bytes();
                 blit.copy_from_buffer(
                     src_storage.buffer(),
                     src_offset,
                     dst_storage.buffer(),
                     dst_offset,
-                    length,
+                    block_size_in_bytes,
                 );
             }
         }
@@ -176,24 +175,23 @@ pub unsafe fn swap_blocks(
                 block_mapping: HashMap<usize, usize>,
             ) -> Result<()> {
                 for (src_block_number, dst_block_number) in block_mapping {
-                    let src_offset = src_block_number * block_size_in_bytes
-                        + src_layout.start_offset() * SRCT::DTYPE.size_in_bytes();
+                    let block_elements = block_size_in_bytes / SRCT::DTYPE.size_in_bytes();
+                    let src_offset = src_block_number * block_elements + src_layout.start_offset();
                     let dst_offset = dst_block_number * block_size_in_bytes
                         + dst_layout.start_offset() * dst_storage.dtype().size_in_bytes();
                     // We copy by bytes
                     let src_buffer = dev.new_buffer_with_data(
-                        &src_slice[src_offset..src_offset + block_size_in_bytes],
+                        &src_slice[src_offset..src_offset + block_elements],
                     )?;
 
                     let mut blit = dev.blit_command_encoder()?;
                     blit.set_label("swap-blocks-cpu-gpu");
-                    let length = src_layout.shape().elem_count() * SRCT::DTYPE.size_in_bytes();
                     blit.copy_from_buffer(
                         &src_buffer,
-                        src_offset,
+                        0,
                         dst_storage.buffer(),
                         dst_offset,
-                        length,
+                        block_size_in_bytes,
                     );
                 }
                 Ok(())
@@ -227,7 +225,18 @@ pub unsafe fn swap_blocks(
                     block_size_in_bytes,
                     block_mapping,
                 )?,
-                _ => candle_core::bail!("expected bf16, f16, or f32 for cpu<>gpu swap-blocks"),
+                CpuStorage::F8E4M3(s) => swap_thunk(
+                    s,
+                    src_layout,
+                    dst_storage,
+                    dst_layout,
+                    dev,
+                    block_size_in_bytes,
+                    block_mapping,
+                )?,
+                _ => candle_core::bail!(
+                    "expected bf16, f16, f32, or f8e4m3 for cpu<>gpu swap-blocks"
+                ),
             }
         }
         (src, dst) => {

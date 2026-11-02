@@ -7,11 +7,7 @@ use std::{
 
 use candle_core::{
     cuda::{
-        cudarc::driver::{
-            result,
-            sys::{CUdevice_attribute, CUstreamCaptureStatus},
-            CudaSlice,
-        },
+        cudarc::driver::{sys::CUstreamCaptureStatus, CudaSlice},
         DeviceId,
     },
     CudaDevice, CudaStorage, DType, Device, Result, Shape, Storage, Tensor,
@@ -21,11 +17,13 @@ use half::{bf16, f16};
 
 use super::Nvfp4LayerParts;
 use crate::{
+    cuda_device::{cuda_device_info, CudaDeviceInfo},
     cutile::Nvfp4GemmArgs,
     utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream},
     Nvfp4ActivationMode, NVFP4_BLOCK_SIZE,
 };
 
+const COMPILED_COMPUTE_CAP: &str = env!("MISTRALRS_NVFP4_CUTLASS_COMPUTE_CAP");
 const MIN_ROWS: usize = 1024;
 const DECODE_MIN_ROWS: usize = 2;
 const DECODE_MAX_ROWS: usize = 64;
@@ -123,6 +121,11 @@ fn check_status(operation: &str, status: i32) -> Result<()> {
         unsafe { CStr::from_ptr(message) }.to_string_lossy()
     };
     candle_core::bail!("CUTLASS NVFP4 {operation} failed: {message} (status {status})")
+}
+
+// Arch-specific sm_12Xa cubins run only on that exact compute capability.
+pub(crate) fn compiled_for(info: &CudaDeviceInfo) -> bool {
+    format!("{}{}", info.major, info.minor) == COMPILED_COMPUTE_CAP
 }
 
 fn outside_capture(device: &CudaDevice, operation: &str) -> Result<()> {
@@ -297,7 +300,7 @@ impl State {
         if parts.activation != Nvfp4ActivationMode::DynamicBlock
             || parts.weight.rank() != 2
             || !matches!(parts.dtype, DType::BF16 | DType::F16)
-            || crate::cutile::device_compute_capability(device) != (12, 1)
+            || !compiled_for(&cuda_device_info(device))
         {
             return Ok(None);
         }
@@ -316,13 +319,7 @@ impl State {
         }
         outside_capture(device, "layer construction")?;
         let contexts = prepare(device)?;
-        let l2_bytes = unsafe {
-            result::device::get_attribute(
-                device.cuda_stream().context().cu_device(),
-                CUdevice_attribute::CU_DEVICE_ATTRIBUTE_L2_CACHE_SIZE,
-            )
-        }
-        .map_err(candle_core::Error::msg)? as usize;
+        let l2_bytes = cuda_device_info(device).l2_bytes;
         let weight_bytes = parts.weight.elem_count() + parts.scales.elem_count();
         Ok(Some(Self {
             weights: aligned_bytes(&parts.weight)?,

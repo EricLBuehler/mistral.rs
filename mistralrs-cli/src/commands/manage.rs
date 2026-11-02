@@ -4,11 +4,9 @@ use anyhow::{bail, Context, Result};
 use std::path::PathBuf;
 
 #[cfg(unix)]
-const INSTALL_SH_URL: &str =
-    "https://raw.githubusercontent.com/EricLBuehler/mistral.rs/refs/heads/master/install.sh";
+const INSTALL_SH_URL: &str = "https://mistralrs.dev/install.sh";
 #[cfg(windows)]
-const INSTALL_PS1_URL: &str =
-    "https://raw.githubusercontent.com/EricLBuehler/mistral.rs/refs/heads/master/install.ps1";
+const INSTALL_PS1_URL: &str = "https://mistralrs.dev/install.ps1";
 
 fn managed_dir() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".mistralrs"))

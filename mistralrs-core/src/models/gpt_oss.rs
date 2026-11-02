@@ -385,9 +385,9 @@ fn load_gpt_oss_packed_expert_projection(
     let projection_vb = vb.pp(name);
     if get_immediate_isq().is_some_and(|params| params.capture == IsqCaptureMode::Immediate) {
         if let Some(target) = immediate_isq_match(&projection_vb).and_then(|matched| matched.ty) {
-            if !MXFP4Layer::supports_stacked_isq(target) {
+            if !target.supports_stacked_gather() {
                 candle_core::bail!(
-                    "Cannot requantize raw GPT-OSS MXFP4 expert `{}` to {target}: that target does not support stacked expert gather. Use a Q*K/Q*_0/Q*_1 target, AFQ, MXFP4, or omit ISQ.",
+                    "Cannot requantize raw GPT-OSS MXFP4 expert `{}` to {target}: that target does not support stacked expert gather.",
                     projection_vb.prefix()
                 );
             }
@@ -514,7 +514,7 @@ impl GptOssMoE {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden_dim))?;
 
-        let router_logits = self.gate.forward(&xs_flat)?;
+        let router_logits = crate::layers::router_linear(&self.gate, &xs_flat)?;
         let router_logits = match &self.gate_lora {
             Some(site) => mistralrs_quant::apply_dynamic_lora_delta(site, &xs_flat, router_logits)?,
             None => router_logits,
@@ -684,10 +684,9 @@ impl DecoderLayer {
         let xs = self
             .self_attn
             .forward(&xs, attention_mask, kv_cache, ctx, layer_idx)?;
-        let xs = (residual + xs)?;
-
-        let residual = &xs;
-        let xs = self.post_attention_layernorm.forward(&xs)?;
+        let (residual, xs) = self
+            .post_attention_layernorm
+            .forward_add_rms_norm(&xs, residual)?;
         let xs = self.mlp.forward(&xs, layer_idx)?;
 
         residual + xs
@@ -879,12 +878,15 @@ impl Model {
         input_ids: &Tensor,
         ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        let mut xs = self.embed_tokens.embedding_forward(input_ids, self.dtype)?;
+        let mut xs = self
+            .embed_tokens
+            .embedding_forward(input_ids, self.dtype.into())?;
         let cache = &mut self.cache.normal().0;
 
         let sliding_window = self.cfg.sliding_window;
 
-        let force_custom_attention_mask = !ctx.flash_params().packed;
+        let force_custom_attention_mask =
+            !ctx.flash_params().packed && !(ctx.is_paged() && xs.device().is_metal());
         let mask_cache = ctx.mask_cache(cache);
         let causal_mask = CausalMasker.make_causal_mask(
             input_ids,

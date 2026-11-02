@@ -16,6 +16,12 @@ pub enum VideoFrameSampling {
         min_frames: usize,
         max_frames: usize,
     },
+    /// Sample at a target rate with endpoint-inclusive, ties-to-even frame indices.
+    FpsInclusive {
+        fps: f64,
+        min_frames: usize,
+        max_frames: usize,
+    },
 }
 
 impl Default for VideoFrameSampling {
@@ -34,6 +40,11 @@ impl VideoFrameSampling {
                 fps,
                 min_frames,
                 max_frames,
+            }
+            | Self::FpsInclusive {
+                fps,
+                min_frames,
+                max_frames,
             } => {
                 let count = if native_fps > 0.0 {
                     (total_frames as f64 / native_fps * fps) as usize
@@ -42,6 +53,24 @@ impl VideoFrameSampling {
                 };
                 count.max(min_frames).min(max_frames).min(total_frames)
             }
+        }
+    }
+
+    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+    pub fn sample_indices(&self, total_frames: usize, num_frames: usize) -> Vec<usize> {
+        if !matches!(self, Self::FpsInclusive { .. }) {
+            return sample_frame_indices(total_frames, num_frames);
+        }
+        let count = num_frames.min(total_frames);
+        match count {
+            0 => Vec::new(),
+            1 => vec![0],
+            _ => (0..count)
+                .map(|index| {
+                    (index as f64 * (total_frames - 1) as f64 / (count - 1) as f64)
+                        .round_ties_even() as usize
+                })
+                .collect(),
         }
     }
 }
@@ -210,5 +239,20 @@ mod tests {
         };
         let ts = vi.timestamp_strings();
         assert_eq!(ts, vec!["00:00", "00:30", "01:00", "01:30"]);
+    }
+    #[test]
+    fn inclusive_fps_sampling_matches_lfm3_reference() {
+        let sampling = VideoFrameSampling::FpsInclusive {
+            fps: 2.0,
+            min_frames: 4,
+            max_frames: 768,
+        };
+        assert_eq!(sampling.target_frames(240, 24.0), 20);
+        assert_eq!(sampling.sample_indices(6, 3), vec![0, 2, 5]);
+        assert_eq!(sampling.sample_indices(8, 3), vec![0, 4, 7]);
+        assert_eq!(sampling.sample_indices(10, 4), vec![0, 3, 6, 9]);
+        assert_eq!(sampling.sample_indices(3, 10), vec![0, 1, 2]);
+        assert_eq!(sampling.sample_indices(1, 4), vec![0]);
+        assert!(sampling.sample_indices(0, 4).is_empty());
     }
 }

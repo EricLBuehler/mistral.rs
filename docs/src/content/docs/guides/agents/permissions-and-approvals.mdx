@@ -5,7 +5,7 @@ description: Control whether agent actions run automatically, require approval, 
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-`agent_permission` controls whether mistral.rs may run an agent action after the model asks for one. It applies to all server-executed actions, not just Python: code execution, shell, web search, file tools, registered callbacks, and external tool dispatch.
+`agent_permission` controls whether mistral.rs may run an agent action after the model asks for one. It applies to all server-executed actions, not just Python: code execution, shell, web search, file tools, registered callbacks, and external tool dispatch. Functions that only your app can run aren't covered: mistral.rs hands those back in `tool_calls` without approving or denying them.
 
 ```bash
 mistralrs run --agent -m google/gemma-4-E4B-it --agent-permission ask

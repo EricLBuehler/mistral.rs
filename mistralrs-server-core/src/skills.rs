@@ -540,6 +540,9 @@ fn extract_zip(bytes: &[u8], dest: &Path) -> Result<()> {
             "Skill zip may contain at most {MAX_SKILL_FILES} files."
         )));
     }
+    archive
+        .validate_header_consistency()
+        .map_err(|error| invalid_skill_upload(format!("Invalid skill zip: {error}")))?;
     let mut total_bytes = 0usize;
     for i in 0..archive.len() {
         let file = archive
@@ -961,14 +964,89 @@ pub async fn list_skill_versions(
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
     use axum::{
         body::Body,
         extract::FromRequest,
         http::{header, Request, Uri},
     };
     use http_body_util::BodyExt;
+    use zip::{write::SimpleFileOptions, CompressionMethod, ZipWriter};
 
     use super::*;
+
+    fn skill_zip(files: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        for (name, content) in files {
+            writer.start_file(name, options).unwrap();
+            writer.write_all(content).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn zip_upload_extracts_nested_files() {
+        let root = tempfile::tempdir().unwrap();
+        let files: &[(&str, &[u8])] = &[
+            ("example/SKILL.md", b"name: example"),
+            ("example/scripts/run.py", b"print('example')"),
+        ];
+
+        extract_zip(&skill_zip(files), root.path()).unwrap();
+
+        for (name, content) in files {
+            assert_eq!(fs::read(root.path().join(name)).unwrap(), *content);
+        }
+    }
+
+    #[test]
+    fn zip_upload_rejects_path_traversal() {
+        let root = tempfile::tempdir().unwrap();
+        let dest = root.path().join("extracted");
+        fs::create_dir(&dest).unwrap();
+        let bytes = skill_zip(&[("../escape.txt", b"outside")]);
+
+        let error = extract_zip(&bytes, &dest).unwrap_err();
+
+        assert!(error.to_string().contains("unsafe path"));
+        assert!(!root.path().join("escape.txt").exists());
+        assert!(fs::read_dir(dest).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn zip_upload_rejects_symlinks() {
+        let root = tempfile::tempdir().unwrap();
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        writer
+            .add_symlink("link", "../outside", SimpleFileOptions::default())
+            .unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+
+        let error = extract_zip(&bytes, root.path()).unwrap_err();
+
+        assert!(error.to_string().contains("may not contain symlinks"));
+        assert!(fs::read_dir(root.path()).unwrap().next().is_none());
+    }
+
+    #[test]
+    fn zip_upload_rejects_mismatched_headers() {
+        let root = tempfile::tempdir().unwrap();
+        let original_name = b"SKILL.md";
+        let replacement_name = b"OTHER.md";
+        let mut bytes = skill_zip(&[("SKILL.md", b"name: example")]);
+        let local_name = bytes
+            .windows(original_name.len())
+            .position(|window| window == original_name)
+            .unwrap();
+        bytes[local_name..local_name + original_name.len()].copy_from_slice(replacement_name);
+
+        let error = extract_zip(&bytes, root.path()).unwrap_err();
+
+        assert!(error.to_string().contains("header inconsistency"));
+        assert!(fs::read_dir(root.path()).unwrap().next().is_none());
+    }
 
     fn test_store() -> (tempfile::TempDir, Arc<SkillStore>) {
         let root = tempfile::tempdir().unwrap();

@@ -3,17 +3,23 @@ title: Build from source
 description: Compile mistral.rs from a repository checkout with exactly the feature flags you want.
 ---
 
-:::tip[Most users do not need this]
-The [quickstart install script](/quickstart/) is the recommended way to install. It downloads a prebuilt binary for your platform; `MISTRALRS_INSTALL_TAG=<tag>` installs a specific release, and `MISTRALRS_INSTALL_FROM_SOURCE=1` makes it build the latest `master` from source for you. Build from a checkout manually only to pin an arbitrary commit, apply a local patch, or use a feature combination the published binaries do not include.
-:::
+This guide is for working from a local checkout, such as making changes to mistral.rs or choosing custom build features. For installation, start with the [quickstart](/quickstart/).
 
 ## Platform prerequisites
 
-A source build needs Rust 1.94+ ([rustup](https://rustup.rs)) plus, per platform:
+A source build needs Rust 1.95+ ([rustup](https://rustup.rs)) plus, per platform:
 
-- **Linux CUDA:** an NVIDIA driver matching the target CUDA version (`nvidia-smi`), the CUDA toolkit on `PATH` (`nvcc --version`), and `libssl-dev` + `pkg-config` (`sudo apt install libssl-dev pkg-config`, or `sudo dnf install openssl-devel pkgconfig`). For a non-standard toolkit location set `CUDA_ROOT` (e.g. `export CUDA_ROOT=/opt/cuda-12.4`); for runtime libraries in non-standard directories (common on HPC module systems) add them to `LD_LIBRARY_PATH`.
-- **macOS:** the Xcode Command Line Tools (`xcode-select --install`); a full Xcode install is not required. Apple Silicon uses `--features metal`; Intel Macs use `--features accelerate` (or `mkl` if Intel MKL is installed).
-- **Windows:** Visual Studio 2022 Build Tools (the `rustup-init.exe` installer can add these) and, for CUDA, the [CUDA toolkit](https://developer.nvidia.com/cuda-downloads). If `cargo build` fails on long paths, enable long-path support: `Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name LongPathsEnabled -Value 1 -Type DWord` (the registry setting, not `git config core.longpaths`). Native Windows lacks the ring-backend and some experimental features; for full parity use **WSL2** (`wsl --install -d Ubuntu`, verify `nvidia-smi` inside it, then follow the Linux steps).
+- **Linux CUDA:**
+  - An NVIDIA driver that supports the target CUDA version (check with `nvidia-smi`).
+  - The CUDA toolkit on `PATH` (check with `nvcc --version`). For a toolkit in a non-standard location, set `CUDA_ROOT`, for example `export CUDA_ROOT=/opt/cuda-12.4`.
+  - `libssl-dev` and `pkg-config`: `sudo apt install libssl-dev pkg-config`, or `sudo dnf install openssl-devel pkgconfig`.
+  - If CUDA runtime libraries live in non-standard directories, as is common with HPC module systems, add them to `LD_LIBRARY_PATH`.
+- **macOS:** the Xcode Command Line Tools (`xcode-select --install`). Full Xcode isn't needed. Apple Silicon builds use `--features metal`. Intel Macs use `--features accelerate`, or `mkl` if Intel MKL is installed.
+- **Windows:**
+  - Visual Studio 2022 Build Tools. The `rustup-init.exe` installer can add them.
+  - For CUDA, the [CUDA toolkit](https://developer.nvidia.com/cuda-downloads).
+  - If `cargo build` fails on long paths, turn on long-path support in the registry (`git config core.longpaths` doesn't help): `Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem' -Name LongPathsEnabled -Value 1 -Type DWord`.
+  - Native Windows builds lack the ring backend and some experimental features. For full parity, use **WSL2**: run `wsl --install -d Ubuntu`, check `nvidia-smi` inside it, then follow the Linux steps.
 
 ## Clone and build
 
@@ -32,10 +38,9 @@ cargo build --release --locked --features "cuda nccl flash-attn cudnn" -p mistra
 cargo install --path mistralrs-cli --locked --features "cuda nccl flash-attn cudnn"
 ```
 
-The flags above target CUDA. On macOS use `--features metal`; on CPU omit `--features` entirely. See the [cargo features reference](/reference/cargo-features/) for the full list.
+The flags above are for CUDA. Use `--features metal` on macOS, and leave out `--features` for a CPU build. See the [cargo features reference](/reference/cargo-features/) for the full list.
 
-CUDA 13.4 is supported. When multiple toolkits are installed, select the same toolkit for CUDA
-headers, libraries, `nvcc`, and cuTile before building:
+CUDA 13.4 is supported. When several toolkits are installed, point the CUDA headers, libraries, `nvcc`, and cuTile at the same one before building:
 
 ```bash
 export CUDA_HOME=/usr/local/cuda-13.4
@@ -46,11 +51,14 @@ export PATH="$CUDA_HOME/bin:$PATH"
 export LD_LIBRARY_PATH="$CUDA_HOME/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 ```
 
-Use a driver that supports the selected toolkit's PTX, and keep these exports in the runtime
-environment when using [cuTile](/developer/moe-backends/). For cuTile, the installer continues
-to select compatible prebuilt CUDA 13.2 or 13.3 binaries on CUDA 13.4-capable drivers.
+The driver must support the selected toolkit's PTX version. If you use [cuTile](/developer/moe-backends/), keep these exports in the environment that runs mistral.rs too.
 
-Metal builds precompile macOS, iOS, and tvOS metallibs by default. For local macOS-only development, set `MISTRALRS_METAL_PLATFORMS=macos`; to skip Metal precompilation entirely, set `MISTRALRS_METAL_PRECOMPILE=0`.
+By default, Metal builds precompile the Metal shader libraries (metallibs) for macOS, iOS, and tvOS, including the GDN and Mamba/SSM kernels. Two build-time variables change this:
+
+- `MISTRALRS_METAL_PLATFORMS=macos` builds only the macOS libraries, which is faster for local development.
+- `MISTRALRS_METAL_PRECOMPILE=0` skips precompilation. The shaders are then compiled at runtime, when the library loads.
+
+Separately, when a model loads on Metal, mistral.rs compiles the paged-attention and quantized-linear kernels for that model's shapes and dtype before it accepts requests (`mistralrs-core/src/pipeline/metal_warmup.rs`). This doesn't run a prompt or touch the KV cache. A few request-specific kernels still compile on first use.
 
 The in-place build leaves the binary at `target/release/mistralrs`. The install variant copies it to `~/.cargo/bin/mistralrs`, which is on `PATH` after a rustup install.
 
@@ -71,13 +79,22 @@ The full flag list, per-hardware recommendations, and per-flag effects live in t
 
 Use `cargo build --release -p mistralrs-cli` for incremental development.
 
-Some tests are gated behind feature flags. Core test suite:
+Run the core test suite with:
 
 ```bash
 cargo test -p mistralrs-core -p mistralrs-quant -p mistralrs-vision
 ```
 
-In the quantization crate, some tests run only with a specific backend feature enabled.
+Some `mistralrs-quant` tests compile only with a backend feature, and are skipped otherwise:
+
+| Tests | Feature |
+|---|---|
+| `grouped_mmq_*_cuda_tests.rs`, `indexed_moe_lora_cuda_tests.rs`, `mmq_sum_range_cuda_tests.rs`, `routed_lora_cuda_tests.rs` in `mistralrs-quant/tests/`, plus some CUDA unit tests | `cuda` |
+| `cutlass_moe_tests.rs` | `cuda`, built for compute capability 8.0 or newer, not with MSVC |
+| `cutile_moe_tests.rs`, `cutile_routed_lora_tests.rs`, `nvfp4_cuda_tests.rs` | `cuda` and `cutile` |
+| Metal unit tests | `metal` |
+
+For example, `cargo test -p mistralrs-quant --features cuda,cutile` runs the cuTile tests.
 
 ## Python wheels
 
@@ -86,7 +103,7 @@ Building the Python SDK from source requires `maturin`:
 ```bash
 pip install maturin[patchelf]
 cd mistralrs-pyo3
-maturin develop --release --features "cuda nccl flash-attn cudnn"
+maturin develop --release --features "cuda nccl flash-attn cudnn pyo3/extension-module"
 ```
 
 This installs the package into the current Python environment. `maturin build` produces a redistributable wheel under `target/wheels/`.

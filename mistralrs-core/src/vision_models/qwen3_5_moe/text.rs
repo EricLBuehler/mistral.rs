@@ -150,8 +150,10 @@ impl FullAttention {
         } else {
             None
         };
-        let q_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("q_norm"))?;
-        let k_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("k_norm"))?;
+        let q_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("q_norm"))?
+            .with_storage(cfg.norm_storage)?;
+        let k_norm = GemmaRmsNorm::new(head_dim, cfg.rms_norm_eps, vb_sa_norms.pp("k_norm"))?
+            .with_storage(cfg.norm_storage)?;
 
         Ok(Self {
             q_proj,
@@ -373,7 +375,7 @@ impl SparseMoeBlock {
         let (b_size, seq_len, hidden_dim) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden_dim))?;
 
-        let router_logits = self.gate.forward(&xs_flat)?;
+        let router_logits = crate::layers::router_linear(&self.gate, &xs_flat)?;
         let router_logits = match &self.gate_lora {
             Some(site) => mistralrs_quant::apply_dynamic_lora_delta(site, &xs_flat, router_logits)?,
             None => router_logits,
@@ -397,16 +399,13 @@ impl SparseMoeBlock {
         y = y.reshape((b_size, seq_len, hidden_dim))?;
 
         let shared_out = self.shared_expert.forward(xs)?;
-        let shared_gate = self.shared_expert_gate.forward(&xs_flat)?;
+        let shared_gate = crate::layers::router_linear(&self.shared_expert_gate, &xs_flat)?;
         let shared_gate = match &self.shared_expert_gate_lora {
             Some(site) => mistralrs_quant::apply_dynamic_lora_delta(site, &xs_flat, shared_gate)?,
             None => shared_gate,
         };
-        let shared_gate = candle_nn::ops::sigmoid(&shared_gate)?;
         let shared_gate = shared_gate.reshape((b_size, seq_len, 1))?;
-        let shared_out = shared_out.broadcast_mul(&shared_gate)?;
-
-        y + shared_out
+        crate::layers::sigmoid_gated_add(&y, &shared_out, &shared_gate)
     }
 }
 
@@ -449,9 +448,10 @@ impl DecoderLayer {
             metadata,
             flash_params,
         )?;
-        let x = (attn_out + residual)?;
+        let (x, normed) = self
+            .post_attention_layernorm
+            .forward_add_rms_norm(&attn_out, residual)?;
         let residual = &x;
-        let normed = self.post_attention_layernorm.forward(&x)?;
         let ffn_out = self.moe.forward(&normed)?;
         ffn_out + residual
     }
@@ -474,9 +474,10 @@ impl DecoderLayer {
         } else {
             gdn.forward(&x, cache, batch_kind)?
         };
-        let x = (gdn_out + residual)?;
+        let (x, normed) = self
+            .post_attention_layernorm
+            .forward_add_rms_norm(&gdn_out, residual)?;
         let residual = &x;
-        let normed = self.post_attention_layernorm.forward(&x)?;
         let ffn_out = self.moe.forward(&normed)?;
         ffn_out + residual
     }
@@ -519,6 +520,20 @@ fn text_model_vb(vb: ShardedVarBuilder) -> Result<ShardedVarBuilder> {
 }
 
 impl Qwen3_5MoeTextModel {
+    pub(super) fn reserve_recurrent_decode_deferred_storage(&self) -> Result<bool> {
+        crate::gdn::reserve_deferred_decode_state(
+            &mut self.cache.hybrid(),
+            self.layers
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, layer)| match &layer.layer_impl {
+                    LayerImpl::LinearAttention(gdn) => Some((idx, gdn)),
+                    LayerImpl::FullAttention(_) => None,
+                }),
+            self.dtype,
+        )
+    }
+
     pub fn new(
         cfg: &TextConfig,
         vb: ShardedVarBuilder,
@@ -530,12 +545,30 @@ impl Qwen3_5MoeTextModel {
         let mapper = normal_loading_metadata.mapper;
         let vb_m = text_model_vb(vb.clone())?;
 
+        let mut cfg = cfg.clone();
+        if let Some(linear) = cfg
+            .layer_types()
+            .iter()
+            .position(|t| *t == LayerType::LinearAttention)
+        {
+            cfg.norm_storage = crate::gdn::checkpoint_norm_storage(
+                &vb_m.pp("layers").pp(linear).pp("linear_attn"),
+            );
+        }
+        let cfg = &cfg;
+        // MLX conversions nest the head under the language model like the rest of the text weights
+        let vb_head = if layers::contains_tensor_or_uqff(&vb, "language_model.lm_head.weight") {
+            vb.pp("language_model")
+        } else {
+            vb.clone()
+        };
+
         let embed_tokens = layers::embedding_with_legacy_tied_uqff(
             cfg.vocab_size,
             cfg.hidden_size,
             mapper.set_nm_device(vb_m.pp("embed_tokens"), normal_loading_metadata.loading_isq),
             tie.then(|| {
-                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq)
+                mapper.set_nm_device(vb_head.pp("lm_head"), normal_loading_metadata.loading_isq)
             }),
             &cfg.quantization_config,
         )?;
@@ -631,7 +664,8 @@ impl Qwen3_5MoeTextModel {
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
                 mapper.set_device(layer_idx, vb_l.pp(layer_idx).pp("input_layernorm"), false),
-            )?;
+            )?
+            .with_storage(cfg.norm_storage)?;
             let post_attention_layernorm = GemmaRmsNorm::new(
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
@@ -640,7 +674,8 @@ impl Qwen3_5MoeTextModel {
                     vb_l.pp(layer_idx).pp("post_attention_layernorm"),
                     false,
                 ),
-            )?;
+            )?
+            .with_storage(cfg.norm_storage)?;
 
             let moe = SparseMoeBlock::new(
                 cfg,
@@ -668,14 +703,15 @@ impl Qwen3_5MoeTextModel {
             cfg.hidden_size,
             cfg.rms_norm_eps,
             mapper.set_nm_device(vb_m.pp("norm"), false),
-        )?;
+        )?
+        .with_storage(cfg.norm_storage)?;
         let lm_head = if !tie {
             ReplicatedLayer::new(
                 cfg.hidden_size,
                 cfg.vocab_size,
                 &cfg.quantization_config,
                 false,
-                mapper.set_nm_device(vb.pp("lm_head"), normal_loading_metadata.loading_isq),
+                mapper.set_nm_device(vb_head.pp("lm_head"), normal_loading_metadata.loading_isq),
             )?
         } else {
             embed_tokens.clone()
@@ -746,7 +782,8 @@ impl Qwen3_5MoeTextModel {
     }
 
     pub fn embed_tokens(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.embedding_forward(input_ids, self.dtype)
+        self.embed_tokens
+            .embedding_forward(input_ids, self.dtype.into())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -854,7 +891,11 @@ impl Qwen3_5MoeTextModel {
                                 pool.state_layout(),
                             )
                         } else {
-                            GdnLayerCache::checkout(pool, &indices)?
+                            GdnLayerCache::checkout(
+                                pool,
+                                &indices,
+                                recurrent_metadata.batch_kind(),
+                            )?
                         };
 
                         xs = layer.forward_linear(

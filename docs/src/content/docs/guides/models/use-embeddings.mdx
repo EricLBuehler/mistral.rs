@@ -1,28 +1,24 @@
 ---
 title: Use embedding models
-description: Generate dense vector representations of text with EmbeddingGemma, Qwen3-Embedding, and others.
+description: Generate text vectors for search, clustering, and retrieval.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Embedding models map text to dense vectors for semantic search, reranking, clustering, and downstream retrieval. mistral.rs serves embeddings through the standard OpenAI `POST /v1/embeddings` endpoint, so any tool that already targets that endpoint (LangChain, LlamaIndex, vector stores) works unchanged.
+An embedding model turns text into a vector of numbers, so that texts with similar meaning get nearby vectors. You use them for semantic search, clustering, deduplication, and retrieval for RAG. mistral.rs serves them through the OpenAI-compatible `/v1/embeddings` endpoint, so tools that already use that endpoint work unchanged.
 
 ## Loading an embedding model
-
-Two regularly tested options:
-
-- `google/embeddinggemma-300m`: 300M parameters, 768-dim vectors. Good general-purpose default.
-- `Qwen/Qwen3-Embedding-0.6B`: 600M parameters, 1024-dim vectors.
 
 ```bash
 mistralrs serve -m google/embeddinggemma-300m
 ```
 
-Use `Qwen/Qwen3-Embedding-0.6B` the same way:
+| Model | Size | Vector length |
+| --- | --- | --- |
+| `google/embeddinggemma-300m` | 300M parameters | 768 |
+| `Qwen/Qwen3-Embedding-0.6B` | 600M parameters | 1,024 |
 
-```bash
-mistralrs serve -m Qwen/Qwen3-Embedding-0.6B
-```
+EmbeddingGemma is gated: accept its license on Hugging Face, then run `hf auth login` or set `HF_TOKEN` before the first download.
 
 ## Requesting an embedding
 
@@ -31,54 +27,28 @@ mistralrs serve -m Qwen/Qwen3-Embedding-0.6B
 
 ```bash
 curl http://localhost:1234/v1/embeddings \
-  -H "Content-Type: application/json" \
+  -H 'Content-Type: application/json' \
   -d '{
     "model": "default",
-    "input": "The cat sat on the mat."
+    "input": "task: search result | query: What is graphene?"
   }'
 ```
 
-The response includes the vector in `embedding`:
-
-```json
-{
-  "object": "list",
-  "data": [{
-    "object": "embedding",
-    "index": 0,
-    "embedding": [0.123, -0.456, 0.789, ...]
-  }],
-  "model": "default",
-  "usage": {"prompt_tokens": 7, "total_tokens": 7}
-}
-```
+Read the vector from `data[0].embedding`.
 
 </TabItem>
 <TabItem label="Python">
 
 ```python
-from mistralrs import EmbeddingArchitecture, EmbeddingRequest, Runner, Which
+from mistralrs import EmbeddingRequest, Runner, Which
 
-runner = Runner(
-    which=Which.Embedding(
-        model_id="google/embeddinggemma-300m",
-        arch=EmbeddingArchitecture.EmbeddingGemma,
-    )
-)
-
-embeddings = runner.send_embedding_request(
-    EmbeddingRequest(
-        input=[
-            "task: search result | query: What is graphene?",
-            "task: search result | query: What is an apple?",
-        ],
-        truncate_sequence=True,
-    )
-)
-print(len(embeddings), len(embeddings[0]))
+runner = Runner(which=Which.Embedding(model_id="google/embeddinggemma-300m"))
+vectors = runner.send_embedding_request(EmbeddingRequest(
+    input=["task: search result | query: What is graphene?"],
+    truncate_sequence=True,
+))
+print(len(vectors[0]))  # 768
 ```
-
-For Qwen3-Embedding, set `arch=EmbeddingArchitecture.Qwen3Embedding` and drop the EmbeddingGemma prompt prefixes.
 
 </TabItem>
 <TabItem label="Rust">
@@ -86,17 +56,10 @@ For Qwen3-Embedding, set `arch=EmbeddingArchitecture.Qwen3Embedding` and drop th
 ```rust
 use mistralrs::{EmbeddingModelBuilder, EmbeddingRequest};
 
-let model = EmbeddingModelBuilder::new("google/embeddinggemma-300m")
-    .build()
-    .await?;
-
-let embeddings = model
-    .generate_embeddings(
-        EmbeddingRequest::builder()
-            .add_prompt("task: search result | query: What is graphene?"),
-    )
-    .await?;
-println!("{:?}", embeddings.first());
+let model = EmbeddingModelBuilder::new("google/embeddinggemma-300m").build().await?;
+let vectors = model.generate_embeddings(
+    EmbeddingRequest::builder().add_prompt("task: search result | query: What is graphene?"),
+).await?;
 ```
 
 </TabItem>
@@ -104,85 +67,51 @@ println!("{:?}", embeddings.first());
 
 ## Batching
 
-Pass a list of strings to embed many at once:
-
-```bash
-curl http://localhost:1234/v1/embeddings \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "default",
-    "input": [
-      "The cat sat on the mat.",
-      "A dog chased a squirrel.",
-      "A raven croaked from the fencepost."
-    ]
-  }'
-```
-
-The `data` array has one entry per input in input order.
+To embed several texts in one call, pass a list as `input` (or use `add_prompts` in Rust). You get one entry in `data` per input, in the same order.
 
 ## Request fields
 
-Beyond `model` and `input`:
-
-- `encoding_format`: `"float"` (default) returns float arrays. `"base64"` returns each vector as base64-encoded little-endian f32 bytes. This matches OpenAI's compact form.
-- `dimensions`: not supported. Passing it returns a validation error rather than silently truncating.
-- `truncate_sequence`: mistral.rs extension. `true` truncates inputs that exceed the model's context length instead of erroring.
+| Field | Values |
+| --- | --- |
+| `encoding_format` | `float` (default) returns a list of numbers. `base64` returns each vector as base64-encoded little-endian f32 bytes, which is smaller to send. |
+| `truncate_sequence` | mistral.rs extension. `true` cuts inputs longer than the model's context to fit. The default, `false`, returns an error instead. |
+| `dimensions` | Not supported. Sending it returns an error rather than silently giving you a different length. |
 
 ## Normalization
 
-Whether vectors are L2-normalized is model-dependent: mistral.rs applies the modules the model ships in `modules.json`. EmbeddingGemma includes a `Normalize` module, so its output is already unit-norm; Qwen3-Embedding does not, so its vectors are returned unnormalized. If you compute cosine similarity as a raw dot product and your model does not normalize, normalize on the client first.
-
-To normalize in Python:
-
-```python
-import numpy as np
-
-v = np.array(response["data"][0]["embedding"])
-v_normalized = v / np.linalg.norm(v)
-```
-
-Many vector stores (FAISS, pgvector) handle normalization internally.
+mistral.rs runs the post-processing steps listed in the checkpoint's `modules.json`. Both EmbeddingGemma and Qwen3-Embedding end with a normalize step, so their vectors already have length 1, and a plain dot product gives you cosine similarity. For another model, check its `modules.json` for a `Normalize` entry. If there isn't one and your vector store expects unit vectors, divide each vector by its length before storing and querying.
 
 ## EmbeddingGemma prompts
 
-EmbeddingGemma works best when the input is prefixed for the task:
+EmbeddingGemma expects a task prefix on every input. mistral.rs doesn't add it, so include it in the text you send:
 
-| Use case | Prompt form |
-|---|---|
-| Retrieval query | `task: search result \| query: <query>` |
-| Retrieval document | `title: <title or none> \| text: <document>` |
+| Use | Prefix |
+| --- | --- |
+| Search query | `task: search result \| query: <query>` |
+| Search document | `title: <title or none> \| text: <document>` |
 | Question answering | `task: question answering \| query: <question>` |
 | Fact verification | `task: fact checking \| query: <claim>` |
 | Classification | `task: classification \| query: <text>` |
 | Clustering | `task: clustering \| query: <text>` |
-| Semantic similarity | `task: sentence similarity \| query: <text>` |
-| Code retrieval | `task: code retrieval \| query: <query>` |
+| Similarity | `task: sentence similarity \| query: <text>` |
+| Code search | `task: code retrieval \| query: <query>` |
 
-Example:
+For search, embed queries with the query prefix and documents with the document prefix. Other models use their own formats; check the model card.
 
-```bash
-curl http://localhost:1234/v1/embeddings \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "default",
-    "input": [
-      "task: search result | query: What is graphene?",
-      "title: none | text: Graphene is a single layer of carbon atoms."
-    ]
-  }'
+## Comparing vectors
+
+Because both models return unit-length vectors, ranking documents against a query is one matrix product:
+
+```python
+import numpy as np
+
+query, *docs = runner.send_embedding_request(EmbeddingRequest(input=[
+    "task: search result | query: What is graphene?",
+    "title: none | text: Graphene is a single layer of carbon atoms.",
+    "title: none | text: Apples grow on trees in temperate climates.",
+]))
+scores = np.array(docs) @ np.array(query)
+print(scores)  # one score per document; higher means more similar
 ```
 
-Qwen3-Embedding does not require these prefixes, but task-specific prefixes can still help keep a retrieval system consistent.
-
-## Using the vectors
-
-Standard pipeline:
-
-1. Embed a corpus offline and store vectors in a vector database (FAISS, Qdrant, pgvector, Pinecone).
-2. At query time, embed the query with the same model.
-3. Search the store for nearest neighbors.
-4. Optionally rerank top results with a reranker.
-5. Feed retrieved documents as language model context.
-
-mistral.rs handles steps 1, 2, and (with a reranker) 4. The rest is the vector store and application logic. The [web search guide](/guides/agents/web-search/) covers using embeddings to rerank search results within an agent.
+For a real corpus, embed your documents once, store the vectors in a vector database, and embed each incoming query with the same model and prefix.

@@ -2,6 +2,8 @@
 
 use candle_core::{DType, Device, Result, Storage, Tensor};
 
+const ROUTING_OFFSETS: [usize; 3] = [0, 1, 17];
+
 fn gelu_tanh(x: f32) -> f32 {
     0.5 * x * (1.0 + ((2.0f32 / std::f32::consts::PI).sqrt() * (x + 0.044715 * x * x * x)).tanh())
 }
@@ -81,63 +83,75 @@ fn run_cutile_case(
     let xs = xs_cpu.to_device(&device)?.to_dtype(DType::BF16)?;
     let gu = gu_cpu.to_device(&device)?.to_dtype(DType::BF16)?;
     let dn = dn_cpu.to_device(&device)?.to_dtype(DType::BF16)?;
-    let ids_t = Tensor::from_vec(ids.clone(), (num_tokens, topk), &device)?;
-    let w_t = Tensor::from_vec(weights.clone(), (num_tokens, topk), &device)?;
     let num_valid = num_tokens * topk;
 
     let cfg = mistralrs_quant::cutile::get_default_config(num_tokens, num_experts);
 
-    let ti_flat = ids_t.flatten_all()?.contiguous()?;
-    let (ti_storage, _l) = ti_flat.storage_and_layout();
-    let ti_slice = match &*ti_storage {
-        Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
-        _ => candle_core::bail!("topk_ids must be cuda"),
-    };
-    let (sids, eids, ntpp, em) = mistralrs_quant::moe::cuda::moe_align(
-        ti_slice,
-        num_tokens,
-        num_experts,
-        topk,
-        cfg.bm,
-        dev,
-    )?;
+    for offset in ROUTING_OFFSETS {
+        let mut ids_data = vec![0u32; offset];
+        ids_data.extend_from_slice(&ids);
+        let ids_t = Tensor::from_vec(ids_data, offset + num_valid, &device)?
+            .narrow(0, offset, num_valid)?
+            .reshape((num_tokens, topk))?;
+        let mut weight_data = vec![-19f32; offset];
+        weight_data.extend_from_slice(&weights);
+        let w_t = Tensor::from_vec(weight_data, offset + num_valid, &device)?
+            .narrow(0, offset, num_valid)?
+            .reshape((num_tokens, topk))?;
+        let ti_flat = ids_t.flatten_all()?.contiguous()?;
+        let (ti_storage, ti_layout) = ti_flat.storage_and_layout();
+        assert_eq!(ti_layout.start_offset(), offset);
+        let ti_slice = match &*ti_storage {
+            Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
+            _ => candle_core::bail!("topk_ids must be cuda"),
+        };
+        let (sids, eids, ntpp, em) = mistralrs_quant::moe::cuda::moe_align(
+            &ti_slice.slice(ti_layout.start_offset()..ti_layout.start_offset() + num_valid),
+            num_tokens,
+            num_experts,
+            topk,
+            cfg.bm,
+            dev,
+        )?;
 
-    let ic1 = mistralrs_quant::cutile::cutile_grouped_gemm(
-        &xs, &gu, &sids, &eids, &ntpp, None, em, num_valid, topk, false, cfg, dev,
-    )?;
-    let ic2 = mistralrs_quant::moe::cuda::act_and_mul(&ic1, inter, act, dev)?;
+        let ic1 = mistralrs_quant::cutile::cutile_grouped_gemm(
+            &xs, &gu, &sids, &eids, &ntpp, None, em, num_valid, topk, false, cfg, dev,
+        )?;
+        let ic2 = mistralrs_quant::moe::cuda::act_and_mul(&ic1, inter, act, dev)?;
 
-    let tw_flat = w_t.flatten_all()?.to_dtype(DType::F32)?.contiguous()?;
-    let (tw_storage, _l) = tw_flat.storage_and_layout();
-    let tw_slice = match &*tw_storage {
-        Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
-        _ => candle_core::bail!("topk_weights must be cuda"),
-    };
-    let ic3 = mistralrs_quant::cutile::cutile_grouped_gemm(
-        &ic2,
-        &dn,
-        &sids,
-        &eids,
-        &ntpp,
-        Some(tw_slice),
-        em,
-        num_valid,
-        1,
-        true,
-        cfg,
-        dev,
-    )?;
-    let got = mistralrs_quant::moe::cuda::moe_sum_bf16(&ic3, num_tokens, topk, dev)?
-        .to_dtype(DType::F32)?
-        .to_device(&cpu)?
-        .flatten_all()?
-        .to_vec1::<f32>()?;
+        let tw_flat = w_t.flatten_all()?.to_dtype(DType::F32)?.contiguous()?;
+        let (tw_storage, tw_layout) = tw_flat.storage_and_layout();
+        assert_eq!(tw_layout.start_offset(), offset);
+        let tw_slice = match &*tw_storage {
+            Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
+            _ => candle_core::bail!("topk_weights must be cuda"),
+        };
+        let ic3 = mistralrs_quant::cutile::cutile_grouped_gemm(
+            &ic2,
+            &dn,
+            &sids,
+            &eids,
+            &ntpp,
+            Some(&tw_slice.slice(tw_layout.start_offset()..tw_layout.start_offset() + num_valid)),
+            em,
+            num_valid,
+            1,
+            true,
+            cfg,
+            dev,
+        )?;
+        let got = mistralrs_quant::moe::cuda::moe_sum_bf16(&ic3, num_tokens, topk, dev)?
+            .to_dtype(DType::F32)?
+            .to_device(&cpu)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
 
-    let mut max_diff = 0f32;
-    for (&g, &e) in got.iter().zip(expect.iter()) {
-        max_diff = max_diff.max((g - e).abs());
+        let mut max_diff = 0f32;
+        for (&g, &e) in got.iter().zip(expect.iter()) {
+            max_diff = max_diff.max((g - e).abs());
+        }
+        assert!(max_diff < tol, "offset={offset}: max diff {max_diff}");
     }
-    assert!(max_diff < tol, "max diff {max_diff}");
     Ok(())
 }
 

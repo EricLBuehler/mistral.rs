@@ -198,6 +198,7 @@ impl SequenceAudios {
                 s.to_bits().hash(&mut hasher);
             }
             a.sample_rate.hash(&mut hasher);
+            a.channels.hash(&mut hasher);
             hasher.finish()
         });
         Self {
@@ -750,6 +751,9 @@ pub fn build_mm_features_from_ranges_with_policy(
 }
 
 pub struct Sequence {
+    pub(crate) decision: Option<Arc<crate::decision::DecisionRequest>>,
+    audio_output: Option<crate::ChatAudioRequest>,
+    generated_audio: Option<crate::ChatAudioResponse>,
     // Metadata, const
     id: usize,
     prompt_len: usize,
@@ -900,6 +904,9 @@ impl Sequence {
                 .is_streaming;
         Self {
             tokens,
+            audio_output: None,
+            decision: None,
+            generated_audio: None,
             prompt,
             logprobs: Vec::new(),
             prompt_len,
@@ -1105,6 +1112,30 @@ impl Sequence {
             return &prefill.tokens;
         }
         &self.tokens
+    }
+
+    pub fn audio_output(&self) -> Option<crate::ChatAudioRequest> {
+        self.audio_output
+    }
+
+    pub(crate) fn needs_prompt_planning(&self) -> bool {
+        self.has_images() || self.has_audios() || self.has_videos() || self.audio_output.is_some()
+    }
+
+    pub(crate) fn set_audio_output(&mut self, config: Option<crate::ChatAudioRequest>) {
+        self.audio_output = config;
+    }
+
+    pub fn generated_audio(&self) -> Option<&crate::ChatAudioResponse> {
+        self.generated_audio.as_ref()
+    }
+
+    pub fn set_generated_audio(&mut self, audio: crate::ChatAudioResponse) {
+        self.generated_audio = Some(audio);
+    }
+
+    pub fn take_generated_audio(&mut self) -> Option<crate::ChatAudioResponse> {
+        self.generated_audio.take()
     }
 
     pub fn is_chunked_prefill_view(&self) -> bool {
@@ -2595,6 +2626,23 @@ mod tests {
     use tokio::sync::mpsc::channel;
 
     #[test]
+    fn audio_hash_distinguishes_channel_count() {
+        let mono = AudioInput {
+            samples: vec![0.25, -0.5, 0.75, 1.0],
+            sample_rate: 16_000,
+            channels: 1,
+        };
+        let stereo = AudioInput {
+            channels: 2,
+            ..mono.clone()
+        };
+        assert_ne!(mono.to_mono(), stereo.to_mono());
+        let audios = SequenceAudios::new(vec![mono.clone(), stereo, mono]);
+        assert_ne!(audios.hashes()[0], audios.hashes()[1]);
+        assert_eq!(audios.hashes()[0], audios.hashes()[2]);
+    }
+
+    #[test]
     fn image_hash_distinguishes_geometry() {
         let bytes = vec![1, 2, 3, 4, 5, 6];
         let wide =
@@ -2669,6 +2717,7 @@ mod tests {
             stop_sequence: None,
             index,
             delta: crate::Delta {
+                audio: None,
                 content: Some(format!("choice {index}")),
                 role: "assistant".to_string(),
                 tool_calls: None,

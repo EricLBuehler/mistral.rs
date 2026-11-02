@@ -41,8 +41,8 @@ use mistralrs_core::{
     EmbeddingLoaderBuilder, EmbeddingSpecificConfig, GGMLLoaderBuilder, GGMLSpecificConfig,
     GGUFLoaderBuilder, GGUFSpecificConfig, ImageGenerationResponse, ImageGenerationResponseFormat,
     LlguidanceGrammar, Loader, LoraAdapterError as CoreLoraAdapterError, LoraAdapterLoadPolicy,
-    LoraAdapterSpec, LoraRuntimeConfig, MemoryGpuConfig, MistralRs, MistralRsBuilder,
-    MistralRsError, MtpConfig, MtpRuntimeConfig, MultimodalLoaderBuilder, MultimodalSpecificConfig,
+    LoraAdapterSpec, LoraRuntimeConfig, MemoryGoal, MistralRs, MistralRsBuilder, MistralRsError,
+    MtpConfig, MtpRuntimeConfig, MultimodalLoaderBuilder, MultimodalSpecificConfig,
     NormalLoaderBuilder, NormalRequest, NormalSpecificConfig, PagedAttentionConfig, PagedCacheType,
     Request as _Request, RequestMessage, Response, ResponseOk, SamplingParams, SchedulerConfig,
     SearchEmbeddingModel, SpeculativeConfig, SpeechLoader, StopTokens, TokenSource,
@@ -62,6 +62,7 @@ use pyo3::PyObject;
 use std::fs::File;
 mod anymoe;
 mod code_execution;
+mod decisions;
 mod files;
 mod requests;
 mod stream;
@@ -73,6 +74,308 @@ use which::{
 };
 
 static DEVICE: OnceLock<Result<Device>> = OnceLock::new();
+
+fn normalize_chat_messages(
+    messages: &requests::PythonChatMessages,
+    enable_thinking: Option<bool>,
+    reasoning_effort: Option<mistralrs_core::ReasoningEffort>,
+) -> PyApiResult<RequestMessage> {
+    Ok(match messages {
+        Either::Left(messages) => {
+            let mut messages_vec = Vec::new();
+            let mut image_urls = Vec::new();
+            let mut audio_urls = Vec::new();
+            let mut video_urls = Vec::new();
+            for message in messages {
+                let role = message
+                    .get("role")
+                    .context("Input message must have a `role` field.")?
+                    .as_ref()
+                    .left()
+                    .context("Input message `role` must be a string.")?
+                    .clone();
+                match message
+                    .get("content")
+                    .context("Input message must have a `content` field.")?
+                {
+                    Either::Left(content) => {
+                        let mut message_map: IndexMap<
+                            String,
+                            Either<String, Vec<IndexMap<String, Value>>>,
+                        > = IndexMap::new();
+                        message_map.insert("role".to_string(), Either::Left(role));
+                        message_map
+                            .insert("content".to_string(), Either::Left(content.to_string()));
+                        messages_vec.push(message_map);
+                    }
+                    Either::Right(image_messages) => {
+                        if image_messages.len() == 1
+                            && image_messages[0].get("type").is_none_or(
+                                |kind| matches!(kind, Either::Left(kind) if kind == "text"),
+                            )
+                        {
+                            let content = image_messages[0]
+                                .get("text")
+                                .context("Expected `text` key in input message.")?
+                                .as_ref()
+                                .left()
+                                .context("Input message `text` must be a string.")?
+                                .clone();
+                            let mut message_map: IndexMap<
+                                String,
+                                Either<String, Vec<IndexMap<String, Value>>>,
+                            > = IndexMap::new();
+                            message_map.insert("role".to_string(), Either::Left(role));
+                            message_map.insert("content".to_string(), Either::Left(content));
+                            messages_vec.push(message_map);
+                            continue;
+                        }
+                        if role != "user" {
+                            return Err(PyApiErr::from(format!(
+                                "Role for a media message must be `user`, but it is {role}"
+                            )));
+                        }
+
+                        enum ContentPart {
+                            Text { text: String },
+                            Image { image_url: String },
+                            Audio { audio_url: String },
+                            Video { video_url: String },
+                        }
+
+                        let mut items = Vec::new();
+                        for image_message in image_messages {
+                            match image_message.get("type") {
+                                Some(Either::Left(x)) if x == "text" => {
+                                    items.push(ContentPart::Text {
+                                        text: image_message
+                                            .get("text").as_ref()
+                                            .context("Text sub-content must have `text` key.")?.as_ref()
+                                            .left().context("Text sub-content `text` key must be a string.")?.clone(),
+                                    });
+                                }
+                                Some(Either::Left(x)) if x == "image_url" => {
+                                    items.push(ContentPart::Image {
+                                        image_url: image_message
+                                            .get("image_url")
+                                            .as_ref()
+                                            .context("Image sub-content must have `image_url` key.")?
+                                            .as_ref()
+                                            .right()
+                                            .context("Image sub-content `image_url` key must be an object.")?
+                                            .get("url")
+                                            .context("Image sub-content `image_url` object must have a `url` key.")?
+                                            .clone(),
+                                    });
+                                }
+                                Some(Either::Left(x)) if x == "input_audio" => {
+                                    let audio = image_message
+                                        .get("input_audio")
+                                        .context("Audio sub-content must have `input_audio` key.")?
+                                        .as_ref()
+                                        .right()
+                                        .context("Audio sub-content `input_audio` must be an object.")?;
+                                    let data = audio.get("data")
+                                        .context("input_audio must have a base64 `data` field.")?;
+                                    let format = audio.get("format")
+                                        .context("input_audio must have a `format` field.")?;
+                                    items.push(ContentPart::Audio {
+                                        audio_url: mistralrs_core::input_audio_data_url(data, format)?,
+                                    });
+                                }
+                                Some(Either::Left(x)) if x == "audio_url" => {
+                                    items.push(ContentPart::Audio {
+                                        audio_url: image_message
+                                            .get("audio_url")
+                                            .as_ref()
+                                            .context("Audio sub-content must have `audio_url` key.")?
+                                            .as_ref()
+                                            .right()
+                                            .context("Audio sub-content `audio_url` key must be an object.")?
+                                            .get("url")
+                                            .context("Audio sub-content `audio_url` object must have a `url` key.")?
+                                            .clone(),
+                                    });
+                                }
+                                Some(Either::Left(x)) if x == "video_url" => {
+                                    items.push(ContentPart::Video {
+                                        video_url: image_message
+                                            .get("video_url")
+                                            .as_ref()
+                                            .context("Video sub-content must have `video_url` key.")?
+                                            .as_ref()
+                                            .right()
+                                            .context("Video sub-content `video_url` key must be an object.")?
+                                            .get("url")
+                                            .context("Video sub-content `video_url` object must have a `url` key.")?
+                                            .clone(),
+                                    });
+                                }
+                                _ => return Err(PyApiErr::from("Expected array content sub-content to be of format {{`type`: `text`, `text`: ...}} and {{`type`: `url`, `image_url`: {{`url`: ...}}}}"))
+                            }
+                        }
+
+                        let text_content = items
+                            .iter()
+                            .filter_map(|item| match item {
+                                ContentPart::Text { text } => Some(text),
+                                _ => None,
+                            })
+                            .join(" ");
+                        let image_urls_iter = items
+                            .iter()
+                            .filter_map(|item| match item {
+                                ContentPart::Image { image_url } => Some(image_url.clone()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>();
+
+                        let audio_urls_iter = items
+                            .iter()
+                            .filter_map(|item| match item {
+                                ContentPart::Audio { audio_url } => Some(audio_url.clone()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>();
+
+                        let video_urls_iter = items
+                            .iter()
+                            .filter_map(|item| match item {
+                                ContentPart::Video { video_url } => Some(video_url.clone()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>();
+
+                        let mut message_map: IndexMap<
+                            String,
+                            Either<String, Vec<IndexMap<String, Value>>>,
+                        > = IndexMap::new();
+                        message_map.insert("role".to_string(), Either::Left(role));
+
+                        let mut content_map: Vec<IndexMap<String, Value>> = Vec::new();
+                        for _ in &image_urls_iter {
+                            let mut content_image_map = IndexMap::new();
+                            content_image_map
+                                .insert("type".to_string(), Value::String("image".to_string()));
+                            content_map.push(content_image_map);
+                        }
+                        for _ in &audio_urls_iter {
+                            let mut content_audio_map = IndexMap::new();
+                            content_audio_map
+                                .insert("type".to_string(), Value::String("audio".to_string()));
+                            content_map.push(content_audio_map);
+                        }
+                        for _ in &video_urls_iter {
+                            let mut content_video_map = IndexMap::new();
+                            content_video_map
+                                .insert("type".to_string(), Value::String("video".to_string()));
+                            content_map.push(content_video_map);
+                        }
+                        {
+                            let mut content_text_map = IndexMap::new();
+                            content_text_map
+                                .insert("type".to_string(), Value::String("text".to_string()));
+                            content_text_map
+                                .insert("text".to_string(), Value::String(text_content));
+                            content_map.push(content_text_map);
+                        }
+
+                        message_map.insert("content".to_string(), Either::Right(content_map));
+                        messages_vec.push(message_map);
+                        image_urls.extend(image_urls_iter);
+                        audio_urls.extend(audio_urls_iter);
+                        video_urls.extend(video_urls_iter);
+                    }
+                }
+            }
+            if !image_urls.is_empty() || !audio_urls.is_empty() || !video_urls.is_empty() {
+                let mut images = Vec::new();
+                for url in image_urls {
+                    let url_unparsed = url.trim();
+
+                    let image = util::parse_image_url(url_unparsed)?;
+                    images.push(image);
+                }
+                let mut audios = Vec::new();
+                for url in audio_urls {
+                    let url_unparsed = url.trim();
+                    let audio = util::parse_audio_url(url_unparsed)?;
+                    audios.push(audio);
+                }
+                let mut videos = Vec::new();
+                for url in video_urls {
+                    let url_unparsed = url.trim();
+                    let video = util::parse_video_url(url_unparsed)?;
+                    videos.push(video);
+                }
+                RequestMessage::MultimodalChat {
+                    messages: messages_vec,
+                    images,
+                    audios,
+                    videos,
+                    enable_thinking,
+                    reasoning_effort,
+                }
+            } else {
+                RequestMessage::Chat {
+                    messages: messages_vec,
+                    enable_thinking,
+                    reasoning_effort,
+                }
+            }
+        }
+        Either::Right(prompt) => {
+            let mut messages = Vec::new();
+            let mut message_map: IndexMap<String, Either<String, Vec<IndexMap<String, Value>>>> =
+                IndexMap::new();
+            message_map.insert("role".to_string(), Either::Left("user".to_string()));
+            message_map.insert("content".to_string(), Either::Left(prompt.to_string()));
+            messages.push(message_map);
+            RequestMessage::Chat {
+                messages,
+                enable_thinking,
+                reasoning_effort,
+            }
+        }
+    })
+}
+
+fn parse_memory_goal(value: Option<&Bound<'_, PyAny>>) -> PyApiResult<MemoryGoal> {
+    let goal = match value {
+        None => MemoryGoal::Auto,
+        Some(value) => {
+            if value.is_instance_of::<pyo3::types::PyBool>() {
+                return Err(PyApiErr::from("memory_goal must be a utilization fraction or a capacity string, not a boolean"));
+            }
+            if let Ok(value) = value.extract::<String>() {
+                value.parse::<MemoryGoal>().map_err(PyApiErr::from)?
+            } else {
+                MemoryGoal::Utilization(value.extract::<f32>().map_err(|_| {
+                    PyApiErr::from("memory_goal must be 'auto', a capacity such as '4GiB' or '65536tokens', or a utilization fraction")
+                })?)
+            }
+        }
+    };
+    goal.validate().map_err(PyApiErr::from)?;
+    Ok(goal)
+}
+
+fn runner_cache_config(
+    memory_goal: MemoryGoal,
+    block_size: Option<usize>,
+    cache_type: PagedCacheType,
+    enabled: bool,
+) -> anyhow::Result<Option<PagedAttentionConfig>> {
+    memory_goal.validate()?;
+    if !enabled {
+        anyhow::ensure!(
+            memory_goal == MemoryGoal::Auto,
+            "an explicit memory goal requires supported paged attention"
+        );
+        return Ok(None);
+    }
+    PagedAttentionConfig::new(block_size, memory_goal, cache_type).map(Some)
+}
 
 pyo3::create_exception!(
     mistralrs,
@@ -390,26 +693,6 @@ fn which_uses_dynamic_lora(which: &Which) -> bool {
     }
 }
 
-fn validate_gguf_runner_options(which: &Which) -> std::result::Result<(), &'static str> {
-    let Which::GGUF {
-        mmproj_filename,
-        auto_map_params,
-        multimodal_auto_map_params,
-        ..
-    } = which
-    else {
-        return Ok(());
-    };
-
-    if auto_map_params.is_some() && multimodal_auto_map_params.is_some() {
-        return Err("GGUF accepts only one of auto_map_params and multimodal_auto_map_params");
-    }
-    if mmproj_filename.is_none() && multimodal_auto_map_params.is_some() {
-        return Err("multimodal_auto_map_params requires mmproj_filename");
-    }
-    Ok(())
-}
-
 fn validate_encoder_cache_runner_options(which: &Which) -> std::result::Result<(), &'static str> {
     let max_bytes = match which {
         Which::GGUF {
@@ -447,7 +730,6 @@ fn parse_which(
             dtype: _,
             imatrix,
             calibration_file,
-            auto_map_params: _,
             hf_cache_path,
             matformer_config_path,
             matformer_slice_name,
@@ -517,7 +799,6 @@ fn parse_which(
             write_uqff,
             from_uqff,
             dtype: _,
-            auto_map_params: _,
             hf_cache_path,
         } => NormalLoaderBuilder::new(
             NormalSpecificConfig {
@@ -563,7 +844,6 @@ fn parse_which(
             write_uqff,
             from_uqff,
             dtype: _,
-            auto_map_params: _,
             hf_cache_path,
             max_adapters,
             max_rank,
@@ -625,8 +905,6 @@ fn parse_which(
             calibration_file,
             max_edge,
             dtype: _,
-            auto_map_params: _,
-            multimodal_auto_map_params: _,
             adapters,
             max_adapters,
             max_rank,
@@ -697,7 +975,6 @@ fn parse_which(
             tgt_non_granular_index,
             topology,
             dtype: _,
-            auto_map_params: _,
         } => GGUFLoaderBuilder::new(
             chat_template,
             tok_model_id,
@@ -728,7 +1005,6 @@ fn parse_which(
             order,
             topology,
             dtype: _,
-            auto_map_params: _,
         } => GGUFLoaderBuilder::new(
             chat_template,
             tok_model_id,
@@ -757,7 +1033,6 @@ fn parse_which(
             gqa,
             topology,
             dtype: _,
-            auto_map_params: _,
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
@@ -783,7 +1058,6 @@ fn parse_which(
             gqa,
             topology,
             dtype: _,
-            auto_map_params: _,
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
@@ -817,7 +1091,6 @@ fn parse_which(
             gqa,
             topology,
             dtype: _,
-            auto_map_params: _,
         } => GGMLLoaderBuilder::new(
             GGMLSpecificConfig {
                 gqa,
@@ -850,7 +1123,6 @@ fn parse_which(
             max_edge,
             calibration_file,
             imatrix,
-            auto_map_params: _,
             hf_cache_path,
             matformer_config_path,
             matformer_slice_name,
@@ -942,9 +1214,9 @@ impl Runner {
     #[new]
     #[pyo3(signature = (
         which,
-        max_seqs = 16,
+        max_seqs = mistralrs_core::memory_plan::DEFAULT_MAX_NUM_SEQS,
         no_kv_cache = false,
-        prefix_cache_n = 16,
+        prefix_cache_n = None,
         token_source = "cache",
         mtp_model = None,
         mtp_n_predict = None,
@@ -953,9 +1225,7 @@ impl Runner {
         num_device_layers = None,
         in_situ_quant = None,
         anymoe_config = None,
-        pa_gpu_mem = None,
-        pa_gpu_mem_usage = None,
-        pa_ctxt_len = None,
+        memory_goal = None,
         pa_blk_size = None,
         pa_cache_type = None,
         no_paged_attn = false,
@@ -973,7 +1243,7 @@ impl Runner {
         which: Which,
         max_seqs: usize,
         no_kv_cache: bool,
-        prefix_cache_n: usize,
+        prefix_cache_n: Option<usize>,
         token_source: &str,
         mtp_model: Option<String>,
         mtp_n_predict: Option<usize>,
@@ -982,9 +1252,7 @@ impl Runner {
         num_device_layers: Option<Vec<String>>,
         in_situ_quant: Option<String>,
         anymoe_config: Option<AnyMoeConfig>,
-        pa_gpu_mem: Option<usize>,
-        pa_gpu_mem_usage: Option<f32>,
-        pa_ctxt_len: Option<usize>,
+        memory_goal: Option<Bound<'_, PyAny>>,
         pa_blk_size: Option<usize>,
         pa_cache_type: Option<PagedCacheType>,
         no_paged_attn: bool,
@@ -1004,7 +1272,6 @@ impl Runner {
                 "dynamic LoRA cannot be combined with AnyMoE in one Python Runner",
             ));
         }
-        validate_gguf_runner_options(&which).map_err(PyApiErr::from)?;
         validate_encoder_cache_runner_options(&which).map_err(PyApiErr::from)?;
         let tgt_non_granular_index = match which {
             Which::Plain { .. }
@@ -1046,92 +1313,14 @@ impl Runner {
             | Which::XLoraGGML { dtype, .. } => dtype,
         };
         let auto_map_params = match &which {
-            Which::Plain {
-                auto_map_params, ..
-            }
-            | Which::Lora {
-                auto_map_params, ..
-            }
-            | Which::LoraGGUF {
-                auto_map_params, ..
-            }
-            | Which::GGML {
-                auto_map_params, ..
-            }
-            | Which::LoraGGML {
-                auto_map_params, ..
-            }
-            | Which::XLora {
-                auto_map_params, ..
-            }
-            | Which::XLoraGGUF {
-                auto_map_params, ..
-            }
-            | Which::XLoraGGML {
-                auto_map_params, ..
-            } => auto_map_params
-                .clone()
-                .map(|p| AutoDeviceMapParams::Text {
-                    max_seq_len: p.max_seq_len,
-                    max_batch_size: p.max_batch_size,
-                })
-                .unwrap_or(AutoDeviceMapParams::default_text()),
-            Which::GGUF {
-                mmproj_filename,
-                auto_map_params,
-                multimodal_auto_map_params,
+            Which::MultimodalPlain { .. }
+            | Which::GGUF {
+                mmproj_filename: Some(_),
                 ..
-            } => {
-                if mmproj_filename.is_some() {
-                    multimodal_auto_map_params
-                        .clone()
-                        .map(|p| AutoDeviceMapParams::Multimodal {
-                            max_seq_len: p.max_seq_len,
-                            max_batch_size: p.max_batch_size,
-                            max_image_shape: (p.max_image_length, p.max_image_length),
-                            max_num_images: p.max_num_images,
-                        })
-                        .or_else(|| {
-                            auto_map_params
-                                .clone()
-                                .map(|p| AutoDeviceMapParams::Multimodal {
-                                    max_seq_len: p.max_seq_len,
-                                    max_batch_size: p.max_batch_size,
-                                    max_image_shape: (
-                                        AutoDeviceMapParams::DEFAULT_MAX_IMAGE_LENGTH,
-                                        AutoDeviceMapParams::DEFAULT_MAX_IMAGE_LENGTH,
-                                    ),
-                                    max_num_images: AutoDeviceMapParams::DEFAULT_MAX_NUM_IMAGES,
-                                })
-                        })
-                        .unwrap_or(AutoDeviceMapParams::default_multimodal())
-                } else {
-                    auto_map_params
-                        .clone()
-                        .map(|p| AutoDeviceMapParams::Text {
-                            max_seq_len: p.max_seq_len,
-                            max_batch_size: p.max_batch_size,
-                        })
-                        .unwrap_or(AutoDeviceMapParams::default_text())
-                }
-            }
-            Which::MultimodalPlain {
-                auto_map_params, ..
-            } => auto_map_params
-                .clone()
-                .map(|p| AutoDeviceMapParams::Multimodal {
-                    max_seq_len: p.max_seq_len,
-                    max_batch_size: p.max_batch_size,
-                    max_image_shape: (p.max_image_length, p.max_image_length),
-                    max_num_images: p.max_num_images,
-                })
-                .unwrap_or(AutoDeviceMapParams::default_multimodal()),
-            Which::Embedding { .. } | Which::DiffusionPlain { .. } | Which::Speech { .. } => {
-                AutoDeviceMapParams::default_text()
-            }
+            } => AutoDeviceMapParams::default_multimodal(),
+            _ => AutoDeviceMapParams::default_text(),
         };
-
-        let max_seq_len = auto_map_params.max_seq_len();
+        let memory_goal = parse_memory_goal(memory_goal.as_ref())?;
 
         let max_seqs = if tgt_non_granular_index.is_some() {
             1
@@ -1211,67 +1400,31 @@ impl Runner {
             None => DeviceMapSetting::Auto(auto_map_params),
         };
 
-        let no_paged_attn = if device.is_cuda() || mistralrs_core::distributed::use_nccl() {
-            no_paged_attn
-        } else if device.is_metal() {
-            !paged_attn
-        } else {
-            true
-        };
-
-        let cache_config = match (
+        if no_paged_attn && paged_attn {
+            return Err(PyApiErr::from(
+                "paged_attn and no_paged_attn are mutually exclusive",
+            ));
+        }
+        let supported = paged_attn_supported()
+            && (device.is_cuda() || device.is_metal() || mistralrs_core::distributed::use_nccl());
+        if paged_attn && (!supported || no_kv_cache) {
+            return Err(PyApiErr::from(
+                "paged attention is unavailable on this device or with no_kv_cache",
+            ));
+        }
+        let cache_config = runner_cache_config(
+            memory_goal,
             pa_blk_size,
-            pa_gpu_mem,
-            pa_gpu_mem_usage,
-            pa_ctxt_len,
-            paged_attn_supported(),
-            no_paged_attn,
-        ) {
-            (block_size, None, None, None, true, false) => Some(PagedAttentionConfig::new(
-                block_size,
-                MemoryGpuConfig::ContextSize(max_seq_len),
-                pa_cache_type.unwrap_or_default(),
-            )?),
-            (block_size, None, None, Some(ctxt), true, false) => Some(PagedAttentionConfig::new(
-                block_size,
-                MemoryGpuConfig::ContextSize(ctxt),
-                pa_cache_type.unwrap_or_default(),
-            )?),
-            (block_size, None, Some(f), None, true, false) => Some(PagedAttentionConfig::new(
-                block_size,
-                MemoryGpuConfig::Utilization(f),
-                pa_cache_type.unwrap_or_default(),
-            )?),
-            (block_size, Some(m), None, None, true, false) => Some(PagedAttentionConfig::new(
-                block_size,
-                MemoryGpuConfig::MbAmount(m),
-                pa_cache_type.unwrap_or_default(),
-            )?),
-            (block_size, Some(_m), Some(f), None, true, false) => Some(PagedAttentionConfig::new(
-                block_size,
-                MemoryGpuConfig::Utilization(f),
-                pa_cache_type.unwrap_or_default(),
-            )?),
-            (block_size, Some(_m), None, Some(ctxt), true, false) => {
-                Some(PagedAttentionConfig::new(
-                    block_size,
-                    MemoryGpuConfig::ContextSize(ctxt),
-                    pa_cache_type.unwrap_or_default(),
-                )?)
-            }
-            (block_size, None, Some(f), Some(_ctxt), true, false) => {
-                Some(PagedAttentionConfig::new(
-                    block_size,
-                    MemoryGpuConfig::Utilization(f),
-                    pa_cache_type.unwrap_or_default(),
-                )?)
-            }
-            (_, _, _, _, _, _) => None,
-        };
+            pa_cache_type.unwrap_or_default(),
+            supported && !no_paged_attn && !no_kv_cache,
+        )
+        .map_err(PyApiErr::from)?;
+        let prefix_cache_n = mistralrs_core::PrefixCacheCapacity::from(prefix_cache_n);
         let cache_config = cache_config
             .map(|config| config.with_serving_capacity(max_seqs))
             .transpose()?
             .map(|config| config.with_recurrent_prefix_capacity(prefix_cache_n));
+        let prefix_cache_n = prefix_cache_n.requested();
         let mtp_config = mtp_model.map(|model| MtpConfig::new(model, mtp_n_predict));
         let mtp_runtime = MtpRuntimeConfig::new(prefix_cache_n);
         let cache_config = reserve_external_mtp_memory_with_runtime(
@@ -1292,7 +1445,7 @@ impl Runner {
                 true, // Silent for jupyter
                 mapper,
                 isq,
-                cache_config,
+                cache_config.clone(),
             )
             .map_err(PyApiErr::from)?;
 
@@ -1426,255 +1579,11 @@ impl Runner {
                 None
             };
 
-            let messages = match request.messages {
-                Either::Left(ref messages) => {
-                    let mut messages_vec = Vec::new();
-                    let mut image_urls = Vec::new();
-                    let mut audio_urls = Vec::new();
-                    let mut video_urls = Vec::new();
-                    for message in messages {
-                        let role = message["role"].as_ref().left().unwrap().clone();
-                        match &message["content"] {
-                            Either::Left(content) => {
-                                let mut message_map: IndexMap<
-                                    String,
-                                    Either<String, Vec<IndexMap<String, Value>>>,
-                                > = IndexMap::new();
-                                message_map.insert("role".to_string(), Either::Left(role));
-                                message_map.insert(
-                                    "content".to_string(),
-                                    Either::Left(content.to_string()),
-                                );
-                                messages_vec.push(message_map);
-                            }
-                            Either::Right(image_messages) => {
-                                // If there is only one message, it is possible a text message
-                                // found when rig is used as client. In this case, we need to check if
-                                // the message is a text message or an image message.
-                                if image_messages.len() == 1 {
-                                    if !image_messages[0].contains_key("text") {
-                                        return Err(PyApiErr::from(
-                                            "Expected `text` key in input message.",
-                                        ));
-                                    }
-                                    let content = match &image_messages[0]["text"] {
-                                        Either::Left(left) => left.to_string(),
-                                        Either::Right(right) => format!("{right:?}"),
-                                    };
-                                    let mut message_map: IndexMap<
-                                        String,
-                                        Either<String, Vec<IndexMap<String, Value>>>,
-                                    > = IndexMap::new();
-                                    message_map.insert("role".to_string(), Either::Left(role));
-                                    message_map
-                                        .insert("content".to_string(), Either::Left(content));
-                                    messages_vec.push(message_map);
-                                    continue;
-                                }
-                                if role != "user" {
-                                    return Err(PyApiErr::from(
-                                        "Role for an image message must be `user`, but it is {role}",
-                                    ));
-                                }
-
-                                enum ContentPart {
-                                    Text { text: String },
-                                    Image { image_url: String },
-                                    Audio { audio_url: String },
-                                    Video { video_url: String },
-                                }
-
-                                let mut items = Vec::new();
-                                for image_message in image_messages {
-                                    match image_message.get("type") {
-                                        Some(Either::Left(x)) if x == "text" => {
-                                            items.push(ContentPart::Text {
-                                                text: image_message
-                                                    .get("text").as_ref()
-                                                    .context("Text sub-content must have `text` key.")?.as_ref()
-                                                    .left().context("Text sub-content `text` key must be a string.")?.clone(),
-                                            });
-                                        }
-                                        Some(Either::Left(x)) if x == "image_url" => {
-                                            items.push(ContentPart::Image {
-                                                image_url: image_message
-                                                    .get("image_url")
-                                                    .as_ref()
-                                                    .context("Image sub-content must have `image_url` key.")?
-                                                    .as_ref()
-                                                    .right()
-                                                    .context("Image sub-content `image_url` key must be an object.")?
-                                                    .get("url")
-                                                    .context("Image sub-content `image_url` object must have a `url` key.")?
-                                                    .clone(),
-                                            });
-                                        }
-                                        Some(Either::Left(x)) if x == "audio_url" => {
-                                            items.push(ContentPart::Audio {
-                                                audio_url: image_message
-                                                    .get("audio_url")
-                                                    .as_ref()
-                                                    .context("Audio sub-content must have `audio_url` key.")?
-                                                    .as_ref()
-                                                    .right()
-                                                    .context("Audio sub-content `audio_url` key must be an object.")?
-                                                    .get("url")
-                                                    .context("Audio sub-content `audio_url` object must have a `url` key.")?
-                                                    .clone(),
-                                            });
-                                        }
-                                        Some(Either::Left(x)) if x == "video_url" => {
-                                            items.push(ContentPart::Video {
-                                                video_url: image_message
-                                                    .get("video_url")
-                                                    .as_ref()
-                                                    .context("Video sub-content must have `video_url` key.")?
-                                                    .as_ref()
-                                                    .right()
-                                                    .context("Video sub-content `video_url` key must be an object.")?
-                                                    .get("url")
-                                                    .context("Video sub-content `video_url` object must have a `url` key.")?
-                                                    .clone(),
-                                            });
-                                        }
-                                        _ => return Err(PyApiErr::from("Expected array content sub-content to be of format {{`type`: `text`, `text`: ...}} and {{`type`: `url`, `image_url`: {{`url`: ...}}}}"))
-                                    }
-                                }
-
-                                let text_content = items
-                                    .iter()
-                                    .filter_map(|item| match item {
-                                        ContentPart::Text { text } => Some(text),
-                                        _ => None,
-                                    })
-                                    .join(" ");
-                                let image_urls_iter = items
-                                    .iter()
-                                    .filter_map(|item| match item {
-                                        ContentPart::Image { image_url } => Some(image_url.clone()),
-                                        _ => None,
-                                    })
-                                    .collect::<Vec<_>>();
-
-                                let audio_urls_iter = items
-                                    .iter()
-                                    .filter_map(|item| match item {
-                                        ContentPart::Audio { audio_url } => Some(audio_url.clone()),
-                                        _ => None,
-                                    })
-                                    .collect::<Vec<_>>();
-
-                                let video_urls_iter = items
-                                    .iter()
-                                    .filter_map(|item| match item {
-                                        ContentPart::Video { video_url } => Some(video_url.clone()),
-                                        _ => None,
-                                    })
-                                    .collect::<Vec<_>>();
-
-                                let mut message_map: IndexMap<
-                                    String,
-                                    Either<String, Vec<IndexMap<String, Value>>>,
-                                > = IndexMap::new();
-                                message_map.insert("role".to_string(), Either::Left(role));
-
-                                let mut content_map: Vec<IndexMap<String, Value>> = Vec::new();
-                                for _ in &image_urls_iter {
-                                    let mut content_image_map = IndexMap::new();
-                                    content_image_map.insert(
-                                        "type".to_string(),
-                                        Value::String("image".to_string()),
-                                    );
-                                    content_map.push(content_image_map);
-                                }
-                                for _ in &audio_urls_iter {
-                                    let mut content_audio_map = IndexMap::new();
-                                    content_audio_map.insert(
-                                        "type".to_string(),
-                                        Value::String("audio".to_string()),
-                                    );
-                                    content_map.push(content_audio_map);
-                                }
-                                for _ in &video_urls_iter {
-                                    let mut content_video_map = IndexMap::new();
-                                    content_video_map.insert(
-                                        "type".to_string(),
-                                        Value::String("video".to_string()),
-                                    );
-                                    content_map.push(content_video_map);
-                                }
-                                {
-                                    let mut content_text_map = IndexMap::new();
-                                    content_text_map.insert(
-                                        "type".to_string(),
-                                        Value::String("text".to_string()),
-                                    );
-                                    content_text_map
-                                        .insert("text".to_string(), Value::String(text_content));
-                                    content_map.push(content_text_map);
-                                }
-
-                                message_map
-                                    .insert("content".to_string(), Either::Right(content_map));
-                                messages_vec.push(message_map);
-                                image_urls.extend(image_urls_iter);
-                                audio_urls.extend(audio_urls_iter);
-                                video_urls.extend(video_urls_iter);
-                            }
-                        }
-                    }
-                    if !image_urls.is_empty() || !audio_urls.is_empty() || !video_urls.is_empty() {
-                        let mut images = Vec::new();
-                        for url in image_urls {
-                            let url_unparsed = url.trim();
-
-                            let image = util::parse_image_url(url_unparsed)?;
-                            images.push(image);
-                        }
-                        let mut audios = Vec::new();
-                        for url in audio_urls {
-                            let url_unparsed = url.trim();
-                            let audio = util::parse_audio_url(url_unparsed)?;
-                            audios.push(audio);
-                        }
-                        let mut videos = Vec::new();
-                        for url in video_urls {
-                            let url_unparsed = url.trim();
-                            let video = util::parse_video_url(url_unparsed)?;
-                            videos.push(video);
-                        }
-                        RequestMessage::MultimodalChat {
-                            messages: messages_vec,
-                            images,
-                            audios,
-                            videos,
-                            enable_thinking: request.enable_thinking,
-                            reasoning_effort: request.reasoning_effort,
-                        }
-                    } else {
-                        RequestMessage::Chat {
-                            messages: messages_vec,
-                            enable_thinking: request.enable_thinking,
-                            reasoning_effort: request.reasoning_effort,
-                        }
-                    }
-                }
-                Either::Right(ref prompt) => {
-                    let mut messages = Vec::new();
-                    let mut message_map: IndexMap<
-                        String,
-                        Either<String, Vec<IndexMap<String, Value>>>,
-                    > = IndexMap::new();
-                    message_map.insert("role".to_string(), Either::Left("user".to_string()));
-                    message_map.insert("content".to_string(), Either::Left(prompt.to_string()));
-                    messages.push(message_map);
-                    RequestMessage::Chat {
-                        messages,
-                        enable_thinking: request.enable_thinking,
-                        reasoning_effort: request.reasoning_effort,
-                    }
-                }
-            };
+            let messages = normalize_chat_messages(
+                &request.messages,
+                request.enable_thinking,
+                request.reasoning_effort,
+            )?;
 
             let tool_choice = request.tool_choice.as_ref().map(|x| match x {
                 ToolChoice::Auto => mistralrs_core::ToolChoice::Auto,
@@ -1699,6 +1608,7 @@ impl Runner {
             );
 
             let model_request = _Request::Normal(Box::new(NormalRequest {
+                audio_output: request.audio_output,
                 id: next_request_id(),
                 queued_at: None,
                 messages,
@@ -1752,6 +1662,7 @@ impl Runner {
             }));
 
             let is_streaming = request.stream;
+            let n_choices = request.n_choices;
             let debug_repr = format!("{request:?}");
             drop(request);
 
@@ -1770,10 +1681,42 @@ impl Runner {
                 .map_err(PyApiErr::from)?;
 
             match send_recv_result {
-                either::Either::Right(rx) => Ok(Either::Right(ChatCompletionStreamer::from_rx(rx))),
+                either::Either::Right(rx) => Ok(Either::Right(ChatCompletionStreamer::from_rx(
+                    rx, n_choices,
+                ))),
                 either::Either::Left(response) => parse_chat_response(response).map(Either::Left),
             }
         })
+    }
+
+    /// Evaluate named decision questions without text generation.
+    #[pyo3(signature = (request, model_id = None))]
+    fn send_decision_request(
+        &self,
+        py: Python<'_>,
+        request: Py<decisions::DecisionRequest>,
+        model_id: Option<String>,
+    ) -> PyApiResult<decisions::DecisionResponse> {
+        let request = request.bind(py).borrow().clone();
+        let debug_repr = format!("{request:?}");
+        let runner = self.runner.clone();
+        let response = py
+            .allow_threads(move || -> std::result::Result<Response, String> {
+                let request = request.resolve().map_err(|error| error.to_string())?;
+                let (tx, rx) = channel(1);
+                let request = _Request::Normal(Box::new(NormalRequest::decision(
+                    request,
+                    tx,
+                    next_request_id(),
+                    model_id.clone(),
+                )));
+                send_request_and_wait(runner, model_id, request, rx, debug_repr)
+            })
+            .map_err(PyApiErr::from)?;
+        let ResponseOk::Decision { result } = response.as_result()? else {
+            return Err("Expected a decision response".into());
+        };
+        Ok(result.try_into()?)
     }
 
     /// Send an embeddings request, returning embedding vectors in the same order they were provided.
@@ -1813,6 +1756,7 @@ impl Runner {
                     let request_id = next_request_id();
 
                     let model_request = _Request::Normal(Box::new(NormalRequest {
+                        audio_output: None,
                         id: request_id,
                         queued_at: None,
                         messages: message,
@@ -1926,6 +1870,7 @@ impl Runner {
             };
 
             let model_request = _Request::Normal(Box::new(NormalRequest {
+                audio_output: None,
                 id: next_request_id(),
                 queued_at: None,
                 messages: RequestMessage::Completion {
@@ -2014,6 +1959,7 @@ impl Runner {
         let (tx, mut rx) = channel(1);
 
         let request = _Request::Normal(Box::new(NormalRequest {
+            audio_output: None,
             id: 0,
             queued_at: None,
             messages: RequestMessage::ImageGeneration {
@@ -2085,6 +2031,7 @@ impl Runner {
         let (tx, mut rx) = channel(1);
 
         let request = _Request::Normal(Box::new(NormalRequest {
+            audio_output: None,
             id: 0,
             queued_at: None,
             messages: RequestMessage::SpeechGeneration { prompt },
@@ -2366,375 +2313,7 @@ impl Runner {
         request: Py<ChatCompletionRequest>,
         model_id: String,
     ) -> PyApiResult<Either<ChatCompletionResponse, ChatCompletionStreamer>> {
-        let (tx, rx) = channel(10_000);
-        Python::with_gil(|py| {
-            let request = request.bind(py).borrow();
-            let stop_toks = request
-                .stop_seqs
-                .as_ref()
-                .map(|x| StopTokens::Seqs(x.to_vec()));
-            let constraint =
-                build_constraint(request.grammar.as_deref(), request.grammar_type.as_deref())?;
-
-            let dry_params = if let Some(dry_multiplier) = request.dry_multiplier {
-                Some(DrySamplingParams::new_with_defaults(
-                    dry_multiplier,
-                    request.dry_sequence_breakers.clone(),
-                    request.dry_base,
-                    request.dry_allowed_length,
-                )?)
-            } else {
-                None
-            };
-
-            let messages = match request.messages {
-                Either::Left(ref messages) => {
-                    let mut messages_vec = Vec::new();
-                    let mut image_urls = Vec::new();
-                    let mut audio_urls = Vec::new();
-                    let mut video_urls = Vec::new();
-                    for message in messages {
-                        let role = message["role"].as_ref().left().unwrap().clone();
-                        match &message["content"] {
-                            Either::Left(content) => {
-                                let mut message_map: IndexMap<
-                                    String,
-                                    Either<String, Vec<IndexMap<String, Value>>>,
-                                > = IndexMap::new();
-                                message_map.insert("role".to_string(), Either::Left(role));
-                                message_map.insert(
-                                    "content".to_string(),
-                                    Either::Left(content.to_string()),
-                                );
-                                messages_vec.push(message_map);
-                            }
-                            Either::Right(image_messages) => {
-                                // If there is only one message, it is possible a text message
-                                // found when rig is used as client. In this case, we need to check if
-                                // the message is a text message or an image message.
-                                if image_messages.len() == 1 {
-                                    if !image_messages[0].contains_key("text") {
-                                        return Err(PyApiErr::from(
-                                            "Expected `text` key in input message.",
-                                        ));
-                                    }
-                                    let content = match &image_messages[0]["text"] {
-                                        Either::Left(left) => left.to_string(),
-                                        Either::Right(right) => format!("{right:?}"),
-                                    };
-                                    let mut message_map: IndexMap<
-                                        String,
-                                        Either<String, Vec<IndexMap<String, Value>>>,
-                                    > = IndexMap::new();
-                                    message_map.insert("role".to_string(), Either::Left(role));
-                                    message_map
-                                        .insert("content".to_string(), Either::Left(content));
-                                    messages_vec.push(message_map);
-                                    continue;
-                                }
-                                if role != "user" {
-                                    return Err(PyApiErr::from(
-                                        "Role for an image message must be `user`, but it is {role}",
-                                    ));
-                                }
-
-                                enum ContentPart {
-                                    Text { text: String },
-                                    Image { image_url: String },
-                                    Audio { audio_url: String },
-                                    Video { video_url: String },
-                                }
-
-                                let mut items = Vec::new();
-                                for image_message in image_messages {
-                                    match image_message.get("type") {
-                                        Some(Either::Left(x)) if x == "text" => {
-                                            items.push(ContentPart::Text {
-                                                text: image_message
-                                                    .get("text").as_ref()
-                                                    .context("Text sub-content must have `text` key.")?.as_ref()
-                                                    .left().context("Text sub-content `text` key must be a string.")?.clone(),
-                                            });
-                                        }
-                                        Some(Either::Left(x)) if x == "image_url" => {
-                                            items.push(ContentPart::Image {
-                                                image_url: image_message
-                                                    .get("image_url")
-                                                    .as_ref()
-                                                    .context("Image sub-content must have `image_url` key.")?
-                                                    .as_ref()
-                                                    .right()
-                                                    .context("Image sub-content `image_url` key must be an object.")?
-                                                    .get("url")
-                                                    .context("Image sub-content `image_url` object must have a `url` key.")?
-                                                    .clone(),
-                                            });
-                                        }
-                                        Some(Either::Left(x)) if x == "audio_url" => {
-                                            items.push(ContentPart::Audio {
-                                                audio_url: image_message
-                                                    .get("audio_url")
-                                                    .as_ref()
-                                                    .context("Audio sub-content must have `audio_url` key.")?
-                                                    .as_ref()
-                                                    .right()
-                                                    .context("Audio sub-content `audio_url` key must be an object.")?
-                                                    .get("url")
-                                                    .context("Audio sub-content `audio_url` object must have a `url` key.")?
-                                                    .clone(),
-                                            });
-                                        }
-                                        Some(Either::Left(x)) if x == "video_url" => {
-                                            items.push(ContentPart::Video {
-                                                video_url: image_message
-                                                    .get("video_url")
-                                                    .as_ref()
-                                                    .context("Video sub-content must have `video_url` key.")?
-                                                    .as_ref()
-                                                    .right()
-                                                    .context("Video sub-content `video_url` key must be an object.")?
-                                                    .get("url")
-                                                    .context("Video sub-content `video_url` object must have a `url` key.")?
-                                                    .clone(),
-                                            });
-                                        }
-                                        _ => return Err(PyApiErr::from("Expected array content sub-content to be of format {{`type`: `text`, `text`: ...}} and {{`type`: `url`, `image_url`: {{`url`: ...}}}}"))
-                                    }
-                                }
-
-                                let text_content = items
-                                    .iter()
-                                    .filter_map(|item| match item {
-                                        ContentPart::Text { text } => Some(text),
-                                        _ => None,
-                                    })
-                                    .join(" ");
-                                let image_urls_iter = items
-                                    .iter()
-                                    .filter_map(|item| match item {
-                                        ContentPart::Image { image_url } => Some(image_url.clone()),
-                                        _ => None,
-                                    })
-                                    .collect::<Vec<_>>();
-
-                                let audio_urls_iter = items
-                                    .iter()
-                                    .filter_map(|item| match item {
-                                        ContentPart::Audio { audio_url } => Some(audio_url.clone()),
-                                        _ => None,
-                                    })
-                                    .collect::<Vec<_>>();
-
-                                let video_urls_iter = items
-                                    .iter()
-                                    .filter_map(|item| match item {
-                                        ContentPart::Video { video_url } => Some(video_url.clone()),
-                                        _ => None,
-                                    })
-                                    .collect::<Vec<_>>();
-
-                                let mut message_map: IndexMap<
-                                    String,
-                                    Either<String, Vec<IndexMap<String, Value>>>,
-                                > = IndexMap::new();
-                                message_map.insert("role".to_string(), Either::Left(role));
-
-                                let mut content_map: Vec<IndexMap<String, Value>> = Vec::new();
-                                for _ in &image_urls_iter {
-                                    let mut content_image_map = IndexMap::new();
-                                    content_image_map.insert(
-                                        "type".to_string(),
-                                        Value::String("image".to_string()),
-                                    );
-                                    content_map.push(content_image_map);
-                                }
-                                for _ in &audio_urls_iter {
-                                    let mut content_audio_map = IndexMap::new();
-                                    content_audio_map.insert(
-                                        "type".to_string(),
-                                        Value::String("audio".to_string()),
-                                    );
-                                    content_map.push(content_audio_map);
-                                }
-                                for _ in &video_urls_iter {
-                                    let mut content_video_map = IndexMap::new();
-                                    content_video_map.insert(
-                                        "type".to_string(),
-                                        Value::String("video".to_string()),
-                                    );
-                                    content_map.push(content_video_map);
-                                }
-                                {
-                                    let mut content_text_map = IndexMap::new();
-                                    content_text_map.insert(
-                                        "type".to_string(),
-                                        Value::String("text".to_string()),
-                                    );
-                                    content_text_map
-                                        .insert("text".to_string(), Value::String(text_content));
-                                    content_map.push(content_text_map);
-                                }
-
-                                message_map
-                                    .insert("content".to_string(), Either::Right(content_map));
-                                messages_vec.push(message_map);
-                                image_urls.extend(image_urls_iter);
-                                audio_urls.extend(audio_urls_iter);
-                                video_urls.extend(video_urls_iter);
-                            }
-                        }
-                    }
-                    if !image_urls.is_empty() || !audio_urls.is_empty() || !video_urls.is_empty() {
-                        let mut images = Vec::new();
-                        for url in image_urls {
-                            let url_unparsed = url.trim();
-
-                            let image = util::parse_image_url(url_unparsed)?;
-                            images.push(image);
-                        }
-                        let mut audios = Vec::new();
-                        for url in audio_urls {
-                            let url_unparsed = url.trim();
-                            let audio = util::parse_audio_url(url_unparsed)?;
-                            audios.push(audio);
-                        }
-                        let mut videos = Vec::new();
-                        for url in video_urls {
-                            let url_unparsed = url.trim();
-                            let video = util::parse_video_url(url_unparsed)?;
-                            videos.push(video);
-                        }
-                        RequestMessage::MultimodalChat {
-                            messages: messages_vec,
-                            images,
-                            audios,
-                            videos,
-                            enable_thinking: request.enable_thinking,
-                            reasoning_effort: request.reasoning_effort,
-                        }
-                    } else {
-                        RequestMessage::Chat {
-                            messages: messages_vec,
-                            enable_thinking: request.enable_thinking,
-                            reasoning_effort: request.reasoning_effort,
-                        }
-                    }
-                }
-                Either::Right(ref prompt) => {
-                    let mut messages = Vec::new();
-                    let mut message_map: IndexMap<
-                        String,
-                        Either<String, Vec<IndexMap<String, Value>>>,
-                    > = IndexMap::new();
-                    message_map.insert("role".to_string(), Either::Left("user".to_string()));
-                    message_map.insert("content".to_string(), Either::Left(prompt.to_string()));
-                    messages.push(message_map);
-                    RequestMessage::Chat {
-                        messages,
-                        enable_thinking: request.enable_thinking,
-                        reasoning_effort: request.reasoning_effort,
-                    }
-                }
-            };
-
-            let tool_choice = request.tool_choice.as_ref().map(|x| match x {
-                ToolChoice::Auto => mistralrs_core::ToolChoice::Auto,
-                ToolChoice::NoTools => mistralrs_core::ToolChoice::None,
-            });
-
-            let tools = if let Some(tools) = &request.tool_schemas {
-                let mut new_tools = Vec::new();
-                for schema in tools {
-                    new_tools.push(serde_json::from_str::<Tool>(schema)?);
-                }
-                Some(new_tools)
-            } else {
-                None
-            };
-
-            let agent_approval_callback = build_agent_approval_callback(
-                request
-                    .agent_approval_callback
-                    .as_ref()
-                    .map(|callback| callback.clone_ref(py)),
-            );
-
-            let model_request = _Request::Normal(Box::new(NormalRequest {
-                id: next_request_id(),
-                queued_at: None,
-                messages,
-                sampling_params: SamplingParams {
-                    temperature: request.temperature,
-                    top_k: request.top_k,
-                    top_p: request.top_p,
-                    top_n_logprobs: request.top_logprobs.unwrap_or(1),
-                    frequency_penalty: request.frequency_penalty,
-                    presence_penalty: request.presence_penalty,
-                    repetition_penalty: request.repetition_penalty,
-                    max_len: request.max_tokens,
-                    stop_toks,
-                    ignore_eos: request.ignore_eos,
-                    logits_bias: request.logit_bias.clone(),
-                    n_choices: request.n_choices,
-                    min_p: request.min_p,
-                    dry_params,
-                },
-                seed: None,
-                response: tx,
-                return_logprobs: request.logprobs,
-                is_streaming: request.stream,
-                constraint,
-                suffix: None,
-                tool_choice,
-                tools,
-                logits_processors: None,
-                return_raw_logits: false,
-                web_search_options: request.web_search_options.clone(),
-                enable_code_execution: request.enable_code_execution,
-                enable_shell: request.enable_shell,
-                shell_options: request.shell_options(),
-                code_execution_permission: request.code_execution_permission,
-                code_execution_approval_notifier: None,
-                agent_permission: request.agent_permission,
-                agent_approval_handler: agent_approval_callback
-                    .map(AgentToolApprovalHandler::from_sync),
-                agent_approval_notifier: None,
-                max_tool_rounds: request.max_tool_rounds,
-                tool_dispatch_url: request.tool_dispatch_url.clone(),
-                model_id: Some(model_id.clone()),
-                adapter: request.adapter.clone(),
-                truncate_sequence: request.truncate_sequence,
-                session_id: request.session_id.clone(),
-                files: request
-                    .files
-                    .clone()
-                    .map(|fs| fs.into_iter().map(Into::into).collect()),
-                input_files: request.input_files(),
-            }));
-
-            let is_streaming = request.stream;
-            let debug_repr = format!("{request:?}");
-            drop(request);
-
-            let runner = self.runner.clone();
-            let send_recv_result = py
-                .allow_threads(move || -> std::result::Result<either::Either<Response, Receiver<Response>>, String> {
-                    send_request_with_optional_stream(
-                        runner,
-                        Some(model_id),
-                        model_request,
-                        rx,
-                        debug_repr,
-                        is_streaming,
-                    )
-                })
-                .map_err(PyApiErr::from)?;
-
-            match send_recv_result {
-                either::Either::Right(rx) => Ok(Either::Right(ChatCompletionStreamer::from_rx(rx))),
-                either::Either::Left(response) => parse_chat_response(response).map(Either::Left),
-            }
-        })
+        self.send_chat_completion_request(request, Some(model_id))
     }
 
     /// Send an OpenAI API compatible completion request to a specific model, returning the result.
@@ -2780,6 +2359,7 @@ impl Runner {
             };
 
             let model_request = _Request::Normal(Box::new(NormalRequest {
+                audio_output: None,
                 id: next_request_id(),
                 queued_at: None,
                 messages: RequestMessage::Completion {
@@ -3234,10 +2814,17 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<ChatCompletionRequest>()?;
     m.add_class::<CompletionRequest>()?;
     m.add_class::<EmbeddingRequest>()?;
+    m.add_class::<decisions::DecisionQuestion>()?;
+    m.add_class::<decisions::DecisionRequest>()?;
+    m.add_class::<decisions::DecisionAnswer>()?;
+    m.add_class::<decisions::DecisionUsage>()?;
+    m.add_class::<decisions::DecisionResponse>()?;
     m.add_class::<Architecture>()?;
     m.add_class::<which::EmbeddingArchitecture>()?;
     m.add_class::<MultimodalArchitecture>()?;
     m.add_class::<DiffusionArchitecture>()?;
+    m.add_class::<which::IsqOrganization>()?;
+    m.add_class::<PagedCacheType>()?;
     m.add_class::<AnyMoeConfig>()?;
     m.add_class::<AnyMoeExpertType>()?;
     m.add_class::<CodeExecutionConfig>()?;
@@ -3262,6 +2849,7 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<SpeechLoaderType>()?;
 
     m.add_class::<mistralrs_core::ResponseMessage>()?;
+    m.add_class::<mistralrs_core::ChatAudioResponse>()?;
     m.add_class::<mistralrs_core::Delta>()?;
     m.add_class::<mistralrs_core::ResponseLogprob>()?;
     m.add_class::<mistralrs_core::Logprobs>()?;
@@ -3311,12 +2899,9 @@ mod mtp_reservation_tests {
             &path,
         )?;
         let mtp_config = MtpConfig::new(dir.path().to_string_lossy().into_owned(), None);
-        let cache_config = PagedAttentionConfig::new(
-            None,
-            MemoryGpuConfig::Utilization(0.9),
-            PagedCacheType::Auto,
-        )?
-        .with_base_device_memory_reservation(usize::MAX - data.len())?;
+        let cache_config =
+            PagedAttentionConfig::new(None, MemoryGoal::Utilization(0.9), PagedCacheType::Auto)?
+                .with_base_device_memory_reservation(usize::MAX - data.len())?;
 
         let cache_config = reserve_external_mtp_memory(
             Some(cache_config),
@@ -3341,6 +2926,31 @@ mod mtp_reservation_tests {
 }
 
 #[cfg(test)]
+mod paged_attention_policy_tests {
+    use super::{runner_cache_config, MemoryGoal, PagedCacheType};
+
+    const TEST_TOKENS: usize = 8192;
+
+    #[test]
+    fn auto_can_disable_paging_but_explicit_goals_cannot() -> anyhow::Result<()> {
+        assert!(
+            runner_cache_config(MemoryGoal::Auto, None, PagedCacheType::Auto, false)?.is_none()
+        );
+        assert!(runner_cache_config(
+            MemoryGoal::KvTokens(TEST_TOKENS),
+            None,
+            PagedCacheType::Auto,
+            false
+        )
+        .is_err());
+        let config =
+            runner_cache_config(MemoryGoal::Auto, None, PagedCacheType::Auto, true)?.unwrap();
+        assert_eq!(config.memory_goal(), MemoryGoal::Auto);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
 mod lora_adapter_error_tests {
     use super::*;
 
@@ -3358,8 +2968,6 @@ mod lora_adapter_error_tests {
             calibration_file: None,
             max_edge: None,
             dtype: mistralrs_core::ModelDType::Auto,
-            auto_map_params: None,
-            multimodal_auto_map_params: None,
             adapters,
             max_adapters: mistralrs_core::DEFAULT_LORA_MAX_ADAPTERS,
             max_rank,
@@ -3424,23 +3032,6 @@ mod lora_adapter_error_tests {
     }
 
     #[test]
-    fn gguf_dynamic_lora_accepts_multimodal_device_mapping() {
-        let mut which = gguf_which(Some(Vec::new()), mistralrs_core::DEFAULT_LORA_MAX_RANK);
-        let Which::GGUF {
-            mmproj_filename,
-            multimodal_auto_map_params,
-            ..
-        } = &mut which
-        else {
-            unreachable!()
-        };
-        *mmproj_filename = Some(Either::Left("mmproj.gguf".to_string()));
-        *multimodal_auto_map_params = Some(which::MultimodalAutoMapParams::new(4096, 1, 1, 1024));
-
-        validate_gguf_runner_options(&which).unwrap();
-    }
-
-    #[test]
     fn encoder_cache_memory_requires_nonzero_capacity() {
         let mut which = gguf_which(None, mistralrs_core::DEFAULT_LORA_MAX_RANK);
         let Which::GGUF {
@@ -3456,5 +3047,147 @@ mod lora_adapter_error_tests {
             validate_encoder_cache_runner_options(&which),
             Err("encoder_cache_memory_bytes must be nonzero")
         );
+    }
+}
+
+#[cfg(test)]
+mod chat_message_tests {
+    use std::{collections::HashMap, io::Cursor};
+
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use image::{DynamicImage, ImageFormat};
+    use mistralrs_core::{encode_audio_pcm, ChatAudioFormat};
+
+    use super::*;
+
+    const AUDIO_RATE: u32 = 16_000;
+    const AUDIO_SAMPLES: usize = 16;
+    type Part = HashMap<String, Either<String, HashMap<String, String>>>;
+
+    fn message(role: &str, parts: Vec<Part>) -> requests::PythonChatMessages {
+        Either::Left(vec![HashMap::from([
+            ("role".to_string(), Either::Left(role.to_string())),
+            ("content".to_string(), Either::Right(parts)),
+        ])])
+    }
+
+    fn media_part(kind: &str, fields: &[(&str, String)]) -> Part {
+        HashMap::from([
+            ("type".to_string(), Either::Left(kind.to_string())),
+            (
+                kind.to_string(),
+                Either::Right(
+                    fields
+                        .iter()
+                        .map(|(key, value)| (key.to_string(), value.clone()))
+                        .collect(),
+                ),
+            ),
+        ])
+    }
+
+    #[test]
+    fn preserves_single_and_multiple_audio_parts() {
+        let data = STANDARD.encode(
+            encode_audio_pcm(&[0.0; AUDIO_SAMPLES], AUDIO_RATE, 1, ChatAudioFormat::Wav).unwrap(),
+        );
+        let inline = media_part(
+            "input_audio",
+            &[("data", data.clone()), ("format", "wav".into())],
+        );
+        let url = media_part(
+            "audio_url",
+            &[("url", format!("data:audio/wav;base64,{data}"))],
+        );
+        for parts in [
+            vec![inline.clone()],
+            vec![url],
+            vec![inline.clone(), inline],
+        ] {
+            let expected_clips = parts.len();
+            let RequestMessage::MultimodalChat {
+                messages,
+                images,
+                audios,
+                videos,
+                ..
+            } = normalize_chat_messages(&message("user", parts), None, None).unwrap()
+            else {
+                panic!("audio content must produce a multimodal request");
+            };
+            assert!(images.is_empty() && videos.is_empty());
+            assert_eq!(audios.len(), expected_clips);
+            for audio in audios {
+                assert_eq!(audio.sample_rate, AUDIO_RATE);
+                assert_eq!(audio.channels, 1);
+                assert_eq!(audio.samples, [0.0; AUDIO_SAMPLES]);
+            }
+            let parts = messages[0]["content"].as_ref().right().unwrap();
+            assert_eq!(
+                parts.iter().filter(|part| part["type"] == "audio").count(),
+                expected_clips
+            );
+        }
+    }
+
+    #[test]
+    fn accepts_single_image_and_video_without_text() {
+        for (kind, format, mime) in [
+            ("image_url", ImageFormat::Png, "image/png"),
+            ("video_url", ImageFormat::Gif, "image/gif"),
+        ] {
+            let mut image = Cursor::new(Vec::new());
+            DynamicImage::new_rgba8(1, 1)
+                .write_to(&mut image, format)
+                .unwrap();
+            let part = media_part(
+                kind,
+                &[(
+                    "url",
+                    format!("data:{mime};base64,{}", STANDARD.encode(image.into_inner())),
+                )],
+            );
+            let RequestMessage::MultimodalChat {
+                images,
+                audios,
+                videos,
+                ..
+            } = normalize_chat_messages(&message("user", vec![part]), None, None).unwrap()
+            else {
+                panic!("media content must produce a multimodal request");
+            };
+            assert!(audios.is_empty());
+            if kind == "image_url" {
+                assert_eq!(images.len(), 1);
+                assert!(videos.is_empty());
+            } else {
+                assert!(images.is_empty());
+                assert_eq!(videos.len(), 1);
+                assert_eq!(videos[0].frames.len(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn preserves_legacy_and_typed_system_text() {
+        for typed in [false, true] {
+            let mut part = HashMap::from([(
+                "text".to_string(),
+                Either::Left("system prompt".to_string()),
+            )]);
+            if typed {
+                part.insert("type".to_string(), Either::Left("text".to_string()));
+            }
+            let RequestMessage::Chat { messages, .. } =
+                normalize_chat_messages(&message("system", vec![part]), None, None).unwrap()
+            else {
+                panic!("text content must produce a text request");
+            };
+            assert_eq!(messages[0]["role"].as_ref().left().unwrap(), "system");
+            assert_eq!(
+                messages[0]["content"].as_ref().left().unwrap(),
+                "system prompt"
+            );
+        }
     }
 }

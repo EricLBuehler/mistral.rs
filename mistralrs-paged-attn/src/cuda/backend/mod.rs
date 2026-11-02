@@ -19,14 +19,16 @@ pub use fa3::{
     Fa3DecodeParams, Fa3DecodeSchedule, Fa3PagedMetadataLayout, FA3_DECODE_MAX_QUERY_LEN,
     USE_FA3_FP8_PAGED,
 };
-pub use flash_attn_sinks::{flash_attn_sinks, flash_attn_sinks_varlen};
+pub use flash_attn_sinks::{
+    flash_attn_sinks, flash_attn_sinks_varlen, flash_attn_sinks_varlen_packed,
+};
 pub use flashinfer::{
     flashinfer_decode, gather_kv_cache_flashinfer, is_flashinfer_cache,
     reshape_and_cache_flashinfer, FlashInferDecodeScratch,
 };
 pub use gather_kv::gather_kv_cache;
 pub use mla::{concat_and_cache_mla, flashinfer_mla_decode, gather_mla_cache};
-pub use paged_attention::{paged_attention, reshape_and_cache};
+pub use paged_attention::{paged_attention, paged_attention_with_window, reshape_and_cache};
 pub use scale_update::kv_scale_update;
 
 fn cache_input_layout(

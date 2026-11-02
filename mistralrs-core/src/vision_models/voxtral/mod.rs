@@ -352,9 +352,8 @@ impl DecoderLayer {
         let xs = self
             .attention
             .forward(&xs, attention_mask, ctx, kv_cache, layer_idx)?;
-        let xs = (xs + residual)?;
+        let (xs, mut ffn_in) = self.ffn_norm.forward_add_rms_norm(&xs, residual)?;
         let residual = &xs;
-        let mut ffn_in = self.ffn_norm.forward(&xs)?;
         // Adaptive scaling: ffn_in = ffn_norm(x) * (1 + ada_norm(t_cond))
         if let (Some(ada_norm), Some(t_cond)) = (&self.ada_norm, t_cond) {
             let scale = ada_norm.forward(t_cond)?;
@@ -818,7 +817,7 @@ impl VoxtralModel {
     ) -> Result<Tensor> {
         let text_embeds = self
             .tok_embeddings
-            .embedding_forward(input_ids, self.dtype)?;
+            .embedding_forward(input_ids, self.dtype.into())?;
         let query_lens = if ctx.flash_params().packed {
             Some(
                 ctx.paged_input_metadata()

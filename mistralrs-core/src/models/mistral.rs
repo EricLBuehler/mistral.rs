@@ -362,11 +362,10 @@ impl DecoderLayer {
         let xs = self
             .self_attn
             .forward(&xs, attention_mask, kv_cache, ctx, layer_idx)?;
-        let xs = (xs + residual)?;
-        let residual = &xs;
-        let xs = self
-            .mlp
-            .forward(&xs.apply(&self.post_attention_layernorm)?)?;
+        let (residual, xs) = self
+            .post_attention_layernorm
+            .forward_add_rms_norm(&xs, residual)?;
+        let xs = self.mlp.forward(&xs)?;
         residual + xs
     }
 }
@@ -566,7 +565,8 @@ impl Model {
     }
 
     pub fn get_input_embeddings(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.embedding_forward(input_ids, self.dtype)
+        self.embed_tokens
+            .embedding_forward(input_ids, self.dtype.into())
     }
 
     pub fn forward(
@@ -576,7 +576,8 @@ impl Model {
     ) -> Result<Tensor> {
         self.forward_embeds(
             input_ids,
-            self.embed_tokens.embedding_forward(input_ids, self.dtype)?,
+            self.embed_tokens
+                .embedding_forward(input_ids, self.dtype.into())?,
             ctx,
         )
     }

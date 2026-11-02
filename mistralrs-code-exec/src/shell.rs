@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context;
 use mistralrs_mcp::{
-    CalledFunction, ShellOptions, ToolCallbackKind, ToolCallbackWithTool, ToolCallbacksWithTools,
-    ToolOutput,
+    AgentToolSource, CalledFunction, ShellOptions, ToolCallbackKind, ToolCallbackWithTool,
+    ToolCallbacksWithTools, ToolOutput,
 };
 use mistralrs_sandbox::{NetworkMode, Sandbox, SandboxPolicy};
 use serde::{Deserialize, Serialize};
@@ -18,11 +18,13 @@ use crate::files::{
 };
 use crate::protocol::ExecuteOutputSpec;
 use crate::tools;
+use crate::workdir::SessionDir;
 use crate::{raise_cpu_limit_for_timeout, DEFAULT_SHELL_TIMEOUT_SECS};
 
 const REAP_INTERVAL: Duration = Duration::from_secs(300);
 const SESSION_TTL: Duration = Duration::from_secs(3600);
 const DEFAULT_MAX_OUTPUT_LENGTH: usize = 4096;
+const TEMP_WORKDIR_PREFIX: &str = "mistralrs-shell-";
 
 /// Shell execution config.
 #[derive(Clone, Serialize, Deserialize)]
@@ -76,7 +78,7 @@ fn default_shell_timeout_secs() -> u64 {
 }
 
 struct ShellSession {
-    work_dir: PathBuf,
+    work_dir: Arc<SessionDir>,
     mounted_key: Option<String>,
     mounted_input_files_key: Option<String>,
     last_active: Instant,
@@ -84,19 +86,12 @@ struct ShellSession {
 
 impl ShellSession {
     fn new(working_directory: Option<&Path>, session_id: &str) -> anyhow::Result<Self> {
-        let work_dir = if let Some(root) = working_directory {
-            let path = root.join(session_id);
-            std::fs::create_dir_all(&path)?;
-            path
-        } else {
-            let dir = tempfile::Builder::new()
-                .prefix("mistralrs-shell-")
-                .tempdir()?;
-            #[allow(deprecated)]
-            dir.into_path()
-        };
+        let work_dir = SessionDir::create(
+            working_directory.map(|root| root.join(session_id)),
+            TEMP_WORKDIR_PREFIX,
+        )?;
         Ok(Self {
-            work_dir,
+            work_dir: Arc::new(work_dir),
             mounted_key: None,
             mounted_input_files_key: None,
             last_active: Instant::now(),
@@ -220,13 +215,15 @@ impl ShellManager {
                         mount_skills(session, tc.shell_options.as_ref())?;
                         mount_input_files(session, &tc.input_files)?;
                         session.last_active = Instant::now();
-                        let work_dir = session.work_dir.clone();
-                        let snapshot = snapshot_output_files(&work_dir);
+                        // held across the call so a reap mid-run can't delete a temp dir
+                        let work_dir_guard = Arc::clone(&session.work_dir);
+                        let work_dir = work_dir_guard.path();
+                        let snapshot = snapshot_output_files(work_dir);
                         drop(sessions);
-                        let text = execute_commands(&ctx, &work_dir, &args).await;
-                        let mut output_files = collect_output_files(&work_dir, &args.outputs);
+                        let text = execute_commands(&ctx, work_dir, &args).await;
+                        let mut output_files = collect_output_files(work_dir, &args.outputs);
                         append_auto_output_files(
-                            &work_dir,
+                            work_dir,
                             &snapshot,
                             &args.outputs,
                             &mut output_files,
@@ -251,6 +248,7 @@ impl ShellManager {
             ToolCallbackWithTool {
                 callback: ToolCallbackKind::Multimodal(callback),
                 tool,
+                source: AgentToolSource::BuiltIn,
             },
         );
 
@@ -279,11 +277,12 @@ impl ShellManager {
                         mount_skills(session, tc.shell_options.as_ref())?;
                         mount_input_files(session, &tc.input_files)?;
                         session.last_active = Instant::now();
-                        let work_dir = session.work_dir.clone();
+                        let work_dir_guard = Arc::clone(&session.work_dir);
+                        let work_dir = work_dir_guard.path();
                         drop(sessions);
 
-                        let output_files = collect_output_files(&work_dir, &args.outputs);
-                        let text = surface_outputs_json(&work_dir, &output_files);
+                        let output_files = collect_output_files(work_dir, &args.outputs);
+                        let text = surface_outputs_json(work_dir, &output_files);
                         let files = output_files
                             .iter()
                             .map(crate::execute_file_to_tool_file)
@@ -304,6 +303,7 @@ impl ShellManager {
             ToolCallbackWithTool {
                 callback: ToolCallbackKind::Multimodal(surface_outputs_callback),
                 tool: tools::build_surface_outputs_tool(),
+                source: AgentToolSource::BuiltIn,
             },
         );
 
@@ -419,7 +419,7 @@ fn mount_input_files(
     if session.mounted_input_files_key.as_deref() == Some(key.as_str()) {
         return Ok(());
     }
-    crate::mount::mount_input_files(&session.work_dir, files)?;
+    crate::mount::mount_input_files(session.work_dir.path(), files)?;
     session.mounted_input_files_key = Some(key);
     Ok(())
 }
@@ -443,7 +443,7 @@ fn mount_skills(
     if session.mounted_key.as_deref() == Some(key.as_str()) {
         return Ok(());
     }
-    let skills_dir = session.work_dir.join("skills");
+    let skills_dir = session.work_dir.path().join("skills");
     if skills_dir.exists() {
         std::fs::remove_dir_all(&skills_dir)?;
     }
@@ -489,12 +489,16 @@ fn copy_dir_all(src: &Path, dst: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+// timeout_ms comes from the model, so it may shorten the server timeout but never extend it
+fn call_timeout(requested_ms: Option<u64>, server_timeout: Duration) -> Duration {
+    requested_ms
+        .map(Duration::from_millis)
+        .map_or(server_timeout, |requested| requested.min(server_timeout))
+}
+
 async fn execute_commands(ctx: &ShellSpawnCtx, work_dir: &Path, args: &ShellArgs) -> String {
     let command = args.commands.join("\n");
-    let timeout = args
-        .timeout_ms
-        .map(Duration::from_millis)
-        .unwrap_or(ctx.timeout);
+    let timeout = call_timeout(args.timeout_ms, ctx.timeout);
     let max_output = args.max_output_length.unwrap_or(DEFAULT_MAX_OUTPUT_LENGTH);
 
     let mut cmd = Command::new(&ctx.shell_path);
@@ -597,6 +601,34 @@ fn shell_timeout_json(args: &ShellArgs, work_dir: &Path, timeout: Duration) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn call_timeout_never_exceeds_server_timeout() {
+        let server = Duration::from_secs(60);
+        assert_eq!(call_timeout(None, server), server);
+        assert_eq!(call_timeout(Some(5_000), server), Duration::from_secs(5));
+        assert_eq!(call_timeout(Some(3_600_000), server), server);
+    }
+
+    #[test]
+    fn temp_workdir_is_removed_when_session_drops() {
+        let session = ShellSession::new(None, "s1").unwrap();
+        let path = session.work_dir.path().to_path_buf();
+        std::fs::write(path.join("out.txt"), b"temp").unwrap();
+        drop(session);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn configured_workdir_survives_session_drop() {
+        let root = tempfile::tempdir().unwrap();
+        let session = ShellSession::new(Some(root.path()), "s1").unwrap();
+        let path = session.work_dir.path().to_path_buf();
+        assert_eq!(path, root.path().join("s1"));
+        std::fs::write(path.join("out.txt"), b"kept").unwrap();
+        drop(session);
+        assert!(path.join("out.txt").is_file());
+    }
 
     #[test]
     fn surface_outputs_reports_existing_and_missing_files() {

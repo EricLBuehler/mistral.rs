@@ -1,4 +1,5 @@
 use super::llg::build_llg_factory;
+use super::loaders::ModelDownload;
 use super::{
     get_model_paths, paged_attention_memory_reservations, reserve_recurrent_serving_capacity,
     text_models_inputs_processor::ModelInputs, AdapterKind, CacheManager, DecodeGraphPrecaptureCtx,
@@ -9,12 +10,12 @@ use super::{
     IsqOrganization, IsqPipelineMixin, MetadataMixin, ModelCategory, PreProcessingMixin,
 };
 use super::{
-    AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader, GLM4Loader, GLM4MoeLiteLoader,
-    GLM4MoeLoader, Gemma2Loader, GemmaLoader, GptOssLoader, GraniteMoeHybridLoader,
-    HunYuanDenseV1Loader, HunYuanMoEV1Loader, Lfm2Loader, LlamaLoader, MistralLoader,
-    MixtralLoader, NormalLoaderType, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader,
-    Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, Qwen3_5TextLoader, SmolLm3Loader,
-    Starcoder2Loader,
+    AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader, FlintLoader, GLM4Loader,
+    GLM4MoeLiteLoader, GLM4MoeLoader, Gemma2Loader, GemmaLoader, GptOssLoader,
+    GraniteMoeHybridLoader, HunYuanDenseV1Loader, HunYuanMoEV1Loader, Lfm2Loader, Lfm3Loader,
+    LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader, Phi3Loader,
+    Phi3_5MoELoader, Qwen2Loader, Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, Qwen3_5TextLoader,
+    SmolLm3Loader, Starcoder2Loader,
 };
 use crate::amoe::AnyMoeExpertType;
 use crate::attention::ATTENTION_CHUNK_SIZE;
@@ -47,16 +48,17 @@ struct CudaDecodeGraphForwardInput<'a> {
 }
 use crate::kv_cache::{FullCacheManager, HybridCacheManager, NormalCacheManager};
 use crate::lora::Ordering;
-use crate::paged_attention::{calculate_cache_config, AttentionImplementation, CacheEngine};
+use crate::paged_attention::{allocate_cache, AttentionImplementation, CacheConfigRequest};
 use crate::pipeline::chat_template::{calculate_eos_tokens, BeginEndUnkPadTok, GenerationConfig};
 #[cfg(feature = "cuda")]
 use crate::pipeline::cuda_graph::{
     capture_cuda_decode_graph, cuda_decode_graph_batch_kind_supported,
     cuda_decode_graph_supported_for_model, cuda_decode_graphs_enabled, cuda_graph_batch_bucket,
-    cuda_graph_precapture_batches, cuda_graph_precapture_max_batch, hybrid_graph_slots,
-    install_hybrid_graph_state_indices, record_cuda_graph_dispatch, CudaDecodeGraphCaptureCtx,
-    CudaDecodeGraphKey, CudaDecodeGraphLaunch, CudaDecodeGraphReplay, CudaDecodeGraphReplayInput,
-    CudaDecodeGraphState, CudaGraphComponent, CudaGraphDecodeStep, CudaGraphDecodeStepInputs,
+    cuda_graph_precapture_batches, cuda_graph_precapture_max_batch, finish_cuda_capture_memory,
+    hybrid_graph_slots, install_hybrid_graph_state_indices, prepare_cuda_capture_memory,
+    record_cuda_graph_dispatch, CudaDecodeGraphCaptureCtx, CudaDecodeGraphKey,
+    CudaDecodeGraphLaunch, CudaDecodeGraphReplay, CudaDecodeGraphReplayInput, CudaDecodeGraphState,
+    CudaGraphCaptureMemory, CudaGraphComponent, CudaGraphDecodeStep, CudaGraphDecodeStepInputs,
     CudaGraphDispatchMode, CudaGraphDispatchReason, CudaGraphEvent, CudaGraphEventGuard,
     CudaGraphPrecaptureInputs,
 };
@@ -71,8 +73,8 @@ use crate::pipeline::text_models_inputs_processor::InputMetadata;
 #[cfg(feature = "cuda")]
 use crate::pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata};
 use crate::pipeline::{
-    get_chat_template, hf::build_api, Modalities, ModelForwardContext, RecurrentBatchKind,
-    RecurrentMetadata, SupportedModality,
+    get_chat_template, Modalities, ModelForwardContext, RecurrentBatchKind, RecurrentMetadata,
+    SupportedModality,
 };
 use crate::pipeline::{ChatTemplate, LocalModelPaths};
 use crate::prefix_cacher::PrefixCacheManagerV2;
@@ -85,15 +87,13 @@ use crate::utils::{
 };
 use crate::xlora_models::NonGranularState;
 use crate::{
-    api_dir_list, api_get_file, get_mut_arcmutex, get_paths, get_uqff_paths, lora_model_loader,
-    normal_model_loader, xlora_model_loader, DeviceMapSetting, DynamicLoraRuntime, LoraAdapterSpec,
-    LoraRuntimeConfig, PagedAttentionConfig, Pipeline, Topology, TryIntoDType, GLOBAL_HF_CACHE,
+    get_mut_arcmutex, get_paths, get_uqff_paths, lora_model_loader, normal_model_loader,
+    xlora_model_loader, DeviceMapSetting, DynamicLoraRuntime, LoraAdapterSpec, LoraRuntimeConfig,
+    PagedAttentionConfig, Pipeline, Topology, TryIntoDType, GLOBAL_HF_CACHE,
 };
 use anyhow::{Context, Result};
 use candle_core::{DType, Device, Tensor, Var};
 use either::Either;
-use hf_hub::Cache;
-use hf_hub::{Repo, RepoType};
 use mistralrs_quant::log::once_log_info;
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
@@ -130,17 +130,22 @@ pub struct NormalPipeline {
     dynamic_lora: Option<Arc<DynamicLoraRuntime>>,
 }
 
-pub(crate) struct NormalPipelineBuildArgs {
+pub(crate) struct NormalPipelineBuildArgs<'a> {
     pub model: Box<dyn NormalModel + Send + Sync>,
     pub tokenizer: Tokenizer,
     pub chat_template: ChatTemplate,
     pub generation_config: Option<GenerationConfig>,
     pub paged_attn_config: Option<PagedAttentionConfig>,
+    pub attention_features: Option<crate::paged_attention::PrefixPrefillAttentionFeatures>,
+    pub capacity_activation_estimate:
+        &'a dyn Fn(
+            &PagedAttentionConfig,
+            usize,
+        ) -> Result<super::loaders::ActivationMemoryEstimate>,
     pub dtype: DType,
     pub device: Device,
     pub mapper: Box<dyn DeviceMapper + Send + Sync>,
     pub silent: bool,
-    pub max_kv_tokens: Option<usize>,
     pub no_kv_cache: bool,
     pub is_xlora: bool,
     pub kind: ModelKind,
@@ -154,19 +159,20 @@ pub(crate) struct NormalPipelineBuildArgs {
 }
 
 pub(crate) fn build_normal_pipeline(
-    args: NormalPipelineBuildArgs,
+    args: NormalPipelineBuildArgs<'_>,
 ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
     let NormalPipelineBuildArgs {
         model,
         tokenizer,
         chat_template,
         generation_config,
-        paged_attn_config,
+        mut paged_attn_config,
+        attention_features,
+        capacity_activation_estimate,
         dtype,
         device,
         mapper,
         silent,
-        max_kv_tokens,
         no_kv_cache,
         is_xlora,
         kind,
@@ -179,7 +185,20 @@ pub(crate) fn build_normal_pipeline(
         dynamic_lora,
     } = args;
 
-    let model_metadata = model.model_config();
+    let model_metadata =
+        crate::paged_attention::with_attention_features(model.model_config(), attention_features);
+    #[cfg(feature = "metal")]
+    if !loaded_for_uqff_write {
+        super::metal_warmup::prepare_model(super::metal_warmup::MetalModelWarmup {
+            device: &device,
+            mapper: mapper.as_ref(),
+            model: model_metadata.as_ref(),
+            paged: paged_attn_config.as_ref(),
+            dtype,
+            tracked_modules: &tracked_modules,
+            packed_prefill: model.supports_packed_prefill(),
+        })?;
+    }
     let num_hidden_layers = match model.cache() {
         EitherCache::Full(full) => full.lock().len(),
         EitherCache::Normal(normal) => normal.lock().unwrap().0.len(),
@@ -188,6 +207,7 @@ pub(crate) fn build_normal_pipeline(
     let recurrent_checkpoints_supported = model.supports_recurrent_speculative_checkpoints();
     let recurrent_transitions_supported = model.supports_recurrent_speculative_transitions();
     let recurrent_pool_grew = paged_attn_config
+        .as_ref()
         .map(|config| {
             let kv_bytes_per_token =
                 super::paged_kv_bytes_per_token(config, dtype, model_metadata.as_ref())?;
@@ -217,46 +237,69 @@ pub(crate) fn build_normal_pipeline(
     #[cfg(not(feature = "cuda"))]
     let _ = recurrent_pool_grew;
 
-    let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config {
-        let cache_config = calculate_cache_config(
-            paged_attn_config.mem_gpu,
-            paged_attention_memory_reservations(model.cache(), paged_attn_config, &device)?,
-            paged_attn_config.block_size,
-            dtype,
-            paged_attn_config.cache_type,
-            model_metadata.as_ref(),
-            &device,
-            &mapper
-                .get_unique_devices()
-                .into_iter()
-                .map(Some)
-                .collect::<Vec<_>>(),
-            silent,
-            None,
-            max_kv_tokens,
-        )?;
-        let layer_devices = (0..num_hidden_layers)
+    let llg_factory = build_llg_factory(tokenizer.clone())?;
+    #[cfg(feature = "cuda")]
+    if !loaded_for_uqff_write {
+        super::prepare_cuda_runtime(&device, mapper.as_ref())?;
+    }
+
+    if let Some(source) = &source_weight_source {
+        #[cfg(feature = "cuda")]
+        super::synchronize_cuda_contexts(&device, mapper.as_ref())?;
+        source.release_source_cache()?;
+    }
+
+    let (cache_config, cache_engine) = if let Some(paged_attn_config) = paged_attn_config.as_mut() {
+        #[cfg(feature = "cuda")]
+        let reserve_decode_graphs = device.is_cuda()
+            && model.supports_cuda_decode_graphs()
+            && cuda_decode_graphs_enabled()
+            && cuda_decode_graph_supported_for_model(Some(model_metadata.as_ref()));
+        #[cfg(not(feature = "cuda"))]
+        let reserve_decode_graphs = false;
+        let paged_snapshot = paged_attn_config.clone();
+        let estimate_for_capacity =
+            |usable_tokens| capacity_activation_estimate(&paged_snapshot, usable_tokens);
+        let memory_reservations = paged_attn_config.memory_reservations()?;
+        let layer_devices = (0..model_metadata.num_layers())
             .map(|layer| mapper.device_for(layer, false).cloned())
-            .collect();
-        let cache_engine = CacheEngine::new(
-            model_metadata.as_ref(),
-            &cache_config,
+            .collect::<Vec<_>>();
+        let mut cache_request = CacheConfigRequest {
+            memory_reservations,
             dtype,
-            model.device(),
-            layer_devices,
+            model: model_metadata.as_ref(),
+            device: &device,
+            layer_devices: &layer_devices,
+            capacity_activation_estimate: &estimate_for_capacity,
+            reserve_decode_graphs,
+            silent,
+        };
+        super::configure_automatic_recurrent_prefix_capacity(
+            model.cache(),
+            paged_attn_config,
+            cache_request,
         )?;
+        cache_request.memory_reservations =
+            paged_attention_memory_reservations(model.cache(), paged_attn_config, &device)?;
+        let (cache_config, cache_engine) = allocate_cache(paged_attn_config, cache_request)?;
         (Some(cache_config), Some(cache_engine))
     } else {
         (None, None)
     };
 
     let max_seq_len = model.max_seq_len();
-    let llg_factory = build_llg_factory(tokenizer.clone())?;
     let generation_defaults = generation_config
         .as_ref()
         .and_then(GenerationConfig::generation_defaults);
     let eos = calculate_eos_tokens(&chat_template, generation_config.as_ref(), &tokenizer);
     let sliding_window = model.config().sliding_window;
+    #[cfg(feature = "cuda")]
+    let runtime_memory_reservation = super::paged_attention_runtime_memory_reservation(
+        model.cache(),
+        paged_attn_config.as_ref(),
+        &device,
+        &mapper.get_unique_devices(),
+    )?;
 
     Ok(Arc::new(Mutex::new(NormalPipeline {
         model,
@@ -281,6 +324,11 @@ pub(crate) fn build_normal_pipeline(
             sliding_window,
             cache_config,
             cache_engine,
+            memory_plan: paged_attn_config
+                .as_ref()
+                .map(|config| config.runtime_memory_plan()),
+            #[cfg(feature = "cuda")]
+            runtime_memory_reservation,
             model_metadata: Some(model_metadata),
             modalities: Modalities {
                 input: vec![SupportedModality::Text],
@@ -348,31 +396,6 @@ pub(crate) struct PreparedNormalSource {
     pub unk_token: Option<String>,
     pub source_weight_files: Vec<PathBuf>,
     pub rope_pairing: crate::gguf::normal_registry::RopePairing,
-}
-
-pub(crate) fn new_dynamic_lora_registry(
-    config: &str,
-) -> Result<Arc<mistralrs_quant::LoraLayerRegistry>> {
-    let config = serde_json::from_str::<serde_json::Value>(config)?;
-    let qwen35_moe_identity = config
-        .get("architectures")
-        .and_then(serde_json::Value::as_array)
-        .and_then(|architectures| architectures.first())
-        .and_then(serde_json::Value::as_str)
-        == Some("Qwen3NextForCausalLM")
-        && config
-            .get(crate::gdn::GDN_V_HEAD_LAYOUT_CONFIG_KEY)
-            .and_then(serde_json::Value::as_str)
-            == Some("tiled");
-    let registry = if qwen35_moe_identity {
-        mistralrs_quant::LoraLayerRegistry::new_with_site_prefix_alias(
-            "model",
-            "model.language_model",
-        )?
-    } else {
-        mistralrs_quant::LoraLayerRegistry::new()
-    };
-    Ok(Arc::new(registry))
 }
 
 #[derive(Default)]
@@ -527,6 +550,7 @@ impl NormalLoaderBuilder {
             Some(NormalLoaderType::GLM4MoeLite) => Box::new(GLM4MoeLiteLoader),
             Some(NormalLoaderType::GLM4Moe) => Box::new(GLM4MoeLoader),
             Some(NormalLoaderType::Qwen3Moe) => Box::new(Qwen3MoELoader),
+            Some(NormalLoaderType::Flint) => Box::new(FlintLoader),
             Some(NormalLoaderType::SmolLm3) => Box::new(SmolLm3Loader),
             Some(NormalLoaderType::GraniteMoeHybrid) => Box::new(GraniteMoeHybridLoader),
             Some(NormalLoaderType::GptOss) => Box::new(GptOssLoader),
@@ -535,6 +559,7 @@ impl NormalLoaderBuilder {
             Some(NormalLoaderType::Qwen3Next) => Box::new(Qwen3NextLoader),
             Some(NormalLoaderType::Qwen3_5) => Box::new(Qwen3_5TextLoader),
             Some(NormalLoaderType::Lfm2) => Box::new(Lfm2Loader),
+            Some(NormalLoaderType::Lfm3) => Box::new(Lfm3Loader),
             Some(NormalLoaderType::Lfm2Moe) => Box::new(Lfm2Loader),
             None => Box::new(AutoNormalLoader),
         };
@@ -577,25 +602,16 @@ impl NormalLoaderBuilder {
 }
 
 impl Loader for NormalLoader {
-    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
-    fn load_model_from_hf(
+    fn download_model_from_hf(
         &self,
         revision: Option<String>,
         token_source: TokenSource,
-        dtype: &dyn TryIntoDType,
-        device: &Device,
         silent: bool,
-        mapper: DeviceMapSetting,
-        in_situ_quant: Option<IsqType>,
-        paged_attn_config: Option<PagedAttentionConfig>,
-    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+    ) -> Result<ModelDownload> {
         let _progress_guard = ProgressScopeGuard::new(silent);
-        let cache = self
-            .hf_cache_path
-            .clone()
-            .map(Cache::new)
-            .unwrap_or_default();
-        GLOBAL_HF_CACHE.get_or_init(|| cache);
+        if let Some(cache) = self.hf_cache_path.as_ref() {
+            GLOBAL_HF_CACHE.get_or_init(|| cache.clone());
+        }
 
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths!(
             LocalModelPaths,
@@ -621,15 +637,11 @@ impl Loader for NormalLoader {
         if let Some(from_uqff) = self.config.from_uqff.clone() {
             *self.from_uqff.write().unwrap() = Some(get_uqff_paths!(&from_uqff, self, silent));
         }
-        self.load_model_from_path(
-            paths?.as_ref(),
-            dtype,
-            device,
-            silent,
-            mapper,
-            in_situ_quant,
-            paged_attn_config,
-        )
+        let mut download = ModelDownload::new(paths?);
+        if let Some(paths) = self.from_uqff.read().unwrap().as_ref() {
+            download.additional_files.extend(paths.iter().cloned());
+        }
+        Ok(download)
     }
 
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
@@ -675,7 +687,7 @@ impl Loader for NormalLoader {
         )?;
 
         if !self.inner.supports_paged_attention(&config)? {
-            paged_attn_config = None;
+            super::disable_unsupported_paged_attention(&mut paged_attn_config)?;
         }
 
         debug!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
@@ -699,6 +711,11 @@ impl Loader for NormalLoader {
         } else {
             device_map::get_all_similar_devices(&device)?
         };
+        if !write_uqff {
+            if let Some(paged) = paged_attn_config.as_ref() {
+                paged.initialize_memory_budget(&available_devices)?;
+            }
+        }
         #[cfg(feature = "cuda")]
         for device in &available_devices {
             if let Device::Cuda(dev) = device {
@@ -726,7 +743,6 @@ impl Loader for NormalLoader {
             .or(prepared_weight_source.clone());
 
         // If auto, convert to Map if not using nccl
-        let mut max_kv_tokens: Option<usize> = None;
         if write_uqff {
             mapper = DeviceMapSetting::dummy();
         } else if use_distributed {
@@ -734,13 +750,18 @@ impl Loader for NormalLoader {
                 nm_device: available_devices[0].clone(),
             };
         } else if let DeviceMapSetting::Auto(params) = mapper.clone() {
-            max_kv_tokens = Some(params.max_seq_len() * params.max_batch_size());
             // Initial dtype
             let dtype = dtype.try_into_dtype(&available_devices.iter().collect::<Vec<_>>())?;
+            let sizing_source = super::loaders::ResourceSource {
+                weights: self.prepared_source.as_ref().map(|source| &source.weights),
+                paths: paths.get_weight_filenames(),
+            };
+            let checkpoint = sizing_source.checkpoint_tensors()?;
+            let source_quantization = QuantizationConfigShim::get_quantization_config(&config)?;
 
             // ISQ or UQFF: quantized path
             // Match logic below where UQFF has priority
-            let (layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
+            let (mut layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
                 match super::isq_flow::resolve_auto_device_map_sizing(
                     uqff_reader.is_some(),
                     has_prepared_weight_source,
@@ -751,36 +772,58 @@ impl Loader for NormalLoader {
                         let source = weight_source
                             .as_ref()
                             .expect("selected weight-source sizing requires a weight source");
-                        let quantization =
-                            if matches!(sizing, super::isq_flow::AutoDeviceMapSizing::Uqff) {
-                                AutoDeviceMapQuantization::weight_source(source.as_ref())
-                            } else {
-                                AutoDeviceMapQuantization::weight_source_with_topology(
-                                    source.as_ref(),
-                                    self.config.topology.as_ref(),
-                                )
-                            };
-                        let weight_pack_factor = quantization
-                            .conservative_pack_factor(dtype, source.pack_factor(dtype)?);
-                        let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
-                            &config,
-                            dtype,
-                            weight_pack_factor,
-                            None,
-                        )?;
-                        let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
-                            &config,
-                            dtype,
-                            weight_pack_factor,
-                            Some(&quantization),
-                            None,
-                        )?;
-                        let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
-                        (
-                            layer_sizes_in_bytes,
-                            non_mapped_size_in_bytes,
-                            layer_sizes_sum + non_mapped_size_in_bytes,
-                        )
+                        let exact = if self.config.topology.is_none() {
+                            exact_weight_source_sizes(
+                                source.as_ref(),
+                                dtype,
+                                self.inner.num_layers(&config)?,
+                            )?
+                        } else {
+                            None
+                        };
+                        if let Some(sizes) = exact {
+                            info!(
+                                model_mib = sizes.2 / (1024 * 1024),
+                                "Using quantized weight-source inventory for automatic device mapping"
+                            );
+                            sizes
+                        } else {
+                            let quantization =
+                                if matches!(sizing, super::isq_flow::AutoDeviceMapSizing::Uqff) {
+                                    AutoDeviceMapQuantization::weight_source(source.as_ref())
+                                } else {
+                                    AutoDeviceMapQuantization::weight_source_with_topology(
+                                        source.as_ref(),
+                                        self.config.topology.as_ref(),
+                                    )
+                                };
+                            let quantization = quantization
+                                .with_checkpoint(&checkpoint)
+                                .with_source_quantization(source_quantization.as_ref());
+                            let weight_pack_factor = quantization
+                                .conservative_pack_factor(dtype, source.pack_factor(dtype)?);
+                            let layer_sizes_in_bytes =
+                                self.inner.layer_sizes_in_bytes_with_quantization(
+                                    &config,
+                                    dtype,
+                                    weight_pack_factor,
+                                    Some(&quantization),
+                                    None,
+                                )?;
+                            let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
+                                &config,
+                                dtype,
+                                weight_pack_factor,
+                                Some(&quantization),
+                                None,
+                            )?;
+                            let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
+                            (
+                                layer_sizes_in_bytes,
+                                non_mapped_size_in_bytes,
+                                layer_sizes_sum + non_mapped_size_in_bytes,
+                            )
+                        }
                     }
                     super::isq_flow::AutoDeviceMapSizing::Isq(isq) => {
                         let moqe =
@@ -826,12 +869,17 @@ impl Loader for NormalLoader {
                                 quantization,
                             )
                         };
-                        let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
-                            &config,
-                            dtype,
-                            weight_pack_factor,
-                            None,
-                        )?;
+                        let quantization = quantization
+                            .with_checkpoint(&checkpoint)
+                            .with_source_quantization(source_quantization.as_ref());
+                        let layer_sizes_in_bytes =
+                            self.inner.layer_sizes_in_bytes_with_quantization(
+                                &config,
+                                dtype,
+                                weight_pack_factor,
+                                (!moqe).then_some(&quantization),
+                                None,
+                            )?;
                         let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
                             &config,
                             dtype,
@@ -875,8 +923,16 @@ impl Loader for NormalLoader {
                                 QuantizationConfigShim::get_quant_config_pack_factor(
                                     &config, dtype,
                                 )?;
-                            let quantization = self.config.topology.as_ref().map(|topology| {
-                                AutoDeviceMapQuantization::isq(None, Some(topology))
+                            let checkpoint_quantization =
+                                QuantizationConfigShim::get_quantization_config(&config)?;
+                            let quantization = AutoDeviceMapQuantization::checkpoint(
+                                checkpoint_quantization.as_ref(),
+                                self.config.topology.as_ref(),
+                            )
+                            .map(|quantization| {
+                                quantization
+                                    .with_checkpoint(&checkpoint)
+                                    .with_source_quantization(source_quantization.as_ref())
                             });
                             let weight_pack_factor =
                                 quantization
@@ -885,12 +941,14 @@ impl Loader for NormalLoader {
                                         quantization
                                             .conservative_pack_factor(dtype, weight_pack_factor)
                                     });
-                            let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
-                                &config,
-                                dtype,
-                                weight_pack_factor,
-                                None,
-                            )?;
+                            let layer_sizes_in_bytes =
+                                self.inner.layer_sizes_in_bytes_with_quantization(
+                                    &config,
+                                    dtype,
+                                    weight_pack_factor,
+                                    quantization.as_ref(),
+                                    None,
+                                )?;
                             let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
                                 &config,
                                 dtype,
@@ -908,6 +966,12 @@ impl Loader for NormalLoader {
                     }
                 };
 
+            let resources = self.inner.layer_resources(&config, sizing_source)?;
+            let total_model_size_in_bytes = super::loaders::add_resource_bytes(
+                &mut layer_sizes_in_bytes,
+                total_model_size_in_bytes,
+                &resources,
+            )?;
             let new = auto_device_map::get_device_layers(
                 &*self.inner,
                 &config,
@@ -919,6 +983,7 @@ impl Loader for NormalLoader {
                 dtype,
                 &params,
                 paged_attn_config.as_mut(),
+                &resources,
             )?;
             mapper = DeviceMapSetting::Map(new);
         }
@@ -958,12 +1023,23 @@ impl Loader for NormalLoader {
             write_uqff,
         )?;
 
+        if let Some(paged) = paged_attn_config.as_mut() {
+            super::loaders::reserve_model_activation_memory(
+                self.inner.as_ref(),
+                &config,
+                paged,
+                dtype,
+                &device,
+                &super::AutoDeviceMapParams::default_text(),
+            )?;
+        }
+
         // TODO: PagedAttention is not supported with CPU for now.
         // This check is not really necessary because `get_device_layers` should prevent it.
         let mapping_uses_cpu = mapper.get_unique_devices().iter().any(Device::is_cpu);
         if mapping_uses_cpu && paged_attn_config.is_some() {
             warn!("Device mapping contains a mix of GPU and CPU. There is no CPU support for PagedAttention, disabling PagedAttention.");
-            paged_attn_config = None;
+            super::disable_unsupported_paged_attention(&mut paged_attn_config)?;
         }
 
         trace!("Model config: {:?}", self.inner.get_config_repr(&config)?);
@@ -1119,7 +1195,7 @@ impl Loader for NormalLoader {
                     ..
                 } => {
                     if let Some(source) = self.prepared_source.as_ref() {
-                        let layers = new_dynamic_lora_registry(&config)?;
+                        let layers = Arc::new(self.inner.new_lora_registry(&config)?);
                         let sharded_vb = sharded_vb.with_lora_registry(layers.clone());
                         let tracker = sharded_vb.tracker().clone();
                         let model = self.inner.load(
@@ -1247,7 +1323,7 @@ impl Loader for NormalLoader {
                     ..
                 } => {
                     if let Some(source) = self.prepared_source.as_ref() {
-                        let layers = new_dynamic_lora_registry(&config)?;
+                        let layers = Arc::new(self.inner.new_lora_registry(&config)?);
                         let vb = source
                             .weights
                             .clone()
@@ -1459,17 +1535,36 @@ impl Loader for NormalLoader {
             None => paths.get_weight_filenames().to_vec(),
         };
 
+        let activation_device = device.clone();
+        let capacity_activation_estimate = |paged: &PagedAttentionConfig, usable_tokens| {
+            super::loaders::estimate_model_activation_memory(
+                self.inner.as_ref(),
+                &config,
+                super::loaders::ActivationMemoryContext {
+                    params: &super::AutoDeviceMapParams::default_text(),
+                    limits: paged.execution_limits,
+                    dtype,
+                    device: &activation_device,
+                    paged,
+                    cache_capacity_tokens: Some(usable_tokens),
+                },
+            )
+        };
         build_normal_pipeline(NormalPipelineBuildArgs {
             model,
             tokenizer,
             chat_template,
             generation_config: gen_conf,
             paged_attn_config,
+            attention_features: self
+                .inner
+                .activation_model_config(&config)?
+                .attention_features,
+            capacity_activation_estimate: &capacity_activation_estimate,
             dtype,
             device,
             mapper: pipeline_mapper,
             silent,
-            max_kv_tokens,
             no_kv_cache: self.no_kv_cache,
             is_xlora,
             kind: self.kind.clone(),
@@ -1658,6 +1753,9 @@ impl MetadataMixin for NormalPipeline {
     fn precapture_cuda_decode_graphs(&self, ctx: &DecodeGraphPrecaptureCtx) {
         #[cfg(feature = "cuda")]
         {
+            if !self.metadata.cuda_capture_memory_ready() {
+                return;
+            }
             if let Err(err) = self.precapture_cuda_decode_graphs_impl(ctx) {
                 self.cuda_decode_graph
                     .lock()
@@ -1775,6 +1873,9 @@ impl NormalPipeline {
         &self,
         input: CudaDecodeGraphForwardInput<'_>,
     ) -> candle_core::Result<Option<CudaDecodeGraphReplay>> {
+        if !self.metadata.cuda_capture_memory_ready() {
+            return Ok(None);
+        }
         let CudaDecodeGraphForwardInput {
             input_ids,
             seqlen_offsets,
@@ -1935,7 +2036,7 @@ impl NormalPipeline {
             return Ok(None);
         }
         let replay_key = key.clone();
-        let _ = self.capture_cuda_decode_graph_step(
+        let captured = self.capture_cuda_decode_graph_step(
             &mut state,
             key,
             &step,
@@ -1947,6 +2048,9 @@ impl NormalPipeline {
             },
             true,
         )?;
+        if captured.is_none() {
+            return Ok(None);
+        }
         super::synchronize_cuda_contexts(step.input_ids.device(), self.mapper.as_ref()).map_err(
             |err| {
                 candle_core::Error::msg(format!(
@@ -2032,22 +2136,26 @@ impl NormalPipeline {
                 continue;
             }
             if !crate::pipeline::cuda_graph::cuda_graph_capture_headroom(step.input_ids.device())? {
-                info!("Deferred larger CUDA decode graph buckets to lazy capture for memory headroom; lower --pa-context-len to precapture more.");
+                info!("Deferred larger CUDA decode graph buckets to lazy capture for memory headroom; reduce --kv-cache to precapture more.");
                 break;
             }
-            self.capture_cuda_decode_graph_step(
-                &mut state,
-                key,
-                &step,
-                CudaDecodeGraphCaptureInputs {
-                    kv_cache: kv_cache.as_slice(),
-                    flash_meta: &inputs.flash_meta,
-                    block_size: cache_config.block_size,
-                    recurrent_batch_kind: RecurrentBatchKind::Decode,
-                },
-                false,
-            )?;
-            captured += 1;
+            if self
+                .capture_cuda_decode_graph_step(
+                    &mut state,
+                    key,
+                    &step,
+                    CudaDecodeGraphCaptureInputs {
+                        kv_cache: kv_cache.as_slice(),
+                        flash_meta: &inputs.flash_meta,
+                        block_size: cache_config.block_size,
+                        recurrent_batch_kind: RecurrentBatchKind::Decode,
+                    },
+                    false,
+                )?
+                .is_some()
+            {
+                captured += 1;
+            }
         }
         if captured > 0 {
             info!(
@@ -2067,7 +2175,7 @@ impl NormalPipeline {
         step: &CudaGraphDecodeStep,
         inputs: CudaDecodeGraphCaptureInputs<'_>,
         rollback_live_state: bool,
-    ) -> candle_core::Result<Tensor> {
+    ) -> candle_core::Result<Option<Tensor>> {
         let CudaDecodeGraphCaptureInputs {
             kv_cache,
             flash_meta,
@@ -2079,6 +2187,21 @@ impl NormalPipeline {
         let Device::Cuda(cuda_device) = step.input_ids.device() else {
             candle_core::bail!("CUDA graph decode expected CUDA input ids");
         };
+        let execution_devices = self.execution_devices();
+        let capture_memory = CudaGraphCaptureMemory {
+            plan: self.metadata.memory_plan,
+            reservation: self.metadata.runtime_memory_reservation.as_deref(),
+            devices: &execution_devices,
+            primary: step.input_ids.device(),
+            activation_dtype: self.metadata.activation_dtype,
+            block_size,
+            step,
+            kv_cache,
+            model: self.metadata.model_metadata.as_deref(),
+        };
+        if !prepare_cuda_capture_memory(state, &capture_memory)? {
+            return Ok(None);
+        }
         let _htod_cache_guard = cuda_device.enable_cuda_graph_htod_cache();
         let metadata = step
             .metadata
@@ -2127,6 +2250,9 @@ impl NormalPipeline {
             let warmup_logits = self.model.forward(&step.input_ids, &mut ctx)?;
             step.input_ids.device().synchronize()?;
             let live_logits = step.narrow_rows(&warmup_logits)?;
+            if !prepare_cuda_capture_memory(state, &capture_memory)? {
+                return Ok((live_logits, None));
+            }
 
             // CUDA stream capture records recurrent writes without executing them.
             let entry = capture_cuda_decode_graph(
@@ -2157,6 +2283,7 @@ impl NormalPipeline {
                     self.model.forward(graph_input_ids, &mut ctx)
                 },
             )?;
+            let entry = finish_cuda_capture_memory(state, &capture_memory, entry)?;
             Ok((live_logits, entry))
         })();
         let (logits, entry) = self.finish_cuda_graph_capture_attempt(
@@ -2166,9 +2293,18 @@ impl NormalPipeline {
             live_state_indices.as_ref(),
             rollback_live_state,
         )?;
-        state.insert(entry);
-        graph_event.success();
-        Ok(logits)
+        if let Some(entry) = entry {
+            state.insert(entry);
+            graph_event.success();
+            Ok(Some(logits))
+        } else {
+            drop(logits);
+            drop(metadata);
+            drop(recurrent_snapshots);
+            drop(live_state_indices);
+            super::cuda_graph::admit_cuda_eager_after_capture(state, &capture_memory)?;
+            Ok(None)
+        }
     }
 
     fn snapshot_hybrid_state_indices(&self) -> Option<HybridStateIndicesSnapshot> {
@@ -2712,23 +2848,14 @@ impl AnyMoePipelineMixin for NormalPipeline {
         // Precompile regex here
         let regex = Regex::new(match_regex).map_err(candle_core::Error::msg)?;
         for model_id in model_ids {
-            let model_id_str = &model_id;
-            let model_id = Path::new(&model_id);
-
-            let api = build_api(token, !silent).map_err(candle_core::Error::msg)?;
-            let revision = revision.clone().unwrap_or("main".to_string());
-            let api = api.repo(Repo::with_revision(
-                model_id_str.clone(),
-                RepoType::Model,
-                revision.clone(),
-            ));
-
-            let mut filenames = vec![];
-            for rfilename in api_dir_list!(api, model_id, true, &revision)
-                .filter(|x| x.ends_with(".safetensors"))
-            {
-                filenames.push(api_get_file!(api, &rfilename, model_id, &revision));
-            }
+            let filenames = super::amoe::download_expert_files(
+                &self.model_id,
+                &model_id,
+                token,
+                revision.as_deref().unwrap_or("main"),
+                silent,
+            )
+            .map_err(candle_core::Error::msg)?;
 
             let regex = regex.clone();
             let match_regex_clone = match_regex.to_string();
@@ -2761,23 +2888,14 @@ impl AnyMoePipelineMixin for NormalPipeline {
         }
 
         let gate_vb = if let Some(gate_model_id) = gate_model_id {
-            let model_id_str = &gate_model_id;
-            let model_id = Path::new(&gate_model_id);
-
-            let api = build_api(token, !silent).map_err(candle_core::Error::msg)?;
-            let revision = revision.clone().unwrap_or("main".to_string());
-            let api = api.repo(Repo::with_revision(
-                model_id_str.clone(),
-                RepoType::Model,
-                revision.clone(),
-            ));
-
-            let mut gate_filenames = vec![];
-            for rfilename in api_dir_list!(api, model_id, true, &revision)
-                .filter(|x| x.ends_with(".safetensors"))
-            {
-                gate_filenames.push(api_get_file!(api, &rfilename, model_id, &revision));
-            }
+            let gate_filenames = super::amoe::download_expert_files(
+                &self.model_id,
+                &gate_model_id,
+                token,
+                revision.as_deref().unwrap_or("main"),
+                silent,
+            )
+            .map_err(candle_core::Error::msg)?;
             assert_eq!(
                 gate_filenames.len(),
                 1,
@@ -2820,15 +2938,161 @@ impl AnyMoePipelineMixin for NormalPipeline {
     }
 }
 
+fn exact_weight_source_sizes(
+    source: &dyn mistralrs_quant::QuantizedWeightSource,
+    dtype: DType,
+    num_layers: usize,
+) -> Result<Option<(Vec<usize>, usize, usize)>> {
+    let Some(exact) = source.resident_layer_bytes(dtype)? else {
+        return Ok(None);
+    };
+    let layers = (0..num_layers)
+        .map(|layer| exact.layers.get(&layer).copied().unwrap_or(0))
+        .collect::<Vec<_>>();
+    let total = layers.iter().sum::<usize>() + exact.outside;
+    Ok(Some((layers, exact.outside, total)))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{new_dynamic_lora_registry, normal_model_requires_uniform_prompt_batch};
+    #[test]
+    fn download_selects_uqff_shards_and_residual_without_loading_tensors() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let root = directory.path();
+        for filename in [
+            "q8_0-0.uqff",
+            "q8_0-1.uqff",
+            "q4_0-0.uqff",
+            "residual.safetensors",
+            "model.safetensors",
+        ] {
+            std::fs::write(root.join(filename), b"not a tensor file")?;
+        }
+        std::fs::write(root.join("config.json"), b"{}")?;
+        std::fs::write(root.join("tokenizer.json"), b"not a tokenizer")?;
+        let loader = super::NormalLoaderBuilder::new(
+            super::NormalSpecificConfig {
+                from_uqff: Some(vec![PathBuf::from("q8_0-0.uqff")]),
+                ..Default::default()
+            },
+            None,
+            None,
+            Some(root.display().to_string()),
+            false,
+            None,
+        )
+        .build(Some(super::NormalLoaderType::Llama))?;
+        let download = loader.download_model_from_hf(None, crate::TokenSource::None, true)?;
+        assert_eq!(
+            download.paths.get_weight_filenames(),
+            &[root.join("residual.safetensors")]
+        );
+        let files = download.files();
+        assert!(files.contains(&root.join("q8_0-0.uqff")));
+        assert!(files.contains(&root.join("q8_0-1.uqff")));
+        assert!(!files.contains(&root.join("q4_0-0.uqff")));
+        assert!(!files.contains(&root.join("model.safetensors")));
+        Ok(())
+    }
+
+    use super::{exact_weight_source_sizes, normal_model_requires_uniform_prompt_batch};
     use crate::pipeline::finish_dynamic_lora_runtime;
-    use crate::pipeline::{AdapterPaths, LocalModelPaths};
+    use crate::pipeline::{
+        AdapterPaths, AutoNormalLoader, LocalModelPaths, NormalModelLoader, Qwen3NextLoader,
+        Qwen3_5TextLoader,
+    };
     use crate::LoraRuntimeConfig;
     use candle_core::{DType, Device};
     use mistralrs_quant::{LoraLayerRegistry, LoraLinearSpec, LoraSiteKey};
     use std::{path::PathBuf, sync::Arc};
+
+    const WIDTH: usize = 256;
+    const UNBOUND_BYTES: usize = 1_024;
+    const Q8_BLOCK_BYTES: usize = 34;
+    const Q8_BLOCK_ELEMS: usize = 32;
+    const Q3_BLOCK_BYTES: usize = 110;
+
+    #[test]
+    fn gguf_mapping_uses_mixed_precision_resident_sizes() -> anyhow::Result<()> {
+        use candle_core::{
+            quantized::{gguf_file, GgmlDType, QTensor},
+            Tensor,
+        };
+        use mistralrs_quant::{
+            GgufArchive, GgufBindingMap, GgufTensorBinding, GgufWeightSource, QuantizedWeightSource,
+        };
+
+        let mut bindings = GgufBindingMap::new();
+        let mut tensors = Vec::new();
+        for (native, stored, shape, dtype) in [
+            (
+                "model.embed_tokens.weight",
+                "token_embd.weight",
+                vec![2, WIDTH],
+                GgmlDType::F32,
+            ),
+            (
+                "model.layers.0.self_attn.q_proj.weight",
+                "blk.0.attn_q.weight",
+                vec![WIDTH, WIDTH],
+                GgmlDType::Q8_0,
+            ),
+            (
+                "model.layers.1.mlp.experts.gate_proj.weight",
+                "blk.1.ffn_gate_exps.weight",
+                vec![2, WIDTH, WIDTH],
+                GgmlDType::Q3K,
+            ),
+            (
+                "model.layers.1.mlp.gate.weight",
+                "blk.1.ffn_gate_inp.weight",
+                vec![2, WIDTH],
+                GgmlDType::F32,
+            ),
+            (
+                "model.layers.1.input_layernorm.weight",
+                "blk.1.attn_norm.weight",
+                vec![WIDTH],
+                GgmlDType::F32,
+            ),
+        ] {
+            let tensor = Tensor::ones(shape, DType::F32, &Device::Cpu)?;
+            tensors.push((stored, QTensor::quantize(&tensor, dtype)?));
+            bindings.insert(native, GgufTensorBinding::tensor(stored));
+        }
+        let mut file = tempfile::NamedTempFile::new()?;
+        gguf_file::write(
+            file.as_file_mut(),
+            &[],
+            &tensors
+                .iter()
+                .map(|(name, tensor)| (*name, tensor))
+                .collect::<Vec<_>>(),
+        )?;
+        let archive = Arc::new(GgufArchive::open_file(file.path())?);
+        let source = GgufWeightSource::new(archive, &bindings, DType::BF16)?;
+        assert_eq!(source.pack_factor(DType::BF16)?, 1);
+        let (mut layers, outside, total) =
+            exact_weight_source_sizes(&source, DType::BF16, 2)?.unwrap();
+        let total = crate::pipeline::loaders::add_resource_bytes(
+            &mut layers,
+            total,
+            &[crate::pipeline::loaders::LayerResource {
+                name: "extra".to_owned(),
+                layer: 1,
+                device_bytes: UNBOUND_BYTES,
+                host_backing: None,
+            }],
+        )?;
+        let attention = WIDTH * WIDTH / Q8_BLOCK_ELEMS * Q8_BLOCK_BYTES;
+        let experts = 2 * WIDTH * Q3_BLOCK_BYTES;
+        let dense = 3 * WIDTH * DType::BF16.size_in_bytes();
+        assert_eq!(layers, vec![attention, experts + dense + UNBOUND_BYTES]);
+        assert_eq!(outside, 2 * WIDTH * DType::BF16.size_in_bytes());
+        assert_eq!(total, attention + experts + dense + UNBOUND_BYTES + outside);
+        assert!(total < 3 * WIDTH * WIDTH * DType::BF16.size_in_bytes());
+        Ok(())
+    }
 
     fn empty_lora_paths() -> LocalModelPaths<PathBuf> {
         LocalModelPaths {
@@ -2903,40 +3167,52 @@ mod tests {
             "architectures":["Qwen3NextForCausalLM"],
             "_mistralrs_gdn_v_head_layout":"tiled"
         }"#;
-        let registry = new_dynamic_lora_registry(config).unwrap();
-        let site = registry
-            .register(
-                LoraSiteKey::new("model.layers.0.self_attn.q_proj"),
-                LoraLinearSpec::replicated(2, 2),
-                DType::F32,
-                Device::Cpu,
-            )
-            .unwrap();
+        for loader in [
+            &AutoNormalLoader as &dyn NormalModelLoader,
+            &Qwen3NextLoader,
+        ] {
+            assert!(loader.new_lora_registry("").is_err());
+            assert!(loader.new_lora_registry("{").is_err());
+            let registry = loader.new_lora_registry(config).unwrap();
+            let site = registry
+                .register(
+                    LoraSiteKey::new("model.layers.0.self_attn.q_proj"),
+                    LoraLinearSpec::replicated(2, 2),
+                    DType::F32,
+                    Device::Cpu,
+                )
+                .unwrap();
 
-        assert_eq!(
-            site.key().path(),
-            "model.language_model.layers.0.self_attn.q_proj"
-        );
+            assert_eq!(
+                site.key().path(),
+                "model.language_model.layers.0.self_attn.q_proj"
+            );
+        }
     }
 
     #[test]
     fn dense_qwen35_config_does_not_alias_lora_namespace() {
-        let registry = new_dynamic_lora_registry(
-            r#"{
-                "architectures":["Qwen3_5ForCausalLM"],
-                "_mistralrs_gdn_v_head_layout":"tiled"
-            }"#,
-        )
-        .unwrap();
-        let site = registry
-            .register(
-                LoraSiteKey::new("model.layers.0.self_attn.q_proj"),
-                LoraLinearSpec::replicated(2, 2),
-                DType::F32,
-                Device::Cpu,
-            )
-            .unwrap();
+        let config = r#"{
+            "architectures":["Qwen3_5ForCausalLM"],
+            "_mistralrs_gdn_v_head_layout":"tiled"
+        }"#;
+        for loader in [
+            &AutoNormalLoader as &dyn NormalModelLoader,
+            &Qwen3_5TextLoader,
+        ] {
+            assert!(loader.new_lora_registry("").is_err());
+            assert!(loader.new_lora_registry("{").is_err());
+            let registry = loader.new_lora_registry(config).unwrap();
+            let site = registry
+                .register(
+                    LoraSiteKey::new("model.layers.0.self_attn.q_proj"),
+                    LoraLinearSpec::replicated(2, 2),
+                    DType::F32,
+                    Device::Cpu,
+                )
+                .unwrap();
 
-        assert_eq!(site.key().path(), "model.layers.0.self_attn.q_proj");
+            assert_eq!(site.key().path(), "model.layers.0.self_attn.q_proj");
+        }
     }
 }

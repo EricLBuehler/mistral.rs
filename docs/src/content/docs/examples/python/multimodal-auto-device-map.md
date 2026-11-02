@@ -17,19 +17,16 @@ from mistralrs import (
     Which,
     ChatCompletionRequest,
     MultimodalArchitecture,
-    MultimodalAutoMapParams,
 )
 
 # MODEL_ID = "meta-llama/Llama-3.2-11B-Vision-Instruct"
 MODEL_ID = "lamm-mit/Cephalo-Llama-3.2-11B-Vision-Instruct-128k"
 
 runner = Runner(
+    memory_goal=0.9,
     which=Which.MultimodalPlain(
         model_id=MODEL_ID,
         arch=MultimodalArchitecture.VLlama,
-        auto_map_params=MultimodalAutoMapParams(
-            max_seq_len=4096, max_batch_size=2, max_num_images=2, max_image_length=512
-        ),
     ),
 )
 

@@ -44,7 +44,7 @@ impl EmbeddingModelBuilder {
     /// A few defaults are applied here:
     /// - Maximum number of sequences running is 32
     /// - Token source is from the cache (.cache/huggingface/token)
-    /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
+    /// - Automatic device mapping
     pub fn new(model_id: impl ToString) -> Self {
         Self {
             model_id: model_id.to_string(),
@@ -61,7 +61,7 @@ impl EmbeddingModelBuilder {
             isq: None,
             imatrix: None,
             calibration_file: None,
-            max_num_seqs: 32,
+            max_num_seqs: mistralrs_core::memory_plan::DEFAULT_MAX_NUM_SEQS,
             with_logging: false,
             device_mapping: None,
             throughput_logging: false,
@@ -173,9 +173,9 @@ impl EmbeddingModelBuilder {
         self
     }
 
-    /// Provide metadata to initialize the device mapper.
-    pub fn with_device_mapping(mut self, device_mapping: DeviceMapSetting) -> Self {
-        self.device_mapping = Some(device_mapping);
+    /// Override automatic placement with explicit device layer counts.
+    pub fn with_device_mapping(mut self, device_mapping: DeviceMapMetadata) -> Self {
+        self.device_mapping = Some(DeviceMapSetting::Map(device_mapping));
         self
     }
 
@@ -236,7 +236,7 @@ pub struct UqffEmbeddingModelBuilder(EmbeddingModelBuilder);
 impl UqffEmbeddingModelBuilder {
     /// A few defaults are applied here:
     /// - Token source is from the cache (.cache/huggingface/token)
-    /// - Automatic device mapping with model defaults according to `AutoDeviceMapParams`
+    /// - Automatic device mapping
     pub fn new(model_id: impl ToString, uqff_file: Vec<PathBuf>) -> Self {
         let mut inner = EmbeddingModelBuilder::new(model_id);
         inner.from_uqff = Some(uqff_file);

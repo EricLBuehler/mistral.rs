@@ -136,6 +136,7 @@ mod tests {
         let cache = InMemoryResponseCache::new();
 
         let messages = vec![Message {
+            audio: None,
             content: Some(crate::openai::MessageContent::from_text(
                 "Hello".to_string(),
             )),

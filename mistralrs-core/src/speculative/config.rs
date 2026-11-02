@@ -3,8 +3,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::pipeline::hf::HubRepo;
 use candle_core::{DType, Device};
-use hf_hub::{api::sync::ApiRepo, Repo, RepoType};
 
 use crate::{
     paged_attention::PagedAttentionConfig,
@@ -220,13 +220,9 @@ pub fn reserve_external_mtp_memory_with_runtime(
     ))
 }
 
-fn build_hf_api(id: &str, revision: &str) -> candle_core::Result<ApiRepo> {
+fn build_hf_api(id: &str, revision: &str) -> candle_core::Result<HubRepo> {
     let api = build_api(&TokenSource::CacheToken, true).map_err(candle_core::Error::msg)?;
-    Ok(api.repo(Repo::with_revision(
-        id.to_string(),
-        RepoType::Model,
-        revision.to_string(),
-    )))
+    Ok(api.repo(id.to_string(), revision.to_string()))
 }
 
 fn resolve_hf_mtp_path(id: &str) -> candle_core::Result<PathBuf> {
@@ -250,7 +246,7 @@ fn resolve_hf_mtp_path(id: &str) -> candle_core::Result<PathBuf> {
         get_file(&api, model_id, &file, revision).map_err(candle_core::Error::msg)?;
     }
 
-    try_get_file(&api, model_id, "generation_config.json", revision)
+    try_get_file(&api, model_id, "generation_config.json")
         .map_err(|err| candle_core::Error::Msg(err.to_string()))?;
 
     config_path.parent().map(Path::to_path_buf).ok_or_else(|| {
@@ -290,7 +286,7 @@ mod tests {
         assert_eq!(config.external_weight_size_in_bytes(DType::F32)?, 16);
         let cache_config = crate::PagedAttentionConfig::new(
             None,
-            crate::MemoryGpuConfig::Utilization(0.9),
+            crate::MemoryGoal::Utilization(0.9),
             crate::PagedCacheType::Auto,
         )?
         .with_base_device_memory_reservation(usize::MAX - 16)?;
@@ -335,13 +331,18 @@ mod tests {
         )?;
         let base = crate::PagedAttentionConfig::new(
             None,
-            crate::MemoryGpuConfig::Utilization(0.9),
+            crate::MemoryGoal::Utilization(0.9),
             crate::PagedCacheType::Auto,
         )?;
 
         let auto = MtpConfig::new(dir.path().to_string_lossy().into_owned(), None);
-        let auto = reserve_external_mtp_memory(Some(base), Some(&auto), &DType::F32, &Device::Cpu)?
-            .expect("cache config missing");
+        let auto = reserve_external_mtp_memory(
+            Some(base.clone()),
+            Some(&auto),
+            &DType::F32,
+            &Device::Cpu,
+        )?
+        .expect("cache config missing");
         assert_eq!(auto.recurrent_checkpoint_lanes, 8);
         assert!(auto.recurrent_checkpoint_lanes_auto);
 
@@ -358,12 +359,12 @@ mod tests {
     fn builtin_mtp_reserves_depth_and_rejects_invalid_counts() -> anyhow::Result<()> {
         let base = crate::PagedAttentionConfig::new(
             None,
-            crate::MemoryGpuConfig::Utilization(0.9),
+            crate::MemoryGoal::Utilization(0.9),
             crate::PagedCacheType::Auto,
         )?;
         let reserve = |count| {
             reserve_external_mtp_memory(
-                Some(base),
+                Some(base.clone()),
                 Some(&MtpConfig::builtin(count)),
                 &DType::F32,
                 &Device::Cpu,

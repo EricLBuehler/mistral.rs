@@ -32,4 +32,3 @@ mistralrs cache delete [OPTIONS] --model-id <MODEL_ID>
 | Option | Default | Description |
 |---|---|---|
 | `-m, --model-id <MODEL_ID>` | required | Model ID (e.g., "Qwen/Qwen3-4B") |
-

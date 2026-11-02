@@ -297,6 +297,7 @@ pub struct ToolCall {
 ///
 /// // User message
 /// let user_msg = Message {
+///     audio: None,
 ///     content: Some(MessageContent(Either::Left("What's 2+2?".to_string()))),
 ///     role: "user".to_string(),
 ///     name: None,
@@ -307,6 +308,7 @@ pub struct ToolCall {
 ///
 /// // System message
 /// let system_msg = Message {
+///     audio: None,
 ///     content: Some(MessageContent(Either::Left("You are a helpful assistant.".to_string()))),
 ///     role: "system".to_string(),
 ///     name: None,
@@ -316,7 +318,14 @@ pub struct ToolCall {
 /// };
 /// ```
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct ChatAudioReference {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct Message {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio: Option<ChatAudioReference>,
     /// The message content
     pub content: Option<MessageContent>,
     /// The role of the message sender ("user", "assistant", "system", "tool", etc.)
@@ -1125,10 +1134,14 @@ fn normalize_openai_tools(
 /// Chat completion request following OpenAI's specification
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
 pub struct ChatCompletionRequest {
+    /// Output modalities: text (default), audio, or both.
+    pub modalities: Option<Vec<String>>,
+    /// Audio format and optional default voice for speech output.
+    pub audio: Option<mistralrs_core::ChatAudioConfig>,
     /// The conversation so far, or a single raw prompt string.
     #[schema(
         schema_with = messages_schema,
-        example = json!(vec![Message{content:Some(MessageContent{0: either::Left(("Why did the crab cross the road?".to_string()))}), role:"user".to_string(), name: None, tool_calls: None}])
+        example = json!(vec![Message{audio:None,content:Some(MessageContent{0: either::Left(("Why did the crab cross the road?".to_string()))}), role:"user".to_string(), name: None, tool_calls: None}])
     )]
     #[serde(with = "either::serde_untagged")]
     pub messages: Either<Vec<Message>, String>,
@@ -1342,6 +1355,7 @@ pub struct CompletionUsageResponse {
 
 #[derive(Debug, ToSchema)]
 pub struct ChatCompletionResponseMessage {
+    pub audio: Option<mistralrs_core::ChatAudioResponse>,
     pub content: Option<String>,
     pub role: String,
     pub tool_calls: Option<Vec<Value>>,
@@ -1374,6 +1388,7 @@ pub struct ChatCompletionResponseBody {
 
 #[derive(Debug, ToSchema)]
 pub struct ChatCompletionChunkDelta {
+    pub audio: Option<mistralrs_core::ChatAudioResponse>,
     pub content: Option<String>,
     pub role: String,
     pub tool_calls: Option<Vec<Value>>,
@@ -1799,9 +1814,17 @@ pub struct SpeechGenerationRequest {
         example = "[S1] Dia is an open weights text to dialogue model. [S2] You get full control over scripts and voices. [S1] Wow. Amazing. (laughs) [S2] Try it now on Git hub or Hugging Face."
     )]
     pub input: String,
-    // `voice` and `instructions` are ignored.
+    /// This model's voice, currently only `default`.
+    pub voice: Option<String>,
+    /// Additional directions for how to speak the input.
+    pub instructions: Option<String>,
+    /// Playback speed between 0.25 and 4.0, default 1.0.
+    pub speed: Option<f64>,
+    /// Raw audio (`audio`, default) or server-sent audio events (`sse`).
+    pub stream_format: Option<String>,
     /// The desired audio format for the generated speech.
     #[schema(example = "mp3")]
+    #[serde(default)]
     pub response_format: AudioResponseFormat,
 }
 

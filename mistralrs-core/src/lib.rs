@@ -7,7 +7,6 @@ pub use engine::{
     EngineInstruction, IntervalLogger, SearchEmbeddingModel, DEFAULT_MAX_TOOL_ROUNDS,
     ENGINE_INSTRUCTIONS, TERMINATE_ALL_NEXT_STEP,
 };
-use hf_hub::Cache;
 pub use lora::Ordering;
 pub use pipeline::CalibrationStatus;
 pub use pipeline::ModelCategory;
@@ -49,15 +48,22 @@ pub const REQUEST_QUEUE_DURATION_METRIC: &str = "mistralrs_request_queue_duratio
 
 mod adapter;
 mod agent_approval;
+mod audio_output;
+pub use audio_output::{
+    decode_generated_wav, encode_audio_pcm, encode_audio_pcm_with_speed,
+    encode_audio_pcm_with_speed_async,
+};
 mod cuda;
 mod device_map;
 mod engine;
 mod lora;
 mod metal;
 pub use metal::warmup_metal_kernels;
+mod input_audio;
 mod model_loader;
 mod moe;
 mod ops;
+pub use input_audio::{input_audio_data_url, MAX_INPUT_AUDIO_BYTES};
 mod video_input;
 pub use model_loader::{
     get_auto_device_map_params, get_model_dtype, get_tgt_non_granular_index, LoaderBuilder,
@@ -77,9 +83,14 @@ pub use toml_selector::{get_toml_selected_model_device_map_params, get_toml_sele
 mod amoe;
 mod attention;
 mod block_diffusion;
+pub mod decision;
 mod diagnostics;
 mod diffusion_models;
 pub mod distributed;
+pub use decision::{
+    DecisionAnswer, DecisionBox, DecisionFoundBox, DecisionInstructions, DecisionMedia,
+    DecisionQuestion, DecisionRequest, DecisionResponse, DecisionUsage,
+};
 pub mod files;
 mod gdn;
 mod gguf;
@@ -87,6 +98,7 @@ pub mod layers;
 mod layers_masker;
 mod layers_utils;
 pub mod matformer;
+pub mod memory_plan;
 mod mla;
 pub mod model_metadata;
 mod models;
@@ -138,12 +150,14 @@ pub use amoe::{AnyMoeConfig, AnyMoeExpertType};
 pub use device_map::{
     DeviceLayerMapMetadata, DeviceMapMetadata, DeviceMapSetting, LayerDeviceMapper,
 };
+pub use engine::speech::speech_task_prompt;
 pub use files::{
     format_from_name, is_text_mime, mime_for_format, File, FileContent, FileSource, FileStore,
     RequestedFile, FILE_PURPOSE_AGENT_OUTPUT, FILE_PURPOSE_USER_DATA, MODEL_INLINE_BYTES,
     WIRE_EMBED_LIMIT_BYTES,
 };
 pub use gguf::{GGUFArchitecture, GGUF_MULTI_FILE_DELIMITER};
+pub use memory_plan::{ExecutionMemoryLimits, MemoryGoal};
 pub use mistralrs_audio::AudioInput;
 pub use mistralrs_code_exec::{
     CodeExecutionApproval, CodeExecutionApprovalCallback, CodeExecutionConfig, ShellConfig,
@@ -160,8 +174,11 @@ pub use mistralrs_mcp::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
 };
 pub use mistralrs_quant::{IsqBits, IsqType};
-pub use mistralrs_sandbox::{NetworkMode, SandboxPolicy};
-pub use paged_attention::{MemoryGpuConfig, PagedAttentionConfig, PagedCacheType};
+pub use mistralrs_sandbox::{
+    NetworkMode, SandboxPolicy, DEFAULT_MAX_CPU_SECS, DEFAULT_MAX_FILE_SZ_MB,
+    DEFAULT_MAX_MEMORY_MB, DEFAULT_MAX_OPEN_FDS, DEFAULT_MAX_PROCS,
+};
+pub use paged_attention::{PagedAttentionConfig, PagedCacheType, PrefixCacheCapacity};
 pub use pipeline::hf::{
     get_model_file, hf_home_dir, hf_hub_cache_dir, hf_token_path, is_hf_hub_offline,
     list_model_files, probe_hf_repo_files, read_model_file_range, try_get_model_file,
@@ -170,14 +187,15 @@ pub use pipeline::hf::{
 pub use pipeline::{
     chat_template::{is_chat_template_request_error, ChatTemplate},
     expand_isq_value, expand_uqff_shards, parse_isq_value, parse_uqff_shard,
-    resolve_uqff_report_output, resolve_uqff_shorthand, AdapterPaths, AnyMoeLoader, AnyMoePipeline,
-    AutoDeviceMapParams, AutoLoader, AutoLoaderBuilder, DiffusionGenerationParams, DiffusionLoader,
+    resolve_uqff_report_output, resolve_uqff_shorthand, ActivationMemoryContext,
+    ActivationMemoryEstimate, AdapterPaths, AnyMoeLoader, AnyMoePipeline, AutoDeviceMapParams,
+    AutoLoader, AutoLoaderBuilder, DiffusionGenerationParams, DiffusionLoader,
     DiffusionLoaderBuilder, DiffusionLoaderType, EmbeddingLoader, EmbeddingLoaderBuilder,
     EmbeddingLoaderType, EmbeddingModelPaths, EmbeddingSpecificConfig, GGMLLoader,
     GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig,
     GemmaLoader, HfConfigOverrides, Idefics2Loader, IsqOrganization, LLaVALoader, LLaVANextLoader,
-    LlamaLoader, Loader, LocalModelPaths, MistralLoader, MixtralLoader, Modalities, ModelKind,
-    ModelPaths, MultimodalLoader, MultimodalLoaderBuilder, MultimodalLoaderType,
+    LlamaLoader, Loader, LocalModelPaths, MistralLoader, MixtralLoader, Modalities, ModelDownload,
+    ModelKind, ModelPaths, MultimodalLoader, MultimodalLoaderBuilder, MultimodalLoaderType,
     MultimodalPromptPrefixer, MultimodalSpecificConfig, NormalLoader, NormalLoaderBuilder,
     NormalLoaderType, NormalSpecificConfig, Phi2Loader, Phi3Loader, Phi3VLoader, Qwen2Loader,
     ResolvedLoraAdapter, SpeechLoader, SpeechPipeline, Starcoder2Loader, SupportedModality,
@@ -185,12 +203,12 @@ pub use pipeline::{
 };
 pub use request::{
     resolve_reasoning_controls, ApproximateUserLocation, CalibrationAction, CalibrationRequest,
-    Constraint, DetokenizationRequest, ImageGenerationResponseFormat, LlguidanceGrammar,
-    MessageContent, NormalRequest, ReasoningControlError, ReasoningEffort,
-    ReasoningEffortParseError, Request, RequestMessage, ResolvedReasoningControls,
-    SearchContextSize, TokenizationRequest, WebSearchContentType, WebSearchFilters,
-    WebSearchImageSettings, WebSearchOptions, WebSearchReturnTokenBudget, WebSearchUserLocation,
-    DEFAULT_ENABLE_THINKING,
+    ChatAudioConfig, ChatAudioFormat, ChatAudioMode, ChatAudioRequest, Constraint,
+    DetokenizationRequest, ImageGenerationResponseFormat, LlguidanceGrammar, MessageContent,
+    NormalRequest, ReasoningControlError, ReasoningEffort, ReasoningEffortParseError, Request,
+    RequestMessage, ResolvedReasoningControls, SearchContextSize, TokenizationRequest,
+    WebSearchContentType, WebSearchFilters, WebSearchImageSettings, WebSearchOptions,
+    WebSearchReturnTokenBudget, WebSearchUserLocation, DEFAULT_ENABLE_THINKING,
 };
 pub use resource_plan::{
     plan_paged_kv, PagedKvModelRequest, PagedKvPlan, PagedKvPolicy, RuntimeResourcePlanOptions,
@@ -232,12 +250,14 @@ pub use llguidance;
 
 /// `true` if `MISTRALRS_DEBUG=1`
 pub(crate) static DEBUG: AtomicBool = AtomicBool::new(false);
-pub static GLOBAL_HF_CACHE: OnceLock<Cache> = OnceLock::new();
+pub static GLOBAL_HF_CACHE: OnceLock<PathBuf> = OnceLock::new();
 
 /// Set the process-wide Hugging Face cache path before model discovery.
 pub fn set_hf_cache_path(path: impl Into<PathBuf>) {
-    GLOBAL_HF_CACHE.get_or_init(|| Cache::new(path.into()));
+    GLOBAL_HF_CACHE.get_or_init(|| path.into());
 }
+
+pub const DEFAULT_PREFIX_CACHE_N: usize = 16;
 
 /// Configuration for creating an engine instance
 #[derive(Clone)]
@@ -257,7 +277,7 @@ impl Default for EngineConfig {
         Self {
             no_kv_cache: false,
             no_prefix_cache: false,
-            prefix_cache_n: 16,
+            prefix_cache_n: DEFAULT_PREFIX_CACHE_N,
             disable_eos_stop: false,
             throughput_logging_enabled: true,
             search_embedding_model: None,
@@ -643,6 +663,7 @@ impl MistralRsBuilder {
                         strict: None,
                     },
                 },
+                source: AgentToolSource::User,
             },
         );
         self
@@ -662,6 +683,7 @@ impl MistralRsBuilder {
             ToolCallbackWithTool {
                 callback: ToolCallbackKind::Text(tool_callback),
                 tool,
+                source: AgentToolSource::User,
             },
         );
         self
@@ -1235,7 +1257,10 @@ impl MistralRs {
                     file_store_for_engine.spawn_cleanup_task();
                     // cuTile warmup precedes graph capture.
                     #[cfg(feature = "cutile")]
-                    if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(&warmup_device) {
+                    if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(
+                        &warmup_device,
+                        crate::utils::progress::progress_suppressed(),
+                    ) {
                         warn!("Failed to warm up cuTile MoE kernels: {err}");
                     }
                     let engine = match Engine::new(
@@ -1275,7 +1300,10 @@ impl MistralRs {
                     file_store_for_engine.spawn_cleanup_task();
                     // cuTile warmup precedes graph capture.
                     #[cfg(feature = "cutile")]
-                    if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(&warmup_device) {
+                    if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(
+                        &warmup_device,
+                        crate::utils::progress::progress_suppressed(),
+                    ) {
                         warn!("Failed to warm up cuTile MoE kernels: {err}");
                     }
                     let engine = match Engine::new(
@@ -1548,7 +1576,7 @@ impl MistralRs {
 
         let no_kv_cache = no_kv_cache.unwrap_or(false);
         let no_prefix_cache = no_prefix_cache.unwrap_or(false);
-        let prefix_cache_n = prefix_cache_n.unwrap_or(16);
+        let prefix_cache_n = prefix_cache_n.unwrap_or(DEFAULT_PREFIX_CACHE_N);
         let disable_eos_stop = disable_eos_stop.unwrap_or(false);
 
         Self::init_external_tool_callbacks(
@@ -1637,6 +1665,7 @@ impl MistralRs {
             tokio::task::block_in_place(|| {
                 let (tx, mut rx) = channel(1);
                 let req = Request::Normal(Box::new(NormalRequest {
+                    audio_output: None,
                     id: 0,
                     queued_at: None,
                     messages: RequestMessage::Completion {
@@ -2560,6 +2589,33 @@ impl MistralRs {
         }
     }
 
+    /// Check if web search was configured for a model, through a search embedding model or callback
+    pub fn has_search(&self, model_id: Option<&str>) -> Result<bool, String> {
+        let resolved_model_id = self
+            .resolve_alias_or_default(model_id)
+            .map_err(|e| e.to_string())?;
+
+        let engines = self
+            .engines
+            .read()
+            .map_err(|_| "Failed to acquire read lock on engines")?;
+        if let Some(engine_instance) = engines.get(&resolved_model_id) {
+            let state = &engine_instance.reboot_state;
+            return Ok(state.search_embedding_model.is_some() || state.search_callback.is_some());
+        }
+        drop(engines);
+
+        let unloaded = self
+            .unloaded_models
+            .read()
+            .map_err(|_| "Failed to acquire read lock on unloaded models")?;
+        match unloaded.get(&resolved_model_id) {
+            Some(state) => Ok(state.engine_config.search_embedding_model.is_some()
+                || state.engine_config.search_callback.is_some()),
+            None => Err(format!("Model {resolved_model_id} not found")),
+        }
+    }
+
     /// Get config for a specific model
     pub fn config(&self, model_id: Option<&str>) -> Result<MistralRsConfig, String> {
         let resolved_model_id = self
@@ -2760,7 +2816,7 @@ impl MistralRs {
                 loader_config.silent,
                 loader_config.device_map_setting.clone(),
                 loader_config.isq,
-                loader_config.paged_attn_config,
+                loader_config.paged_attn_config.clone(),
             )
             .map_err(|e| MistralRsError::ReloadFailed(format!("Failed to load model: {e}")))?;
 

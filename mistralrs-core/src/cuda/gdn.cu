@@ -4526,7 +4526,7 @@ __global__ __launch_bounds__(GDN_SPEC_FUSED_THREADS, 2)
         int64_t a_stride_h, int64_t gate_stride_b,
         int64_t gate_stride_h, int64_t gate_stride_v, int batch_size,
         int capacity, int num_k_heads, int num_v_heads,
-        int tiled_v_heads, float norm_eps) {
+        int tiled_v_heads, float norm_eps, int sigmoid_gate) {
   constexpr int K = GDN_DECODE_VALUE_MAJOR_K;
   constexpr int V = GDN_DECODE_VALUE_MAJOR_V;
   constexpr int VALUES_PER_WARP = GDN_SPEC_FUSED_VALUES_PER_WARP;
@@ -4798,7 +4798,7 @@ __global__ __launch_bounds__(GDN_SPEC_FUSED_THREADS, 2)
           (size_t)value * gate_stride_v;
       rounded[i] = __float2bfloat16_rn(
           output_values[i] * rstd * (float)norm_weight[value] *
-          gdn_silu((float)gate[gate_offset]));
+          gdn_gate_act((float)gate[gate_offset], sigmoid_gate));
       maximum = fmaxf(maximum, fabsf((float)rounded[i]));
     }
     if (quantized_output != nullptr) {
@@ -4996,7 +4996,7 @@ extern "C" void gdn_deferred_recurrence_rmsnorm_gate_value_major_128(
     int64_t b_stride_h, int64_t a_stride_b, int64_t a_stride_h,
     int64_t gate_stride_b, int64_t gate_stride_h, int64_t gate_stride_v,
     int batch_size, int capacity, int num_k_heads, int num_v_heads,
-    int tiled_v_heads, float norm_eps, int64_t stream) {
+    int tiled_v_heads, float norm_eps, int sigmoid_gate, int64_t stream) {
   const cudaStream_t custream = (cudaStream_t)stream;
   dim3 recurrence_grid(batch_size, num_v_heads);
   gdn_deferred_recurrence_rmsnorm_gate_value_major_128_kernel
@@ -5010,7 +5010,7 @@ extern "C" void gdn_deferred_recurrence_rmsnorm_gate_value_major_128(
           (const __nv_bfloat16 *)norm_weight, b_stride_b, b_stride_h,
           a_stride_b, a_stride_h, gate_stride_b, gate_stride_h,
           gate_stride_v, batch_size, capacity, num_k_heads, num_v_heads,
-          tiled_v_heads, norm_eps);
+          tiled_v_heads, norm_eps, sigmoid_gate);
   constexpr int FINALIZE_THREADS = 256;
   gdn_deferred_cursor_advance_kernel
       <<<(batch_size + FINALIZE_THREADS - 1) / FINALIZE_THREADS,

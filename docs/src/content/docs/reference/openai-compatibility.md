@@ -3,84 +3,78 @@ title: OpenAI compatibility
 description: Which OpenAI API fields mistralrs implements, which it extends, and which it does not support.
 ---
 
-mistral.rs targets field-level OpenAI API compatibility. Most OpenAI client libraries work against mistral.rs unchanged. This page lists the exceptions. For setup and examples, see [OpenAI-compatible APIs](/guides/serve/openai-compatible-apis/).
+Use OpenAI clients with a local base URL; capabilities depend on the loaded model and endpoint. This page lists supported fields and deviations. Start with the [serving guide](/guides/serve/openai-compatible-apis/); use [OpenAPI](/reference/http-api-generated/) for schemas and [HTTP semantics](/reference/http-api/) for streaming and history.
+
+Decision models use the [SystemOne API at `POST /v1/systemone`](/reference/decisions/), a separate endpoint outside the OpenAI API.
 
 ## Chat Completions fields
 
 ### Implemented
 
-- `model`
-- `messages` (including multimodal content parts)
-- `max_tokens`
-- `max_completion_tokens` (OpenAI's newer alias for `max_tokens`)
-- `temperature`
-- `top_p`
-- `stream`
-- `stop`
-- `tools`, `tool_choice`
-- `response_format` (`text`, `json_schema`)
-- `logit_bias`
-- `logprobs`, `top_logprobs`
-- `presence_penalty`, `frequency_penalty`
-- `n` (multiple completions)
+`model`, `messages` (including multimodal content), `max_tokens` / `max_completion_tokens`, `temperature`, `top_p`, `stream`, `stop`, `tools`, `tool_choice`, `response_format` (`text`, `json_schema`), `logit_bias`, `logprobs`, `top_logprobs`, `presence_penalty`, `frequency_penalty`, and `n`.
 
-Loaded dynamic LoRA aliases receive stable qualified model-card IDs from `GET /v1/models` and may be sent as `model`. Use the exact returned ID rather than constructing one; reserved characters are escaped and collisions receive a suffix. A unique short alias is also accepted for vLLM-style routing. The card's `parent` identifies the base model, `root` uses the public adapter alias rather than a local filesystem path, and `adapter_generation` identifies the current immutable generation. The explicit `adapter` extension below is available when callers need separate base-model routing or an exact generation.
+Loaded LoRA adapters can be selected by their exact model-card ID from `GET /v1/models`, a unique short alias, or the `adapter` extension. See [adapter routing](/reference/http-api/#lora-adapter-routing-and-management).
 
 ### Implemented with deviation
 
-- `tool_choice`: `"auto"`, `"none"`, `"required"`, Chat Completions specific function objects (`{"type":"function","function":{"name":"..."}}`), Responses-style specific function objects (`{"type":"function","name":"..."}`), and `{"type":"allowed_tools","mode":"auto"|"required","tools":[{"type":"function","name":"..."}]}` work for function tools. `"required"` rejects requests with no available tools.
-- `tools[*].function.strict`: accepted on function tools. When `true`, mistral.rs constrains generated tool arguments to the tool's `parameters` JSON Schema. See [tool calling](/guides/agents/tool-calling-basics/).
-- `tools[*].type="code_interpreter"`: accepted as the OpenAI-compatible opt-in for the built-in Python executor. The server must be started with code execution enabled. The only supported container form is `{"type":"auto"}`. Container ids, `container.file_ids`, `container.memory_limit`, and OpenAI container lifecycle endpoints are not supported.
-- `messages[].content[]` file parts: `{"type":"file","file":{"file_id":"file-..."}}` and `{"type":"file","file":{"filename":"data.csv","file_data":"data:text/csv;base64,..."}}` are supported. Chat Completions file URLs are not supported; upload the file first or use Responses.
-- `response_format` with `json_schema`: supported; output shape may differ from OpenAI's on ambiguous schemas. `json_object` is not accepted. See [structured output](/guides/serve/structured-output/).
-- `seed`: initializes a deterministic request-scoped sampling stream. Requests with multiple choices derive a distinct stream for each choice.
+| Field | Support and limits |
+| --- | --- |
+| `modalities`, `audio` | Spoken replies from chat models that can speak, such as LFM3-Audio and LFM3-Omni. See [audio output](#audio-output) below. |
+| `input_audio` content parts | WAV/MP3 base64 file bytes in `input_audio: {"data":"...","format":"wav"}`. `audio_url` is an extension for URLs and other decodable formats. |
+| Assistant `audio.id` | Restores the server-cached transcript as text context. IDs can expire or be evicted; see [audio history](/reference/http-api/#audio-requests-and-history). |
+| `tool_choice` | `auto`, `none`, `required`, specific function objects in Chat or Responses form, and function-only `allowed_tools` subsets. `required` needs available tools. |
+| Function `strict: true` | Constrains arguments to the function's `parameters` JSON Schema. |
+| `code_interpreter` | Requires server-side code execution enabled. Only `container: {"type":"auto"}` is supported; container IDs, `file_ids`, `memory_limit`, and container lifecycle APIs are rejected. |
+| `file` content parts | Accept `file_id`, or `filename` plus base64/data-URL `file_data`. File URLs require Responses. |
+| `response_format` | `json_schema` constrains output; `json_object` is rejected. Ambiguous schemas can produce different shapes from OpenAI. |
+| `seed` | Makes the request's sampling reproducible. With `n > 1`, each choice gets its own random stream. |
+
+See [tool calling](/guides/agents/tool-calling-basics/), [structured output](/guides/serve/structured-output/), and [audio streaming](/reference/http-api/#streaming-chat-completions) for examples and wire formats.
+
+#### Audio output
+
+- `modalities`: `["audio"]` for speech only, or `["text", "audio"]` for both.
+- `audio.format`: `wav`, `pcm16`, `mp3`, `flac`, `opus`, or `aac`. `mp3`, `flac`, `opus`, and `aac` need FFmpeg on the server.
+- `audio.voice`: omit it or use `"default"`.
+- Streaming needs `pcm16`.
+- Audio output can't be combined with tools, structured output (`json_schema` or `grammar`), or `logprobs`.
 
 ### Silently ignored
 
-`user`, `stream_options`, `metadata`, `service_tier`, `parallel_tool_calls`, `store`. The request body accepts these fields (unknown fields are not rejected) but no behavior is wired to them. Use mistral.rs `session_id` for persistence.
+`user`, `stream_options`, `metadata`, `service_tier`, `parallel_tool_calls`, `store`. These fields have no effect on Chat Completions. Use `session_id` for agent session persistence.
 
 ### Additional request controls
 
-Accepted alongside the base Chat Completions fields. Several are mistral.rs extensions:
+| Fields | Purpose |
+| --- | --- |
+| `top_k`, `min_p`, `repetition_penalty` | Additional sampling controls. |
+| `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers` | DRY sampling. |
+| `grammar` | Constraints beyond JSON Schema. |
+| `reasoning_effort`, `enable_thinking` | Reasoning controls described below. |
+| `web_search_options` | Server-side search configuration. |
+| `session_id` | Agent session persistence. |
+| `files` | Requested output files. |
+| `agent_permission`, `code_execution_permission` | Tighten tool permissions for a request. |
+| `max_tool_rounds` | Cap server-side tool-loop rounds. |
+| `truncate_sequence` | Truncate an oversized prompt instead of rejecting it. |
+| `adapter` | Loaded LoRA alias or `{"generation":"..."}`; omitted/null selects the base model. |
 
-- `top_k`: hard candidate cap.
-- `min_p`: min-p sampling threshold.
-- `repetition_penalty`: simpler alternative to frequency/presence.
-- `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`: DRY sampling parameters.
-- `grammar`: llguidance constraints beyond JSON schemas.
-- `reasoning_effort`: `off`, `low`, `medium`, `high`, or `xhigh`. `none` is accepted as an alias for `off`. Values are trimmed and case-insensitive.
-- `enable_thinking`: legacy boolean toggle. If both controls are omitted, mistral.rs enables thinking and leaves the effort unspecified. An explicit positive effort enables thinking; `off` disables it. Contradictory pairs such as `reasoning_effort: "off"` with `enable_thinking: true` return a validation error.
+`reasoning_effort` takes `off`, `low`, `medium`, `high`, or `xhigh`, in any case, and `none` means `off`. Any value except `off` turns thinking on. `enable_thinking` is a plain on/off switch.
 
-The selected effort is passed to the chat template as both `reasoning_effort` and the compatibility name `reasoning_strength`. The template determines how each tier affects the model; it may treat positive tiers alike or ignore controls it does not use. The Python SDK uses the same values and defaults.
-- `web_search_options`: search tool configuration (de facto OpenAI field, not yet universal).
-- `session_id`: multi-turn session persistence.
-- `files`: required output files for server-side code execution.
-- `agent_permission`, `code_execution_permission`: per-request permission tightening for server-executed tools.
-- `max_tool_rounds`: cap server-side tool loop rounds for one request.
-- `truncate_sequence`: truncate long prompts at the model's context limit instead of erroring.
-- `adapter`: select a loaded dynamic LoRA alias string or an exact immutable generation object, `{"generation":"<generation-id>"}`. Omit it or use `null` for the base model. Unknown aliases, nonresident generations, and models without a dynamic LoRA runtime return an error.
+- With neither set, thinking is on for text replies and off for spoken replies.
+- Setting both to values that disagree, such as `"high"` with `enable_thinking: false`, is rejected.
+- The model's chat template decides what each level does. Effort doesn't change sampling settings.
 
-`GET /v1/lora_adapters` is always registered and returns detailed alias, generation, and capacity state for models started with dynamic LoRA. A model without that runtime returns 409 with `lora_runtime_unavailable`. Adapter source is redacted unless runtime mutation is enabled. With `mistralrs serve`, `POST /v1/load_lora_adapter` and `POST /v1/unload_lora_adapter` require `MISTRALRS_ALLOW_RUNTIME_LORA_UPDATING`; embedded servers configure mutation through `LoraAdapterApiConfig`. Read-only discovery does not require mutation access.
-
-Chat Completions and Completions responses expose the exact resolved generation as `adapter_generation`, including streaming chunks. Completed Responses resources expose the same field. The field is omitted for base-model requests.
+LoRA responses expose the selected `adapter_generation`, including Chat/Completions streaming chunks and completed Responses objects. See [adapter management](/reference/http-api/#lora-adapter-routing-and-management) for runtime requirements and errors.
 
 ## Responses API
 
-mistral.rs implements the OpenAI Responses API alongside Chat Completions:
-
-- `POST /v1/responses`: create a response. Returns a response object with a unique id.
-- `GET /v1/responses/{id}`: fetch the current state of a stored response.
-- `DELETE /v1/responses/{id}`: delete a stored response.
-- `POST /v1/responses/{id}/cancel`: cancel a background response that has not finished.
-
-Use Responses when the client:
-
-- expects OpenAI's Responses object shape,
-- needs response ids,
-- needs polling or background processing,
-- needs cancellation.
-
-Chat Completions, by contrast, returns the full response on a single connection. Codex speaks the Responses API; see [coding agents](/guides/serve/coding-agents/).
+| Route | Operation |
+| --- | --- |
+| `POST /v1/responses` | Create a response. |
+| `GET /v1/responses/{id}` | Fetch a stored response. |
+| `DELETE /v1/responses/{id}` | Delete it. |
+| `POST /v1/responses/{id}/cancel` | Cancel an unfinished background response. |
 
 ### Implemented
 
@@ -88,9 +82,9 @@ Chat Completions, by contrast, returns the full response on a single connection.
 - `input_file` content parts with `file_id`, `file_data`, or `file_url`.
 - `previous_response_id`: continues a stored conversation.
 - `max_output_tokens`: with `max_tokens` and `max_completion_tokens` as aliases.
-- `instructions`, `temperature`, `top_p`, `stop`, `stream`, `tools`, `tool_choice`, `response_format`, `logit_bias`, `logprobs`, `top_logprobs`, `presence_penalty`, `frequency_penalty`, `n`, `metadata`, `background`, `store`.
+- `instructions`, `temperature`, `top_p`, `stop`, `stream`, `tools`, `tool_choice`, `text.format`, `response_format`, `logit_bias`, `logprobs`, `top_logprobs`, `presence_penalty`, `frequency_penalty`, `n`, `metadata`, `background`, `store`.
 
-`store` defaults to `true`; `store: false` skips caching, which makes the response unavailable to `GET /v1/responses/{id}` and `previous_response_id`. Function tools support `strict: true` with the same JSON-Schema-constrained argument generation as Chat Completions.
+`store` defaults to `true`; `false` makes the response unavailable to retrieval or `previous_response_id`. Use `text.format` for structured output; the legacy `response_format` alias is also accepted. As with Chat Completions, `json_object` is rejected and function tools support `strict: true`.
 
 Responses `tools` accepts:
 
@@ -98,22 +92,18 @@ Responses `tools` accepts:
 - Function tools in the Chat Completions nested form: `{"type":"function","function":{...}}`.
 - `{"type":"web_search", ...}` and `{"type":"web_search_preview"}` for server-side web search.
 - `{"type":"code_interpreter","container":{"type":"auto"}}` for server-side Python code execution.
-- `{"type":"shell","environment":{"type":"container_auto","skills":[{"type":"skill_reference","skill_id":"skill_...","version":"latest"}]}}` for server-side shell execution and OpenAI-compatible Skills. Skills require the shell executor, so start the server with at least `--enable-shell`; `--agent` is the recommended preset when you also want the full agentic runtime.
+- `{"type":"shell","environment":{"type":"container_auto","skills":[{"type":"skill_reference","skill_id":"skill_...","version":"latest"}]}}` for server-side shell execution and OpenAI-compatible Skills. Skills run in the shell tool, so start the server with `--enable-shell`, or with `--agent` for the full agent runtime.
 
 `tool_choice: "required"` is accepted and rejects requests that provide no tools. Specific function choices must reference a declared function tool. `tool_choice: {"type":"allowed_tools", ...}` is supported for function tool subsets only. Hosted tool forcing or filtering, such as `{"type":"web_search_preview"}`, `{"type":"code_interpreter"}`, `{"type":"shell"}`, or hosted tools inside `allowed_tools`, is not supported.
 
 ### Skills API
 
-- `POST /v1/skills`: upload one OpenAI-compatible Skill as multipart form data. Use `files` fields containing either a zip archive or the files from one top-level skill directory. The top-level directory must contain `SKILL.md` with `name` and `description` frontmatter.
-- `GET /v1/skills`: list uploaded skills for the current server process and skills directory.
-- `POST /v1/skills/{skill_id}/versions`: upload a new version for an existing skill.
-
-Uploaded skill versions remain available from the server's skills directory (`--skills-dir`, or a system temporary directory by default). Referenced skills are made available to the shell session.
+Upload, list, and version Skills through `/v1/skills`, then reference them in a shell tool's `environment.skills`. Execution requires `--enable-shell` or `--agent`. See the [Skills guide](/guides/agents/skills/) for upload shapes, version selection, and storage.
 
 ### Rejected non-default values
 
 - `parallel_tool_calls` must be `true` (default) or omitted; `false` returns an error.
-- `max_tool_calls` returns an error for any value. To cap tool rounds, use the server-level `--max-tool-rounds` flag (applies to both Chat Completions and Responses).
+- `max_tool_calls` returns an error for any value. Use `max_tool_rounds` to cap agentic rounds per request, or `--max-tool-rounds` for the server default.
 - `tools[*].type="web_search"` rejects image search (`search_content_types: ["image"]` or `image_settings`) and `external_web_access: false`. Domain filters are supported for up to 100 allowed or blocked domains and include subdomains.
 - `tools[*].type="web_search_preview"` rejects `filters` and `return_token_budget`; `external_web_access` is ignored.
 - `tools[*].type="code_interpreter"` rejects container ids, `container.file_ids`, and `container.memory_limit`.
@@ -121,23 +111,20 @@ Uploaded skill versions remain available from the server's skills directory (`--
 
 ### mistralrs extensions on Responses
 
-`top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`, `adapter`. The `adapter` field selects a loaded dynamic LoRA alias string or exact generation object; omit it or use `null` for the base model. A loaded alias can instead be sent as `model`. The chat-only agentic fields (`session_id`, `agent_permission`, `files`, `max_tool_rounds`, `web_search_options`) are not part of this endpoint's schema. Use the Responses `tools` array for web search, code interpreter, shell, and OpenAI-compatible Skills.
+`top_k`, `min_p`, `repetition_penalty`, the `dry_*` sampling fields, `grammar`, `seed`, `ignore_eos`, and `adapter` follow the Chat Completions behavior. `files` requests tool-produced output files; `max_tool_rounds` caps agentic rounds. Chat-only `session_id`, `agent_permission`, and `web_search_options` are not accepted as controls here. Use the Responses `tools` array for hosted tools and Skills.
 
-Thinking, reasoning effort, and truncation are not top-level extension fields here; they are controlled through the standard Responses objects. Use `reasoning.effort` with `off`, `low`, `medium`, `high`, or `xhigh`; `none` is accepted as an alias for `off`. Omission enables thinking without choosing an effort. `reasoning.summary` is accepted for compatibility but currently does not change the response. Use `truncation` for sequence truncation. Top-level `enable_thinking`, `reasoning_effort`, and `truncate_sequence` keys are silently ignored on this endpoint.
+For thinking and truncation, Responses uses the standard OpenAI fields instead of the Chat Completions extensions:
+
+| Chat Completions field | Responses field |
+| --- | --- |
+| `reasoning_effort`, `enable_thinking` | `reasoning.effort`: `off`, `low`, `medium`, `high`, or `xhigh` (`none` means `off`). Omit it to leave thinking on without choosing a level. |
+| `truncate_sequence` | `truncation` |
+
+The Chat Completions names are ignored here. `reasoning.summary` is accepted but has no effect.
 
 ### Background runs
 
-```bash
-curl http://localhost:1234/v1/responses \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "default",
-    "input": "Summarize today in tech news.",
-    "background": true
-  }'
-```
-
-Poll with `curl http://localhost:1234/v1/responses/<id>`, cancel with `curl -X POST http://localhost:1234/v1/responses/<id>/cancel`. Streaming event names are in the [HTTP API semantics page](/reference/http-api/#streaming-responses); full schemas in the [generated reference](/reference/http-api-generated/).
+Send `background: true`, then poll `GET /v1/responses/{id}` or cancel with `POST /v1/responses/{id}/cancel`. [Streaming event names](/reference/http-api/#streaming-responses) and the [Responses example](/examples/server/responses/) cover consuming results.
 
 ## Completions (legacy)
 
@@ -145,39 +132,44 @@ Poll with `curl http://localhost:1234/v1/responses/<id>`, cancel with `curl -X P
 
 ## Embeddings
 
-- `input` accepts a string or a list of strings.
-- `encoding_format`: `"float"` (default) or `"base64"`.
-- `dimensions`: passing any value returns an error. Custom dimensions are not supported.
-- `user`: accepted but not used.
-
-Extensions:
-
-- `truncate_sequence`: truncate long prompts at the model's context limit instead of erroring.
+`input` accepts a string or list of strings. `encoding_format` is `float` (default) or `base64`. `dimensions` is rejected; `user` is ignored. The `truncate_sequence` extension truncates oversized inputs instead of rejecting them.
 
 ## Image Generation
 
-- `prompt`
-- `n`
-- `response_format`: `"Url"` (default; response carries a server-side filename in `url`) or `"B64Json"` (response carries a `data:image/png;base64,...` string in `b64_json`).
+Supports `prompt`, `n`, and `response_format`. Format values differ from OpenAI: `"Url"` (default) returns a server-side filename in `url`; `"B64Json"` returns a `data:image/png;base64,...` string in `b64_json`.
 
-OpenAI's `size` string (e.g. `"1024x1024"`) is not supported. Use the `height` and `width` fields instead:
-
-- `height` (default 720)
-- `width` (default 1280)
-
-`quality`, `style`, `steps`, `guidance_scale` are ignored.
+Use `height` (default 720) and `width` (default 1280) instead of OpenAI's `size` string. `quality`, `style`, `steps`, and `guidance_scale` are ignored.
 
 ## Audio
 
 ### `/v1/audio/speech` (TTS)
 
-- `model`, `input`: supported.
-- `response_format`: only `wav` and `pcm` are accepted; `mp3`, `opus`, `aac`, `flac` return a validation error.
-- `voice`, `instructions`, `speed`: ignored.
+| Field | Support |
+| --- | --- |
+| `model`, `input` | Dedicated speech models or chat speech models such as LFM3-Audio/Omni. |
+| `response_format` | `mp3` (default), `opus`, `aac`, `flac`, `wav`, `pcm`. Compressed formats require FFmpeg. PCM is signed 16-bit little-endian. |
+| `voice` | Omitted or `"default"`; named/custom voices are rejected. |
+| `instructions` | Synthesis instructions for chat speech models. Dia rejects nonempty instructions. |
+| `speed` | 0.25 to 4.0, default 1.0. Non-default speed requires FFmpeg. |
+| `stream_format` | `audio` (default) returns a completed binary file. Chat speech models also support `sse`; Dia rejects it. |
+
+SSE sends incremental audio only for PCM at speed 1.0; other formats/speeds send a completed encoded file. See [speech streaming](/reference/http-api/#streaming-speech) for event schemas.
 
 ### `/v1/audio/transcriptions` and `/v1/audio/translations`
 
-Not exposed as dedicated endpoints. Voxtral and similar STT models go through `/v1/chat/completions` with audio content parts. See [speech models guide](/guides/models/use-speech-models/).
+Both take multipart `file` and `model` fields and run on a loaded model that accepts audio. Transcriptions return the spoken text; translations return it in English. Which languages work depends on the model.
+
+| Field | Support |
+| --- | --- |
+| `response_format` | `json` (default) returns `{"text":"..."}`; `text` returns plain text. |
+| `prompt` | Spelling and vocabulary hints. |
+| `temperature` | `0` to `1`. |
+| `language` | Transcriptions only. |
+| `stream` | Transcriptions only, with `json` format. See [transcription streaming](/reference/http-api/#streaming-transcriptions) for event schemas. |
+
+Timestamps, diarization, subtitle formats, verbose JSON, and logprobs are rejected with a validation error.
+
+See the [dedicated audio endpoint example](/examples/server/lfm3-audio-endpoints/) and [speech models guide](/guides/models/use-speech-models/). The OpenAI Realtime API and live microphone sessions are not implemented.
 
 ## Moderation
 
@@ -185,9 +177,9 @@ Not supported. mistral.rs has no built-in moderation model; run one as a separat
 
 ## Files and Assistants APIs
 
-`POST /v1/files` multipart uploads are supported for user-provided input files. Use `purpose="user_data"` for OpenAI-compatible request attachments. Uploaded files, inline request files, URL-fetched request files, and agent-produced files are available through `GET /v1/files`, `GET /v1/files/{id}`, `GET /v1/files/{id}/content`, and `DELETE /v1/files/{id}`.
+`POST /v1/files` accepts multipart uploads with `purpose="user_data"`. Uploaded, inline, URL-fetched, and generated files can be listed, fetched, downloaded, and deleted through `/v1/files` routes. See [file wire semantics](/reference/http-api/#file-wire-schemas-and-semantics).
 
-Text-like UTF-8 files are exposed to the model as bounded decoded previews, with additional text available during agentic runs when file access is active. Binary files are stored, downloadable, and mounted into shell/code workdirs when those tools are active, but mistral.rs does not perform OpenAI's private PDF/image/spreadsheet extraction pipeline. The Assistants API is not supported; the mistral.rs equivalent is the session-based agentic loop on the chat completions endpoint.
+UTF-8 files provide bounded text previews; active shell/code tools can inspect their full contents. Binary files are stored and accessible to those tools, but there is no automatic PDF/image/spreadsheet extraction pipeline. The Assistants API is unsupported; use [agent sessions](/guides/agents/persist-sessions/) for persistent tool state.
 
 ## Fine-tuning and Batch
 
@@ -199,8 +191,8 @@ mistral.rs does not expose `/v1/tokenize` or `/v1/detokenize` HTTP endpoints. To
 
 ## Authentication
 
-OpenAI requires an `Authorization: Bearer ...` header. mistral.rs does not validate it. Clients that require an API key for initialization can send any non-empty string. For real authentication, place an authenticating reverse proxy in front.
+The server does not validate API keys. Clients can supply any nonempty key; use a reverse proxy for authentication and TLS. See [HTTP authentication](/reference/http-api/#authentication).
 
 ## Response headers
 
-`Content-Type: application/json` for non-streaming responses; `text/event-stream` for streaming. The session id (when assigned or matched) is in the response body's `session_id` field.
+See [HTTP response headers](/reference/http-api/#response-headers) for JSON, SSE, audio, and file content types. Session IDs are in response bodies.

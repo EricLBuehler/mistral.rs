@@ -1,4 +1,6 @@
-use candle_core::{DType, Device, Result, Tensor, D};
+#[cfg(any(feature = "cutile", test))]
+use candle_core::DType;
+use candle_core::{Device, Result, Tensor, D};
 use candle_nn::Linear;
 use mistralrs_quant::{
     apply_immediate_isq_with_key, should_apply_immediate_isq, DummyLayer, LoraExpertInputMode,
@@ -8,31 +10,14 @@ use mistralrs_quant::{
 use std::sync::Arc;
 
 use crate::cuda::moe;
-#[cfg(feature = "cuda")]
+#[cfg(feature = "cutile")]
 use crate::layers::Activation;
 
 use super::checkpoint::ExpertCheckpoint;
 #[cfg(feature = "cuda")]
 use super::config::gated_act;
 use super::config::{ExpertProj, MoEExpertsConfig};
-#[cfg(feature = "cuda")]
-use super::forward::MoECudaFastPath;
 use super::forward::{MoEForward, MoEForwardConfig};
-
-#[cfg(feature = "cuda")]
-pub(crate) const GROUPED_PREFILL_MIN_TOKENS: usize = 32;
-#[cfg(feature = "cuda")]
-const SMALL_GROUPED_MMQ_MIN_TOKENS: usize = 24;
-#[cfg(feature = "cuda")]
-const SMALL_GROUPED_MMQ_GATE_UP_SHAPE: [usize; 3] = [512, 640, 2560];
-#[cfg(feature = "cuda")]
-const SMALL_GROUPED_MMQ_DOWN_SHAPE: [usize; 3] = [512, 2560, 640];
-#[cfg(feature = "cuda")]
-const SMALL_GROUPED_MMQ_TOPK: usize = 10;
-#[cfg(feature = "cuda")]
-const SMALL_GROUPED_MMQ_COMPUTE_CAPABILITY: (i32, i32) = (12, 1);
-#[cfg(feature = "cuda")]
-static SMALL_GROUPED_MMQ_LOG: std::sync::Once = std::sync::Once::new();
 
 /// Canonical stacked expert weights, ENK [E, N, K] = [E, out, in]. The raw backends (Fused,
 /// Cutile) hold exactly this; nothing else stores a layout.
@@ -71,16 +56,16 @@ pub(super) struct FastExpertsWeights {
     pub(super) sharded: bool,
 }
 
+// Per-linear expert formats load without the router config, so their warmup reads the model's routing here.
+#[cfg(feature = "cutile")]
+fn register_cutile_moe_routing(cfg: &MoEExpertsConfig, device: &Device) -> Result<()> {
+    mistralrs_quant::cutile::register_moe_routing(device, cfg.num_experts, cfg.num_experts_per_tok)
+}
+
 fn should_stage_prequantized_on_cpu(experts_vb: &ShardedVarBuilder) -> bool {
     ["gate_proj", "up_proj", "down_proj"]
         .iter()
         .all(|name| should_apply_immediate_isq(&experts_vb.pp(name)))
-}
-
-#[cfg(feature = "cuda")]
-enum GroupedGateUp {
-    Packed(Tensor),
-    SortedPair { gate: Tensor, up: Tensor },
 }
 
 impl StackedExpertWeights {
@@ -205,13 +190,10 @@ impl CutileFp8ExpertsWeights {
         if forward.lora.is_some() {
             candle_core::bail!("dynamic LoRA is not supported on cuTile FP8 experts");
         }
-        let activation = match config.act {
-            Activation::Silu => mistralrs_quant::GluActivationType::Silu,
-            Activation::NewGelu | Activation::GeluPytorchTanh => {
+        let activation = match gated_act(config.act)? {
+            mistralrs_quant::moe::cuda::GatedAct::Silu => mistralrs_quant::GluActivationType::Silu,
+            mistralrs_quant::moe::cuda::GatedAct::GeluTanh => {
                 mistralrs_quant::GluActivationType::Gelu
-            }
-            other => {
-                candle_core::bail!("activation {other:?} is not supported by cuTile FP8 experts")
             }
         };
         let dev = forward.xs_flat.device().as_cuda_device()?;
@@ -416,6 +398,7 @@ impl FastExpertsWeights {
 #[cfg(all(test, feature = "cuda"))]
 mod tests {
     use super::*;
+    use crate::layers::Activation;
     use crate::moe::experts::forward::{MoEForwardPhase, MoEForwardShape};
     use candle_core::quantized::{GgmlDType, QTensor};
     use mistralrs_quant::{
@@ -539,7 +522,6 @@ mod tests {
         let topk_ids = Tensor::from_slice(&[0u32, 2, 1, 0], (TOKENS, TOPK), &device)?;
         let topk_weights = Tensor::from_slice(&[0.65f32, 0.35, 0.4, 0.6], (TOKENS, TOPK), &device)?;
         let forward = MoEForward {
-            xs: &xs,
             xs_flat: &xs_flat,
             topk_weights: &topk_weights,
             topk_ids: &topk_ids,
@@ -559,10 +541,8 @@ mod tests {
             act: Activation::Silu,
         };
 
-        let actual = fast
-            .forward_decode_lora(&forward, config)?
-            .expect("Q4_0 uses the fast decode path");
-        let expected = fast.forward_gather_lora(&forward, config)?;
+        let actual = fast.forward_impl(&forward, config)?;
+        let expected = fast.forward_reference(&forward, config)?;
         let error = (&actual - &expected)?
             .abs()?
             .max_all()?
@@ -576,7 +556,7 @@ mod tests {
         const HIDDEN: usize = 64;
         const INTERMEDIATE: usize = 96;
         const RANK: usize = 8;
-        const TOKENS: usize = GROUPED_PREFILL_MIN_TOKENS;
+        const TOKENS: usize = 32;
         const TOPK: usize = 2;
 
         let device = Device::new_cuda(0)?;
@@ -669,7 +649,6 @@ mod tests {
             .collect::<Vec<_>>();
         let topk_weights = Tensor::from_vec(topk_weights, (TOKENS, TOPK), &device)?;
         let forward = MoEForward {
-            xs: &xs,
             xs_flat: &xs_flat,
             topk_weights: &topk_weights,
             topk_ids: &topk_ids,
@@ -689,15 +668,8 @@ mod tests {
             act: Activation::Silu,
         };
 
-        assert!(matches!(
-            FastExpertsWeights::select_cuda_fast_path(&forward),
-            Some(MoECudaFastPath::GroupedPrefill)
-        ));
-        assert!(fast.grouped_lora_preserves_route_order());
-        let actual = fast
-            .forward_grouped(&forward, config)?
-            .expect("Q4_0 uses the grouped prefill path");
-        let expected = fast.forward_gather_lora(&forward, config)?;
+        let actual = fast.forward_impl(&forward, config)?;
+        let expected = fast.forward_reference(&forward, config)?;
         assert_eq!(actual.dtype(), dtype);
         assert_eq!(expected.dtype(), dtype);
         let actual = actual.to_dtype(DType::F32)?;
@@ -756,11 +728,7 @@ impl FastExpertsWeights {
         quantization_config: &Option<QuantizedConfig>,
     ) -> Result<FastExpertsWeights> {
         #[cfg(feature = "cutile")]
-        mistralrs_quant::cutile::register_nvfp4_routing(
-            vb.device(),
-            cfg.num_experts,
-            cfg.num_experts_per_tok,
-        )?;
+        register_cutile_moe_routing(cfg, vb.device())?;
         let experts_vb = vb.pp("experts");
         let read_vb = if should_stage_prequantized_on_cpu(&experts_vb) && !vb.device().is_cpu() {
             vb.set_device(Device::Cpu)
@@ -922,10 +890,8 @@ impl CutileExpertsWeights {
             Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
             _ => candle_core::bail!("topk_ids must be a cuda tensor"),
         };
-        assert_eq!(ti_layout.start_offset(), 0, "expected contiguous topk_ids");
-
         let (sids, eids, ntpp, em) = mistralrs_quant::moe::cuda::moe_align(
-            ti_slice,
+            &ti_slice.slice(ti_layout.start_offset()..ti_layout.start_offset() + num_valid),
             num_tokens,
             num_experts,
             topk,
@@ -961,11 +927,8 @@ impl CutileExpertsWeights {
             Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
             _ => candle_core::bail!("topk_weights must be a cuda tensor"),
         };
-        assert_eq!(
-            tw_layout.start_offset(),
-            0,
-            "expected contiguous topk_weights"
-        );
+        let tw_view =
+            tw_slice.slice(tw_layout.start_offset()..tw_layout.start_offset() + num_valid);
 
         let ic3 = mistralrs_quant::cutile::cutile_grouped_gemm(
             &ic2,
@@ -973,7 +936,7 @@ impl CutileExpertsWeights {
             &sids,
             &eids,
             &ntpp,
-            Some(tw_slice),
+            Some(&tw_view),
             em,
             num_valid,
             1,
@@ -1002,9 +965,8 @@ impl CutileExpertsWeights {
             Storage::Cuda(c) => c.as_cuda_slice::<u32>()?,
             _ => candle_core::bail!("topk_ids must be a cuda tensor"),
         };
-        assert_eq!(ti_layout.start_offset(), 0, "expected contiguous topk_ids");
         let (sids, eids, ntpp, em) = mistralrs_quant::moe::cuda::moe_align(
-            ti_slice,
+            &ti_slice.slice(ti_layout.start_offset()..ti_layout.start_offset() + num_valid),
             num_tokens,
             num_experts,
             topk,
@@ -1040,18 +1002,15 @@ impl CutileExpertsWeights {
             Storage::Cuda(c) => c.as_cuda_slice::<f32>()?,
             _ => candle_core::bail!("topk_weights must be a cuda tensor"),
         };
-        assert_eq!(
-            tw_layout.start_offset(),
-            0,
-            "expected contiguous topk_weights"
-        );
+        let tw_view =
+            tw_slice.slice(tw_layout.start_offset()..tw_layout.start_offset() + num_valid);
         let down = mistralrs_quant::cutile::cutile_grouped_gemm(
             &down_inputs.reshape((num_valid, inter))?,
             &self.w.down,
             &sids,
             &eids,
             &ntpp,
-            Some(tw_slice),
+            Some(&tw_view),
             em,
             num_valid,
             1,
@@ -1079,769 +1038,41 @@ impl CutileExpertsWeights {
 }
 
 impl FastExpertsWeights {
+    fn routed_experts(
+        &self,
+        config: MoEForwardConfig,
+    ) -> mistralrs_quant::routed_moe::RoutedExperts<'_> {
+        mistralrs_quant::routed_moe::RoutedExperts {
+            gate: self.fused_gate_proj.as_ref(),
+            up: self.fused_up_proj.as_ref(),
+            down: self.fused_down_proj.as_ref(),
+            num_experts: config.num_experts,
+        }
+    }
+
     pub(super) fn forward_impl(
         &self,
         forward: &MoEForward,
         config: MoEForwardConfig,
     ) -> Result<Tensor> {
-        if forward.lora.is_some() {
-            #[cfg(feature = "cuda")]
-            if self.fused_gate_proj.stats_snapshot().is_none() {
-                match Self::select_cuda_fast_path(forward) {
-                    Some(MoECudaFastPath::Decode) => {
-                        if let Some(result) = self
-                            .forward_decode_lora(forward, config)
-                            .map_err(|err| err.context("moe experts LoRA fast decode"))?
-                        {
-                            return Ok(result);
-                        }
-                    }
-                    Some(MoECudaFastPath::GroupedPrefill)
-                        if self.grouped_lora_preserves_route_order() =>
-                    {
-                        if let Some(result) = self.forward_grouped(forward, config)? {
-                            return Ok(result);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            return self.forward_gather_lora(forward, config);
-        }
-        // while collecting, force the gather path; fused kernels never materialize the routed inputs
-        #[cfg(feature = "cuda")]
-        if self.fused_gate_proj.stats_snapshot().is_none() {
-            if let Some(result) = self.forward_cuda(forward, config)? {
-                return Ok(result);
-            }
-        }
-
-        self.forward_gather(forward, config)
+        self.routed_experts(config).forward(
+            forward.routed_input(),
+            mistralrs_quant::routed_moe::RoutedActivation {
+                fused: crate::ops::glu_activation_type(config.act),
+                fallback: &config.act,
+            },
+        )
     }
 
-    #[cfg(feature = "cuda")]
-    fn grouped_lora_preserves_route_order(&self) -> bool {
-        self.fused_gate_proj
-            .get_qtensor()
-            .zip(self.fused_up_proj.get_qtensor())
-            .is_some_and(|(gate, up)| {
-                gate.dtype() == up.dtype() && mistralrs_quant::supports_mmq(gate.dtype())
-            })
-    }
-
-    #[cfg(feature = "cuda")]
-    pub(super) fn select_cuda_fast_path(forward: &MoEForward) -> Option<MoECudaFastPath> {
-        if !forward.xs.device().is_cuda() {
-            return None;
-        }
-
-        if !forward.shape.phase.is_prefill()
-            || forward.shape.num_tokens < GROUPED_PREFILL_MIN_TOKENS
-        {
-            Some(MoECudaFastPath::Decode)
-        } else {
-            Some(MoECudaFastPath::GroupedPrefill)
-        }
-    }
-
-    #[cfg(feature = "cuda")]
-    fn prefers_small_grouped_mmq(&self, forward: &MoEForward, config: MoEForwardConfig) -> bool {
-        use candle_core::cuda::cudarc::driver::sys::CUdevice_attribute;
-        use candle_core::quantized::GgmlDType;
-
-        if !(SMALL_GROUPED_MMQ_MIN_TOKENS..GROUPED_PREFILL_MIN_TOKENS)
-            .contains(&forward.shape.num_tokens)
-            || forward.shape.seq_len <= 1
-            || forward.original_dtype != DType::BF16
-            || !matches!(config.act, Activation::Silu)
-            || self.sharded
-            || forward.lora.is_some()
-            || config.num_experts != SMALL_GROUPED_MMQ_GATE_UP_SHAPE[0]
-            || config.num_experts_per_tok != SMALL_GROUPED_MMQ_TOPK
-            || forward.shape.hidden_dim != SMALL_GROUPED_MMQ_GATE_UP_SHAPE[2]
-        {
-            return false;
-        }
-        let projections = [
-            &self.fused_gate_proj,
-            &self.fused_up_proj,
-            &self.fused_down_proj,
-        ];
-        let expected = [
-            (GgmlDType::Q4K, SMALL_GROUPED_MMQ_GATE_UP_SHAPE),
-            (GgmlDType::Q4K, SMALL_GROUPED_MMQ_GATE_UP_SHAPE),
-            (GgmlDType::Q4_1, SMALL_GROUPED_MMQ_DOWN_SHAPE),
-        ];
-        if !projections
-            .into_iter()
-            .zip(expected)
-            .all(|(projection, (dtype, shape))| {
-                !projection.has_bias()
-                    && !projection.is_dynamic_lora_active()
-                    && projection.stats_snapshot().is_none()
-                    && projection.get_qtensor().is_some_and(|weight| {
-                        weight.dtype() == dtype && weight.shape().dims() == shape.as_slice()
-                    })
-            })
-        {
-            return false;
-        }
-        let Ok(device) = forward.xs.device().as_cuda_device() else {
-            return false;
-        };
-        let stream = device.cuda_stream();
-        let context = stream.context();
-        context
-            .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR)
-            .is_ok_and(|major| major == SMALL_GROUPED_MMQ_COMPUTE_CAPABILITY.0)
-            && context
-                .attribute(CUdevice_attribute::CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR)
-                .is_ok_and(|minor| minor == SMALL_GROUPED_MMQ_COMPUTE_CAPABILITY.1)
-    }
-
-    #[cfg(feature = "cuda")]
-    pub(super) fn forward_cuda(
-        &self,
-        forward: &MoEForward,
-        config: MoEForwardConfig,
-    ) -> Result<Option<Tensor>> {
-        let path = match Self::select_cuda_fast_path(forward) {
-            Some(MoECudaFastPath::Decode) if self.prefers_small_grouped_mmq(forward, config) => {
-                SMALL_GROUPED_MMQ_LOG.call_once(|| {
-                    tracing::info!(
-                        min_tokens = SMALL_GROUPED_MMQ_MIN_TOKENS,
-                        max_tokens = GROUPED_PREFILL_MIN_TOKENS - 1,
-                        "Using grouped GGUF MoE for small batches"
-                    );
-                });
-                Some(MoECudaFastPath::GroupedPrefill)
-            }
-            path => path,
-        };
-        match path {
-            Some(MoECudaFastPath::Decode) => self
-                .forward_decode(forward, config)
-                .map_err(|err| err.context("moe experts fast decode")),
-            Some(MoECudaFastPath::GroupedPrefill) => self
-                .forward_grouped(forward, config)
-                .map_err(|err| err.context("moe experts fast grouped")),
-            None => Ok(None),
-        }
-    }
-
-    fn uses_flattened_gather(&self, device: &Device) -> bool {
-        device.is_cuda()
-            || [
-                &self.fused_gate_proj,
-                &self.fused_up_proj,
-                &self.fused_down_proj,
-            ]
-            .iter()
-            .any(|projection| projection.name() == "NVFP4")
-    }
-
-    pub(super) fn forward_gather(
-        &self,
-        forward: &MoEForward,
-        config: MoEForwardConfig,
-    ) -> Result<Tensor> {
-        // Routed stats are fed here: only the block knows the token-to-expert pairing.
-        let ids = forward.topk_ids;
-        self.fused_gate_proj
-            .process_routed_stats(forward.xs_flat, ids)?;
-        self.fused_up_proj
-            .process_routed_stats(forward.xs_flat, ids)?;
-        let ys = if self.uses_flattened_gather(forward.xs.device()) {
-            let xs =
-                forward
-                    .xs_flat
-                    .reshape((forward.shape.num_tokens, 1, forward.shape.hidden_dim))?;
-            let gate = self.fused_gate_proj.gather_forward(&xs, forward.topk_ids)?;
-            let up = self.fused_up_proj.gather_forward(&xs, forward.topk_ids)?;
-            let down_in = (up * gate.apply(&config.act)?)?;
-            self.fused_down_proj.process_routed_stats(&down_in, ids)?;
-            self.fused_down_proj
-                .gather_forward(&down_in, forward.topk_ids)?
-        } else {
-            let xs = forward.xs.reshape((
-                forward.shape.batch_size,
-                forward.shape.seq_len,
-                1,
-                1,
-                forward.shape.hidden_dim,
-            ))?;
-            let indices = forward.topk_ids.reshape((
-                forward.shape.batch_size,
-                forward.shape.seq_len,
-                config.num_experts_per_tok,
-            ))?;
-            let gate = self.fused_gate_proj.gather_forward(&xs, &indices)?;
-            let up = self.fused_up_proj.gather_forward(&xs, &indices)?;
-            let down_in = (up * gate.apply(&config.act)?)?;
-            let inter = down_in.dim(D::Minus1)?;
-            self.fused_down_proj.process_routed_stats(
-                &down_in.reshape((forward.shape.num_tokens, config.num_experts_per_tok, inter))?,
-                ids,
-            )?;
-            let xs = self.fused_down_proj.gather_forward(&down_in, &indices)?;
-            xs.squeeze(D::Minus2)?.reshape((
-                forward.shape.num_tokens,
-                config.num_experts_per_tok,
-                forward.shape.hidden_dim,
-            ))?
-        };
-
-        ys.to_dtype(DType::F32)?
-            .broadcast_mul(&forward.topk_weights.unsqueeze(D::Minus1)?)?
-            .sum(D::Minus2)?
-            .to_dtype(forward.original_dtype)
-    }
-
-    fn forward_gather_lora(
-        &self,
-        forward: &MoEForward,
-        config: MoEForwardConfig,
-    ) -> Result<Tensor> {
-        let ids = forward.topk_ids;
-        let num_tokens = forward.shape.num_tokens;
-        let top_k = config.num_experts_per_tok;
-        self.fused_gate_proj
-            .process_routed_stats(forward.xs_flat, ids)?;
-        self.fused_up_proj
-            .process_routed_stats(forward.xs_flat, ids)?;
-
-        let (gather_input, gather_ids) = if self.uses_flattened_gather(forward.xs.device()) {
-            (
-                forward
-                    .xs_flat
-                    .reshape((num_tokens, 1, forward.shape.hidden_dim))?,
-                ids.clone(),
-            )
-        } else {
-            (
-                forward.xs.reshape((
-                    forward.shape.batch_size,
-                    forward.shape.seq_len,
-                    1,
-                    1,
-                    forward.shape.hidden_dim,
-                ))?,
-                ids.reshape((forward.shape.batch_size, forward.shape.seq_len, top_k))?,
-            )
-        };
-        let gate_base = self
-            .fused_gate_proj
-            .gather_forward(&gather_input, &gather_ids)?
-            .to_dtype(forward.xs_flat.dtype())?;
-        let inter = gate_base.dim(D::Minus1)?;
-        let gate_base = gate_base.reshape((num_tokens, top_k, inter))?;
-        let up_base = self
-            .fused_up_proj
-            .gather_forward(&gather_input, &gather_ids)?
-            .to_dtype(forward.xs_flat.dtype())?
-            .reshape((num_tokens, top_k, inter))?;
-        let lora = forward.lora.as_ref().expect("LoRA path requires execution");
-        let gate_up_base = Tensor::cat(&[&gate_base, &up_base], D::Minus1)?;
-        let (gate, up) = lora.add_gate_up_delta_owned(forward.xs_flat, gate_up_base, ids)?;
-        let down_input = crate::ops::mul_and_act(&gate, &up, config.act)?;
-        self.fused_down_proj
-            .process_routed_stats(&down_input, ids)?;
-        let down_base = if self.uses_flattened_gather(forward.xs.device()) {
-            self.fused_down_proj.gather_forward(&down_input, ids)?
-        } else {
-            self.fused_down_proj.gather_forward(
-                &down_input.reshape((
-                    forward.shape.batch_size,
-                    forward.shape.seq_len,
-                    top_k,
-                    inter,
-                ))?,
-                &gather_ids,
-            )?
-        }
-        .to_dtype(down_input.dtype())?
-        .reshape((num_tokens, top_k, forward.shape.hidden_dim))?;
-        let down = lora.add_delta_owned(
-            LoraExpertProjection::Down,
-            &down_input,
-            down_base,
-            ids,
-            None,
-            LoraExpertInputMode::RoutedRows,
-        )?;
-        down.to_dtype(DType::F32)?
-            .broadcast_mul(&forward.topk_weights.unsqueeze(D::Minus1)?)?
-            .sum(D::Minus2)?
-            .to_dtype(forward.original_dtype)
-    }
-
-    #[cfg(feature = "cuda")]
-    fn forward_decode_lora(
-        &self,
-        forward: &MoEForward,
-        config: MoEForwardConfig,
-    ) -> Result<Option<Tensor>> {
-        let Some(gate_qt) = self.fused_gate_proj.get_qtensor() else {
-            return Ok(None);
-        };
-        let Some(up_qt) = self.fused_up_proj.get_qtensor() else {
-            return Ok(None);
-        };
-        let Some(down_qt) = self.fused_down_proj.get_qtensor() else {
-            return Ok(None);
-        };
-        let dev = forward.xs_flat.device().as_cuda_device()?;
-        let topk_ids_flat = forward.topk_ids.flatten_all()?.contiguous()?;
-        let (ids_storage, ids_layout) = topk_ids_flat.storage_and_layout();
-        let candle_core::Storage::Cuda(ids_cuda) = &*ids_storage else {
-            return Ok(None);
-        };
-        if ids_layout.start_offset() != 0 {
-            return Ok(None);
-        }
-        let ids = ids_cuda.as_cuda_slice::<u32>()?;
-        let weights = mistralrs_quant::IndexedMoeLoraWeights::new(&gate_qt, &up_qt, &down_qt);
-        let routing = mistralrs_quant::IndexedMoeRouting::new(
-            ids,
-            forward.shape.num_tokens,
-            config.num_experts_per_tok,
-            config.num_experts,
-            dev,
-        );
-        let Some(decode) = mistralrs_quant::IndexedMoeLoraDecode::new(weights, routing)? else {
-            return Ok(None);
-        };
-        let Some(gate_up) = decode.gate_up(forward.xs_flat)? else {
-            return Ok(None);
-        };
-
-        let lora = forward.lora.as_ref().expect("LoRA path requires execution");
-        let gate_up =
-            lora.add_gate_up_delta_combined_owned(forward.xs_flat, gate_up, forward.topk_ids)?;
-        let intermediate = gate_up.dim(D::Minus1)? / 2;
-        let down_input = crate::ops::split_mul_and_act(&gate_up, intermediate, config.act)?;
-        let down_input_flat = down_input.reshape((
-            forward.shape.num_tokens * config.num_experts_per_tok,
-            intermediate,
-        ))?;
-        let Some(down_base) = decode.down(&down_input_flat)? else {
-            candle_core::bail!("indexed MoE LoRA down projection rejected a supported dtype");
-        };
-        let down = lora.add_delta_owned(
-            LoraExpertProjection::Down,
-            &down_input,
-            down_base,
-            forward.topk_ids,
-            None,
-            LoraExpertInputMode::RoutedRows,
-        )?;
-
-        let down = down.reshape((
-            forward.shape.num_tokens * config.num_experts_per_tok,
-            forward.shape.hidden_dim,
-        ))?;
-        let output = mistralrs_quant::moe_weighted_reduce_flat_same_dtype(
-            &down,
-            forward.topk_weights,
-            forward.shape.num_tokens,
-            config.num_experts_per_tok,
-            dev,
-        )?;
-        Ok(Some(output.to_dtype(forward.original_dtype)?))
-    }
-
-    /// Fused MoE decode path for CUDA. Returns Ok(Some) on success, Ok(None) to fall back.
-    #[cfg(feature = "cuda")]
-    pub(super) fn forward_decode(
-        &self,
-        forward: &MoEForward,
-        config: MoEForwardConfig,
-    ) -> Result<Option<Tensor>> {
-        use candle_core::cuda::cudarc::driver::DevicePtr;
-
-        let dev = forward.xs_flat.device().as_cuda_device()?;
-
-        // Get QTensors - bail to fallback if not quantized
-        let gate_qt = match self.fused_gate_proj.get_qtensor() {
-            Some(qt) => qt,
-            None => return Ok(None),
-        };
-        let up_qt = match self.fused_up_proj.get_qtensor() {
-            Some(qt) => qt,
-            None => return Ok(None),
-        };
-        let down_qt = match self.fused_down_proj.get_qtensor() {
-            Some(qt) => qt,
-            None => return Ok(None),
-        };
-
-        // Get topk_ids as contiguous u32 CudaSlice
-        let topk_ids_flat = forward.topk_ids.flatten_all()?.contiguous()?;
-        let (ti_storage, ti_layout) = topk_ids_flat.storage_and_layout();
-        let ti_cuda = match &*ti_storage {
-            candle_core::Storage::Cuda(c) => c,
-            _ => return Ok(None),
-        };
-        let ti_u32_slice = ti_cuda.as_cuda_slice::<u32>()?;
-        assert!(ti_layout.start_offset() == 0, "expected contiguous tensor");
-
-        // Get topk_weights as contiguous f32 CudaSlice
-        let tw_f32 = forward
-            .topk_weights
-            .flatten_all()?
-            .to_dtype(DType::F32)?
-            .contiguous()?;
-        let (tw_storage, tw_layout) = tw_f32.storage_and_layout();
-        let tw_cuda = match &*tw_storage {
-            candle_core::Storage::Cuda(c) => c,
-            _ => return Ok(None),
-        };
-        let tw_slice = tw_cuda.as_cuda_slice::<f32>()?;
-        let tw_ptr = tw_slice
-            .slice(tw_layout.start_offset()..)
-            .device_ptr(tw_slice.stream())
-            .0 as *const f32;
-
-        // Map activation to CUDA kernel act_type
-        let act_type = match config.act {
-            Activation::GeluPytorchTanh => mistralrs_quant::ACT_GELU_PYTORCH_TANH,
-            Activation::Silu | Activation::Swish => mistralrs_quant::ACT_SILU,
-            _ => return Ok(None),
-        };
-
-        // SAFETY: tw_ptr is a valid device pointer obtained from the topk_weights tensor above.
-        let result = unsafe {
-            mistralrs_quant::indexed_moe_fused_decode(
-                &gate_qt,
-                &up_qt,
-                &down_qt,
-                forward.xs_flat,
-                ti_u32_slice,
-                tw_ptr,
-                forward.shape.num_tokens,
-                config.num_experts_per_tok,
-                act_type,
-                dev,
-            )?
-        };
-
-        Ok(Some(result.to_dtype(forward.original_dtype)?))
-    }
-
-    /// Grouped MoE forward for CUDA prefill. Returns Ok(Some) on success, Ok(None) to fall back.
-    #[cfg(feature = "cuda")]
-    pub(super) fn forward_grouped(
-        &self,
-        forward: &MoEForward,
-        config: MoEForwardConfig,
-    ) -> Result<Option<Tensor>> {
-        let topk = config.num_experts_per_tok;
-        let num_experts = config.num_experts;
-        let total_assignments = forward.shape.num_tokens * topk;
-
-        let dev = forward.xs_flat.device().as_cuda_device()?;
-
-        // Get topk_ids as contiguous u32 CudaSlice
-        let topk_ids_flat = forward.topk_ids.flatten_all()?.contiguous()?;
-        let (ti_storage, ti_layout) = topk_ids_flat.storage_and_layout();
-        let ti_cuda = match &*ti_storage {
-            candle_core::Storage::Cuda(c) => c,
-            _ => return Ok(None),
-        };
-        let ti_u32_slice = ti_cuda.as_cuda_slice::<u32>()?;
-        assert!(ti_layout.start_offset() == 0, "expected contiguous tensor");
-
-        // Build dispatch tables on GPU (no CPU-GPU sync)
-        // moe_dispatch_build takes u32 and casts to i32 internally for the CUDA kernel
-        let (expert_bounds, sorted_token_ids, sorted_source_ids) =
-            mistralrs_quant::moe_dispatch_build(
-                ti_u32_slice,
-                total_assignments,
-                num_experts,
-                topk,
-                dev,
-            )?;
-
-        // Use the pre-quantized Q8_0 grouped kernel path
-        let gate_qt = match self.fused_gate_proj.get_qtensor() {
-            Some(qt) => qt,
-            None => return Ok(None),
-        };
-        let up_qt = match self.fused_up_proj.get_qtensor() {
-            Some(qt) => qt,
-            None => return Ok(None),
-        };
-        let down_qt = match self.fused_down_proj.get_qtensor() {
-            Some(qt) => qt,
-            None => return Ok(None),
-        };
-
-        let use_mmq_gate_up =
-            gate_qt.dtype() == up_qt.dtype() && mistralrs_quant::supports_mmq(gate_qt.dtype());
-        if forward.lora.is_some() && !use_mmq_gate_up {
-            return Ok(None);
-        }
-
-        let gate_up = if use_mmq_gate_up {
-            GroupedGateUp::Packed(mistralrs_quant::grouped_moe_mmq_pair_packed(
-                &gate_qt,
-                &up_qt,
-                forward.xs_flat,
-                &sorted_source_ids,
-                &sorted_token_ids,
-                &expert_bounds,
-                total_assignments,
-                topk,
-                num_experts,
-                dev,
-            )?)
-        } else {
-            // Quantize input to Q8_1 ONCE, shared between gate and up.
-            // quantize_input_q8_1 accepts BF16/F16/F32 directly (no conversion needed).
-            let (input_q8, k, k_padded) =
-                mistralrs_quant::quantize_input_q8_1(forward.xs_flat, dev)?;
-
-            // Gate projection using pre-quantized input
-            let gate = mistralrs_quant::grouped_moe_gemm_prequantized(
-                &gate_qt,
-                &input_q8,
-                k,
-                k_padded,
-                &expert_bounds,
-                &sorted_token_ids,
-                None,
-                total_assignments,
-                topk,
-                num_experts,
-                1,
-                dev,
-            )?;
-
-            // Up projection reusing same pre-quantized input
-            let up = mistralrs_quant::grouped_moe_gemm_prequantized(
-                &up_qt,
-                &input_q8,
-                k,
-                k_padded,
-                &expert_bounds,
-                &sorted_token_ids,
-                None,
-                total_assignments,
-                topk,
-                num_experts,
-                1,
-                dev,
-            )?;
-
-            drop(input_q8);
-            GroupedGateUp::SortedPair { gate, up }
-        };
-
-        let lora_activated = if let Some(lora) = forward.lora.as_ref() {
-            let GroupedGateUp::Packed(gate_up) = &gate_up else {
-                return Ok(None);
-            };
-            let gate_up = lora.add_gate_up_delta_combined_owned(
-                forward.xs_flat,
-                gate_up.to_dtype(forward.original_dtype)?,
-                forward.topk_ids,
-            )?;
-            let intermediate = gate_up.dim(D::Minus1)? / 2;
-            Some(crate::ops::split_mul_and_act(
-                &gate_up,
-                intermediate,
-                config.act,
-            )?)
-        } else {
-            None
-        };
-
-        // Get topk_weights pointer
-        use candle_core::cuda::cudarc::driver::DevicePtr;
-        let tw_f32 = forward
-            .topk_weights
-            .flatten_all()?
-            .to_dtype(DType::F32)?
-            .contiguous()?;
-        let (tw_storage, tw_layout) = tw_f32.storage_and_layout();
-        let tw_cuda = match &*tw_storage {
-            candle_core::Storage::Cuda(c) => c,
-            _ => return Ok(None),
-        };
-        let tw_slice = tw_cuda.as_cuda_slice::<f32>()?;
-        let tw_ptr = tw_slice
-            .slice(tw_layout.start_offset()..)
-            .device_ptr(tw_slice.stream())
-            .0 as *const f32;
-
-        let glu_activation = match config.act {
-            Activation::Silu | Activation::Swish => Some(mistralrs_quant::GluActivationType::Silu),
-            Activation::NewGelu | Activation::GeluPytorchTanh => {
-                Some(mistralrs_quant::GluActivationType::Gelu)
-            }
-            Activation::Gelu => Some(mistralrs_quant::GluActivationType::GeluErf),
-            Activation::Relu => Some(mistralrs_quant::GluActivationType::Relu),
-            _ => None,
-        };
-
-        let down = if let (true, Some(glu_activation)) = (
-            mistralrs_quant::supports_mmq(down_qt.dtype()),
-            glu_activation,
-        ) {
-            if let (Some(lora), Some(activated)) = (forward.lora.as_ref(), lora_activated.as_ref())
-            {
-                let intermediate = activated.dim(D::Minus1)?;
-                let activated_flat = activated.reshape((total_assignments, intermediate))?;
-                let down_assignments = mistralrs_quant::grouped_moe_mmq(
-                    &down_qt,
-                    &activated_flat,
-                    &sorted_token_ids,
-                    &sorted_token_ids,
-                    &expert_bounds,
-                    total_assignments,
-                    forward.shape.num_tokens,
-                    num_experts,
-                    dev,
-                )?
-                .to_dtype(activated.dtype())?
-                .reshape((
-                    forward.shape.num_tokens,
-                    topk,
-                    forward.shape.hidden_dim,
-                ))?;
-                let down = lora.add_delta_owned(
-                    LoraExpertProjection::Down,
-                    activated,
-                    down_assignments,
-                    forward.topk_ids,
-                    None,
-                    LoraExpertInputMode::RoutedRows,
-                )?;
-                mistralrs_quant::moe_weighted_reduce_flat_same_dtype(
-                    &down.reshape((total_assignments, forward.shape.hidden_dim))?,
-                    forward.topk_weights,
-                    forward.shape.num_tokens,
-                    topk,
-                    dev,
-                )?
-            } else {
-                let down_assignments = match &gate_up {
-                    GroupedGateUp::Packed(gate_up) => {
-                        mistralrs_quant::grouped_moe_mmq_from_glu_packed(
-                            &down_qt,
-                            gate_up,
-                            &sorted_token_ids,
-                            &sorted_token_ids,
-                            &expert_bounds,
-                            total_assignments,
-                            forward.shape.num_tokens,
-                            num_experts,
-                            glu_activation as i32,
-                            dev,
-                        )?
-                    }
-                    GroupedGateUp::SortedPair { gate, up } => {
-                        mistralrs_quant::grouped_moe_mmq_from_glu_sorted_pair(
-                            &down_qt,
-                            gate,
-                            up,
-                            &sorted_token_ids,
-                            &expert_bounds,
-                            total_assignments,
-                            forward.shape.num_tokens,
-                            num_experts,
-                            glu_activation as i32,
-                            dev,
-                        )?
-                    }
-                };
-                if forward.original_dtype == DType::BF16 {
-                    unsafe {
-                        mistralrs_quant::moe_weighted_reduce_flat_bf16(
-                            &down_assignments,
-                            tw_ptr,
-                            forward.shape.num_tokens,
-                            topk,
-                            dev,
-                        )?
-                    }
-                } else {
-                    unsafe {
-                        mistralrs_quant::moe_weighted_reduce_flat(
-                            &down_assignments,
-                            tw_ptr,
-                            forward.shape.num_tokens,
-                            topk,
-                            dev,
-                        )?
-                    }
-                }
-            }
-        } else {
-            let (activated, down_input_dim1) = match &lora_activated {
-                Some(activated) => (
-                    activated.reshape((total_assignments, activated.dim(D::Minus1)?))?,
-                    2,
-                ),
-                None => match &gate_up {
-                    GroupedGateUp::Packed(gate_up) => (
-                        crate::ops::split_mul_and_act(
-                            gate_up,
-                            gate_up.dim(D::Minus1)? / 2,
-                            config.act,
-                        )?,
-                        2,
-                    ),
-                    GroupedGateUp::SortedPair { gate, up } => {
-                        (crate::ops::mul_and_act(gate, up, config.act)?, 0)
-                    }
-                },
-            };
-
-            let (down_input_q8, down_k, down_k_padded) =
-                mistralrs_quant::quantize_input_q8_1(&activated, dev)?;
-
-            let down = mistralrs_quant::grouped_moe_gemm_prequantized(
-                &down_qt,
-                &down_input_q8,
-                down_k,
-                down_k_padded,
-                &expert_bounds,
-                &sorted_token_ids,
-                Some((tw_ptr, 0)),
-                total_assignments,
-                topk,
-                num_experts,
-                down_input_dim1,
-                dev,
-            )?;
-
-            if let (Some(lora), Some(activated)) = (forward.lora.as_ref(), lora_activated.as_ref())
-            {
-                let delta_base = Tensor::zeros(
-                    (forward.shape.num_tokens, topk, forward.shape.hidden_dim),
-                    activated.dtype(),
-                    activated.device(),
-                )?;
-                let delta = lora.add_delta_owned(
-                    LoraExpertProjection::Down,
-                    activated,
-                    delta_base,
-                    forward.topk_ids,
-                    Some(forward.topk_weights),
-                    LoraExpertInputMode::RoutedRows,
-                )?;
-                (down.to_dtype(DType::F32)? + delta.to_dtype(DType::F32)?.sum(D::Minus2)?)?
-            } else {
-                down
-            }
-        };
-
-        if down.dtype() == forward.original_dtype {
-            Ok(Some(down))
-        } else {
-            Ok(Some(down.to_dtype(forward.original_dtype)?))
-        }
+    #[cfg(test)]
+    fn forward_reference(&self, forward: &MoEForward, config: MoEForwardConfig) -> Result<Tensor> {
+        self.routed_experts(config).gather(
+            forward.routed_input(),
+            mistralrs_quant::routed_moe::RoutedActivation {
+                fused: crate::ops::glu_activation_type(config.act),
+                fallback: &config.act,
+            },
+        )
     }
 }
 
@@ -1983,7 +1214,6 @@ mod nvfp4_tests {
         let ids = Tensor::new(&[[0u32, 1], [1, 0]], device)?;
         let weights = Tensor::new(&[[0.25f32, 0.75], [0.75, 0.25]], device)?;
         let forward = MoEForward {
-            xs: &xs,
             xs_flat: &xs_flat,
             topk_weights: &weights,
             topk_ids: &ids,
@@ -2003,8 +1233,110 @@ mod nvfp4_tests {
                 fused_down_proj: projection([1.0, 2.0], quantized_projection == 2)?,
                 sharded: false,
             };
-            let output = experts.forward_gather(&forward, config)?.to_vec2::<f32>()?;
+            let output = experts
+                .forward_reference(&forward, config)?
+                .to_vec2::<f32>()?;
             assert_eq!(output, vec![vec![204.0; FEATURES], vec![816.0; FEATURES]]);
+        }
+        Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "metal"))]
+mod metal_tests {
+    use super::*;
+    use crate::layers::Activation;
+    use crate::moe::experts::forward::{MoEForwardPhase, MoEForwardShape};
+
+    fn tensor(shape: impl Into<candle_core::Shape>, phase: f32) -> Result<Tensor> {
+        let shape = shape.into();
+        let values = (0..shape.elem_count())
+            .map(|index| {
+                let index = u16::try_from(index % 4096).expect("index is bounded");
+                (f32::from(index) * 0.017 + phase).sin() * 0.08
+            })
+            .collect::<Vec<_>>();
+        Tensor::from_vec(values, shape, &Device::Cpu)
+    }
+
+    #[test]
+    fn metal_sorted_afq_moe_matches_gather_pipeline() -> Result<()> {
+        // 128-wide experts exercise the gather route that previously picked a missing bs_qmv_quad kernel.
+        for (hidden, intermediate) in [(512, 512), (128, 256)] {
+            sorted_matches_gather(hidden, intermediate)?;
+        }
+        Ok(())
+    }
+
+    fn sorted_matches_gather(hidden: usize, intermediate: usize) -> Result<()> {
+        use mistralrs_quant::{AfqBits, AfqGroupSize, AfqLayer};
+
+        const EXPERTS: usize = 4;
+        const TOKENS: usize = 40;
+        const TOPK: usize = 2;
+
+        let device = Device::new_metal(0)?;
+        let afq = |shape: (usize, usize, usize), phase: f32| -> Result<Arc<dyn QuantMethod>> {
+            let weight = tensor(shape, phase)?
+                .to_dtype(DType::BF16)?
+                .to_device(&device)?;
+            Ok(Arc::new(AfqLayer::new(QuantMethodConfig::Afq {
+                weight,
+                bias: None,
+                bits: AfqBits::Four,
+                group_size: AfqGroupSize::Med,
+            })?))
+        };
+        let fast = FastExpertsWeights {
+            fused_gate_proj: afq((EXPERTS, intermediate, hidden), 0.1)?,
+            fused_up_proj: afq((EXPERTS, intermediate, hidden), 0.7)?,
+            fused_down_proj: afq((EXPERTS, hidden, intermediate), 1.3)?,
+            sharded: false,
+        };
+
+        let xs = (tensor((TOKENS, 1, hidden), 3.1)? * 10.0)?
+            .to_dtype(DType::BF16)?
+            .to_device(&device)?;
+        let xs_flat = xs.reshape((TOKENS, hidden))?;
+        let ids = (0..TOKENS * TOPK)
+            .map(|i| u32::try_from((i * 7 + i / TOPK) % EXPERTS).expect("small"))
+            .collect::<Vec<_>>();
+        let topk_ids = Tensor::from_slice(&ids, (TOKENS, TOPK), &device)?;
+        let topk_weights = Tensor::from_vec(
+            (0..TOKENS * TOPK)
+                .map(|i| if i % 2 == 0 { 0.6f32 } else { 0.4 })
+                .collect::<Vec<_>>(),
+            (TOKENS, TOPK),
+            &device,
+        )?;
+        let forward = MoEForward {
+            xs_flat: &xs_flat,
+            topk_weights: &topk_weights,
+            topk_ids: &topk_ids,
+            original_dtype: DType::BF16,
+            shape: MoEForwardShape {
+                batch_size: TOKENS,
+                seq_len: 1,
+                hidden_dim: hidden,
+                num_tokens: TOKENS,
+                phase: MoEForwardPhase::Prefill,
+            },
+            lora: None,
+        };
+        for act in [Activation::Silu, Activation::GeluPytorchTanh] {
+            let config = MoEForwardConfig {
+                num_experts: EXPERTS,
+                num_experts_per_tok: TOPK,
+                act,
+            };
+            let actual = fast.forward_impl(&forward, config)?;
+            let expected = fast.forward_reference(&forward, config)?;
+            let expected_f32 = expected.to_dtype(DType::F32)?;
+            let error = ((actual.to_dtype(DType::F32)? - &expected_f32)?.abs()?
+                / expected_f32.abs()?.maximum(0.05)?)?
+            .max_all()?
+            .to_scalar::<f32>()?;
+            assert!(error < 3e-2, "{act:?}: relative error {error}");
         }
         Ok(())
     }

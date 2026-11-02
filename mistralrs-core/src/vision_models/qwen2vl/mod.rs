@@ -36,7 +36,7 @@ mod inputs_processor;
 mod text;
 mod vision;
 
-pub(crate) use config::Config;
+pub(crate) use config::{AttentionType, Config};
 pub(crate) use inputs_processor::{
     apply_mrope_position_deltas, expand_media_placeholders, media_data_cached_offset,
     packed_layout, prompt_mrope, replace_first_occurrence, select_media_batch, select_media_view,

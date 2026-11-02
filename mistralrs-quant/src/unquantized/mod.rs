@@ -105,6 +105,11 @@ impl UnquantLinear {
 }
 
 impl QuantMethod for UnquantLinear {
+    #[cfg(feature = "metal")]
+    fn prepare_metal_kernels(&self, _activation_dtype: DType) -> Result<()> {
+        crate::metal_kernels::prepare_dense(&self.w)
+    }
+
     fn new(method: QuantMethodConfig) -> candle_core::Result<Self>
     where
         Self: Sized,
@@ -120,11 +125,16 @@ impl QuantMethod for UnquantLinear {
             | QuantMethodConfig::PerTensorFP8 { .. }
             | QuantMethodConfig::Afq { .. }
             | QuantMethodConfig::MXFP4 { .. } => unreachable!(),
-            QuantMethodConfig::Unquantized(l) => Ok(Self {
-                w: l.weight().clone(),
-                b: l.bias().cloned(),
-                stats: ImatrixLayerStats::empty(),
-            }),
+            QuantMethodConfig::Unquantized(l) => {
+                let layer = Self {
+                    w: l.weight().clone(),
+                    b: l.bias().cloned(),
+                    stats: ImatrixLayerStats::empty(),
+                };
+                #[cfg(feature = "metal")]
+                layer.prepare_metal_kernels(layer.w.dtype())?;
+                Ok(layer)
+            }
         }
     }
 
@@ -132,11 +142,17 @@ impl QuantMethod for UnquantLinear {
         Ok(self.w.clone())
     }
 
-    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
-        let mut final_dims = ids.dims().to_vec();
-        final_dims.push(self.w.dim(D::Minus1)?);
-        let ids = ids.flatten_all()?;
-        self.w.index_select(&ids, 0)?.reshape(final_dims)
+    fn embedding_table(&self) -> Option<crate::EmbeddingTable<'_>> {
+        let (rows, columns) = self.w.dims2().ok()?;
+        (matches!(self.w.dtype(), DType::F32 | DType::F16 | DType::BF16) && self.w.is_contiguous())
+            .then(|| {
+                crate::EmbeddingTable::new(
+                    crate::embedding::RowCodec::Dense(self.w.dtype()),
+                    rows,
+                    columns,
+                    &self.w,
+                )
+            })
     }
 
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
@@ -144,13 +160,13 @@ impl QuantMethod for UnquantLinear {
         maybe_init_cublas_lt_wrapper(a.device().clone());
         let legacy_bf16 = use_legacy_bf16_fallback(a);
 
+        self.stats.process(a)?;
+
         // Try custom GEMV for single-token decode (batch_size=1)
         #[cfg(feature = "cuda")]
         if !legacy_bf16 && crate::gemv::should_use_gemv(a, &self.w) {
             return crate::gemv::gemv(a, &self.w, self.b.as_ref());
         }
-
-        self.stats.process(a)?;
 
         #[cfg(feature = "cuda")]
         if crate::gemv::should_use_wide_gemv(a, &self.w) {
@@ -220,7 +236,7 @@ impl QuantMethod for UnquantLinear {
                     #[cfg(not(feature = "accelerate"))]
                     {
                         let matmul_result = a.matmul(&w.t()?)?;
-                        matmul_result.broadcast_add(&b)
+                        crate::elementwise::broadcast_add(&matmul_result, &b)
                     }
                 }
             }
@@ -397,7 +413,7 @@ impl QuantMethod for UnquantLinear {
     fn plan_isq(&self, request: &crate::IsqRequest) -> Result<crate::IsqPlanParams> {
         if self.w.rank() == 3 && request.ty.is_some_and(|ty| !ty.supports_stacked_gather()) {
             candle_core::bail!(
-                "Cannot quantize stacked expert weights to {}: that target does not support stacked expert gather. Use a Q*K/Q*_0/Q*_1 target, AFQ, or omit ISQ.",
+                "Cannot quantize stacked expert weights to {}: that target does not support stacked expert gather.",
                 request.ty.expect("rank-3 rejection requires an ISQ target")
             );
         }
@@ -611,6 +627,10 @@ impl QuantMethod for UnquantLinear {
 
     fn unquant_weight_bias(&self) -> Option<(Tensor, Option<Tensor>)> {
         Some((self.w.clone(), self.b.clone()))
+    }
+
+    fn unquant_forward_weight(&self) -> Option<Tensor> {
+        Some(self.w.clone())
     }
 
     fn begin_track_stats(&self) -> Result<()> {

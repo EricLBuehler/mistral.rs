@@ -23,45 +23,43 @@ The host needs the NVIDIA Container Toolkit; see [NVIDIA's install guide](https:
 
 ## Published tags
 
-All images live at `ghcr.io/ericlbuehler/mistral.rs` ([package page](https://github.com/EricLBuehler/mistral.rs/pkgs/container/mistral.rs)).
+All images live at `ghcr.io/ericlbuehler/mistral.rs` ([package page](https://github.com/EricLBuehler/mistral.rs/pkgs/container/mistral.rs)). Each one has a `-latest` tag that follows the newest release and an `X.Y.Z` tag, such as `cpu-0.9.5`, that stays on one release.
 
-- CPU: `latest` (alias of `cpu-latest`), `cpu-latest`, `cpu-X.Y.Z`.
-- CUDA: `cuda128-sm{cc}-latest`, `cuda129-sm121-latest`, `cuda130-sm{cc}-latest`, `cuda131-sm{cc}-latest`, `cuda132-sm{cc}-latest`, `cuda133-sm90-latest` and matching `X.Y.Z` version tags.
-- CUDA legacy aliases: `cuda-sm{cc}-latest`, `cuda-sm{cc}-X.Y.Z` point at the `cuda131` image.
-
-Choose the CUDA lane from the CUDA version shown by `nvidia-smi`:
-
-| Driver reports | Use |
+| Image | Tags |
 |---|---|
-| CUDA 13.3+ on Hopper / `sm90` | `cuda133-sm90` |
-| CUDA 13.2+ on Ampere/Ada / `sm80`, `sm86`, `sm89` | `cuda132-sm{cc}` |
-| CUDA 13.2+ on Blackwell / `sm100`, `sm120`, `sm121` | `cuda132-sm{cc}` |
-| CUDA 13.1+ on Blackwell / `sm100`, `sm120`, `sm121` | `cuda131-sm{cc}` (no cuTile) |
-| CUDA 13.0+ | `cuda130-sm{cc}` |
-| CUDA 12.9+ on GB10 / `sm121` | `cuda129-sm121` |
-| CUDA 12.8+ | `cuda128-sm{cc}` |
+| CPU | `latest` (same as `cpu-latest`), `cpu-X.Y.Z` |
+| CUDA | `cuda<ver>-sm<cc>-latest`, `cuda<ver>-sm<cc>-X.Y.Z` |
 
-cuTile is available only on the supported CUDA lanes listed above. Install `tileiras` as described
-in [cuTile setup](/developer/moe-backends/).
+For CUDA, `<ver>` is the CUDA version the image was built with, such as `cuda132` for CUDA 13.2. Pick the newest one your driver supports, using the CUDA version `nvidia-smi` reports. Only `cuda132` and `cuda133` include cuTile support:
 
-CUDA compute capability variants (SM80+):
-- `80` (A100)
-- `86` (A-series workstation/RTX 30)
-- `89` (RTX 40/L4)
-- `90` (H100)
-- `100` (B200)
-- `120` (RTX 50)
-- `121` (DGX Spark)
+| `nvidia-smi` reports | Tag |
+|---|---|
+| CUDA 13.3+ on Hopper (`sm90`) | `cuda133-sm90-latest` |
+| CUDA 13.2+ on Ampere, Ada, or Blackwell | `cuda132-sm<cc>-latest` |
+| CUDA 13.1+ | `cuda131-sm<cc>-latest` |
+| CUDA 13.0+ | `cuda130-sm<cc>-latest` |
+| CUDA 12.9+ on DGX Spark (`sm121`) | `cuda129-sm121-latest` |
+| CUDA 12.8+ | `cuda128-sm<cc>-latest` (not `sm121`) |
 
-See [hardware support](/reference/hardware-support/) for the full GPU mapping.
+Then fill in `<cc>`, your GPU's compute capability:
 
-The CPU image is multi-arch. CUDA `90` and `100` tags are multi-arch where both variants appear in the release table, while CUDA `121` is arm64-only for DGX Spark. Docker picks the matching architecture automatically; the other CUDA tags are x86_64 only.
+| `<cc>` | GPUs |
+|---|---|
+| `80` | A100 |
+| `86` | RTX 30 series, A-series workstation cards |
+| `89` | RTX 40 series, L4 |
+| `90` | H100 |
+| `100` | B200 |
+| `120` | RTX 50 series |
+| `121` | DGX Spark |
 
-The `*-latest` tags publish on releases and on manual CI dispatch from master; version tags pin a release.
+The full mapping is in [hardware support](/reference/hardware-support/#cuda-artifacts). Older tags without a CUDA version, `cuda-sm<cc>-latest` and `cuda-sm<cc>-X.Y.Z`, point at the `cuda131` images.
 
-For production, pin a version or sha tag rather than `*-latest`. Model ids also float: `-m Qwen/Qwen3-4B` resolves to whatever revision is tagged `main` at download time. The CLI has no revision flag; to pin a revision, use the Rust SDK's `with_hf_revision`.
+The CPU image and the `sm90` and `sm100` CUDA images run on both x86_64 and arm64 (NVIDIA Grace), and `sm121` is arm64 only. The other CUDA images are x86_64 only. Docker pulls the right architecture automatically.
 
-## Image contract
+For production, use an `X.Y.Z` tag instead of `-latest`. Model IDs also move: `-m Qwen/Qwen3-4B` downloads whatever the `main` branch holds at that moment. The CLI has no flag to pick a model revision, so to pin one, download that revision and pass its local path to `-m`, or use the Rust SDK's `with_hf_revision`.
+
+## Ports and model cache
 
 - Entrypoint is the `mistralrs` binary; pass a subcommand and its flags as the container command.
 - `mistralrs serve` listens on port 1234 by default (the image's `EXPOSE`d port). To change it, change the flag and the mapping together: `serve -p 8080` with `-p 8080:8080`. There is no `PORT` environment variable.
@@ -70,8 +68,7 @@ For production, pin a version or sha tag rather than `*-latest`. Model ids also 
 
 ## Enabling cuTile in a published image
 
-The published image does not include Python or `tileiras`. Install the official package
-in a derived image. For Ampere, Ada, or Blackwell:
+cuTile is an optional NVIDIA backend that speeds up MoE and quantized models, and NVFP4 models require it. The `cuda132` and `cuda133` images can use it, but they don't include NVIDIA's `tileiras` tool, which you add in your own image. For Ampere, Ada, or Blackwell:
 
 ```dockerfile
 FROM ghcr.io/ericlbuehler/mistral.rs:cuda132-sm100-latest
@@ -85,8 +82,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3-pip \
 ENV CUTILE_TILEIRAS_PATH=/usr/local/bin/tileiras
 ```
 
-Select the base tag for the actual GPU. For Hopper, derive from `cuda133-sm90-latest` and install
-`cuda-toolkit[tileiras,nvvm,nvcc]>=13.3` instead. Pin a versioned base tag for production.
+Change the base tag to match your GPU. For Hopper, start from `cuda133-sm90-latest` and install `cuda-toolkit[tileiras,nvvm,nvcc]>=13.3` instead. Run `mistralrs doctor` in the container to check that cuTile is available.
 
 ## Building an image
 
@@ -102,10 +98,16 @@ docker build -t mistralrs:cuda -f Dockerfile.cuda-13.0-ubi9 \
   --build-arg WITH_FEATURES=cuda,cudnn,flash-attn .
 ```
 
-- `Dockerfile.cuda-13.0-ubi9` builds from source on Red Hat UBI 9 and accepts `CUDA_COMPUTE_CAP` and `WITH_FEATURES`.
-- `Dockerfile.cuda-all` is not a source-build Dockerfile.
-- Release images are cuTile-capable on supported CUDA/SM pairs. NVIDIA's `tileiras` tool is not redistributed in the image. Supply an official installation as described in [cuTile setup](/developer/moe-backends/) to activate cuTile.
-- Building with `flash-attn` is slow the first time; later builds use the layer cache.
+`Dockerfile.cuda-13.0-ubi9` compiles mistral.rs on Red Hat UBI 9. It takes two build arguments:
+
+| Argument | Default | What it sets |
+|---|---|---|
+| `CUDA_COMPUTE_CAP` | `80` | Your GPU's compute capability, from the table above. |
+| `WITH_FEATURES` | `cuda,cudnn` | [Cargo features](/reference/cargo-features/) to build with. Add `flash-attn` for faster prompt processing on compute capability 8.0 and newer. |
+
+The first build with `flash-attn` is slow; later builds reuse the layer cache.
+
+`Dockerfile.cuda-all` is what the published CUDA images are built from. It doesn't compile anything: it copies a prebuilt release binary into an NVIDIA CUDA runtime image, so use `Dockerfile.cuda-13.0-ubi9` to build from source.
 
 ## Production deployment notes
 
@@ -128,7 +130,7 @@ The generous `--start-period` matters: first-run model loading can take minutes.
 
 The pieces above translate directly:
 
-- Use a Deployment with a readiness probe hitting `/health` (or a model-aware check; see the [production checklist](/guides/deploy/production-checklist/)).
+- Use `/health` for liveness and check the required model's status in `/v1/models` for readiness. See the [production checklist](/guides/deploy/production-checklist/).
 - Mount a PersistentVolumeClaim at `/data` for the Hugging Face cache.
 - Use the NVIDIA device plugin and a `nvidia.com/gpu` resource request for CUDA.
 - Use an initContainer to pre-download weights for fast pod startup.

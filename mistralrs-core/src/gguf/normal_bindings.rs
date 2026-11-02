@@ -9,6 +9,9 @@ pub(crate) fn build_normal_bindings(
     loader: &NormalLoaderType,
     architecture: CanonicalGgufArchitecture,
 ) -> Result<GgufBindingMap> {
+    if architecture == CanonicalGgufArchitecture::Lfm3 {
+        super::normal_config::validate_lfm3_metadata(archive.metadata())?;
+    }
     if matches!(loader, NormalLoaderType::Qwen3_5) {
         return super::qwen_multimodal_bindings::build_qwen35_text_bindings(archive);
     }
@@ -90,6 +93,12 @@ fn bind_root_tensors(
             "model.embedding_norm.weight",
             "token_embd_norm.weight",
         ),
+        NormalLoaderType::Lfm3 => bind(
+            archive,
+            bindings,
+            "model.embedding_norm.weight",
+            "output_norm.weight",
+        ),
         _ if archive.contains_tensor("output_norm.weight") => {
             bindings.insert(
                 "model.norm.weight",
@@ -133,7 +142,7 @@ fn bind_block_tensor(
     }
     let target = match role {
         "attn_norm" => Some(match loader {
-            NormalLoaderType::Lfm2 | NormalLoaderType::Lfm2Moe => {
+            NormalLoaderType::Lfm2 | NormalLoaderType::Lfm2Moe | NormalLoaderType::Lfm3 => {
                 format!("{p}.operator_norm.{suffix}")
             }
             _ => format!("{p}.input_layernorm.{suffix}"),
@@ -141,18 +150,20 @@ fn bind_block_tensor(
         "ffn_norm" => Some(match loader {
             NormalLoaderType::Gemma2 => format!("{p}.pre_feedforward_layernorm.{suffix}"),
             NormalLoaderType::GLM4 => format!("{p}.post_attention_layernorm.{suffix}"),
-            NormalLoaderType::Lfm2 | NormalLoaderType::Lfm2Moe => {
+            NormalLoaderType::Lfm2 | NormalLoaderType::Lfm2Moe | NormalLoaderType::Lfm3 => {
                 format!("{p}.ffn_norm.{suffix}")
             }
             _ => format!("{p}.post_attention_layernorm.{suffix}"),
         }),
         "post_attention_norm" => Some(match loader {
             NormalLoaderType::GLM4 => format!("{p}.post_self_attn_layernorm.{suffix}"),
+            NormalLoaderType::Lfm3 => format!("{p}.post_operator_norm.{suffix}"),
             _ => format!("{p}.post_attention_layernorm.{suffix}"),
         }),
         "post_ffw_norm" => Some(match loader {
             NormalLoaderType::Gemma2 => format!("{p}.post_feedforward_layernorm.{suffix}"),
             NormalLoaderType::GLM4 => format!("{p}.post_mlp_layernorm.{suffix}"),
+            NormalLoaderType::Lfm3 => format!("{p}.post_ffn_norm.{suffix}"),
             _ => return Ok(()),
         }),
         "attn_q" if !matches!(loader, NormalLoaderType::Phi3) => {
@@ -179,7 +190,17 @@ fn bind_block_tensor(
         )),
         "attn_q_norm" => Some(format!("{p}.self_attn.{}.{suffix}", q_norm_name(loader))),
         "attn_k_norm" => Some(format!("{p}.self_attn.{}.{suffix}", k_norm_name(loader))),
-        "attn_sinks" => Some(format!("{p}.self_attn.sinks")),
+        "attn_gate" if matches!(loader, NormalLoaderType::Lfm3) => {
+            Some(format!("{p}.self_attn.gate_proj.{suffix}"))
+        }
+        "attn_sinks" => Some(format!(
+            "{p}.self_attn.{}",
+            if matches!(loader, NormalLoaderType::Flint) {
+                "softmax_offset"
+            } else {
+                "sinks"
+            }
+        )),
         "ffn_gate" if !matches!(loader, NormalLoaderType::GraniteMoeHybrid) => {
             dense_mlp_target(loader, &p, "gate", suffix)
         }
@@ -216,6 +237,7 @@ fn bind_block_tensor(
         }
         "ffn_gate_inp_shexp" => Some(format!("{p}.mlp.shared_expert_gate.{suffix}")),
         "exp_probs_b" => Some(match loader {
+            NormalLoaderType::Flint => format!("{p}.mlp.gate.expert_bias"),
             NormalLoaderType::Lfm2 | NormalLoaderType::Lfm2Moe => {
                 format!("{p}.feed_forward.expert_bias")
             }
@@ -379,16 +401,44 @@ fn bind_split_qkv(
             );
         }
         let p = format!("model.layers.{layer}.self_attn");
-        for (name, start, len) in [
-            ("q_proj", 0, q_rows),
-            ("k_proj", q_rows, k_rows),
-            ("v_proj", q_rows + k_rows, v_rows),
-        ] {
-            bindings.insert(
-                format!("{p}.{name}.{suffix}"),
-                GgufTensorBinding::tensor(&source).slice(0, start, len),
-            );
-        }
+        bind_slices(
+            bindings,
+            &source,
+            0,
+            output,
+            [
+                (format!("{p}.q_proj.{suffix}"), q_rows),
+                (format!("{p}.k_proj.{suffix}"), k_rows),
+                (format!("{p}.v_proj.{suffix}"), v_rows),
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+/// Bind consecutive `dim` ranges of a fused `source` tensor that must exactly cover its `size`.
+pub(super) fn bind_slices(
+    bindings: &mut GgufBindingMap,
+    source: &str,
+    dim: usize,
+    size: usize,
+    parts: impl IntoIterator<Item = (String, usize)>,
+) -> Result<()> {
+    let parts = parts.into_iter().collect::<Vec<_>>();
+    let expected = parts
+        .iter()
+        .try_fold(0usize, |total, (_, len)| total.checked_add(*len))
+        .with_context(|| format!("fused tensor `{source}` split size overflow"))?;
+    if size != expected {
+        bail!("fused tensor `{source}` has size {size} along dim {dim}, expected {expected}");
+    }
+    let mut start = 0;
+    for (target, len) in parts {
+        bindings.insert(
+            target,
+            GgufTensorBinding::tensor(source).slice(dim, start, len),
+        );
+        start += len;
     }
     Ok(())
 }
@@ -460,13 +510,18 @@ fn bind_fused_expert_gate_up(
         bail!("fused expert gate/up tensor `{source}` has invalid shape {shape:?}");
     }
     let intermediate = shape[1] / 2;
-    for (projection, start) in [("gate", 0), ("up", intermediate)] {
-        bindings.insert(
-            expert_target(loader, prefix, projection, suffix),
-            GgufTensorBinding::tensor(source).slice(1, start, intermediate),
-        );
-    }
-    Ok(())
+    bind_slices(
+        bindings,
+        source,
+        1,
+        shape[1],
+        ["gate", "up"].map(|projection| {
+            (
+                expert_target(loader, prefix, projection, suffix),
+                intermediate,
+            )
+        }),
+    )
 }
 
 fn bind_deepseek_kv_b(
@@ -738,12 +793,14 @@ fn dense_mlp_target(
             "down" => "down_proj",
             _ => return None,
         },
-        NormalLoaderType::Lfm2 | NormalLoaderType::Lfm2Moe => match projection {
-            "gate" => "w1",
-            "up" => "w3",
-            "down" => "w2",
-            _ => unreachable!(),
-        },
+        NormalLoaderType::Lfm2 | NormalLoaderType::Lfm2Moe | NormalLoaderType::Lfm3 => {
+            match projection {
+                "gate" => "w1",
+                "up" => "w3",
+                "down" => "w2",
+                _ => unreachable!(),
+            }
+        }
         _ => match projection {
             "gate" => "gate_proj",
             "up" => "up_proj",
@@ -751,7 +808,10 @@ fn dense_mlp_target(
             _ => unreachable!(),
         },
     };
-    let module = if matches!(loader, NormalLoaderType::Lfm2 | NormalLoaderType::Lfm2Moe) {
+    let module = if matches!(
+        loader,
+        NormalLoaderType::Lfm2 | NormalLoaderType::Lfm2Moe | NormalLoaderType::Lfm3
+    ) {
         "feed_forward"
     } else {
         "mlp"
@@ -794,7 +854,7 @@ fn shared_expert_target(
     let module = match loader {
         NormalLoaderType::GLM4Moe | NormalLoaderType::GLM4MoeLite => "shared_experts",
         NormalLoaderType::HunYuanMoEV1 => "shared_mlp",
-        NormalLoaderType::Qwen3Next => "shared_expert",
+        NormalLoaderType::Qwen3Next | NormalLoaderType::Flint => "shared_expert",
         _ => "shared_experts",
     };
     format!("{p}.mlp.{module}.{projection}_proj.{suffix}")
@@ -940,7 +1000,146 @@ fn bind_named(
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
+    use candle_core::{
+        quantized::{gguf_file, GgmlDType, QTensor},
+        Device, Tensor,
+    };
+    use tempfile::NamedTempFile;
+
     use super::*;
+
+    #[test]
+    fn lfm3_bindings_preserve_attention_layout_and_restore_conv_axis() -> Result<()> {
+        let names = [
+            ("token_embd.weight", "model.embed_tokens.weight"),
+            ("output_norm.weight", "model.embedding_norm.weight"),
+            ("rope_freqs.weight", "model.rope_freqs.weight"),
+            (
+                "blk.0.attn_norm.weight",
+                "model.layers.0.operator_norm.weight",
+            ),
+            ("blk.0.ffn_norm.weight", "model.layers.0.ffn_norm.weight"),
+            (
+                "blk.0.post_attention_norm.weight",
+                "model.layers.0.post_operator_norm.weight",
+            ),
+            (
+                "blk.0.post_ffw_norm.weight",
+                "model.layers.0.post_ffn_norm.weight",
+            ),
+            (
+                "blk.0.attn_q.weight",
+                "model.layers.0.self_attn.q_proj.weight",
+            ),
+            (
+                "blk.0.attn_k.weight",
+                "model.layers.0.self_attn.k_proj.weight",
+            ),
+            (
+                "blk.0.attn_v.weight",
+                "model.layers.0.self_attn.v_proj.weight",
+            ),
+            (
+                "blk.0.attn_output.weight",
+                "model.layers.0.self_attn.o_proj.weight",
+            ),
+            (
+                "blk.0.attn_q_norm.weight",
+                "model.layers.0.self_attn.q_norm.weight",
+            ),
+            (
+                "blk.0.attn_k_norm.weight",
+                "model.layers.0.self_attn.k_norm.weight",
+            ),
+            (
+                "blk.0.attn_gate.weight",
+                "model.layers.0.self_attn.gate_proj.weight",
+            ),
+            (
+                "blk.0.ffn_gate.weight",
+                "model.layers.0.feed_forward.w1.weight",
+            ),
+            (
+                "blk.0.ffn_up.weight",
+                "model.layers.0.feed_forward.w3.weight",
+            ),
+            (
+                "blk.0.ffn_down.weight",
+                "model.layers.0.feed_forward.w2.weight",
+            ),
+            (
+                "blk.1.shortconv.in_proj.weight",
+                "model.layers.1.conv.in_proj.weight",
+            ),
+            (
+                "blk.1.shortconv.out_proj.weight",
+                "model.layers.1.conv.out_proj.weight",
+            ),
+        ];
+        let weight = QTensor::quantize(
+            &Tensor::zeros((8, 8), DType::F32, &Device::Cpu)?,
+            GgmlDType::F32,
+        )?;
+        let convolution = QTensor::quantize(
+            &Tensor::zeros((8, 7), DType::F32, &Device::Cpu)?,
+            GgmlDType::F32,
+        )?;
+        let mut tensors = names
+            .iter()
+            .map(|(source, _)| (*source, &weight))
+            .collect::<Vec<_>>();
+        tensors.push(("blk.1.shortconv.conv.weight", &convolution));
+        for (causal, decision_type) in [
+            (true, None),
+            (false, None),
+            (false, Some("lfm3-d1")),
+            (false, Some("lfm3-d1-omni")),
+        ] {
+            let mut metadata = vec![
+                ("general.architecture", Value::String("lfm3".to_string())),
+                ("lfm3.block_count", Value::U32(2)),
+                ("lfm3.attention.causal", Value::Bool(causal)),
+            ];
+            if let Some(kind) = decision_type {
+                metadata.push(("lfm3.decision.type", Value::String(kind.to_string())));
+            }
+            let metadata = metadata
+                .iter()
+                .map(|(key, value)| (*key, value))
+                .collect::<Vec<_>>();
+            let mut file = NamedTempFile::new()?;
+            gguf_file::write(file.as_file_mut(), &metadata, &tensors)?;
+            file.as_file_mut().flush()?;
+            let archive = GgufArchive::open_file(file.path())?;
+            let result = build_normal_bindings(
+                &archive,
+                &NormalLoaderType::Lfm3,
+                CanonicalGgufArchitecture::Lfm3,
+            );
+            if !causal && decision_type.is_none() {
+                assert!(result.unwrap_err().to_string().contains("noncausal"));
+                continue;
+            }
+            let bindings = result?;
+            for (source, target) in names {
+                assert_eq!(
+                    bindings.get(target),
+                    Some(&GgufTensorBinding::tensor(source))
+                );
+            }
+            assert_eq!(
+                bindings.get("model.layers.1.conv.conv.weight"),
+                Some(
+                    &GgufTensorBinding::tensor("blk.1.shortconv.conv.weight")
+                        .reshape(vec![8, 1, 7])
+                )
+            );
+            assert!(bindings.get("lm_head.weight").is_none());
+        }
+        Ok(())
+    }
 
     #[test]
     fn parses_block_tensor_names() {

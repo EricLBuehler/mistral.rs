@@ -16,7 +16,11 @@ mod hf_config;
 mod inputs_processor;
 mod isq;
 mod isq_flow;
+#[cfg(feature = "metal")]
+mod metal_warmup;
 pub use isq_flow::CalibrationStatus;
+#[cfg(any(feature = "cuda", test))]
+mod cuda_graph_budget;
 pub(crate) mod llg;
 mod loaders;
 mod macros;
@@ -34,7 +38,7 @@ use crate::amoe::{AnyMoeConfig, AnyMoeExpertType, AnyMoeTrainingInputs, AnyMoeTr
 use crate::device_map::DeviceMapper;
 use crate::layers_masker::PastKvLenCache;
 use crate::paged_attention::{
-    AttentionBackendKind, CacheConfig, CacheEngine, CacheMemoryReservations, MemoryGpuConfig,
+    AttentionBackendKind, CacheConfig, CacheEngine, CacheMemoryReservations, MemoryGoal,
     ModelConfigLike,
 };
 use crate::prefix_cacher::{PagedAuxiliaryPrefixState, PrefixCacheManagerV2};
@@ -53,25 +57,29 @@ pub use gguf::{GGUFLoader, GGUFLoaderBuilder, GGUFSpecificConfig};
 pub use hf_config::HfConfigOverrides;
 use image::DynamicImage;
 pub use inputs_processor::InputProcessorOutput;
-pub(crate) use isq::IsqModelLoader;
 pub use isq::{
     expand_isq_value, expand_uqff_shards, parse_isq_value, parse_uqff_shard,
     resolve_uqff_report_output, resolve_uqff_shorthand, IsqModel, IsqOrganization, UqffWriteConfig,
     UQFF_MULTI_FILE_DELIMITER,
 };
+pub(crate) use isq::{sanitize_quantized_weight_source_config, IsqModelLoader};
 use llguidance::toktrie::TokEnv;
-pub(crate) use loaders::checkpoint_runtime_size;
+#[cfg(feature = "cuda")]
+pub(crate) use loaders::HostBacking;
+pub(crate) use loaders::{apply_model_activation_memory, checkpoint_runtime_size};
 pub use loaders::{
-    AdapterKind, AutoDeviceMapParams, AutoDeviceMapQuantization, AutoEmbeddingLoader,
-    AutoMultimodalLoader, AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader,
-    DeviceMappedModelLoader, DiffusionGemmaLoader, DiffusionLoaderType, DiffusionModel,
-    DiffusionModelLoader, EmbeddingGemmaLoader, EmbeddingLoaderType, EmbeddingModel,
-    EmbeddingModelLoader, EmbeddingModelPaths, EmbeddingModule, EmbeddingModulePaths,
-    EmbeddingModuleType, FluxLoader, GLM4Loader, GLM4MoeLiteLoader, GLM4MoeLoader, Gemma2Loader,
-    Gemma3Loader, Gemma3nLoader, Gemma4Loader, GemmaLoader, GptOssLoader, GraniteMoeHybridLoader,
+    ActivationMemoryContext, ActivationMemoryEstimate, ActivationModelConfig, AdapterKind,
+    AutoDeviceMapParams, AutoDeviceMapQuantization, AutoEmbeddingLoader, AutoMultimodalLoader,
+    AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader, DeviceMappedModelLoader,
+    DiffusionGemmaLoader, DiffusionLoaderType, DiffusionModel, DiffusionModelLoader,
+    EmbeddingGemmaLoader, EmbeddingLoaderType, EmbeddingModel, EmbeddingModelLoader,
+    EmbeddingModelPaths, EmbeddingModule, EmbeddingModulePaths, EmbeddingModuleType, FlintLoader,
+    FluxLoader, GLM4Loader, GLM4MoeLiteLoader, GLM4MoeLoader, Gemma2Loader, Gemma3Loader,
+    Gemma3nLoader, Gemma4Loader, GemmaLoader, GptOssLoader, GraniteMoeHybridLoader,
     HunYuanDenseV1Loader, HunYuanMoEV1Loader, Idefics2Loader, Idefics3Loader, LLaVALoader,
-    LLaVANextLoader, Lfm2Loader, Lfm2VlLoader, LlamaLoader, Loader, LocalModelPaths,
-    MiniCpmOLoader, Mistral3Loader, MistralLoader, MixtralLoader, ModelKind, ModelPaths,
+    LLaVANextLoader, Lfm2Loader, Lfm2VlLoader, Lfm3AudioLoader, Lfm3D1Loader, Lfm3Loader,
+    Lfm3OmniLoader, Lfm3VlLoader, LlamaLoader, Loader, LocalModelPaths, MiniCpmOLoader,
+    Mistral3Loader, MistralLoader, MixtralLoader, ModelDownload, ModelKind, ModelPaths,
     MultimodalLoaderType, MultimodalModel, MultimodalModelLoader, MuseGlimmerLoader,
     NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader,
     Phi3Loader, Phi3VLoader, Phi3_5MoELoader, Phi4MMLoader, PrettyName, QuantizationKind,
@@ -80,20 +88,27 @@ pub use loaders::{
     Qwen3_5TextLoader, Qwen4ExpLoader, SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader,
     VLlamaLoader, VoxtralLoader,
 };
+pub use loaders::{LayerResource, ResourceSource};
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn get_device_layers_for_loader(
     loader: &dyn loaders::DeviceMappedModelLoader,
     config: &str,
     num_layers: usize,
-    layer_sizes_in_bytes: Vec<usize>,
+    mut layer_sizes_in_bytes: Vec<usize>,
     non_mapped_size_in_bytes: usize,
     total_model_size_in_bytes: usize,
     devices: &[Device],
     dtype: DType,
     params: &loaders::AutoDeviceMapParams,
     paged_attn_config: Option<&mut PagedAttentionConfig>,
-) -> Result<crate::device_map::DeviceMapMetadata> {
-    loaders::auto_device_map::get_device_layers(
+) -> Result<(crate::device_map::DeviceMapMetadata, usize)> {
+    let resources = loader.layer_resources(config, loaders::ResourceSource::default())?;
+    let total_model_size_in_bytes = loaders::add_resource_bytes(
+        &mut layer_sizes_in_bytes,
+        total_model_size_in_bytes,
+        &resources,
+    )?;
+    let mapping = loaders::auto_device_map::get_device_layers(
         loader,
         config,
         num_layers,
@@ -104,7 +119,9 @@ pub(crate) fn get_device_layers_for_loader(
         dtype,
         params,
         paged_attn_config,
-    )
+        &resources,
+    )?;
+    Ok((mapping, total_model_size_in_bytes))
 }
 
 fn finish_dynamic_lora_runtime(
@@ -149,6 +166,7 @@ pub(crate) use paths::{
     get_adapter_paths, get_chat_template, get_model_paths, AdapterPathOptions, XLoraPreload,
 };
 pub use paths::{AdapterPaths, ResolvedLoraAdapter};
+pub use processing::DecisionForwardContext;
 pub(crate) use processing::{
     apply_chat_template, BasicProcessor, MessagesAction, Processor, ProcessorCreator,
 };
@@ -198,6 +216,32 @@ pub(crate) fn synchronize_cuda_contexts(primary: &Device, mapper: &dyn DeviceMap
         }
     }
     Ok(())
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn prepare_cuda_runtime(primary: &Device, mapper: &dyn DeviceMapper) -> Result<()> {
+    mistralrs_quant::cublaslt::maybe_init_cublas_lt_wrapper(primary.clone());
+    let mut devices = mapper.get_unique_devices();
+    if !devices.iter().any(|device| device.same_device(primary)) {
+        devices.push(primary.clone());
+    }
+    for device in devices.iter().filter(|device| device.is_cuda()) {
+        match crate::cuda::preload::preload_candle_ptx(device) {
+            Ok(count) if count > 0 => {
+                tracing::info!("Preloaded {count} Candle CUDA PTX functions.")
+            }
+            Ok(_) => {}
+            Err(err) => tracing::warn!("Failed to preload Candle CUDA PTX functions: {err}"),
+        }
+    }
+    #[cfg(feature = "cutile")]
+    if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(
+        primary,
+        crate::utils::progress::progress_suppressed(),
+    ) {
+        tracing::warn!("Failed to warm up cuTile MoE kernels: {err}");
+    }
+    synchronize_cuda_contexts(primary, mapper)
 }
 
 pub(crate) fn resolve_lora_execution(
@@ -321,6 +365,7 @@ pub use crate::kv_cache::{
 
 pub(crate) const RECURRENT_GRAPH_PAD_SLOTS: usize = 1;
 const AUTO_RECURRENT_KV_FLOOR_FRACTION: f64 = 0.05;
+const AUTO_RECURRENT_PREFIX_BUDGET_DIVISOR: usize = 2;
 const BYTES_PER_MIB: usize = 1024 * 1024;
 
 #[derive(Clone, Copy)]
@@ -330,12 +375,22 @@ struct RecurrentCheckpointBudget {
     snapshot_bytes: usize,
     current_capacity: usize,
     current_lanes: usize,
-    memory_total: usize,
-    memory_available: usize,
     allocation_available: usize,
     future_reserved_bytes: usize,
     kv_floor_bytes: usize,
-    memory_utilization: Option<f32>,
+}
+
+pub(crate) fn disable_unsupported_paged_attention(
+    config: &mut Option<PagedAttentionConfig>,
+) -> Result<()> {
+    if config
+        .as_ref()
+        .is_some_and(|config| config.memory_goal != MemoryGoal::Auto)
+    {
+        anyhow::bail!("The requested memory goal requires paged attention, which this model or device placement does not support");
+    }
+    *config = None;
+    Ok(())
 }
 
 fn effective_recurrent_checkpoint_lanes(requested: usize, supported: bool) -> usize {
@@ -361,24 +416,11 @@ fn automatic_recurrent_checkpoint_lane_budget(budget: RecurrentCheckpointBudget)
     if bytes_per_lane == 0 {
         anyhow::bail!("recurrent checkpoint lane size must be nonzero");
     }
-    let steady_layout_budget = match budget.memory_utilization {
-        Some(fraction) => {
-            let target_used = (budget.memory_total as f64 * f64::from(fraction)) as usize;
-            let current_used_without_layout = budget
-                .memory_total
-                .saturating_sub(budget.memory_available)
-                .saturating_sub(current_layout_bytes);
-            target_used
-                .saturating_sub(current_used_without_layout)
-                .saturating_sub(budget.future_reserved_bytes)
-                .saturating_sub(budget.kv_floor_bytes)
-        }
-        None => budget
-            .allocation_available
-            .saturating_add(current_layout_bytes)
-            .saturating_sub(budget.future_reserved_bytes)
-            .saturating_sub(budget.kv_floor_bytes),
-    };
+    let steady_layout_budget = budget
+        .allocation_available
+        .saturating_add(current_layout_bytes)
+        .saturating_sub(budget.future_reserved_bytes)
+        .saturating_sub(budget.kv_floor_bytes);
     let steady_lanes = steady_layout_budget / bytes_per_lane;
     let allocation_lanes = budget.allocation_available / bytes_per_lane;
     let checkpoint_lanes = budget
@@ -394,27 +436,18 @@ fn automatic_recurrent_checkpoint_lane_budget(budget: RecurrentCheckpointBudget)
 
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 fn recurrent_kv_floor_bytes(
-    memory_config: MemoryGpuConfig,
+    memory_config: MemoryGoal,
     memory_total: usize,
     kv_bytes_per_token: usize,
 ) -> Result<usize> {
     let bytes = match memory_config {
-        MemoryGpuConfig::MbAmount(mb) => mb
-            .checked_mul(BYTES_PER_MIB)
-            .ok_or_else(|| anyhow::anyhow!("PagedAttention memory size overflow"))?,
-        MemoryGpuConfig::BestEffortMbAmount { target_mb, min_mb } => {
-            let mb = min_mb.unwrap_or_else(|| {
-                ((memory_total as f64 * AUTO_RECURRENT_KV_FLOOR_FRACTION) as usize / BYTES_PER_MIB)
-                    .min(target_mb)
-            });
-            mb.checked_mul(BYTES_PER_MIB)
-                .ok_or_else(|| anyhow::anyhow!("PagedAttention memory size overflow"))?
-        }
-        MemoryGpuConfig::Utilization(fraction) => {
+        MemoryGoal::KvBytes(bytes) => bytes,
+        MemoryGoal::Auto => (memory_total as f64 * AUTO_RECURRENT_KV_FLOOR_FRACTION) as usize,
+        MemoryGoal::Utilization(fraction) => {
             let floor_fraction = f64::from(fraction).min(AUTO_RECURRENT_KV_FLOOR_FRACTION);
             (memory_total as f64 * floor_fraction) as usize
         }
-        MemoryGpuConfig::ContextSize(tokens) => {
+        MemoryGoal::KvTokens(tokens) => {
             let bytes = tokens
                 .checked_mul(kv_bytes_per_token)
                 .ok_or_else(|| anyhow::anyhow!("PagedAttention context memory size overflow"))?;
@@ -428,7 +461,7 @@ fn recurrent_kv_floor_bytes(
 }
 
 fn paged_kv_bytes_per_token(
-    paged_attn_config: PagedAttentionConfig,
+    paged_attn_config: &PagedAttentionConfig,
     dtype: DType,
     model_config: &dyn ModelConfigLike,
 ) -> Result<usize> {
@@ -442,7 +475,7 @@ fn paged_kv_bytes_per_token(
 
 fn automatic_recurrent_checkpoint_lanes(
     cache: &EitherCache,
-    paged_attn_config: PagedAttentionConfig,
+    paged_attn_config: &PagedAttentionConfig,
     primary_device: &Device,
     capacity: usize,
     kv_bytes_per_token: usize,
@@ -476,7 +509,7 @@ fn automatic_recurrent_checkpoint_lanes(
             reservations.secondary_device_bytes
         };
         let kv_floor_bytes = recurrent_kv_floor_bytes(
-            paged_attn_config.mem_gpu,
+            paged_attn_config.memory_goal,
             memory.total(),
             kv_bytes_per_token,
         )?;
@@ -487,18 +520,9 @@ fn automatic_recurrent_checkpoint_lanes(
                 snapshot_bytes,
                 current_capacity,
                 current_lanes,
-                memory_total: memory.total(),
-                memory_available: memory.available(),
-                allocation_available: crate::paged_attention::device_memory_cap(
-                    memory.available(),
-                    &device,
-                ),
+                allocation_available: paged_attn_config.allocation_budget(&device, memory)?,
                 future_reserved_bytes,
                 kv_floor_bytes,
-                memory_utilization: match paged_attn_config.mem_gpu {
-                    MemoryGpuConfig::Utilization(fraction) => Some(fraction),
-                    _ => None,
-                },
             },
         )?);
     }
@@ -507,7 +531,7 @@ fn automatic_recurrent_checkpoint_lanes(
 
 fn reserve_recurrent_serving_capacity(
     cache: &EitherCache,
-    paged_attn_config: PagedAttentionConfig,
+    paged_attn_config: &PagedAttentionConfig,
     recurrent_checkpoints_supported: bool,
     recurrent_transitions_supported: bool,
     primary_device: &Device,
@@ -570,6 +594,104 @@ fn uses_recurrent_transition_log(cache: &EitherCache) -> bool {
     cache.is_hybrid() && cache.hybrid().uses_recurrent_transition_log()
 }
 
+#[derive(Clone, Copy)]
+struct RecurrentPrefixBudget {
+    snapshot_bytes: usize,
+    persistent_bytes: usize,
+    execution_bytes: usize,
+}
+
+impl RecurrentPrefixBudget {
+    fn reserve_runtime(mut self, enabled: bool, baseline_activation: usize) -> Self {
+        let allowance = crate::paged_attention::automatic_runtime_allowance(
+            enabled,
+            baseline_activation,
+            self.persistent_bytes.min(self.execution_bytes),
+        );
+        self.persistent_bytes = self.persistent_bytes.saturating_sub(allowance);
+        self.execution_bytes = self.execution_bytes.saturating_sub(allowance);
+        self
+    }
+}
+
+fn automatic_recurrent_prefix_capacity(
+    requested: usize,
+    budgets: &[RecurrentPrefixBudget],
+) -> usize {
+    budgets.iter().fold(requested, |capacity, budget| {
+        if budget.snapshot_bytes == 0 {
+            return capacity;
+        }
+        let persistent = budget.persistent_bytes / AUTO_RECURRENT_PREFIX_BUDGET_DIVISOR;
+        let retained = persistent.min(budget.execution_bytes.saturating_sub(budget.snapshot_bytes));
+        capacity.min(retained / budget.snapshot_bytes)
+    })
+}
+
+fn configure_automatic_recurrent_prefix_capacity(
+    cache: &EitherCache,
+    config: &mut PagedAttentionConfig,
+    mut request: crate::paged_attention::CacheConfigRequest<'_>,
+) -> Result<()> {
+    if !config.recurrent_prefix_capacity_auto
+        || config.recurrent_prefix_capacity == 0
+        || !cache.is_hybrid()
+    {
+        return Ok(());
+    }
+    let hybrid = cache.hybrid();
+    let snapshot_bytes = hybrid.recurrent_snapshot_bytes_by_device()?;
+    let devices = hybrid.recurrent_devices();
+    drop(hybrid);
+    request.memory_reservations = config
+        .memory_reservations()
+        .map_err(candle_core::Error::msg)?;
+    let mut budgets = Vec::with_capacity(devices.len());
+    for device in devices {
+        device.synchronize()?;
+        #[cfg(feature = "cuda")]
+        if device.is_cuda() {
+            crate::MemoryUsage.synchronize_cuda_context(&device)?;
+            crate::MemoryUsage.trim_cuda_memory_pool(&device, 0)?;
+        }
+        let (persistent, transient) =
+            crate::paged_attention::optional_weight_reservation(config, request, &device)
+                .map_err(candle_core::Error::msg)?;
+        let memory = crate::MemoryUsage.query(&device)?;
+        let budget = RecurrentPrefixBudget {
+            snapshot_bytes: snapshot_bytes[&device.location()],
+            persistent_bytes: config
+                .allocation_budget(&device, memory)
+                .map_err(candle_core::Error::msg)?
+                .saturating_sub(persistent),
+            execution_bytes: config
+                .execution_budget(&device, memory)
+                .map_err(candle_core::Error::msg)?
+                .saturating_sub(persistent)
+                .saturating_sub(transient),
+        };
+        let baseline_activation = if device.same_device(request.device) {
+            config.primary_activation_memory_reservation_bytes
+        } else {
+            config.mapped_activation_memory_reservation_bytes
+        };
+        budgets.push(budget.reserve_runtime(
+            request.reserve_decode_graphs && device.is_cuda(),
+            baseline_activation,
+        ));
+    }
+    let requested = config.recurrent_prefix_capacity;
+    config.recurrent_prefix_capacity = automatic_recurrent_prefix_capacity(requested, &budgets);
+    if !request.silent && requested != config.recurrent_prefix_capacity {
+        tracing::info!(
+            requested,
+            capacity = config.recurrent_prefix_capacity,
+            "Adjusted automatic recurrent prefix capacity for the serving memory budget"
+        );
+    }
+    Ok(())
+}
+
 fn add_recurrent_prefix_memory_reservations(
     mut reservations: CacheMemoryReservations,
     bytes_by_device: HashMap<DeviceLocation, usize>,
@@ -583,6 +705,7 @@ fn add_recurrent_prefix_memory_reservations(
         .checked_add(1)
         .ok_or_else(|| candle_core::Error::msg("recurrent prefix capacity overflow"))?;
     let mut secondary_prefix_bytes = 0usize;
+    let mut secondary_staging_bytes = 0usize;
     for (device, bytes_per_snapshot) in bytes_by_device {
         let bytes = bytes_per_snapshot
             .checked_mul(peak_snapshots)
@@ -592,20 +715,50 @@ fn add_recurrent_prefix_memory_reservations(
                 .primary_device_bytes
                 .checked_add(bytes)
                 .ok_or_else(|| candle_core::Error::msg("recurrent prefix reservation overflow"))?;
+            reservations.primary_staging_bytes = reservations
+                .primary_staging_bytes
+                .checked_add(bytes_per_snapshot)
+                .ok_or_else(|| candle_core::Error::msg("recurrent prefix staging overflow"))?;
         } else {
             secondary_prefix_bytes = secondary_prefix_bytes.max(bytes);
+            secondary_staging_bytes = secondary_staging_bytes.max(bytes_per_snapshot);
         }
     }
     reservations.secondary_device_bytes = reservations
         .secondary_device_bytes
         .checked_add(secondary_prefix_bytes)
         .ok_or_else(|| candle_core::Error::msg("recurrent prefix reservation overflow"))?;
+    reservations.secondary_staging_bytes = reservations
+        .secondary_staging_bytes
+        .checked_add(secondary_staging_bytes)
+        .ok_or_else(|| candle_core::Error::msg("recurrent prefix staging overflow"))?;
     Ok(reservations)
+}
+
+#[cfg(feature = "cuda")]
+fn paged_attention_runtime_memory_reservation(
+    cache: &EitherCache,
+    config: Option<&PagedAttentionConfig>,
+    primary: &Device,
+    devices: &[Device],
+) -> Result<Option<Arc<crate::resource_plan::RuntimeMemoryReservation>>> {
+    let Some(config) = config else {
+        return Ok(None);
+    };
+    let prefix = if config.recurrent_prefix_capacity > 0 && cache.is_hybrid() {
+        Some(crate::resource_plan::RecurrentPrefixReservation::new(
+            cache.hybrid().recurrent_snapshot_bytes_by_device()?,
+            config.recurrent_prefix_capacity,
+        ))
+    } else {
+        None
+    };
+    Ok(config.runtime_memory_reservation(primary, devices, prefix))
 }
 
 fn paged_attention_memory_reservations(
     cache: &EitherCache,
-    paged_attn_config: PagedAttentionConfig,
+    paged_attn_config: &PagedAttentionConfig,
     primary_device: &Device,
 ) -> Result<CacheMemoryReservations> {
     let reservations = paged_attn_config
@@ -1267,6 +1420,7 @@ impl LogitsSelection {
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum SupportedModality {
+    Decision,
     Text,
     Audio,
     Vision,
@@ -1277,6 +1431,7 @@ pub enum SupportedModality {
 impl Debug for SupportedModality {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Decision => write!(f, "Decision"),
             Self::Text => write!(f, "📝 Text"),
             Self::Audio => write!(f, "🔊 Audio"),
             Self::Vision => write!(f, "🖼️ Vision"),
@@ -1308,6 +1463,9 @@ pub struct GeneralMetadata {
     // PagedAttention stuff
     pub cache_config: Option<CacheConfig>,
     pub cache_engine: Option<CacheEngine>,
+    pub memory_plan: Option<crate::memory_plan::RuntimeMemoryPlan>,
+    #[cfg(feature = "cuda")]
+    pub runtime_memory_reservation: Option<Arc<crate::resource_plan::RuntimeMemoryReservation>>,
     pub model_metadata: Option<Arc<dyn ModelConfigLike + Send + Sync>>,
     pub modalities: Modalities,
     // UQFF writes force the whole model onto CPU, so the pipeline is not servable afterwards.
@@ -1315,6 +1473,13 @@ pub struct GeneralMetadata {
 }
 
 impl GeneralMetadata {
+    #[cfg(feature = "cuda")]
+    pub(crate) fn cuda_capture_memory_ready(&self) -> bool {
+        self.runtime_memory_reservation
+            .as_ref()
+            .is_none_or(|reservation| reservation.capture_ready())
+    }
+
     pub fn tok_env(&self) -> Option<TokEnv> {
         self.llg_factory.as_ref().map(|f| f.tok_env().clone())
     }
@@ -1398,6 +1563,12 @@ pub trait MetadataMixin {
     /// an eager step plus a capture when the batch composition changes.
     fn precapture_cuda_decode_graphs(&self, _ctx: &DecodeGraphPrecaptureCtx) {}
     fn get_metadata(&self) -> Arc<GeneralMetadata>;
+    fn encoder_activation_memory_bytes(
+        &self,
+        _seq: &Sequence,
+    ) -> candle_core::Result<Option<usize>> {
+        Ok(None)
+    }
     fn generation_defaults(&self) -> Option<crate::ModelGenerationDefaults> {
         None
     }
@@ -1473,6 +1644,9 @@ pub trait AnyMoePipelineMixin {
 /// such as the multimodal model prompt prefixer.
 #[derive(Clone)]
 pub enum ModelCategory {
+    Decision {
+        video_sampling: crate::VideoFrameSampling,
+    },
     Text,
     Multimodal {
         prefixer: Arc<dyn MultimodalPromptPrefixer>,
@@ -1487,6 +1661,7 @@ pub enum ModelCategory {
 impl std::fmt::Debug for ModelCategory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ModelCategory::Decision { .. } => write!(f, "ModelCategory::Decision"),
             ModelCategory::Text => write!(f, "ModelCategory::Text"),
             ModelCategory::Multimodal { .. } => {
                 write!(f, "ModelCategory::Multimodal {{ prefixer: .. }}")
@@ -1502,6 +1677,7 @@ impl std::fmt::Debug for ModelCategory {
 impl PartialEq for ModelCategory {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
+            (Self::Decision { .. }, Self::Decision { .. }) => true,
             (Self::Text, Self::Text) => true,
             (Self::Multimodal { .. }, Self::Multimodal { .. }) => true,
             (Self::Audio, Self::Audio) => true,
@@ -1510,6 +1686,7 @@ impl PartialEq for ModelCategory {
             (Self::Embedding, Self::Embedding) => true,
             (
                 Self::Text
+                | Self::Decision { .. }
                 | Self::Multimodal { .. }
                 | Self::Diffusion
                 | Self::Audio
@@ -1755,6 +1932,20 @@ pub trait Pipeline:
     + MetadataMixin
     + AnyMoePipelineMixin
 {
+    fn finalize_response(&self, _seq: &mut crate::sequence::Sequence) -> candle_core::Result<()> {
+        Ok(())
+    }
+    fn prepare_streaming_response(
+        &self,
+        _seq: &mut crate::sequence::Sequence,
+    ) -> candle_core::Result<()> {
+        Ok(())
+    }
+    fn release_generation_sequences(&self, _sequence_ids: &[usize]) {}
+    fn response_token_is_hidden(&self, _token: u32) -> bool {
+        false
+    }
+
     fn requires_uniform_prompt_batch(&self) -> bool {
         true
     }
@@ -1784,6 +1975,13 @@ pub trait Pipeline:
         inputs: Box<dyn Any>,
         return_raw_logits: bool,
     ) -> Result<ForwardInputsResult, candle_core::Error>;
+
+    fn forward_decision(
+        &self,
+        _sequence: &mut Sequence,
+    ) -> Result<crate::decision::DecisionResponse> {
+        anyhow::bail!("This pipeline does not support decision requests")
+    }
 
     #[doc(hidden)]
     fn forward_step(
@@ -2011,6 +2209,44 @@ pub trait Pipeline:
         logger: &IntervalLogger,
         lookahead: StepLookahead,
     ) -> Result<StepSubmission, candle_core::Error> {
+        if matches!(self.category(), ModelCategory::Decision { .. }) {
+            let mut duration = Duration::ZERO;
+            for seq in input_seqs {
+                if seq.responder().is_closed() {
+                    seq.set_state(crate::sequence::SequenceState::Done(
+                        crate::sequence::StopReason::Canceled,
+                    ));
+                    continue;
+                }
+                let start = Instant::now();
+                let result = self.forward_decision(seq);
+                duration += start.elapsed();
+                if seq.responder().is_closed() {
+                    seq.set_state(crate::sequence::SequenceState::Done(
+                        crate::sequence::StopReason::Canceled,
+                    ));
+                    continue;
+                }
+                let response = match result {
+                    Ok(result) => {
+                        seq.set_state(crate::sequence::SequenceState::Done(
+                            crate::sequence::StopReason::Length(0),
+                        ));
+                        crate::Response::Decision { result }
+                    }
+                    Err(error) => {
+                        seq.set_state(crate::sequence::SequenceState::Error);
+                        if is_inputs_processor_validation_error(&error) {
+                            crate::Response::ValidationError(error.into())
+                        } else {
+                            crate::Response::InternalError(error.into())
+                        }
+                    }
+                };
+                let _ = seq.responder().send(response).await;
+            }
+            return Ok(StepSubmission::ready(duration));
+        }
         match backend_metadata {
             CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
                 if !is_prompt && !return_raw_logits {
@@ -2299,7 +2535,7 @@ pub trait Pipeline:
                     && is_prompt
                     && !return_raw_logits
                     && !self.get_metadata().is_xlora
-                    && self.device().is_cuda()
+                    && (self.device().is_cuda() || self.device().is_metal())
                 {
                     metadata.prompt_chunk_size
                 } else {
@@ -2668,6 +2904,27 @@ pub trait Pipeline:
                                 logits[seq_idx] = Some(raw_logits.index_bs(logit_idx)?);
                             }
                         }
+                        drop(raw_logits);
+                        #[cfg(feature = "metal")]
+                        if prompt_chunk
+                            .as_ref()
+                            .is_some_and(|chunk| !chunk.is_final_prompt_chunk)
+                        {
+                            let start = Instant::now();
+                            let primary = self.device();
+                            let mut devices = self
+                                .device_mapper()
+                                .map(|mapper| mapper.get_unique_devices())
+                                .unwrap_or_default();
+                            if !devices.iter().any(|device| device.same_device(&primary)) {
+                                devices.push(primary);
+                            }
+                            // Partial chunks skip sampling readback, which otherwise releases pooled uploads.
+                            for device in devices.into_iter().filter(Device::is_metal) {
+                                device.synchronize()?;
+                            }
+                            exec_duration += start.elapsed();
+                        }
                     }
                     (
                         logits,
@@ -2991,12 +3248,13 @@ mod tests {
 
     use super::{
         add_recurrent_prefix_memory_reservations, automatic_recurrent_checkpoint_lane_budget,
-        decode_positions_tensor, effective_recurrent_checkpoint_lanes,
-        next_pipeline_prompt_chunk_group, paged_attention_memory_reservations,
-        prompt_chunk_is_final, recurrent_batch_kind_for_input, recurrent_kv_floor_bytes,
-        reserve_recurrent_serving_capacity, resolve_lora_execution, should_sample_step,
-        should_try_speculative_sampling, CacheMemoryReservations, ForwardCache, LogitsSelection,
-        ModelForwardContext, RecurrentBatchKind, RecurrentCheckpointBudget,
+        automatic_recurrent_prefix_capacity, decode_positions_tensor,
+        effective_recurrent_checkpoint_lanes, next_pipeline_prompt_chunk_group,
+        paged_attention_memory_reservations, prompt_chunk_is_final, recurrent_batch_kind_for_input,
+        recurrent_kv_floor_bytes, reserve_recurrent_serving_capacity, resolve_lora_execution,
+        should_sample_step, should_try_speculative_sampling, CacheMemoryReservations, ForwardCache,
+        LogitsSelection, ModelForwardContext, RecurrentBatchKind, RecurrentCheckpointBudget,
+        RecurrentPrefixBudget,
     };
     use crate::{
         kv_cache::{
@@ -3006,7 +3264,7 @@ mod tests {
         paged_attention::block_hash::MultimodalAttentionPolicy,
         pipeline::prompt_chunks::PromptChunkPlan,
         pipeline::text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        MemoryGpuConfig, MessageContent, PagedAttentionConfig, PagedCacheType,
+        MemoryGoal, MessageContent, PagedAttentionConfig, PagedCacheType,
     };
     use candle_core::{Device, DeviceLocation, Tensor};
     use either::Either;
@@ -3127,12 +3385,9 @@ mod tests {
             snapshot_bytes: SNAPSHOT_BYTES,
             current_capacity: 9,
             current_lanes: 1,
-            memory_total: 100 * GIB,
-            memory_available: 68 * GIB,
-            allocation_available: 66 * GIB,
+            allocation_available: 53 * GIB,
             future_reserved_bytes: 7 * GIB,
             kv_floor_bytes: 5 * GIB,
-            memory_utilization: Some(0.85),
         })
         .unwrap();
 
@@ -3150,12 +3405,9 @@ mod tests {
             snapshot_bytes: SNAPSHOT_BYTES,
             current_capacity: 9,
             current_lanes: 1,
-            memory_total: 100 * GIB,
-            memory_available: 68 * GIB,
-            allocation_available: 66 * GIB,
+            allocation_available: 53 * GIB,
             future_reserved_bytes: 7 * GIB,
             kv_floor_bytes: 5 * GIB,
-            memory_utilization: Some(0.85),
         })
         .unwrap();
 
@@ -3173,12 +3425,9 @@ mod tests {
             snapshot_bytes: SNAPSHOT_BYTES,
             current_capacity: 9,
             current_lanes: 1,
-            memory_total: 100 * GIB,
-            memory_available: 68 * GIB,
-            allocation_available: 66 * GIB,
+            allocation_available: 53 * GIB,
             future_reserved_bytes: 7 * GIB,
             kv_floor_bytes: 5 * GIB,
-            memory_utilization: Some(0.85),
         })
         .unwrap();
 
@@ -3195,12 +3444,9 @@ mod tests {
             snapshot_bytes: GIB,
             current_capacity: 9,
             current_lanes: 1,
-            memory_total: 100 * GIB,
-            memory_available: 15 * GIB,
             allocation_available: 15 * GIB,
             future_reserved_bytes: 0,
             kv_floor_bytes: 0,
-            memory_utilization: None,
         })
         .unwrap();
 
@@ -3211,12 +3457,9 @@ mod tests {
     fn recurrent_context_floor_preserves_requested_kv_bytes() {
         const MIB: usize = 1024 * 1024;
 
-        let bytes = recurrent_kv_floor_bytes(
-            MemoryGpuConfig::ContextSize(1_000_000),
-            100 * 1024 * MIB,
-            1024,
-        )
-        .unwrap();
+        let bytes =
+            recurrent_kv_floor_bytes(MemoryGoal::KvTokens(1_000_000), 100 * 1024 * MIB, 1024)
+                .unwrap();
 
         assert_eq!(bytes, 977 * MIB);
     }
@@ -3244,14 +3487,14 @@ mod tests {
         .unwrap();
         let cache = EitherCache::Hybrid(Arc::new(Mutex::new(hybrid)));
         let config =
-            PagedAttentionConfig::new(None, MemoryGpuConfig::MbAmount(1), PagedCacheType::Auto)
+            PagedAttentionConfig::new(None, MemoryGoal::KvBytes(1024 * 1024), PagedCacheType::Auto)
                 .unwrap()
                 .with_serving_capacity(16)
                 .unwrap()
                 .with_recurrent_checkpoint_lanes(8)
                 .unwrap();
 
-        reserve_recurrent_serving_capacity(&cache, config, false, false, &Device::Cpu, 1).unwrap();
+        reserve_recurrent_serving_capacity(&cache, &config, false, false, &Device::Cpu, 1).unwrap();
 
         let cache = cache.hybrid();
         assert_eq!(cache.checkpoint_lanes(), 1);
@@ -3283,14 +3526,14 @@ mod tests {
         .unwrap();
         let cache = EitherCache::Hybrid(Arc::new(Mutex::new(hybrid)));
         let config =
-            PagedAttentionConfig::new(None, MemoryGpuConfig::MbAmount(1), PagedCacheType::Auto)
+            PagedAttentionConfig::new(None, MemoryGoal::KvBytes(1024 * 1024), PagedCacheType::Auto)
                 .unwrap()
                 .with_serving_capacity(64)
                 .unwrap()
                 .with_recurrent_checkpoint_lanes(8)
                 .unwrap();
 
-        reserve_recurrent_serving_capacity(&cache, config, true, true, &Device::Cpu, 1).unwrap();
+        reserve_recurrent_serving_capacity(&cache, &config, true, true, &Device::Cpu, 1).unwrap();
 
         let cache = cache.hybrid();
         assert_eq!(cache.recurrent_capacity(), 65);
@@ -3325,14 +3568,14 @@ mod tests {
         .unwrap();
         let cache = EitherCache::Hybrid(Arc::new(Mutex::new(hybrid)));
         let config =
-            PagedAttentionConfig::new(None, MemoryGpuConfig::MbAmount(1), PagedCacheType::Auto)
+            PagedAttentionConfig::new(None, MemoryGoal::KvBytes(1024 * 1024), PagedCacheType::Auto)
                 .unwrap()
                 .with_serving_capacity(64)
                 .unwrap()
                 .with_recurrent_checkpoint_lanes(1)
                 .unwrap();
 
-        reserve_recurrent_serving_capacity(&cache, config, true, true, &Device::Cpu, 1).unwrap();
+        reserve_recurrent_serving_capacity(&cache, &config, true, true, &Device::Cpu, 1).unwrap();
 
         let cache = cache.hybrid();
         assert_eq!(cache.recurrent_capacity(), 65);
@@ -3344,11 +3587,32 @@ mod tests {
     }
 
     #[test]
+    fn automatic_prefix_capacity_uses_the_limiting_recurrent_device() {
+        let roomy = RecurrentPrefixBudget {
+            snapshot_bytes: 10,
+            persistent_bytes: 1000,
+            execution_bytes: 1000,
+        };
+        let limited = RecurrentPrefixBudget {
+            snapshot_bytes: 20,
+            persistent_bytes: 240,
+            execution_bytes: 100,
+        };
+        assert_eq!(automatic_recurrent_prefix_capacity(16, &[roomy]), 16);
+        assert_eq!(
+            automatic_recurrent_prefix_capacity(16, &[roomy, limited]),
+            4
+        );
+        assert_eq!(automatic_recurrent_prefix_capacity(2, &[roomy, limited]), 2);
+    }
+
+    #[test]
     fn recurrent_prefix_reservation_includes_staging_and_device_baselines() {
         let reservations = add_recurrent_prefix_memory_reservations(
             CacheMemoryReservations {
                 primary_device_bytes: 100,
                 secondary_device_bytes: 50,
+                ..Default::default()
             },
             HashMap::from([
                 (DeviceLocation::Cpu, 10),
@@ -3362,6 +3626,8 @@ mod tests {
 
         assert_eq!(reservations.primary_device_bytes, 130);
         assert_eq!(reservations.secondary_device_bytes, 140);
+        assert_eq!(reservations.primary_staging_bytes, 10);
+        assert_eq!(reservations.secondary_staging_bytes, 30);
     }
 
     #[test]
@@ -3387,17 +3653,19 @@ mod tests {
         .unwrap();
         let cache = EitherCache::Hybrid(Arc::new(Mutex::new(hybrid)));
         let config =
-            PagedAttentionConfig::new(None, MemoryGpuConfig::MbAmount(1), PagedCacheType::Auto)
+            PagedAttentionConfig::new(None, MemoryGoal::KvBytes(1024 * 1024), PagedCacheType::Auto)
                 .unwrap()
                 .with_base_device_memory_reservation(100)
                 .unwrap()
-                .with_recurrent_prefix_capacity(2);
+                .with_recurrent_prefix_capacity(crate::PrefixCacheCapacity::Fixed(2));
 
         let reservations =
-            paged_attention_memory_reservations(&cache, config, &Device::Cpu).unwrap();
+            paged_attention_memory_reservations(&cache, &config, &Device::Cpu).unwrap();
 
         assert_eq!(reservations.primary_device_bytes, 676);
         assert_eq!(reservations.secondary_device_bytes, 0);
+        assert_eq!(reservations.primary_staging_bytes, 192);
+        assert_eq!(reservations.secondary_staging_bytes, 0);
     }
     use serde_json::Value;
 

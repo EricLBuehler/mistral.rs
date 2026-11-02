@@ -18,8 +18,10 @@ use crate::openapi_doc::get_openapi_doc;
 use crate::{
     anthropic::{anthropic_count_tokens, anthropic_error_response, anthropic_messages},
     approvals::{resolve_agent_approval, ApprovalBroker},
+    audio_transcription::{audio_transcriptions, audio_translations},
     chat_completion::chatcompletions,
     completions::completions,
+    decisions::systemone,
     embeddings::embeddings,
     files::{
         delete_file, get_container_file, get_container_file_content, get_file, get_file_content,
@@ -39,15 +41,16 @@ use crate::{
     responses::{cancel_response, create_response, delete_response, get_response},
     route_registry::{
         AGENT_APPROVAL_ROUTE, ANTHROPIC_COUNT_TOKENS_ROUTE, ANTHROPIC_MESSAGES_ROUTE,
-        CALIBRATION_APPLY_ROUTE, CALIBRATION_START_ROUTE, CALIBRATION_STATUS_ROUTE,
-        CANCEL_RESPONSE_ROUTE, CHAT_COMPLETIONS_ROUTE, COMPLETIONS_ROUTE, CONTAINER_FILES_ROUTE,
+        AUDIO_TRANSCRIPTIONS_ROUTE, AUDIO_TRANSLATIONS_ROUTE, CALIBRATION_APPLY_ROUTE,
+        CALIBRATION_START_ROUTE, CALIBRATION_STATUS_ROUTE, CANCEL_RESPONSE_ROUTE,
+        CHAT_COMPLETIONS_ROUTE, COMPLETIONS_ROUTE, CONTAINER_FILES_ROUTE,
         CONTAINER_FILE_CONTENT_ROUTE, CONTAINER_FILE_ROUTE, EMBEDDINGS_ROUTE, FILES_ROUTE,
         FILE_CONTENT_ROUTE, FILE_ROUTE, HEALTH_ROUTE, IMAGE_GENERATION_ROUTE,
         LIST_LORA_ADAPTERS_ROUTE, LOAD_LORA_ADAPTER_ROUTE, MODELS_ROUTE, MODEL_STATUS_ROUTE,
         RELOAD_MODEL_ROUTE, RESPONSES_ROUTE, RESPONSE_ROUTE, RE_ISQ_ROUTE, ROOT_ROUTE,
         SESSION_ROUTE, SKILLS_ROUTE, SKILL_VERSIONS_ROUTE, SPEECH_GENERATION_ROUTE,
-        SYSTEM_DOCTOR_ROUTE, SYSTEM_INFO_ROUTE, TUNE_MODEL_ROUTE, UNLOAD_LORA_ADAPTER_ROUTE,
-        UNLOAD_MODEL_ROUTE,
+        SYSTEMONE_ROUTE, SYSTEM_DOCTOR_ROUTE, SYSTEM_INFO_ROUTE, TUNE_MODEL_ROUTE,
+        UNLOAD_LORA_ADAPTER_ROUTE, UNLOAD_MODEL_ROUTE,
     },
     skills::{list_skill_versions, list_skills, upload_skill, upload_skill_version, SkillStore},
     speech_generation::speech_generation,
@@ -380,6 +383,7 @@ fn init_router(
         )
         .route(COMPLETIONS_ROUTE.path, post(completions))
         .route(EMBEDDINGS_ROUTE.path, post(embeddings))
+        .route(SYSTEMONE_ROUTE.path, post(systemone))
         .route(MODELS_ROUTE.path, get(models))
         .route(LIST_LORA_ADAPTERS_ROUTE.path, get(list_lora_adapters))
         .route(UNLOAD_MODEL_ROUTE.path, post(unload_model))
@@ -409,6 +413,8 @@ fn init_router(
             get(get_container_file_content),
         )
         .route(SPEECH_GENERATION_ROUTE.path, post(speech_generation))
+        .route(AUDIO_TRANSCRIPTIONS_ROUTE.path, post(audio_transcriptions))
+        .route(AUDIO_TRANSLATIONS_ROUTE.path, post(audio_translations))
         .route(AGENT_APPROVAL_ROUTE.path, post(resolve_agent_approval))
         .route(RESPONSES_ROUTE.path, post(create_response))
         .route(SKILLS_ROUTE.path, get(list_skills).post(upload_skill))
@@ -451,6 +457,9 @@ fn init_router(
         .layer(Extension(skill_store))
         .layer(Extension(agentic_defaults))
         .layer(Extension(lora_adapter_api))
+        .layer(Extension(std::sync::Arc::new(
+            crate::audio_history::AudioHistoryStore::default(),
+        )))
         .with_state(state);
 
     Ok(router)

@@ -11,9 +11,9 @@ sidebar:
 ```text
 __init__(
     which: Which,
-    max_seqs: int = 16,
+    max_seqs: int = 32,
     no_kv_cache: bool = False,
-    prefix_cache_n: int = 16,
+    prefix_cache_n: int | None = None,
     token_source: str = 'cache',
     mtp_model: str | None = None,
     mtp_n_predict: int | None = None,
@@ -22,9 +22,7 @@ __init__(
     num_device_layers: list[str] | None = None,
     in_situ_quant: str | None = None,
     anymoe_config: AnyMoeConfig | None = None,
-    pa_gpu_mem: int | None = None,
-    pa_gpu_mem_usage: float | None = None,
-    pa_ctxt_len: int | None = None,
+    memory_goal: str | float | None = None,
     pa_blk_size: int | None = None,
     pa_cache_type: PagedCacheType | None = None,
     no_paged_attn: bool = False,
@@ -42,46 +40,49 @@ __init__(
 
 Load a model.
 
-- `which` specifies which model to load.
-- `max_seqs` specifies how many sequences may be running at any time.
-- `no_kv_cache` disables the KV cache.
-- `prefix_cache_n` sets the number of sequences to hold in the device prefix cache; older ones are evicted (dropped) and re-prefilled on a later match.
-- `token_source` specifies where to load the HF token from.
-    The token source follows the following format: "literal:<value>", "env:<value>", "path:<value>", "cache" to use a cached token or "none" to use no token.
-- `mtp_model` attaches an MTP assistant from a model id or path.
-- `mtp_n_predict` controls the number of assistant tokens proposed per speculative step. If unset, the assistant generation config is used.
-- `chat_template` specifies an optional JINJA chat template as a JSON file.
-    This chat template should have `messages`, `add_generation_prompt`, `bos_token`, `eos_token`, and `unk_token` as inputs.
-    It is used if the automatic deserialization fails. If this ends with `.json` (i.e., it is a file) then that template is loaded.
-- `jinja_explicit` allows an explicit JINJA chat template file to be used. If specified, this overrides all other chat templates.
-- `num_device_layers` sets the number of layers to load and run on each device.
-    Each element follows the format ORD:NUM where ORD is the device ordinal and NUM is
-    the corresponding number of layers. Note: this is deprecated in favor of automatic device mapping.
-- `in_situ_quant` sets the optional in-situ quantization for a model.
-- `anymoe_config` specifies the AnyMoE config. If this is set, then the model will be loaded as an AnyMoE model.
-- `pa_gpu_mem`: GPU memory to allocate for KV cache with PagedAttention in MBs.
-    PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-    The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
-- `pa_gpu_mem_usage`: Percentage of GPU memory to utilize after allocation of KV cache with PagedAttention, from 0 to 1.
-    If this is not set and the device is CUDA, it will default to `0.9`.
-    PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-    The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
-- `pa_ctxt_len`: Total context length to allocate the KV cache for (total number of tokens which the KV cache can hold).
-    PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-    The priority is as follows: `pa-ctxt-len` > `pa-gpu-mem-usage` > `pa-gpu-mem`.
-    This is the default setting, and it defaults to the `max-seq-len` specified in after the model type.
-- `pa_blk_size` sets the block size (number of tokens per block) for PagedAttention. If this is not set and the device is CUDA,
-    it will default to 32. PagedAttention is supported on CUDA and Metal. It is automatically activated on CUDA but not on Metal.
-- `pa_cache_type` sets the PagedAttention KV cache type (auto or f8e4m3). Defaults to `auto`.
-- `no_paged_attn` disables PagedAttention on CUDA. Because PagedAttention is already disabled on Metal, this is only applicable on CUDA.
-- `paged_attn` enables PagedAttention on Metal. Because PagedAttention is already enabled on CUDA, this is only applicable on Metal.
-- `seed`, used to ensure reproducible random number generation.
-- `enable_search`: Enable searching compatible with the OpenAI `web_search_options` setting. This loads the selected search embedding reranker (EmbeddingGemma by default).
-- `search_embedding_model`: select which built-in search embedding model to load (currently `"embedding_gemma"`).
-- `search_callback`: Custom Python callable to perform web searches. Should accept a query string and return a list of dicts with keys "title", "description", "url", and "content".
-- `tool_callbacks`: Mapping from tool name to Python callable invoked for generic tool calls. Each callable receives the tool name and a dict of arguments and should return the tool output as a string.
-- `code_execution_config`: enables the built-in Python code execution tool. Pass a `CodeExecutionConfig` to configure the interpreter, per-call timeout, and working directory. Per-request, set `ChatCompletionRequest.enable_code_execution=True`.
-- `shell_config`: enables the built-in shell tool. Pass a `ShellConfig` to configure the shell, per-call timeout, and working directory. Per-request, set `ChatCompletionRequest.enable_shell=True` or provide `ChatCompletionRequest.shell_skills`.
+- `which`: the model to load. See [Which](/reference/python/which/).
+- `max_seqs`: how many requests can run at once.
+- `no_kv_cache`: turn off the KV cache, and paged attention with it.
+- `prefix_cache_n`: how many finished requests' caches to keep, so a later request that starts
+  with the same prompt can skip recomputing it.
+    - `None` (default): keep up to 16. Models with recurrent layers may keep fewer to fit memory.
+    - A number: keep exactly that many.
+    - `0`: turn prefix caching off.
+- `token_source`: where to read the Hugging Face token. One of `"cache"`, `"none"`,
+  `"literal:<token>"`, `"env:<VAR>"`, or `"path:<file>"`.
+- `mtp_model`: a separate drafter model, by ID or path, for
+  [speculative decoding](/guides/perf/speculative-decoding/).
+- `mtp_n_predict`: how many tokens the drafter proposes per step. If unset, mistral.rs picks the
+  depth as it runs. See [draft depth](/guides/perf/speculative-decoding/#draft-depth).
+- `chat_template`: fallback chat template, used only when the model's files don't include one. A JSON
+  file with a `chat_template` key, plus optional `bos_token`, `eos_token`, and `unk_token`.
+- `jinja_explicit`: a `.jinja` chat template file. It overrides every other template source.
+- `num_device_layers`: place layers by hand instead of mapping them automatically. Each entry is
+  `"ORD:NUM"`, putting `NUM` layers on device `ORD`. A single number puts that many on device 0.
+- `in_situ_quant`: quantize the weights while loading. Takes a format such as `"q4k"`, or a bit width
+  such as `"4"` that picks a format for the device. See
+  [quantize a model](/guides/quantization/quantize-a-model/).
+- `anymoe_config`: load the model as an AnyMoE model. See `AnyMoeConfig`.
+- `memory_goal`: how much memory to plan for. A fraction or a size requires paged attention.
+  See [paged attention](/guides/perf/paged-attention/#memory-budget).
+    - `None` (default): size the KV cache from the memory left after loading.
+    - A fraction such as `0.9`: keep weights, working memory, and cache under that share of GPU memory.
+    - A size such as `"8GiB"` or `"65536tokens"`: give the KV cache exactly that much.
+- `pa_blk_size`: tokens per paged attention block: 8, 16, or 32. Defaults to 32.
+- `pa_cache_type`: KV cache storage type. See `PagedCacheType`.
+- `no_paged_attn`: turn paged attention off. It's on by default on CUDA and Metal.
+- `paged_attn`: require paged attention, failing if the device doesn't support it. Can't be combined
+  with `no_paged_attn`.
+- `seed`: random seed, for reproducible sampling.
+- `enable_search`: load a reranker for web search results. The default is EmbeddingGemma.
+- `search_embedding_model`: which reranker to load. The only option is `"embedding_gemma"`.
+- `search_callback`: a function to run web searches yourself. It takes the query string and returns
+  a list of dicts with `"title"`, `"description"`, `"url"`, and `"content"`.
+- `tool_callbacks`: map of tool name to a Python function that runs that tool. The function gets the
+  tool name and a dict of arguments, and returns the result as a string.
+- `mcp_client_config`: connect to MCP servers and give the model their tools. See [MCP](/reference/python/mcp/).
+- `code_execution_config`: turn on the built-in Python tool. See `CodeExecutionConfig`.
+- `shell_config`: turn on the built-in shell tool. See `ShellConfig`.
 
 ### `Runner.send_chat_completion_request`
 
@@ -119,6 +120,17 @@ Send a completion request to the mistral.rs engine, returning the response objec
 | --- | --- | --- | --- |
 | `request` | `CompletionRequest` | required | The completion request. |
 | `model_id` | `str \| None` | `None` | Optional model ID to send the request to. If None, uses the default model. |
+
+### `Runner.send_decision_request`
+
+```text
+send_decision_request(
+    request: DecisionRequest,
+    model_id: str | None = None,
+) -> DecisionResponse
+```
+
+Evaluate named decision questions with the selected model, without text generation.
 
 ### `Runner.send_embedding_request`
 
@@ -173,7 +185,13 @@ generate_audio(
 ) -> SpeechGenerationResponse
 ```
 
-Generate audio given a (model specific) prompt. PCM and sampling rate as well as the number of channels is returned.
+Generate speech with a dedicated speech model such as Dia or a chat speech
+model such as LFM3-Audio or LFM3-Omni. Returns PCM samples, sample rate, and
+channel count. LFM3 uses audio-only synthesis with its default voice.
+
+Use send_chat_completion_request with modalities and audio for custom chat
+prompts, mixed text/speech output, encoded formats, or PCM16 streaming.
+HTTP instructions, speed, and audio.id history are not options on this helper.
 
 **Parameters**
 
@@ -396,9 +414,28 @@ load_lora_adapter(
 ) -> LoraAdapterInfo
 ```
 
-Load a local LoRA adapter, optionally replacing with generation CAS.
+Load a LoRA adapter from a local directory under the name `alias`.
 
-**Raises:** LoraAdapterError: The operation failed; inspect `error.code` for recovery.
+By default this fails if `alias` is already loaded. With `load_inplace=True`, it replaces the
+alias instead. Requests already running keep the adapter version they started with.
+
+To avoid overwriting someone else's change, also pass `expected_generation`, the generation you
+last saw for the alias. The replace then happens only if the alias still points at it. If it was
+changed first, the call fails with code `lora_generation_mismatch` and nothing changes.
+
+**Parameters**
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `alias` | `str` | required | Name that requests use to select the adapter. |
+| `adapter_dir` | `str \| PathLike[str]` | required | Directory with `adapter_config.json` and `adapter_model.safetensors`. |
+| `model_id` | `str \| None` | `None` | Model to load it into. If None, uses the default model. |
+| `load_inplace` | `bool` | `False` | Replace `alias` if it's already loaded. |
+| `expected_generation` | `str \| None` | `None` | Replace only if the alias still points at this generation. Requires `load_inplace=True`. |
+
+**Returns:** The alias and its new generation.
+
+**Raises:** LoraAdapterError: The load failed. `code` says why.
 
 ### `Runner.unload_lora_adapter`
 
@@ -410,9 +447,19 @@ unload_lora_adapter(
 ) -> LoraAdapterInfo
 ```
 
-Unregister a LoRA alias while in-flight requests retain their generation.
+Remove `alias`. Requests already running keep using its adapter until they finish.
 
-**Raises:** LoraAdapterError: The operation failed; inspect `error.code` for recovery.
+**Parameters**
+
+| Name | Type | Default | Description |
+| --- | --- | --- | --- |
+| `alias` | `str` | required | Alias to remove. |
+| `model_id` | `str \| None` | `None` | Model to remove it from. If None, uses the default model. |
+| `expected_generation` | `str \| None` | `None` | Remove only if the alias still points at this generation. If it was changed first, the call fails with code `lora_generation_mismatch`. |
+
+**Returns:** The removed alias.
+
+**Raises:** LoraAdapterError: The unload failed. `code` says why.
 
 ### `Runner.list_lora_adapters`
 
@@ -422,9 +469,9 @@ list_lora_adapters(
 ) -> list[LoraAdapterInfo]
 ```
 
-List loaded LoRA adapters for a model.
+List the loaded adapter aliases for a model.
 
-**Raises:** LoraAdapterError: The operation failed; inspect `error.code` for recovery.
+**Raises:** LoraAdapterError: The call failed, for example because the model has no LoRA runtime. `code` says why.
 
 ### `Runner.lora_adapter_status`
 
@@ -432,9 +479,9 @@ List loaded LoRA adapters for a model.
 lora_adapter_status(model_id: str | None = None) -> LoraRuntimeStatus
 ```
 
-Return loaded aliases and complete resident-generation capacity usage.
+Report loaded aliases, adapter generations in memory, and the adapter limits for a model.
 
-**Raises:** LoraAdapterError: The operation failed; inspect `error.code` for recovery.
+**Raises:** LoraAdapterError: The call failed, for example because the model has no LoRA runtime. `code` says why.
 
 ### `Runner.list_models_with_status`
 
@@ -545,8 +592,8 @@ List all stored agentic session IDs.
 find_file(file_id: str) -> File | None
 ```
 
-Look up a produced file by id. Returns the full body even if the
-file was wire-truncated in the response payload.
+Look up a file by ID and return it with its full body, even if the response left the body out.
+Returns None if no file has that ID. Files are kept for 30 minutes.
 
 
 ## `CalibrationStatus`
@@ -563,25 +610,27 @@ file was wire-truncated in the response payload.
 
 ## `LoraAdapterError`
 
-A dynamic LoRA lifecycle operation failed.
+Raised when a dynamic LoRA operation fails. See the
+[error codes](/guides/customize/lora-adapters/#troubleshooting).
 
-| Field | Type |
-| --- | --- |
-| `code` | `str` |
+| Field | Type | Description |
+| --- | --- | --- |
+| `code` | `str` | Why it failed, such as `lora_generation_mismatch` or `lora_adapter_not_found`. |
 
 
 ## `LoraAdapterInfo`
 
-A loaded alias and the immutable generation it currently selects.
+A loaded adapter alias and the generation it points to now. A generation is one exact set of
+adapter files, identified by a hash of its config and weights. See `LoraAdapterGeneration`.
 
-| Field | Type |
-| --- | --- |
-| `alias` | `str` |
-| `source` | `str` |
-| `revision` | `str \| None` |
-| `generation` | `str` |
-| `rank` | `int` |
-| `bytes` | `int` |
+| Field | Type | Description |
+| --- | --- | --- |
+| `alias` | `str` | Name that requests use to select the adapter. |
+| `source` | `str` | Repo or directory the adapter was loaded from. |
+| `revision` | `str \| None` | Hub revision requested at load, if any. |
+| `generation` | `str` | 64-character ID of the generation the alias points to now. |
+| `rank` | `int` | Highest LoRA rank in the adapter's config. |
+| `bytes` | `int` | Memory used by this generation's adapter tensors, in bytes. |
 
 ### `LoraAdapterInfo.exact`
 
@@ -589,37 +638,38 @@ A loaded alias and the immutable generation it currently selects.
 exact() -> LoraAdapterGeneration
 ```
 
-Select this exact immutable generation in a request.
+Return a selector for this exact generation, to pass as a request's `adapter`.
 
 
 ## `LoraResidentGenerationInfo`
 
-One device-resident generation, including retired generations still leased.
+One adapter generation held in memory. When an alias is replaced or unloaded, its old generation
+is retired: no alias points to it, but it stays in memory until the requests using it finish.
 
-| Field | Type |
-| --- | --- |
-| `generation` | `str` |
-| `aliases` | `list[str]` |
-| `rank` | `int` |
-| `bytes` | `int` |
-| `retired` | `bool` |
-| `active_leases` | `int` |
+| Field | Type | Description |
+| --- | --- | --- |
+| `generation` | `str` | 64-character generation ID. |
+| `aliases` | `list[str]` | Aliases that point to this generation now. |
+| `rank` | `int` | Highest LoRA rank in the adapter's config. |
+| `bytes` | `int` | Memory used by this generation's adapter tensors, in bytes. |
+| `retired` | `bool` | True if no alias points to it and it stays only for requests still using it. |
+| `active_leases` | `int` | How many in-flight requests are using it. |
 
 
 ## `LoraRuntimeStatus`
 
-Loaded aliases, resident generations, active leases, and capacity limits.
+Adapter memory use and limits for one model.
 
-| Field | Type |
-| --- | --- |
-| `adapters` | `list[LoraAdapterInfo]` |
-| `generations` | `list[LoraResidentGenerationInfo]` |
-| `resident_generations` | `int` |
-| `retired_generations` | `int` |
-| `resident_bytes` | `int` |
-| `max_adapters` | `int` |
-| `max_rank` | `int` |
-| `max_bytes` | `int` |
+| Field | Type | Description |
+| --- | --- | --- |
+| `adapters` | `list[LoraAdapterInfo]` | Loaded aliases. |
+| `generations` | `list[LoraResidentGenerationInfo]` | Every generation in memory, including retired ones. |
+| `resident_generations` | `int` | Number of generations in memory. |
+| `retired_generations` | `int` | How many of those are retired and kept only for running requests. |
+| `resident_bytes` | `int` | Memory used by all adapter tensors, in bytes. |
+| `max_adapters` | `int` | `max_adapters` limit set on `Which.Lora` or `Which.GGUF`. |
+| `max_rank` | `int` | `max_rank` limit set on `Which.Lora` or `Which.GGUF`. |
+| `max_bytes` | `int` | `max_bytes` limit set on `Which.Lora` or `Which.GGUF`. |
 
 ---
 

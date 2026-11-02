@@ -16,4 +16,3 @@ mistralrs uninstall [OPTIONS]
 | Option | Default | Description |
 |---|---|---|
 | `-y, --yes` | `false` | Skip the confirmation prompt |
-

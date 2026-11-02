@@ -5,60 +5,55 @@ description: Upload files, attach them to Chat Completions or Responses requests
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-mistral.rs supports OpenAI-compatible user file inputs on the server API and local SDKs:
+You can attach files such as CSVs, JSON, logs, or source code to a request and ask the model about them. With code execution or shell turned on, the model can also open the files from Python or the command line, for example to load a CSV with pandas.
 
-- [`POST /v1/files`](/reference/http-api-generated/operations/upload_file/) multipart uploads with `purpose="user_data"`.
-- [`POST /v1/responses`](/reference/http-api-generated/operations/create_response/) `input_file` content parts with `file_id`, `file_data`, or `file_url`.
-- [`POST /v1/chat/completions`](/reference/http-api-generated/operations/chatcompletions/) `file` content parts with `file_id` or `file_data`.
-- Rust SDK [`InputFile`](/reference/rust-sdk/) on `RequestBuilder::with_input_file(...)`.
-- Python SDK [`InputFile`](/reference/python/files/) on `ChatCompletionRequest.input_files`.
+mistral.rs accepts files the same ways OpenAI does:
 
-Use this when a request needs to analyze or transform user-provided files, or when a Responses shell/Skill workflow should see request files in the session working directory.
-
-For field-level compatibility notes, see [OpenAI compatibility](/reference/openai-compatibility/). For wire schema and lifetime rules, see [HTTP API file semantics](/reference/http-api/#file-wire-schemas-and-semantics).
-
-## File handling
-
-`file_data` is decoded before it reaches the model. Base64 is never placed in prompt context.
-
-Uploaded, inline, URL-fetched, and SDK-provided files are visible through the server file endpoints:
-
-- [`GET /v1/files`](/reference/http-api-generated/operations/list_files/)
-- [`GET /v1/files/{id}`](/reference/http-api-generated/operations/get_file/)
-- [`GET /v1/files/{id}/content`](/reference/http-api-generated/operations/get_file_content/)
-
-Text-like UTF-8 files get:
-
-- metadata in prompt context,
-- a decoded preview of up to 4096 chars per file,
-- a total preview budget of 32768 chars per request,
-- access to additional text during agentic tool runs when the preview is not enough.
-
-Binary or non-UTF-8 files get metadata only in prompt context. They are still stored, downloadable from `GET /v1/files/{id}/content`, and mounted into shell/code workdirs when those tools are active.
-
-Extraction support is intentionally simple:
-
-| File kind | Behavior |
+| How | Where it works |
 |---|---|
-| Text-like UTF-8 files | Text, CSV, JSON, XML, Markdown, YAML, TOML, HTML, source files, and other valid UTF-8 payloads are readable as text. |
-| Binary or structured documents | PDFs, images, archives, spreadsheets, and other binary formats are stored and mounted, but mistral.rs does not extract OCR, PDF text, or spreadsheet summaries yet. |
+| Upload once with [`POST /v1/files`](/reference/http-api-generated/operations/upload_file/) (`purpose="user_data"`), then reference the returned `file_id` | Chat Completions `file` parts, Responses `input_file` parts |
+| Send the contents inline as base64 or a data URL in `file_data` | Chat Completions and Responses |
+| Give a public `http` or `https` URL in `file_url` | Responses only |
+| Pass an `InputFile` in the [Rust](/reference/rust-sdk/) or [Python](/reference/python/files/) SDK | `RequestBuilder::with_input_file(...)`, `ChatCompletionRequest.input_files` |
 
-Responses `file_url` fetches only `http` and `https` URLs, with a timeout, redirect cap, decoded-size cap, and basic local/private host rejection. Chat Completions does not support file URLs; upload the file first or use inline `file_data`.
+Field-level details are in [OpenAI compatibility](/reference/openai-compatibility/) and the [HTTP file reference](/reference/http-api/#file-wire-schemas-and-semantics).
 
-Start a server:
+## What the model sees
+
+| File type | What the model gets |
+|---|---|
+| UTF-8 text: plain text, CSV, JSON, XML, Markdown, YAML, TOML, HTML, source code | The file's name, size, and type, plus the first 4,096 characters. Previews share a budget of 32,768 characters per request. |
+| Anything else: PDFs, images, spreadsheets, archives | Only the name, size, and type. mistral.rs doesn't extract PDF text, run OCR, or summarize spreadsheets. |
+
+When a text file is longer than its preview, the model can read the rest itself. On the server, every request with attached files gets built-in tools to list the files and read any part of one, up to 64K characters per read, so you don't need to turn anything else on. The model never sees base64.
+
+With [code execution](/guides/agents/enable-code-execution/) or [shell](/guides/agents/enable-shell/) on, every attached file, binary or text, is also copied into the session's working directory under its original name. That's how the model can work with formats it can't read directly, for example by opening a PDF or spreadsheet from Python. [Skills](/guides/agents/skills/) can use the same files.
+
+To get every tool at once, start the server with `--agent`:
 
 ```bash
 mistralrs serve --agent -m <model>
 ```
 
-`--agent` is useful when you want file pagination, Python code execution, shell execution, or OpenAI-compatible Skills. Plain requests still receive text previews even without tool execution.
+## Download, list, or delete files
 
-Related setup guides:
+| Endpoint | Returns |
+|---|---|
+| `GET /v1/files` | Metadata for every stored file. |
+| `GET /v1/files/{id}` | One file's metadata. |
+| `GET /v1/files/{id}/content` | The file's bytes. |
+| `DELETE /v1/files/{id}` | Removes the file. |
 
-- [Build an agent](/guides/agents/build-an-agent/) for the `--agent` preset.
-- [Code execution](/guides/agents/enable-code-execution/) and [shell execution](/guides/agents/enable-shell/) for workdir mounting behavior.
-- [OpenAI-compatible Skills](/guides/agents/skills/) for using request files alongside uploaded Skills.
-- [Agentic runtime](/guides/agents/agentic-runtime/) for streaming progress, sessions, and file events.
+Uploaded files and files the tools wrote live in the same store. The server keeps each one for 30 minutes after it was uploaded or last used in a request, so upload shortly before you need a file.
+
+## URL inputs
+
+`file_url` works only in the Responses API. The server downloads the file itself, with these limits:
+
+- `http` and `https` only, and the host must be public: local and private addresses are refused.
+- 30-second timeout, at most 3 redirects, and at most 64 MiB.
+
+In Chat Completions, upload the file first or send it inline.
 
 ## Examples
 
@@ -168,9 +163,9 @@ Full examples:
 - [Python SDK](/examples/python/file-inputs/)
 - [Rust SDK](/examples/rust/advanced/file-inputs/)
 
-## Other server shapes
+## Attach a file without uploading it
 
-Use inline Responses `input_file` when you do not want a separate upload:
+To skip the separate upload, put the file's contents in the request as a base64 data URL. In the Responses API, use an `input_file` part with `filename` and `file_data`:
 
 ```python
 import base64
@@ -201,7 +196,7 @@ response = client.responses.create(
 print(response.output_text)
 ```
 
-Chat Completions uses `type: "file"` content parts:
+In Chat Completions, use a `file` part with the same two fields nested under `file`:
 
 ```python
 import base64

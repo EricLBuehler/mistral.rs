@@ -3,15 +3,7 @@ title: Anthropic Messages API
 description: Use Anthropic-compatible clients with the mistralrs HTTP server.
 ---
 
-mistral.rs exposes Anthropic-compatible Messages endpoints at `POST /v1/messages`
-and `POST /v1/messages/count_tokens`. They run through the same local model,
-scheduler, chat templates, multimodal handling, tool calling, and [agentic runtime](/guides/agents/agentic-runtime/)
-as `/v1/chat/completions`. Anthropic clients use `http://localhost:1234` as the
-base URL (no `/v1` suffix; the client appends `/v1/messages` itself).
-
-Start the server as for the [OpenAI-compatible API](/guides/serve/openai-compatible-apis/);
-both APIs are always served. For Claude Code configuration, see
-[Use Codex and Claude Code](/guides/serve/coding-agents/).
+Use Anthropic clients with `http://localhost:1234` as the base URL, without `/v1`. The server exposes `/v1/messages` and `/v1/messages/count_tokens` alongside the OpenAI endpoints. Start it with the [serving guide](/guides/serve/openai-compatible-apis/); see [coding agents](/guides/serve/coding-agents/) for Claude Code setup.
 
 ## Basic request
 
@@ -59,28 +51,7 @@ The server accepts Anthropic headers for client compatibility, but does not vali
 
 ## Streaming
 
-Set `stream: true` to receive Anthropic-style Server-Sent Events:
-
-```bash
-curl http://localhost:1234/v1/messages \
-  -H 'content-type: application/json' \
-  -H 'x-api-key: not-used' \
-  -H 'anthropic-version: 2023-06-01' \
-  -d '{
-    "model": "default",
-    "max_tokens": 128,
-    "stream": true,
-    "messages": [{"role": "user", "content": "Count to three."}]
-  }'
-```
-
-The stream uses `message_start`, `content_block_start`, `content_block_delta`,
-`content_block_stop`, `message_delta`, and `message_stop` events. It also emits
-Anthropic `ping` events while idle. Text deltas use
-`{"type":"text_delta","text":"..."}`. Thinking deltas use
-`{"type":"thinking_delta","thinking":"..."}` when the model produces separate
-reasoning content. Tool-call argument deltas use
-`{"type":"input_json_delta","partial_json":"..."}`.
+Add `stream: true` to the request. The server emits Anthropic message/content-block events, including text, thinking, and tool-argument deltas, plus idle pings. See [HTTP streaming semantics](/reference/http-api/#streaming-anthropic-messages) for event names and the [streaming example](/examples/server/anthropic-streaming/) for a parser.
 
 ## Count tokens
 
@@ -145,12 +116,7 @@ mistral.rs agentic extensions accepted on this endpoint: `session_id`,
 
 ## Compatibility status
 
-Core Messages requests and responses, streaming event order, client tool loops,
-stop reasons and sequences, token usage, request IDs, structured errors, and
-`/v1/messages/count_tokens` use Anthropic-compatible wire shapes.
-
-Some hosted Anthropic features have local equivalents rather than identical
-semantics:
+Messages, client tool loops, errors, and token counts use Anthropic wire shapes. Hosted features differ:
 
 | Feature | Local behavior |
 |---|---|
@@ -160,9 +126,7 @@ semantics:
 | Server tools | Web search and code execution use mistral.rs agentic implementations. Their extra streaming events are mistral.rs extensions, not Anthropic server-tool result blocks. |
 | Beta request controls | Unknown forward-compatible fields are ignored. Anthropic context management and context editing are not implemented. |
 
-`max_tokens` must be greater than zero. Authentication headers are accepted for
-client compatibility but are not validated by the local server; use a reverse
-proxy when authentication is required.
+`max_tokens` must be greater than zero.
 
 ## Tool use
 
@@ -210,114 +174,41 @@ Return the result in a later user message with a `tool_result` block:
 }
 ```
 
-For server-executed tools, use the same mistral.rs agent fields as Chat Completions.
-Streaming may include mistral.rs named events such as `agentic_tool_call_progress`,
-`agentic_tool_approval_required`, and `file_produced`.
-
 ## Agentic server tools
 
-Anthropic web search server-tool declarations enable mistral.rs web search for
-the request. The server must be started with search enabled, for example with
-`mistralrs serve --agent ...` or `mistralrs serve --enable-search ...`. Two
-declaration types are accepted:
-
-- `web_search_20250305` enables web search only.
-- `web_search_20260209` (Anthropic's dynamic web-search variant) also enables
-  code execution for the request, because it uses code-backed filtering. The
-  server must additionally be started with code execution enabled.
+Enable the required executors when starting the server, for example with `mistralrs serve --agent ...`. Then include server tools in the request:
 
 ```json
 {
   "tools": [
-    {
-      "type": "web_search_20250305",
-      "name": "web_search",
-      "user_location": {
-        "type": "approximate",
-        "city": "New York",
-        "country": "US",
-        "region": "NY",
-        "timezone": "America/New_York"
-      }
-    }
-  ]
-}
-```
-
-Anthropic code-execution server-tool declarations enable the built-in Python
-tool for the request. The server must be started with code execution enabled,
-for example with `mistralrs serve --agent ...` or
-`mistralrs serve --enable-code-execution ...`.
-
-```json
-{
-  "tools": [
+    {"type": "web_search_20250305", "name": "web_search"},
     {"type": "code_execution_20250825", "name": "code_execution"}
   ],
   "agent_permission": "auto"
 }
 ```
 
-You can combine both server tools. The Anthropic request field
-`tool_choice: {"type":"none"}` disables both client and server tools for that
-request.
+`web_search_20250305` requires search enabled; `web_search_20260209` also requires code execution for dynamic filtering. Code-execution declarations require the Python executor. Search accepts approximate `user_location` fields such as city, country, region, and timezone.
+
+`tool_choice: {"type":"none"}` disables both client and server tools. Server-tool streams include mistral.rs progress, approval, and file events; see [HTTP semantics](/reference/http-api/#streaming-anthropic-messages).
 
 ## Skills
 
-Anthropic-compatible Skills use the same uploaded skill store as
-[OpenAI-compatible Skills](/guides/agents/skills/). Upload a zip or
-multipart skill directory to `POST /v1/skills`, then reference the returned
-custom skill id from `container.skills` on `/v1/messages`.
+Upload a custom Skill through `/v1/skills`, then reference it in a Messages request:
 
-Start the server with shell execution enabled. `--agent` is recommended because
-it also enables the rest of the local agent runtime:
-
-```bash
-mistralrs serve --agent -p 1234 -m Qwen/Qwen3-4B
+```json
+{
+  "container": {
+    "skills": [{"type": "custom", "skill_id": "skill_...", "version": "latest"}]
+  }
+}
 ```
 
-List and upload endpoints accept Anthropic headers. When an Anthropic header is
-present, `GET /v1/skills` returns Anthropic-style fields such as
-`display_title`, `latest_version`, `source`, `has_more`, and `next_page`.
-`source=custom` returns uploaded local Skills; `source=anthropic` returns an
-empty list because mistral.rs does not bundle Anthropic-managed built-in Skills.
+Execution requires shell support (`--enable-shell` or `--agent`). Adding a code-execution tool also enables Python execution for that request. See the [Skills guide](/guides/agents/skills/) for uploads and the [Messages Skills example](/examples/server/anthropic-skills/) for a complete request.
 
-Use the uploaded Skill in a Messages request:
+With Anthropic headers, skill-list responses use `display_title`, `latest_version`, `source`, `has_more`, and `next_page`. `source=custom` lists uploads; `source=anthropic` is empty because built-in Anthropic Skills are not bundled.
 
-```bash
-curl http://localhost:1234/v1/messages \
-  -H 'content-type: application/json' \
-  -H 'x-api-key: not-used' \
-  -H 'anthropic-version: 2023-06-01' \
-  -H 'anthropic-beta: code-execution-2025-08-25,skills-2025-10-02' \
-  -d '{
-    "model": "default",
-    "max_tokens": 1024,
-    "agent_permission": "auto",
-    "max_tool_rounds": 6,
-    "container": {
-      "skills": [
-        {"type": "custom", "skill_id": "skill_...", "version": "latest"}
-      ]
-    },
-    "tools": [
-      {"type": "code_execution_20250825", "name": "code_execution"}
-    ],
-    "messages": [
-      {"role": "user", "content": "Use the uploaded skill to complete the task."}
-    ]
-  }'
-```
-
-Skills are mounted into the shell runtime. The Anthropic code execution tool
-declaration is accepted for client compatibility and enables Python code
-execution too, but the skill bundle itself is read from the shell workdir under
-`skills/<skill-name>/`.
-
-Generated artifacts are available the same way as other mistral.rs agentic
-files. Non-streaming responses include a top-level `files` array, and streaming
-responses emit `file_produced` events. Download bytes from
-`GET /v1/files/{file_id}/content`.
+Generated files appear in response `files[]` or streamed `file_produced` events. Download them from `/v1/files/{file_id}/content`.
 
 ## Examples
 

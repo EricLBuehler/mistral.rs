@@ -1,11 +1,11 @@
 ---
 title: Generate images with diffusion models
-description: Running FLUX and similar image-generation models through the mistralrs OpenAI-compatible API.
+description: Run FLUX and retrieve generated images through HTTP or the native SDKs.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-mistral.rs serves diffusion models through `POST /v1/images/generations`. The main supported model is FLUX; see the [supported models reference](/reference/supported-models/).
+mistral.rs generates images from text prompts with FLUX.1, served at `POST /v1/images/generations`.
 
 ## Running FLUX
 
@@ -13,84 +13,65 @@ mistral.rs serves diffusion models through `POST /v1/images/generations`. The ma
 mistralrs serve -m black-forest-labs/FLUX.1-schnell
 ```
 
-`FLUX.1-schnell` is permissively licensed. `FLUX.1-dev` requires Hugging Face license acceptance: accept on the model page, then authenticate with `mistralrs login`.
+There are two checkpoints:
 
-The CLI and server always load the fully-resident `Flux` path. To trade speed for a much smaller GPU footprint, use the `FluxOffloaded` loader, which is only selectable from the Python and Rust SDKs shown below:
+| Model | Denoising steps | Prompt length | Access |
+| --- | --- | --- | --- |
+| `black-forest-labs/FLUX.1-schnell` | 4, so it's fast | Up to 256 tokens. Longer prompts return an error. | Open |
+| `black-forest-labs/FLUX.1-dev` | 50, with guidance scale 4.0 | Not limited to 256 tokens | Gated: accept the license on its Hugging Face page, then run `hf auth login` or set `HF_TOKEN` |
 
-| Loader | GPU footprint | Availability | Notes |
-|---|---|---|---|
-| `Flux` | Full model resident | CLI, server, SDK | Fully loaded path. Fastest. |
-| `FluxOffloaded` | Much smaller | SDK only | Offloads components to CPU; useful when the full model does not fit. |
-
-Generating an image:
+The step count is fixed per checkpoint; request fields like `steps` and `guidance_scale` are ignored.
 
 <Tabs>
 <TabItem label="HTTP">
 
 ```bash
 curl http://localhost:1234/v1/images/generations \
-  -H "Content-Type: application/json" \
+  -H 'Content-Type: application/json' \
   -d '{
     "model": "default",
-    "prompt": "A photograph of a golden retriever wearing a scarf in autumn leaves.",
-    "n": 1,
+    "prompt": "A golden retriever wearing a scarf in autumn leaves.",
     "height": 1024,
-    "width": 1024
+    "width": 1024,
+    "response_format": "B64Json"
   }'
 ```
-
-The response is JSON with a `data` array. Each entry has either `url` or `b64_json`, controlled by `response_format` (default `Url`); see [Request fields](#request-fields) and [Output handling](#output-handling).
 
 </TabItem>
 <TabItem label="Python">
 
 ```python
-from mistralrs import (
-    DiffusionArchitecture,
-    ImageGenerationResponseFormat,
-    Runner,
-    Which,
-)
+from mistralrs import DiffusionArchitecture, ImageGenerationResponseFormat, Runner, Which
 
-runner = Runner(
-    which=Which.DiffusionPlain(
-        model_id="black-forest-labs/FLUX.1-schnell",
-        arch=DiffusionArchitecture.FluxOffloaded,
-    )
-)
-
+runner = Runner(which=Which.DiffusionPlain(
+    model_id="black-forest-labs/FLUX.1-schnell",
+    arch=DiffusionArchitecture.FluxOffloaded,  # or Flux to keep it all on the GPU
+))
 response = runner.generate_image(
-    "A vibrant sunset in the mountains, high quality.",
+    "A vibrant sunset in the mountains.",
     ImageGenerationResponseFormat.Url,
+    height=1024,
+    width=1024,
+    save_file="sunset.png",
 )
-print(response.data[0].url)
 ```
 
 </TabItem>
 <TabItem label="Rust">
 
 ```rust
-use mistralrs::{
-    DiffusionGenerationParams, DiffusionLoaderType, DiffusionModelBuilder,
-    ImageGenerationResponseFormat,
-};
+use mistralrs::{DiffusionGenerationParams, DiffusionLoaderType,
+    DiffusionModelBuilder, ImageGenerationResponseFormat};
 
 let model = DiffusionModelBuilder::new(
-    "black-forest-labs/FLUX.1-schnell",
-    DiffusionLoaderType::FluxOffloaded,
-)
-.build()
-.await?;
-
-let response = model
-    .generate_image(
-        "A vibrant sunset in the mountains, high quality.".to_string(),
-        ImageGenerationResponseFormat::Url,
-        DiffusionGenerationParams::default(),
-        None,
-    )
-    .await?;
-println!("{}", response.data[0].url.as_ref().unwrap());
+    "black-forest-labs/FLUX.1-schnell", DiffusionLoaderType::FluxOffloaded,
+).build().await?;
+let response = model.generate_image(
+    "A vibrant sunset in the mountains.".to_string(),
+    ImageGenerationResponseFormat::Url,
+    DiffusionGenerationParams { height: 1024, width: 1024 },
+    Some("sunset.png".into()),
+).await?;
 ```
 
 </TabItem>
@@ -98,37 +79,29 @@ println!("{}", response.data[0].url.as_ref().unwrap());
 
 ## Request fields
 
-| Field | Default | Notes |
-|---|---|---|
-| `prompt` | required | Text prompt. |
-| `n` | 1 | Number of images. |
-| `height` | 720 | Output height in pixels. |
-| `width` | 1280 | Output width in pixels. |
-| `response_format` | `"Url"` | `"Url"` (response carries a server-side filename in `url`) or `"B64Json"` (response carries a `data:image/png;base64,...` string in `b64_json`). |
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `prompt` | Required | What to draw |
+| `n` | 1 | How many images to generate |
+| `height`, `width` | 720, 1280 | Output size in pixels. OpenAI's `size` string (such as `"1024x1024"`) is ignored, so set these instead. |
+| `response_format` | `Url` | `Url` saves the image on the server and returns its filename. `B64Json` returns the image inline. See [Output handling](#output-handling). |
 
-`size` (the OpenAI string form) is not supported. Use `height` and `width`.
+## Memory
 
-## Memory notes
+FLUX can't be quantized: `--quant` and `--isq` don't apply to it. The FLUX transformer alone has about 12B parameters, roughly 24 GB at 16-bit precision, and the T5-XXL text encoder needs more memory on top while it reads the prompt.
 
-FLUX is memory-hungry at native precision: the model is roughly 12B parameters, and the T5 XXL text encoder adds a large memory footprint. For low-memory hosts, use the `FluxOffloaded` loader (SDK only) from the [Running FLUX](#running-flux) table.
-
-Diffusion models do not support [ISQ (in-situ quantization)](/reference/quantization-types/). Load them at native precision instead of passing `--quant` or `--isq`; they are generally more sensitive to quantization than language models.
+If that doesn't fit on your GPU, load the offloaded variant from Python or Rust (`FluxOffloaded`, as in the examples above). It keeps the model in system RAM and moves each layer onto the GPU only while that layer runs. GPU memory use drops sharply, but every step copies the model across, so images take longer. The CLI and server always load the full model onto the GPU.
 
 ## Output handling
 
-With `Url` (the default), the server writes the PNG to disk and returns its filename in `url`:
+With `B64Json`, `b64_json` holds a complete data URL (`data:image/png;base64,...`). Strip the prefix before decoding:
 
 ```python
-import shutil
-shutil.copy(response.data[0].url, "out.png")
+import base64
+
+payload = response.data[0].b64_json.split(",", 1)[1]
+with open("out.png", "wb") as output:
+    output.write(base64.b64decode(payload))
 ```
 
-With `B64Json`, `b64_json` is a `data:image/png;base64,...` string. Strip the prefix before decoding:
-
-```python
-import base64, re
-
-payload = re.sub(r"^data:image/\w+;base64,", "", response.data[0].b64_json)
-with open("out.png", "wb") as f:
-    f.write(base64.b64decode(payload))
-```
+With `Url`, the server writes a PNG named like `image-generation-<uuid>.png` into its working directory and returns that filename in `data[0].url`. It's a path on the server's disk, not a download link, so use `B64Json` when your client runs on another machine. In the SDKs, pass `save_file` to choose where the PNG goes.

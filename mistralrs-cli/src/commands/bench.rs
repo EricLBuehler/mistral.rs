@@ -3,8 +3,8 @@
 use anyhow::Result;
 use comfy_table::{presets::UTF8_FULL, Cell, Color, ContentArrangement, Table};
 use mistralrs_core::{
-    initialize_logging, AdapterSelection, Constraint, NormalRequest, Request, RequestMessage,
-    Response, SamplingParams,
+    initialize_logging, AdapterSelection, Constraint, NormalRequest, PrefixCacheCapacity, Request,
+    RequestMessage, Response, SamplingParams,
 };
 use mistralrs_server_core::mistralrs_for_server_builder::MistralRsForServerBuilder;
 use std::{
@@ -115,18 +115,12 @@ pub async fn run_bench(
     let model_id = get_model_id(&model_type);
     // Convert args and load model
     let matformer = runtime.matformer_selection();
-    apply_quant_resolution(&mut model_type, &global.token_source, &matformer).await?;
+    apply_quant_resolution(&mut model_type, &global.token_source, &matformer, None).await?;
     let model_selected = convert_to_model_selected(&model_type, &matformer)?;
     let (max_model_len, hf_config_overrides) = extract_hf_config_settings(&model_type);
 
-    let (
-        paged_attn,
-        paged_attn_gpu_mem,
-        paged_attn_gpu_mem_usage,
-        paged_ctxt_len,
-        paged_attn_block_size,
-        paged_cache_type,
-    ) = extract_paged_attn_settings(&model_type);
+    let (paged_attn, memory_goal, paged_attn_block_size, paged_cache_type) =
+        extract_paged_attn_settings(&model_type)?;
 
     let (cpu, device_layers) = extract_device_settings(&model_type);
     let isq = extract_isq_setting(&model_type);
@@ -141,7 +135,7 @@ pub async fn run_bench(
         .with_no_kv_cache(runtime.no_kv_cache)
         .with_token_source(global.token_source)
         .with_interactive_mode(false)
-        .with_prefix_cache_n(0) // Disable prefix cache for benchmarking
+        .with_prefix_cache_n(PrefixCacheCapacity::DISABLED)
         .with_disable_eos_stop(true) // Always generate exactly gen_len tokens
         .with_mtp_config_optional(runtime.mtp_config())
         .with_max_model_len_optional(max_model_len)
@@ -151,9 +145,7 @@ pub async fn run_bench(
         .with_seed_optional(global.seed)
         .with_num_device_layers_optional(device_layers)
         .with_in_situ_quant_optional(isq)
-        .with_paged_attn_gpu_mem_optional(paged_attn_gpu_mem)
-        .with_paged_attn_gpu_mem_usage_optional(paged_attn_gpu_mem_usage)
-        .with_paged_ctxt_len_optional(paged_ctxt_len)
+        .with_memory_goal(memory_goal)
         .with_paged_attn_block_size_optional(paged_attn_block_size)
         .with_paged_attn_cache_type(paged_cache_type);
 
@@ -395,6 +387,7 @@ async fn run_single_bench(
     let tokens = bench_tokens(prompt_tokens, token_start);
 
     let req = Request::Normal(Box::new(NormalRequest {
+        audio_output: None,
         id: mistralrs.next_request_id(),
         queued_at: None,
         messages: RequestMessage::CompletionTokens(tokens),

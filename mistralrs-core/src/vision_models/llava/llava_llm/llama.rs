@@ -321,16 +321,16 @@ impl Block {
     ) -> Result<Tensor> {
         let residual = x;
         let mut x = self.rms_1.forward(x)?;
-        x = (self.attn.forward(
+        x = self.attn.forward(
             &x,
             attention_mask,
             ctx,
             block_idx,
             kv_cache,
             (&self.rope_parameter.0, &self.rope_parameter.1),
-        )? + residual)?;
-        let residual = &x;
-        x = (self.mlp.forward(&self.rms_2.forward(&x)?)? + residual)?;
+        )?;
+        let (residual, normed) = self.rms_2.forward_add_rms_norm(&x, residual)?;
+        x = (self.mlp.forward(&normed)? + residual)?;
         Ok(x)
     }
 
@@ -393,7 +393,7 @@ impl Llama {
         input_ids: &Tensor,
         ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        let x = self.wte.embedding_forward(input_ids, self.dtype)?;
+        let x = self.wte.embedding_forward(input_ids, self.dtype.into())?;
         self.forward_input_embed(input_ids, x, ctx)
     }
 
@@ -518,7 +518,7 @@ impl IsqModel for Llama {
 
 impl LLaVALLM for Llama {
     fn embed(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.wte.embedding_forward(input_ids, self.dtype)
+        self.wte.embedding_forward(input_ids, self.dtype.into())
     }
     fn forward_input_embed(
         &self,

@@ -1,4 +1,5 @@
 use super::llg::build_llg_factory;
+use super::loaders::ModelDownload;
 use super::{
     get_model_paths, text_models_inputs_processor::ModelInputs, AdapterKind, CacheManager,
     GeneralMetadata, Loader, ModelKind, ModelPaths, PrettyName, QuantizationKind, TokenSource,
@@ -10,27 +11,21 @@ use super::{
 use crate::device_map::{self, DeviceMapper};
 use crate::distributed::WorkerTransferData;
 use crate::gguf::{
-    base_model::infer_hf_base_model_id,
-    convert_gguf_metadata_to_hf_tokenizer,
-    gemma3_bindings::build_gemma3_text_bindings,
-    gemma3_config::{
-        ensure_gemma3_vision_config, gemma3_text_uses_language_model_prefix,
-        prepare_gemma3_text_config,
+    arch_registry::{
+        arch_spec, GgufArchSpec, GgufMultimodalRoute, GgufSynthesisInputs, GgufTextRoute,
+        SynthesizeFn,
     },
-    get_gguf_chat_template, get_gguf_chat_template_from_metadata,
-    multimodal_bindings::build_gemma4_bindings,
-    multimodal_vision_registry::resolve_native_multimodal_gguf,
-    muse_glimmer_bindings::normalize_muse_glimmer_config,
+    base_model::infer_hf_base_model_id,
+    convert_gguf_metadata_to_hf_tokenizer, generation_config_from_metadata, get_gguf_chat_template,
+    get_gguf_chat_template_from_metadata,
+    lfm3_d1_config::decision_model_type,
+    multimodal_vision_registry::NativeMultimodalGguf,
     normal_bindings::build_normal_bindings,
     normal_config::{
         normal_loader_hint_from_external_config, normalize_external_normal_config,
         synthesize_normal_config, validate_normal_config_tensor_inventory,
     },
     normal_registry::{resolve_native_adapter, GgufDescriptor, RopePairing},
-    qwen_multimodal_bindings::{
-        build_qwen_multimodal_bindings, normalize_qwen_multimodal_config,
-        qwen_multimodal_loader_type,
-    },
     validate_external_gguf_tokenizer, GgufTokenizerConversion,
 };
 use crate::gguf::{Content, GGUFArchitecture};
@@ -62,7 +57,6 @@ use crate::{
 use anyhow::{bail, Context, Result};
 use candle_core::{Device, Tensor};
 use either::Either;
-use hf_hub::{Repo, RepoType};
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use std::any::Any;
@@ -74,16 +68,6 @@ use std::{env, fs};
 use tokenizers::Tokenizer;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
-
-const PROJECTOR_REQUIRED_ARCHITECTURES: &[&str] = &[
-    "gemma3n",
-    "gemma4",
-    "llama4",
-    "muse-glimmer",
-    "qwen2vl",
-    "qwen3vl",
-    "qwen3vlmoe",
-];
 
 fn validate_native_dynamic_lora(
     dynamic_lora: Option<&DynamicLoraConfig>,
@@ -118,12 +102,6 @@ fn preferred_hf_config(files: &[String]) -> Option<&'static str> {
     } else {
         None
     }
-}
-
-fn requires_multimodal_projector(architecture: &str) -> bool {
-    PROJECTOR_REQUIRED_ARCHITECTURES
-        .iter()
-        .any(|candidate| candidate.eq_ignore_ascii_case(architecture))
 }
 
 enum Model {
@@ -207,12 +185,15 @@ struct NativeMultimodalLoadArgs<'a> {
 }
 
 fn prepare_native_multimodal_config(
+    spec: &GgufArchSpec,
     loader_type: &MultimodalLoaderType,
     config: &str,
 ) -> Result<String> {
     let config = super::isq::sanitize_quantized_weight_source_config(config)?;
-    let config = normalize_qwen_multimodal_config(loader_type, &config)?;
-    normalize_muse_glimmer_config(loader_type, &config)
+    match spec.normalize_multimodal_config {
+        Some(normalize) => normalize(loader_type, &config),
+        None => Ok(config),
+    }
 }
 
 struct NativeNormalLoadArgs<'a> {
@@ -532,6 +513,24 @@ impl GGUFLoader {
         &self,
         paths: &dyn ModelPaths,
         tokenizer: &ResolvedGgufTokenizer,
+        metadata: &HashMap<String, candle_core::quantized::gguf_file::Value>,
+    ) -> Result<Option<GenerationConfig>> {
+        if let Some(config) = self.resolve_external_generation_config(paths, tokenizer) {
+            return Ok(Some(config));
+        }
+        let config = generation_config_from_metadata(metadata)?;
+        if let Some(config) = &config {
+            config
+                .validate_token_ids(tokenizer.conversion.tokenizer.get_vocab_size(true))
+                .context("Invalid generation token IDs in GGUF metadata")?;
+        }
+        Ok(config)
+    }
+
+    fn resolve_external_generation_config(
+        &self,
+        paths: &dyn ModelPaths,
+        tokenizer: &ResolvedGgufTokenizer,
     ) -> Option<GenerationConfig> {
         let filename = paths.get_gen_conf_filename()?;
         if !tokenizer.generation_config_compatible {
@@ -586,34 +585,32 @@ impl GGUFLoader {
             }
             None => bail!("GGUF metadata is missing `general.architecture`"),
         };
-        if architecture.eq_ignore_ascii_case(crate::gguf::qwen4exp::ARCHITECTURE) {
-            return self.load_native_qwen4exp(
-                archive,
-                NativeNormalLoadArgs {
-                    paths,
-                    dtype,
-                    device,
-                    silent,
-                    mapper,
-                    in_situ_quant,
-                    paged_attn_config,
-                },
-                &[],
-            );
+        if decision_model_type(archive.metadata())?.is_some() {
+            bail!("d1 GGUF requires its companion projector; pass `--mmproj <file>`");
         }
-        if architecture.eq_ignore_ascii_case("gemma3") {
-            return self.load_native_gemma3_text(
-                archive,
-                NativeNormalLoadArgs {
-                    paths,
-                    dtype,
-                    device,
-                    silent,
-                    mapper,
-                    in_situ_quant,
-                    paged_attn_config,
-                },
-            );
+        match arch_spec(architecture).text {
+            GgufTextRoute::NormalRegistry => {}
+            GgufTextRoute::ProjectorRequired => bail!(
+                "GGUF architecture `{architecture}` is supported only as a multimodal model. Pass \
+                 its companion projector with `--mmproj <file>`, or load from a GGUF repository \
+                 that publishes one; text-only `{architecture}` checkpoints are not supported"
+            ),
+            GgufTextRoute::Synthesized(synthesize) => {
+                return self.load_native_synthesized_multimodal(
+                    archive,
+                    NativeNormalLoadArgs {
+                        paths,
+                        dtype,
+                        device,
+                        silent,
+                        mapper,
+                        in_situ_quant,
+                        paged_attn_config,
+                    },
+                    synthesize,
+                    &[],
+                );
+            }
         }
         let metadata_keys = archive
             .metadata()
@@ -629,13 +626,6 @@ impl GGUFLoader {
             Some(candle_core::quantized::gguf_file::Value::String(value)) => Some(value.as_str()),
             _ => None,
         };
-        if requires_multimodal_projector(architecture) {
-            bail!(
-                "GGUF architecture `{architecture}` is supported only as a multimodal model. Pass \
-                 its companion projector with `--mmproj <file>`, or load from a GGUF repository \
-                 that publishes one; text-only `{architecture}` checkpoints are not supported"
-            );
-        }
         let descriptor = GgufDescriptor::new(architecture, &metadata_keys, &tensor_names)?
             .with_model_identity(
                 metadata_string("general.name"),
@@ -692,7 +682,8 @@ impl GGUFLoader {
         let weights = source.sharded_var_builder(Device::Cpu);
 
         let tokenizer = self.resolve_tokenizer(paths, archive.metadata())?;
-        let generation_config = self.resolve_generation_config(paths, &tokenizer);
+        let generation_config =
+            self.resolve_generation_config(paths, &tokenizer, archive.metadata())?;
         let gguf_chat_template =
             if paths.get_template_filename().is_none() && self.chat_template.is_none() {
                 get_gguf_chat_template_from_metadata(archive.metadata())?
@@ -744,68 +735,13 @@ impl GGUFLoader {
         )
     }
 
-    fn load_native_gemma3_text(
-        &self,
-        archive: Arc<mistralrs_quant::GgufArchive>,
-        args: NativeNormalLoadArgs<'_>,
-    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let external_config = read_external_config(args.paths)?;
-        let tensor_names = archive.tensors().keys().cloned().collect::<Vec<_>>();
-        let config = prepare_gemma3_text_config(
-            external_config.as_deref(),
-            archive.metadata(),
-            &tensor_names,
-        )?;
-        let config = stamp_qk_rope_layout(&config, RopePairing::HalfSplit)?;
-        let use_language_model_prefix = gemma3_text_uses_language_model_prefix(&config)?;
-        let bindings = build_gemma3_text_bindings(&archive, use_language_model_prefix)?;
-        self.load_native_synthesized_multimodal(
-            archive,
-            args,
-            SynthesizedMultimodalSource {
-                config,
-                bindings,
-                loader_type: MultimodalLoaderType::Gemma3,
-                preprocessor_config: None,
-                projector_files: &[],
-            },
-        )
-    }
-
-    fn load_native_qwen4exp(
-        &self,
-        archive: Arc<mistralrs_quant::GgufArchive>,
-        args: NativeNormalLoadArgs<'_>,
-        projector_files: &[PathBuf],
-    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
-        let external_config = read_external_config(args.paths)?;
-        let config =
-            crate::gguf::qwen4exp::prepare_qwen4exp_config(external_config.as_deref(), &archive)?;
-        let config = stamp_qk_rope_layout(&config, RopePairing::HalfSplit)?;
-        let bindings = crate::gguf::qwen4exp::build_qwen4exp_bindings(&archive)?;
-        let preprocessor_config = match args.paths.get_preprocessor_config() {
-            Some(path) => Some(fs::read_to_string(path)?),
-            None => crate::gguf::qwen4exp::qwen4exp_preprocessor_config(&archive)?,
-        };
-        self.load_native_synthesized_multimodal(
-            archive,
-            args,
-            SynthesizedMultimodalSource {
-                config,
-                bindings,
-                loader_type: MultimodalLoaderType::Qwen4Exp,
-                preprocessor_config,
-                projector_files,
-            },
-        )
-    }
-
     /// Load a GGUF whose config the loader builds itself into a model implemented as multimodal.
     fn load_native_synthesized_multimodal(
         &self,
         archive: Arc<mistralrs_quant::GgufArchive>,
         args: NativeNormalLoadArgs<'_>,
-        prepared: SynthesizedMultimodalSource<'_>,
+        synthesize: SynthesizeFn,
+        projector_files: &[PathBuf],
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let NativeNormalLoadArgs {
             paths,
@@ -816,14 +752,27 @@ impl GGUFLoader {
             in_situ_quant,
             paged_attn_config,
         } = args;
-        let SynthesizedMultimodalSource {
-            config,
-            bindings,
-            loader_type,
-            preprocessor_config,
-            projector_files,
-        } = prepared;
+        let external_config = read_external_config(paths, self.model_id.is_some())?;
+        let processor_config_path = paths.get_processor_config().clone();
+        let preprocessor_config_path = paths.get_preprocessor_config().clone();
         let internal_dtype = dtype.try_into_dtype(&[device])?;
+        let synthesized = synthesize(&GgufSynthesisInputs {
+            archive: &archive,
+            dtype: internal_dtype,
+            external_config: external_config.as_deref(),
+            processor_config: processor_config_path.as_deref(),
+            preprocessor_config: preprocessor_config_path.as_deref(),
+        })?;
+        let rope_pairing = synthesized.rope_pairing;
+        let config = stamp_qk_rope_layout(&synthesized.config, rope_pairing)?;
+        let bindings = synthesized.bindings;
+        let loader_type = synthesized.loader_type;
+        let preprocessor_config = synthesized.preprocessor_config;
+        validate_native_dynamic_lora(
+            self.dynamic_lora.as_ref(),
+            rope_pairing,
+            &loader_type.to_string(),
+        )?;
         let source = Arc::new(mistralrs_quant::GgufWeightSource::new(
             archive.clone(),
             &bindings,
@@ -831,7 +780,8 @@ impl GGUFLoader {
         )?);
         let weights = source.sharded_var_builder(Device::Cpu);
         let tokenizer = self.resolve_tokenizer(paths, archive.metadata())?;
-        let generation_config = self.resolve_generation_config(paths, &tokenizer);
+        let generation_config =
+            self.resolve_generation_config(paths, &tokenizer, archive.metadata())?;
         let gguf_chat_template =
             if paths.get_template_filename().is_none() && self.chat_template.is_none() {
                 get_gguf_chat_template_from_metadata(archive.metadata())?
@@ -847,7 +797,7 @@ impl GGUFLoader {
             bos_token: tokenizer.conversion.bos,
             eos_token: tokenizer.conversion.eos,
             unk_token: tokenizer.conversion.unk,
-            processor_config: None,
+            processor_config: synthesized.processor_config,
             preprocessor_config,
             source_weight_files: paths
                 .get_weight_filenames()
@@ -855,7 +805,7 @@ impl GGUFLoader {
                 .chain(projector_files)
                 .cloned()
                 .collect(),
-            rope_pairing: RopePairing::HalfSplit,
+            rope_pairing,
         };
         let mut loader = MultimodalLoaderBuilder::new(
             self.config.multimodal_config(),
@@ -908,13 +858,9 @@ impl GGUFLoader {
         let mmproj = mistralrs_quant::GgufArchive::open_components(mmproj_paths)?;
         archive.merge_components(mmproj)?;
         let archive = Arc::new(archive);
-        if architecture.eq_ignore_ascii_case(crate::gguf::qwen4exp::ARCHITECTURE) {
-            validate_native_dynamic_lora(
-                self.dynamic_lora.as_ref(),
-                RopePairing::HalfSplit,
-                &architecture,
-            )?;
-            return self.load_native_qwen4exp(
+        let spec = arch_spec(&architecture);
+        if let GgufMultimodalRoute::Synthesized(synthesize) = spec.multimodal {
+            return self.load_native_synthesized_multimodal(
                 archive,
                 NativeNormalLoadArgs {
                     paths,
@@ -925,34 +871,17 @@ impl GGUFLoader {
                     in_situ_quant,
                     paged_attn_config,
                 },
+                synthesize,
                 mmproj_paths,
             );
         }
 
-        let (loader_type, bindings, rope_pairing) = match architecture.as_str() {
-            "gemma4" => (
-                MultimodalLoaderType::Gemma4,
-                build_gemma4_bindings(&archive)?,
-                RopePairing::HalfSplit,
-            ),
-            "qwen2vl" | "qwen3vl" | "qwen3vlmoe" | "qwen35" | "qwen35moe" => (
-                qwen_multimodal_loader_type(&archive)?,
-                build_qwen_multimodal_bindings(&archive)?,
-                RopePairing::HalfSplit,
-            ),
-            architecture => {
-                let Some(resolved) = resolve_native_multimodal_gguf(&archive)? else {
-                    bail!(
-                        "multimodal GGUF architecture `{architecture}` is not supported by the native multimodal loader"
-                    );
-                };
-                (
-                    resolved.loader_type,
-                    resolved.bindings,
-                    resolved.rope_pairing,
-                )
-            }
-        };
+        let internal_dtype = dtype.try_into_dtype(&[device])?;
+        let NativeMultimodalGguf {
+            loader_type,
+            bindings,
+            rope_pairing,
+        } = spec.resolve_multimodal(&archive, &architecture, internal_dtype)?;
         validate_native_dynamic_lora(self.dynamic_lora.as_ref(), rope_pairing, &architecture)?;
         if paths.get_config_filename().as_os_str().is_empty() {
             bail!(
@@ -960,14 +889,14 @@ impl GGUFLoader {
             );
         }
         let config = prepare_native_multimodal_config(
+            spec,
             &loader_type,
             &fs::read_to_string(paths.get_config_filename())?,
         )?;
         let config = stamp_qk_rope_layout(&config, rope_pairing)?;
-        if architecture == "gemma3" {
-            ensure_gemma3_vision_config(&config)?;
+        if let Some(validate) = spec.validate_multimodal_config {
+            validate(&config)?;
         }
-        let internal_dtype = dtype.try_into_dtype(&[device])?;
         let source = Arc::new(mistralrs_quant::GgufWeightSource::new(
             archive.clone(),
             &bindings,
@@ -975,7 +904,8 @@ impl GGUFLoader {
         )?);
         let weights = source.sharded_var_builder(Device::Cpu);
         let tokenizer = self.resolve_tokenizer(paths, archive.metadata())?;
-        let generation_config = self.resolve_generation_config(paths, &tokenizer);
+        let generation_config =
+            self.resolve_generation_config(paths, &tokenizer, archive.metadata())?;
         let gguf_chat_template =
             if paths.get_template_filename().is_none() && self.chat_template.is_none() {
                 get_gguf_chat_template_from_metadata(archive.metadata())?
@@ -1051,10 +981,17 @@ impl GGUFLoader {
         }
 
         let model_archive = mistralrs_quant::GgufArchive::open(paths.get_weight_filenames())?;
+        if matches!(
+            model_archive.metadata_value("general.architecture"),
+            Some(candle_core::quantized::gguf_file::Value::String(architecture))
+                if !arch_spec(architecture).infer_multimodal_assets
+        ) {
+            return Ok(None);
+        }
         let synthesizes_config = matches!(
             model_archive.metadata_value("general.architecture"),
             Some(candle_core::quantized::gguf_file::Value::String(architecture))
-                if architecture.eq_ignore_ascii_case(crate::gguf::qwen4exp::ARCHITECTURE)
+                if arch_spec(architecture).synthesizes_multimodal_config()
         );
         let config_missing =
             paths.get_config_filename().as_os_str().is_empty() && !synthesizes_config;
@@ -1114,11 +1051,7 @@ impl GGUFLoader {
                 return Ok(None);
             }
         };
-        let api = api.repo(Repo::with_revision(
-            inferred_model_id.clone(),
-            RepoType::Model,
-            revision.to_string(),
-        ));
+        let api = api.repo(inferred_model_id.clone(), revision.to_string());
         let model_id = Path::new(&inferred_model_id);
         let files = match list_repo_files(&api, model_id, true, revision) {
             Ok(files) => files,
@@ -1198,26 +1131,16 @@ impl GGUFLoader {
 }
 
 impl Loader for GGUFLoader {
-    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
-    fn load_model_from_hf(
+    fn download_model_from_hf(
         &self,
         revision: Option<String>,
         token_source: TokenSource,
-        dtype: &dyn TryIntoDType,
-        device: &Device,
         silent: bool,
-        mapper: DeviceMapSetting,
-        in_situ_quant: Option<IsqType>,
-        paged_attn_config: Option<PagedAttentionConfig>,
-    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+    ) -> Result<ModelDownload> {
         let _progress_guard = ProgressScopeGuard::new(silent);
-        let cache = self
-            .config
-            .hf_cache_path
-            .clone()
-            .map(hf_hub::Cache::new)
-            .unwrap_or_default();
-        GLOBAL_HF_CACHE.get_or_init(|| cache);
+        if let Some(cache) = self.config.hf_cache_path.as_ref() {
+            GLOBAL_HF_CACHE.get_or_init(|| cache.clone());
+        }
         let revision = revision.unwrap_or_else(|| "main".to_string());
         if self.mmproj_filenames.as_ref().is_some_and(|filenames| {
             filenames.is_empty() || filenames.iter().any(|filename| filename.trim().is_empty())
@@ -1238,7 +1161,7 @@ impl Loader for GGUFLoader {
             silent,
             true
         );
-        let paths = paths?;
+        let mut download = ModelDownload::new(paths?);
         if let Some(mmproj_filenames) = self.mmproj_filenames.as_ref() {
             let mmproj_paths: anyhow::Result<Box<dyn ModelPaths>> = get_paths_gguf!(
                 LocalModelPaths,
@@ -1250,20 +1173,36 @@ impl Loader for GGUFLoader {
                 silent,
                 false
             );
-            let mmproj_paths = mmproj_paths?;
-            let inferred_paths = self.infer_multimodal_asset_paths(
-                paths.as_ref(),
-                mmproj_paths.get_weight_filenames(),
+            download.projector_paths = mmproj_paths?.get_weight_filenames().to_vec();
+            if let Some(paths) = self.infer_multimodal_asset_paths(
+                download.paths.as_ref(),
+                &download.projector_paths,
                 &token_source,
                 silent,
-            )?;
-            let paths = inferred_paths
-                .as_ref()
-                .map(|paths| paths as &dyn ModelPaths)
-                .unwrap_or(paths.as_ref());
+            )? {
+                download.paths = Box::new(paths);
+            }
+        }
+        Ok(download)
+    }
+
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
+    fn load_model_from_hf(
+        &self,
+        revision: Option<String>,
+        token_source: TokenSource,
+        dtype: &dyn TryIntoDType,
+        device: &Device,
+        silent: bool,
+        mapper: DeviceMapSetting,
+        in_situ_quant: Option<IsqType>,
+        paged_attn_config: Option<PagedAttentionConfig>,
+    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+        let download = self.download_model_from_hf(revision, token_source, silent)?;
+        if !download.projector_paths.is_empty() {
             return self.load_native_multimodal(NativeMultimodalLoadArgs {
-                paths,
-                mmproj_paths: mmproj_paths.get_weight_filenames(),
+                paths: download.paths.as_ref(),
+                mmproj_paths: &download.projector_paths,
                 dtype,
                 device,
                 silent,
@@ -1272,9 +1211,8 @@ impl Loader for GGUFLoader {
                 paged_attn_config,
             });
         }
-
         self.load_model_from_path(
-            paths.as_ref(),
+            download.paths.as_ref(),
             dtype,
             device,
             silent,
@@ -1314,7 +1252,8 @@ impl Loader for GGUFLoader {
         {
             bail!("ISQ conversion is only supported by the native GGUF loading path");
         }
-        if paged_attn_config.is_some() {
+        if let Some(config) = paged_attn_config {
+            super::disable_unsupported_paged_attention(&mut Some(config))?;
             warn!("Adapter models do not currently support PagedAttention, running without");
         }
 
@@ -1396,7 +1335,7 @@ impl Loader for GGUFLoader {
         )?;
 
         let tokenizer = self.resolve_tokenizer(paths, model.get_metadata())?;
-        let gen_conf = self.resolve_generation_config(paths, &tokenizer);
+        let gen_conf = self.resolve_generation_config(paths, &tokenizer, model.get_metadata())?;
         let GgufTokenizerConversion {
             tokenizer,
             bos,
@@ -1477,6 +1416,16 @@ impl Loader for GGUFLoader {
             .as_ref()
             .and_then(GenerationConfig::generation_defaults);
         let eos = calculate_eos_tokens(&chat_template, gen_conf.as_ref(), &tokenizer);
+        #[cfg(feature = "metal")]
+        super::metal_warmup::prepare_model(super::metal_warmup::MetalModelWarmup {
+            device,
+            mapper: pipeline_mapper.as_ref(),
+            model: &model_config_metadata,
+            paged: None,
+            dtype: internal_dtype,
+            tracked_modules: &[],
+            packed_prefill: false,
+        })?;
         Ok(Arc::new(Mutex::new(GGUFPipeline {
             model,
             tokenizer: tokenizer.into(),
@@ -1502,6 +1451,9 @@ impl Loader for GGUFLoader {
                 sliding_window: None,
                 cache_config: None,
                 cache_engine: None,
+                memory_plan: None,
+                #[cfg(feature = "cuda")]
+                runtime_memory_reservation: None,
                 model_metadata: Some(Arc::new(model_config_metadata)),
                 modalities: Modalities {
                     input: vec![SupportedModality::Text],
@@ -1676,26 +1628,53 @@ impl Pipeline for GGUFPipeline {
 
 impl AnyMoePipelineMixin for GGUFPipeline {}
 
-struct SynthesizedMultimodalSource<'a> {
-    config: String,
-    bindings: mistralrs_quant::GgufBindingMap,
-    loader_type: MultimodalLoaderType,
-    preprocessor_config: Option<String>,
-    projector_files: &'a [PathBuf],
-}
-
-fn read_external_config(paths: &dyn ModelPaths) -> Result<Option<String>> {
+fn read_external_config(
+    paths: &dyn ModelPaths,
+    require_calibration: bool,
+) -> Result<Option<String>> {
     if paths.get_config_filename().as_os_str().is_empty() {
         Ok(None)
     } else {
-        Ok(Some(fs::read_to_string(paths.get_config_filename())?))
+        let config = fs::read_to_string(paths.get_config_filename())?;
+        let mut value: serde_json::Value = serde_json::from_str(&config)?;
+        if is_d1_config(&value) {
+            if !require_calibration && needs_d1_calibration(paths.get_config_filename())? {
+                return Ok(None);
+            }
+            crate::vision_models::lfm3_d1::config::inject_calibration(
+                &mut value,
+                paths.get_config_filename(),
+            )?;
+            Ok(Some(serde_json::to_string(&value)?))
+        } else {
+            Ok(Some(config))
+        }
     }
+}
+
+fn is_d1_config(config: &serde_json::Value) -> bool {
+    config["architectures"]
+        .as_array()
+        .is_some_and(|architectures| architectures.iter().any(|name| name == "D1Model"))
+}
+
+pub(crate) fn needs_d1_calibration(config_path: &Path) -> Result<bool> {
+    if config_path.as_os_str().is_empty() {
+        return Ok(false);
+    }
+    let config: serde_json::Value = serde_json::from_str(&fs::read_to_string(config_path)?)?;
+    Ok(is_d1_config(&config)
+        && config.get("d1_calibration").is_none()
+        && !config_path
+            .with_file_name(crate::vision_models::lfm3_d1::config::CALIBRATION_FILENAME)
+            .is_file())
 }
 
 #[cfg(test)]
 mod tests {
+
     use super::{
-        preferred_hf_config, prepare_native_multimodal_config, requires_multimodal_projector,
+        arch_spec, preferred_hf_config, prepare_native_multimodal_config,
         resolve_tokenizer_candidate, validate_legacy_gguf_adapter_qk_layout,
         validate_native_dynamic_lora, DynamicLoraConfig, GGUFSpecificConfig,
         GgufTokenizerConversion, TokenizerFallback,
@@ -1715,18 +1694,6 @@ mod tests {
             eos: Some(marker.to_string()),
             unk: None,
         }
-    }
-
-    #[test]
-    fn scopes_main_only_multimodal_architectures() {
-        assert!(!requires_multimodal_projector("qwen35"));
-        assert!(!requires_multimodal_projector("QWEN35"));
-        assert!(!requires_multimodal_projector("gemma3"));
-        assert!(requires_multimodal_projector("gemma3n"));
-        assert!(requires_multimodal_projector("gemma4"));
-        assert!(!requires_multimodal_projector("qwen35moe"));
-        assert!(!requires_multimodal_projector("mistral3"));
-        assert!(requires_multimodal_projector("muse-glimmer"));
     }
 
     #[test]
@@ -1773,23 +1740,26 @@ mod tests {
             },
             "vision_config":{"hidden_size":64}
         }"#;
-        for loader_type in [
-            MultimodalLoaderType::Gemma3,
-            MultimodalLoaderType::Gemma3n,
-            MultimodalLoaderType::Gemma4,
-            MultimodalLoaderType::Idefics3,
-            MultimodalLoaderType::Llama4,
-            MultimodalLoaderType::Lfm2Vl,
-            MultimodalLoaderType::Mistral3,
-            MultimodalLoaderType::MuseGlimmer,
-            MultimodalLoaderType::Qwen2VL,
-            MultimodalLoaderType::Qwen2_5VL,
-            MultimodalLoaderType::Qwen3VL,
-            MultimodalLoaderType::Qwen3VLMoE,
-            MultimodalLoaderType::Qwen3_5,
-            MultimodalLoaderType::Qwen3_5Moe,
+        for (architecture, loader_type) in [
+            ("gemma3", MultimodalLoaderType::Gemma3),
+            ("gemma3n", MultimodalLoaderType::Gemma3n),
+            ("gemma4", MultimodalLoaderType::Gemma4),
+            ("idefics3", MultimodalLoaderType::Idefics3),
+            ("llama4", MultimodalLoaderType::Llama4),
+            ("lfm2", MultimodalLoaderType::Lfm2Vl),
+            ("lfm3", MultimodalLoaderType::Lfm3Vl),
+            ("mistral3", MultimodalLoaderType::Mistral3),
+            ("muse-glimmer", MultimodalLoaderType::MuseGlimmer),
+            ("qwen2vl", MultimodalLoaderType::Qwen2VL),
+            ("qwen2vl", MultimodalLoaderType::Qwen2_5VL),
+            ("qwen3vl", MultimodalLoaderType::Qwen3VL),
+            ("qwen3vlmoe", MultimodalLoaderType::Qwen3VLMoE),
+            ("qwen35", MultimodalLoaderType::Qwen3_5),
+            ("qwen35moe", MultimodalLoaderType::Qwen3_5Moe),
         ] {
-            let config = prepare_native_multimodal_config(&loader_type, raw).unwrap();
+            let config =
+                prepare_native_multimodal_config(arch_spec(architecture), &loader_type, raw)
+                    .unwrap();
             let config: serde_json::Value = serde_json::from_str(&config).unwrap();
             assert!(config["quantization_config"].is_null(), "{loader_type:?}");
             assert!(

@@ -2,9 +2,9 @@
 
 use clap::{Args, ValueEnum};
 use mistralrs_core::{
-    AutoDeviceMapParams, HfConfigOverrides, IsqOrganization, LoraAdapterSpec, LoraRuntimeConfig,
-    ModelDType, NormalLoaderType, DEFAULT_LORA_MAX_ADAPTERS, DEFAULT_LORA_MAX_BYTES,
-    DEFAULT_LORA_MAX_RANK, MAX_LORA_ALIAS_BYTES,
+    HfConfigOverrides, IsqOrganization, LoraAdapterSpec, LoraRuntimeConfig, ModelDType,
+    NormalLoaderType, DEFAULT_LORA_MAX_ADAPTERS, DEFAULT_LORA_MAX_BYTES, DEFAULT_LORA_MAX_RANK,
+    MAX_LORA_ALIAS_BYTES,
 };
 use serde::Deserialize;
 use std::{
@@ -36,16 +36,16 @@ pub struct ModelSourceOptions {
     #[arg(short = 'a', long, value_parser = parse_arch)]
     pub arch: Option<NormalLoaderType>,
 
-    /// Model data type
+    /// Weight data type: `auto`, `bf16`, `f16`, or `f32`. `auto` picks the best one for the device.
     #[arg(long, default_value = "auto", value_parser = parse_dtype)]
     #[serde(default)]
     pub dtype: ModelDType,
 
-    /// Recursively merged JSON overrides for the Hugging Face model config
+    /// JSON to merge into the model's `config.json`; nested objects merge key by key
     #[arg(long)]
     pub hf_overrides: Option<HfConfigOverrides>,
 
-    /// Runtime model context length
+    /// Maximum context length, in tokens
     #[arg(long, value_parser = parse_positive_usize)]
     pub max_model_len: Option<usize>,
 }
@@ -63,8 +63,7 @@ pub(super) fn parse_positive_usize(value: &str) -> Result<usize, String> {
 /// Format options for model loading
 #[derive(Args, Clone, Default, Deserialize)]
 pub struct FormatOptions {
-    /// Model format: plain (safetensors), GGUF, or GGML.
-    /// Auto-detected from `-f` when not specified.
+    /// Model file format. Auto-detected from `-f` when omitted.
     #[arg(long, value_enum)]
     pub format: Option<ModelFormat>,
 
@@ -72,15 +71,15 @@ pub struct FormatOptions {
     #[arg(short = 'f', long)]
     pub quantized_file: Option<String>,
 
-    /// GGUF projector override; auto-selected when unambiguous (semicolon-separated for multiple)
+    /// GGUF vision or audio projector file(s), separated by semicolons. Auto-selected when there is only one.
     #[arg(long)]
     pub mmproj: Option<String>,
 
-    /// Optional model ID overriding configuration, tokenizer, and processor assets for a quantized model
+    /// Model ID to take the config, tokenizer, and processor files from, for a GGUF or GGML model
     #[arg(long)]
     pub tok_model_id: Option<String>,
 
-    /// GQA value for GGML models
+    /// Grouped-query attention (GQA) factor for GGML models
     #[arg(long, default_value_t = 1)]
     #[serde(default = "default_gqa")]
     pub gqa: usize,
@@ -241,12 +240,12 @@ impl FormatOptions {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, Default, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ModelFormat {
-    /// Plain model (safetensors)
+    /// Safetensors weights
     #[default]
     Plain,
-    /// GGUF quantized model
+    /// GGUF file
     Gguf,
-    /// GGML quantized model
+    /// GGML file
     Ggml,
 }
 
@@ -321,7 +320,8 @@ pub struct AdapterOptions {
     #[serde(default)]
     pub lora: Vec<LoraAdapterSpec>,
 
-    /// Maximum loaded LoRA aliases and, independently, resident adapter generations
+    /// Maximum LoRA adapters loaded at once. Separately caps adapter versions in memory, counting old
+    /// versions still used by running requests.
     #[arg(
         long,
         default_value_t = DEFAULT_LORA_MAX_ADAPTERS,
@@ -475,7 +475,8 @@ pub struct MultimodalAdapterOptions {
     )]
     pub lora: Vec<LoraAdapterSpec>,
 
-    /// Maximum loaded LoRA aliases and, independently, resident adapter generations
+    /// Maximum LoRA adapters loaded at once. Separately caps adapter versions in memory, counting old
+    /// versions still used by running requests.
     #[arg(long, default_value_t = DEFAULT_LORA_MAX_ADAPTERS)]
     pub lora_max_adapters: usize,
 
@@ -651,35 +652,36 @@ fn default_lora_max_bytes() -> u64 {
 /// Quantization options
 #[derive(Args, Clone, Default, Deserialize)]
 pub struct QuantizationOptions {
-    /// Quantization target. Inference commands select a matching GGUF or UQFF artifact when
-    /// available. Source checkpoints without a matching UQFF use in-situ quantization. `tune`
-    /// evaluates the requested level instead of selecting an artifact. Accepts numeric levels
-    /// (`2`, `3`, `4`, `5`, `6`, `8`) or supported quantization names.
+    /// Quantization level: a bit width (`2`, `3`, `4`, `5`, `6`, `8`), a named type such as `q4k` or
+    /// `fp8`, or `auto` to pick one that fits your hardware. Uses a matching prebuilt file when one
+    /// exists, otherwise quantizes at load time.
     #[arg(long, conflicts_with_all = ["in_situ_quant", "from_uqff"])]
     pub quant: Option<String>,
 
-    /// In-situ quantization target. Accepts numeric levels (`2`, `3`, `4`, `5`, `6`, `8`) or
-    /// raw quant names (`q4k`, `q8_0`, etc.). Supports compatible GGUF sources.
+    /// Quantize the weights at load time (in-situ quantization, ISQ): a bit width (`2`, `3`, `4`,
+    /// `5`, `6`, `8`) or a named type such as `q4k` or `q8_0`. Unlike `--quant`, never swaps in a
+    /// prebuilt file.
     #[arg(long = "isq")]
     #[serde(rename = "isq", alias = "in_situ_quant")]
     pub in_situ_quant: Option<String>,
 
-    /// UQFF artifact to load. Accepts a filename, numeric quantization level (`2`, `3`, `4`, `5`,
-    /// `6`, `8`), or quantization type (`q4k`, `afq8`, etc.). Report-declared artifacts and
-    /// conventional shard names expand to all of their shards. Use semicolons only to list
-    /// disjoint shards manually.
+    /// Prebuilt UQFF file to load: a filename, a bit width (`2`, `3`, `4`, `5`, `6`, `8`), or a type
+    /// such as `q4k` or `afq8`. Sharded files load every shard; separate names with `;` to pick
+    /// shards yourself.
     #[arg(long)]
     pub from_uqff: Option<String>,
 
-    /// ISQ organization strategy: default or moqe
+    /// Which layers to quantize: `default` for all supported layers, or `moqe` for only the experts
+    /// of a mixture-of-experts model, leaving the rest unquantized
     #[arg(long)]
     pub isq_organization: Option<IsqOrganization>,
 
-    /// imatrix file for enhanced quantization
+    /// Importance matrix (imatrix) file, which tells the quantizer which weights matter most and
+    /// improves quality at low bit widths
     #[arg(long)]
     pub imatrix: Option<PathBuf>,
 
-    /// Calibration file for imatrix generation
+    /// Text file to compute an importance matrix from, instead of passing `--imatrix`
     #[arg(long, conflicts_with = "imatrix")]
     pub calibration_file: Option<PathBuf>,
 }
@@ -692,34 +694,24 @@ pub struct DeviceOptions {
     #[serde(default)]
     pub cpu: bool,
 
-    /// Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20")
-    /// Omit for automatic device mapping
+    /// Layers per device as `ORD:NUM;...`, e.g. `0:10;1:20` puts 10 layers on GPU 0 and 20 on GPU 1.
+    /// Omit for automatic mapping.
     #[arg(short = 'n', long, value_delimiter = ';')]
     pub device_layers: Option<Vec<String>>,
 
-    /// Topology YAML file for device mapping
+    /// YAML file setting the device and quantization for each layer range
     #[arg(long)]
     pub topology: Option<PathBuf>,
 
     /// Custom Hugging Face cache directory
     #[arg(long)]
     pub hf_cache: Option<PathBuf>,
-
-    /// Max sequence length for automatic device mapping
-    #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
-    #[serde(default = "default_max_seq_len")]
-    pub max_seq_len: usize,
-
-    /// Max batch size for automatic device mapping
-    #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
-    #[serde(default = "default_max_batch_size")]
-    pub max_batch_size: usize,
 }
 
 /// Multimodal model specific options
 #[derive(Args, Clone, Default, Deserialize)]
 pub struct MultimodalOptions {
-    /// Maximum logical tensor memory retained by the multimodal encoder cache, in MiB
+    /// Memory cap, in MiB, for cached image and audio encoder outputs
     #[arg(long = "encoder-cache-memory-mb")]
     pub encoder_cache_memory_mb: Option<NonZeroUsize>,
 
@@ -731,7 +723,7 @@ pub struct MultimodalOptions {
     #[arg(long)]
     pub max_num_images: Option<usize>,
 
-    /// Maximum image dimension for device mapping
+    /// Largest image side, in pixels, to reserve memory for when placing layers on devices
     #[arg(long)]
     pub max_image_length: Option<usize>,
 }
@@ -746,14 +738,6 @@ fn parse_dtype(s: &str) -> Result<ModelDType, String> {
 
 fn default_gqa() -> usize {
     1
-}
-
-fn default_max_seq_len() -> usize {
-    AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN
-}
-
-fn default_max_batch_size() -> usize {
-    AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE
 }
 
 #[cfg(test)]

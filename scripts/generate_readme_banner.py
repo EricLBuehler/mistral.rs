@@ -40,28 +40,28 @@ class Theme:
     panel_border: str | None
     panel_shadow: str | None
     fg: str
-    blue: str
+    accent: str
     cursor: str
 
 
 THEMES = {
     "dark": Theme(
-        canvas="#020305",
+        canvas="#121110",
         panel=None,
         panel_border=None,
         panel_shadow=None,
-        fg="#f8fafc",
-        blue="#38bdf8",
-        cursor="#7dd3fc",
+        fg="#f8f6f3",
+        accent="#f0884a",
+        cursor="#ffb07f",
     ),
     "light": Theme(
-        canvas="#f8fafc",
-        panel="#020305",
-        panel_border="#d8dee9",
-        panel_shadow="#dbe3ee",
-        fg="#f8fafc",
-        blue="#38bdf8",
-        cursor="#7dd3fc",
+        canvas="#ffffff",
+        panel="#121110",
+        panel_border="#e6e2de",
+        panel_shadow="#f2f0ee",
+        fg="#f8f6f3",
+        accent="#f0884a",
+        cursor="#ffb07f",
     ),
 }
 
@@ -179,7 +179,7 @@ def draw_banner(
     tagline_x = (CANVAS_SIZE[0] - final_width) // 2
     tagline_y = ART_TOP + art_height + TAGLINE_GAP
     draw.text(
-        (tagline_x, tagline_y), tagline_prefix, font=tagline_font, fill=theme.blue
+        (tagline_x, tagline_y), tagline_prefix, font=tagline_font, fill=theme.accent
     )
 
     if cursor_on:

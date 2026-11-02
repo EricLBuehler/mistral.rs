@@ -782,11 +782,10 @@ impl DecoderLayer {
         let xs = self
             .attn
             .forward(&xs, attention_mask, kv_cache, ctx, layer_idx)?;
-        let xs = (xs + residual)?;
-        let residual = &xs;
-        let xs = self
-            .moe_or_mlp
-            .forward(&xs.apply(&self.post_attention_layernorm)?)?;
+        let (residual, xs) = self
+            .post_attention_layernorm
+            .forward_add_rms_norm(&xs, residual)?;
+        let xs = self.moe_or_mlp.forward(&xs)?;
         residual + xs
     }
 }
@@ -949,7 +948,9 @@ impl DeepSeekV2 {
     }
 
     pub fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
-        let mut xs = self.embed_tokens.embedding_forward(input_ids, self.dtype)?;
+        let mut xs = self
+            .embed_tokens
+            .embedding_forward(input_ids, self.dtype.into())?;
         let cache = &mut self.cache.normal().0;
         let mask_cache = ctx.mask_cache(cache);
         let attention_mask = CausalMasker.make_causal_mask(

@@ -92,6 +92,14 @@ name = "speech"
 path = "examples/models/speech/main.rs"
 
 [[example]]
+name = "lfm3_d1"
+path = "examples/models/lfm3_d1/main.rs"
+
+[[example]]
+name = "lfm3_audio"
+path = "examples/models/lfm3_audio/main.rs"
+
+[[example]]
 name = "asr"
 path = "examples/models/asr/main.rs"
 

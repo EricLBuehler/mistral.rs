@@ -301,7 +301,7 @@ fn lark_string(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{parse_qwen_tool_calls, QwenParser};
-    use crate::tools::parsers::{specialize_required_tool_call_grammar, ToolFormatParser};
+    use crate::tools::parsers::{specialize_tool_call_grammar, ToolFormatParser};
     use mistralrs_mcp::{Function, ToolType};
     use serde_json::json;
     use serde_json::Value;
@@ -474,7 +474,7 @@ print(1 < 2)
 
         assert!(!matcher.compute_mask().unwrap().is_allowed(start_token));
 
-        specialize_required_tool_call_grammar(&mut grammar, factory.tok_env().tok_trie());
+        specialize_tool_call_grammar(&mut grammar, factory.tok_env().tok_trie());
 
         let lark = grammar.grammars[0].lark_grammar.as_ref().unwrap();
         assert!(lark.contains("start: <tool_call> (json_call | xml_call)"));

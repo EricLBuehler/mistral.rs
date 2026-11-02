@@ -180,7 +180,7 @@ pub(super) fn token_bytes_to_string(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use hf_hub::{api::sync::ApiBuilder, Repo, RepoType};
+    use crate::{pipeline::hf::build_api, TokenSource};
 
     use super::*;
 
@@ -212,12 +212,8 @@ mod tests {
 
     #[test]
     fn test_tiktoken_conversion() -> anyhow::Result<()> {
-        let api = ApiBuilder::new().with_progress(true).build().unwrap();
-        let api = api.repo(Repo::with_revision(
-            "EricB/mistralrs_tests".to_string(),
-            RepoType::Model,
-            "main".to_string(),
-        ));
+        let api = build_api(&TokenSource::CacheToken, true).unwrap();
+        let api = api.repo("EricB/mistralrs_tests".to_string(), "main".to_string());
 
         let converted_tokenizer = {
             let tokenizer_filename = api.get("tokenizer_llama3.model").unwrap();

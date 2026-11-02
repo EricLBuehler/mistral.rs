@@ -314,11 +314,10 @@ impl DecoderLayer {
         let xs = self
             .self_attn
             .forward(&xs, attention_mask, kv_cache, ctx, layer_idx)?;
-        let xs = (xs + residual)?;
-        let residual = &xs;
-        let xs = self
-            .mlp
-            .forward(&xs.apply(&self.post_attention_layernorm)?)?;
+        let (residual, xs) = self
+            .post_attention_layernorm
+            .forward_add_rms_norm(&xs, residual)?;
+        let xs = self.mlp.forward(&xs)?;
         residual + xs
     }
 }
@@ -461,8 +460,10 @@ impl Model {
         input_ids: &Tensor,
         ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        let xs = self.embed_tokens.embedding_forward(input_ids, self.dtype)?;
-        let mut xs = (xs * (self.hidden_size as f64).sqrt())?;
+        let mut xs = self.embed_tokens.embedding_forward(
+            input_ids,
+            mistralrs_quant::EmbeddingOutput::scaled(self.dtype, (self.hidden_size as f64).sqrt()),
+        )?;
         let cache = &mut self.cache.normal().0;
         let mask_cache = ctx.mask_cache(cache);
         let attention_mask = CausalMasker.make_causal_mask(

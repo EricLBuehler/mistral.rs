@@ -71,7 +71,7 @@ impl ToolCallStrategy for TextToolCallStrategy {
         text: Option<&str>,
         tools: &[Tool],
     ) -> Option<TopLevelGrammar> {
-        parsers::build_tool_call_grammar(text?, tools)
+        parsers::build_tool_call_grammar_with_format(text?, tools, self.preferred_format)
     }
 
     fn required_grammar(&self, tools: &[Tool], _boundary: ToolCallBoundary) -> TopLevelGrammar {

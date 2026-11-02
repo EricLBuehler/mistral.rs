@@ -1,171 +1,39 @@
 ---
 title: Quantize a model
-description: Shrink a model so it fits on the hardware you have, pick the right format, and understand what ISQ does.
+description: Shrink a model to fit your hardware, pick a bit width or format, and see what --quant loads.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Quantization stores weights at lower precision so a model fits in less memory. A 14B model in
-BF16 (2 bytes/param) needs about 28 GB for weights; at 4 bits the same model is about 7 GB.
-For `run`, `serve`, and `bench`, `--quant` selects an available pre-quantized artifact. With a
-safetensors source, it falls back to runtime quantization when no matching UQFF is available:
+Quantization stores a model's weights at lower precision so it needs less memory. A 14B model in BF16 (2 bytes per parameter) needs about 28 GB for its weights; at 4 bits it needs about 7 GB.
 
-```bash
-mistralrs run --quant 4 -m google/gemma-4-E4B-it
-```
-
-`--quant 4` first looks for a matching prebuilt
-[UQFF (Universal Quantized File Format)](/guides/quantization/uqff/) in
-`mistralrs-community/<model>-UQFF` and loads it directly if one is published. Otherwise it falls
-back to [ISQ (in-situ quantization)](/reference/quantization-types/): the engine
-quantizes weights on the fly as they load, picking a hardware-appropriate format (AFQ4 on Metal,
-Q4K elsewhere). With ISQ the full unquantized model is never resident in memory; loading just
-takes longer than a pre-quantized file.
-
-For a local safetensors model path, `--quant` skips the UQFF probe and applies ISQ directly. A
-local directory containing GGUF files instead selects a matching GGUF artifact.
-
-## How much memory you save
-
-Footprint scales roughly linearly with bits per weight: a BF16 model uses about half the memory
-at `--quant 8` and a quarter at `--quant 4`. The KV cache is a separate budget that depends on
-context length, not on weight quantization. Use `nvidia-smi` (or equivalent) to measure, and
-[`mistralrs tune`](#estimate-with-mistralrs-tune) to estimate before downloading anything.
-
-## Picking a bit width
-
-Supported widths are 2, 3, 4, 5, 6, and 8. Lower bit widths reduce weight memory and generally
-increase quantization error:
-
-- 8-bit formats preserve the most weight precision in this set.
-- 5- and 6-bit formats trade some additional precision for lower memory use.
-- 4-bit formats reduce memory further and are commonly used for larger models.
-- 2- and 3-bit formats are the most aggressive options.
-
-An [importance matrix](#imatrix) can reduce quality loss for K-quant formats at low bit widths.
-Evaluate the selected format on the target model and workload; bit width alone does not determine
-output quality.
-
-## Picking a specific format
-
-`--quant` also accepts format names:
-
-```bash
-mistralrs run --quant q4k -m google/gemma-4-E4B-it     # 4-bit K-quant
-mistralrs run --quant afq4 -m google/gemma-4-E4B-it    # AFQ, Metal-optimized
-mistralrs run --quant q8_0 -m google/gemma-4-E4B-it    # 8-bit block quant
-```
-
-How the numeric shorthands resolve per backend, plus the full type list and hardware
-constraints, is in the [quantization types reference](/reference/quantization-types/).
-
-For `run`, `serve`, and `bench`, use `--isq` instead of `--quant` only when you want to force
-runtime ISQ and skip the UQFF lookup. For GGUF, `--quant` selects an existing variant while
-`--isq` requantizes an exact file selected with `-f`.
-
-## Letting mistral.rs decide
-
-`--quant auto` estimates what fits on the current host and picks for you:
-
-```bash
-mistralrs run --quant auto -m google/gemma-4-E4B-it
-```
-
-It runs the same analysis as `mistralrs tune` with the balanced profile. If the model fits at
-full precision, no quantization is applied; otherwise the recommended type is resolved like an
-explicit `--quant` value (prebuilt UQFF preferred, ISQ fallback).
-
-`--quant auto` does not select a GGUF file. For a GGUF repository, pass an explicit bit width or
-format name.
-
-### Estimate with mistralrs tune
-
-`mistralrs tune` prints the full analysis instead of acting on it:
-
-```bash
-mistralrs tune -m google/gemma-4-E4B-it
-```
-
-Output is a table with columns `Quant | Est. Size | VRAM % | Context Room | Quality | Status`.
-One row is marked `Recommended`; the others are marked `Fits`, `Hybrid` (split across GPU and
-CPU), or `Too Large`. A recommended command line is printed below the table.
-
-`tune` is a config-based estimator, not a benchmark. It downloads only the model's config files,
-computes per-quantization sizes from the architecture, and checks them against detected VRAM.
-No weights are downloaded, no model is loaded, and the quality column is a fixed tier per format
-(`Baseline`, `Near-lossless`, `Good`, `Acceptable`, `Degraded`), not a measurement.
-
-Variations:
-
-```bash
-mistralrs tune --profile quality -m google/gemma-4-E4B-it     # quality, balanced (default), fast
-mistralrs tune --isq q4k -m google/gemma-4-E4B-it             # bias toward a specific target
-mistralrs tune --json -m google/gemma-4-E4B-it                # machine-readable output
-mistralrs tune --emit-config gemma.toml -m google/gemma-4-E4B-it
-```
-
-`--emit-config` writes a TOML config with the recommended settings; run it with
-`mistralrs from-config -f gemma.toml`. `tune` rejects `--quant auto` since tune is the
-recommender. All flags: [CLI reference](/reference/cli/tune/).
-
-## Quantization on each surface
+To quantize, pass a bit width: `2`, `3`, `4`, `5`, `6`, or `8`. Lower is smaller and loses more precision. You can also pass `auto` to let mistral.rs pick, or a [format name](#pick-a-specific-format) like `q4k` or `fp8`.
 
 <Tabs>
 <TabItem label="CLI">
 
-Use `--quant` for artifact selection with an ISQ fallback, or `--isq` to force runtime ISQ:
-
 ```bash
-mistralrs serve -m google/gemma-4-E4B-it --quant 4
-mistralrs serve -m google/gemma-4-E4B-it --isq q4k
-
-# Requantize an exact GGUF source instead of selecting a published variant.
-mistralrs serve -f /path/model-BF16.gguf --isq q4k
+mistralrs run -m Qwen/Qwen3-4B --quant 4
 ```
 
-To quantize once and reuse the result, write a UQFF file with `mistralrs quantize`. See the
-[UQFF guide](/guides/quantization/uqff/). The command accepts safetensors sources and
-compatible GGUF inputs selected with either `-f` or `-m <repo> --quant <level-or-name>`.
-
-</TabItem>
-<TabItem label="HTTP">
-
-There is no quantize-at-load HTTP request; a server quantizes via the `--quant`/`--isq` flags on
-the CLI tab. To re-quantize a model already running, `POST /re_isq` changes its ISQ type without
-restarting the server. The model must have been loaded with ISQ; models loaded without ISQ are not
-supported:
-
-```bash
-curl -X POST localhost:1234/re_isq \
-  -H "Content-Type: application/json" \
-  -d '{"ggml_type": "Q4K"}'
-```
+`--quant` works the same way with `run`, `serve`, and `bench`, and as the `quant` key in a [TOML config](/reference/cli-toml-config/).
 
 </TabItem>
 <TabItem label="Python">
-
-`in_situ_quant` accepts the same values as `--isq`, including numeric shorthands resolved
-against the actual device:
 
 ```python
 from mistralrs import Runner, Which
 
 runner = Runner(
-    which=Which.Plain(model_id="microsoft/Phi-3.5-mini-instruct"),
-    in_situ_quant="Q4K",
+    which=Which.Plain(model_id="Qwen/Qwen3-4B"),
+    in_situ_quant="4",
 )
 ```
 
-Use `Which.GGUF(...)` with the same `in_situ_quant` argument to requantize a compatible GGUF.
-`Which.GGUF` also accepts `imatrix`, `calibration_file`, `organization`, and `write_uqff`.
-
-[Full example](/examples/python/isq/)
+`in_situ_quant` takes a bit width or a format name such as `"q4k"`. [Full example](/examples/python/isq/).
 
 </TabItem>
 <TabItem label="Rust">
-
-`with_auto_isq` picks the platform-preferred format at a bit width; `with_isq` requests an exact
-type:
 
 ```rust
 use mistralrs::{IsqBits, ModelBuilder};
@@ -176,105 +44,154 @@ let model = ModelBuilder::new("Qwen/Qwen3-4B")
     .await?;
 ```
 
-`GgufModelBuilder` exposes the same ISQ, imatrix, calibration, MoE organization, and UQFF-writing
-options for compatible GGUF sources.
-
-[Full example](/examples/rust/quantization/isq/)
+`with_auto_isq` picks the format that suits your hardware at that bit width. To ask for an exact format, use `.with_isq(IsqType::Q4K)`. [Full example](/examples/rust/quantization/isq/).
 
 </TabItem>
 </Tabs>
 
-## What ISQ does
+## How mistral.rs chooses what to load
 
-ISQ converts the model during loading rather than requiring a prebuilt artifact. It adds load time
-but avoids keeping the complete source model in memory at once. To skip the conversion on repeated
-loads, [save the result as UQFF](/guides/quantization/uqff/).
+On the CLI, `--quant` uses a copy of the model that's already quantized when one exists, so you skip the conversion and download less. What happens depends on what `-m` points to:
 
-<details>
-<summary>Format families</summary>
+| `-m` points to | What `--quant 4` does |
+|---|---|
+| A Hugging Face model with safetensors weights | Looks for a prebuilt [UQFF](/guides/quantization/uqff/) in `mistralrs-community/<name>-UQFF`. For `Qwen/Qwen3-4B` that's `mistralrs-community/Qwen3-4B-UQFF`. If that repo has a 4-bit file, mistral.rs downloads and loads it. If not, it downloads the original weights and quantizes them while loading. |
+| A local safetensors directory | Quantizes the weights while loading. |
+| A GGUF repo or a local directory of GGUF files | Picks the matching GGUF file. For `4` it tries `Q4_K_M`, then `Q4_K_S`, `Q4_K_L`, `Q4_1`, and `Q4_0`. You can also pass the file's own label, like `--quant q5_k_s`. IQ files aren't supported. |
+| A UQFF repo or directory | Loads its 4-bit UQFF file. If it has none, loading fails and lists the files it does have. |
 
-- **Q\*K** (`q2k`-`q6k`): GGML-compatible block quantization. Broadly applicable, works on all
-  backends.
-- **AFQ** (`afq2`-`afq8`): affine quantization optimized for Apple Silicon. Runs on Metal
-  (native kernels), CUDA (dedicated backend), and CPU (fallback).
-- **Legacy GGML** (`q4_0`, `q4_1`, `q5_0`, `q5_1`, `q8_0`): supported for GGUF compatibility.
-- **FP8** (`fp8`): E4M3 weights on CUDA. Published block-scaled checkpoints load their original
-  scales and activation scheme; Hopper uses a CUTLASS W8A8 provider for 128x128 weights with
-  dynamic 1x128 activation scaling.
-- **F8Q8** (`f8q8`): CPU-only 8-bit format.
-- **MXFP4** (4-bit microscaling): CUDA and Metal; CPU is not supported.
-- **HQQ** (`hqq4`, `hqq8`): alternative 4- and 8-bit schemes.
+A bit width matches any format at that width, preferring AFQ on Metal and GGML formats (`q4k`, `q8_0`) elsewhere. A format name like `q4k` matches only that format. The startup log says which file or format was picked.
 
-The numeric shorthand picks a format the active device supports; explicit names override that,
-and incompatible combinations are rejected at load time. Full constraint table:
-[quantization types reference](/reference/quantization-types/).
+To skip the UQFF lookup and always quantize the original weights, use `--isq` instead of `--quant`. With GGUF, `--isq` requantizes a file you name with `-f`:
 
-</details>
+```bash
+mistralrs serve -m Qwen/Qwen3-4B --isq 4
+mistralrs serve -f /path/model-BF16.gguf --isq q4k
+```
 
-### Organization: default vs moqe
+The Python and Rust SDKs always quantize while loading and never look for a prebuilt UQFF. To load one from the SDKs, pass it explicitly as shown in the [UQFF guide](/guides/quantization/uqff/).
 
-`--isq-organization` selects which layers get quantized:
+Quantizing while loading is called ISQ (in-situ quantization). mistral.rs quantizes each layer as it reads it, so the full-precision model never has to fit in memory at once, but every load takes longer than loading a prebuilt file. To pay that cost only once, [save the result as UQFF](/guides/quantization/uqff/#make-your-own-uqff).
 
-- `default`: every linear layer the pipeline exposes for quantization.
-- `moqe` (MoQE, Mixture of Quantization Experts): only MoE (Mixture of Experts) expert layers;
-  the shared (non-expert) trunk stays at its source precision.
+## How much memory you save
 
-`moqe` is useful on MoE models where the experts dominate parameter count.
-It applies when mistral.rs performs ISQ, including UQFF generation. Loading a pre-quantized GGUF or UQFF with `--quant` does not change that artifact's layer organization.
+Footprint scales roughly linearly with bits per weight: a BF16 model uses about half the memory at `--quant 8` and a quarter at `--quant 4`. The KV cache is a separate budget that depends on context length, not on weight quantization. Use `nvidia-smi` (or equivalent) to measure, and [`mistralrs tune`](#estimate-with-mistralrs-tune) to estimate before downloading anything.
 
-### imatrix
+## Pick a bit width
 
-An importance matrix (imatrix) is a per-column weight derived from running the model on
-calibration data and accumulating squared input activations. The quantizer uses it to allocate
-precision to higher-impact weights, which matters most at low bit widths.
+Start with `8` if it fits and `4` if it doesn't.
 
-Two flags, used with `--isq`:
+| Bits | Quality label in `tune` | Use it when |
+|---|---|---|
+| `8` | Near-lossless | The model fits at 8 bits. Output stays closest to the original. |
+| `6`, `5` | Good | 8-bit is a little too big. |
+| `4` | Acceptable | You need a large model to fit. This is the most common choice. |
+| `3`, `2` | Degraded | Nothing larger fits. Quality drops the most here, so add an [imatrix](#imatrix) to limit the loss. |
 
-- `--imatrix <path>`: load an existing imatrix. Accepts llama.cpp `.imatrix` files (layer names
-  are mapped automatically) or mistral.rs `.cimatrix` files.
-- `--calibration-file <path>`: generate the importance data at load time by running the
-  calibration text through the model, then quantize.
+Each width maps to a format suited to your hardware. On Metal it's AFQ (`4` is AFQ4). On CUDA and CPU it's a GGML format (`4` is Q4K, `8` is Q8_0). `5` is Q5K everywhere. The full mapping is in the [numeric shorthands table](/reference/quantization-types/#numeric-shorthands).
 
-The two conflict. `--imatrix` is reused across runs; `--calibration-file` re-generates on every
-load. Importance weighting applies to the K-quant formats (`q2k`-`q6k`); other formats quantize
-without it. Calibration runs on all pipelines (text, multimodal, embedding); the calibration
-text drives the language model, so vision/audio encoder layers quantize without importance data.
+## Pick a specific format
 
-To collect an imatrix from a live server's real traffic instead of a static calibration file,
-see [online calibration](/guides/quantization/online-calibration/).
+`--quant` and `--isq` also take format names:
 
-Full example: [Rust](/examples/rust/quantization/imatrix/),
-[Python](/examples/python/imatrix/).
+```bash
+mistralrs run -m Qwen/Qwen3-4B --quant q4k    # 4-bit K-quant
+mistralrs run -m Qwen/Qwen3-4B --quant afq4   # 4-bit AFQ, built for Apple Silicon
+mistralrs run -m Qwen/Qwen3-4B --quant q8_0   # 8-bit block format
+```
 
-<details>
-<summary>Interaction with paged attention and flash attention</summary>
+| Names | What they are |
+|---|---|
+| `q2k`, `q3k`, `q4k`, `q5k`, `q6k`, `q8k` | GGML K-quants. They run on every backend and are the only formats that use an [imatrix](#imatrix). `q8k` isn't available in CUDA builds. |
+| `afq2`, `afq3`, `afq4`, `afq6`, `afq8` | Affine quantization with native Apple Silicon kernels. Also runs on CUDA and CPU. |
+| `q4_0`, `q4_1`, `q5_0`, `q5_1`, `q8_0`, `q8_1` | Older GGML block formats. `q8_1` isn't available in CUDA builds. |
+| `fp8` | 8-bit floating point (E4M3) weights. |
+| `mxfp4` | 4-bit microscaling. CUDA and Metal only. |
+| `hqq4`, `hqq8` | Half-quadratic quantization at 4 or 8 bits. |
+| `f8q8` | 8-bit format for CPU only. |
 
-ISQ applies to weights. The KV cache is a separate budget:
-[paged attention](/guides/perf/paged-attention/) manages its memory independently, and
-`--pa-cache-type` quantizes the cache itself. Flash attention operates on activations, not
-weights, and composes with any ISQ format.
+If you pick a format your hardware can't run, loading fails with an error. Hardware details are in the [quantization types reference](/reference/quantization-types/). To give some layers a different format from the rest, use a [topology file](/guides/perf/topology/).
 
-</details>
+## Let mistral.rs decide
 
-## Pre-quantized formats
+```bash
+mistralrs run -m Qwen/Qwen3-4B --quant auto
+```
 
-By default, these load directly with no ISQ conversion:
+`--quant auto` checks your hardware and picks the highest bit width that fits, trying 6, 5, 4, and then 3 bits (6, 4, and 3 on Metal). If none of those fit it tries 2 bits, and it fails if nothing fits. It then loads that width the same way an explicit `--quant` does, prebuilt UQFF first.
 
-- **UQFF**: the native pre-quantized format. Loaded automatically by `--quant` when a sibling
-  UQFF repo exists, or explicitly via `--from-uqff`. See the
-  [UQFF guide](/guides/quantization/uqff/).
-- **GGUF**: load a local file directly with `-f <file.gguf>`, or select a published variant with
-  `-m <gguf-repo> --quant <level>`. Add `--isq <type>` to an exact `-f` selection only when you
-  intentionally want to requantize it. See [GGUF support](/reference/gguf-support/)
-  for compatible models and file formats.
-- **GPTQ, AWQ**: detected from the source repo's config and loaded directly; no `--quant` or
-  `--isq` needed.
+`auto` always quantizes. To run at full precision, leave out `--quant`. It doesn't pick GGUF files, so pass a bit width or label for GGUF repos.
 
-## See also
+### Estimate with mistralrs tune
 
-- [Quantization types reference](/reference/quantization-types/) for the full type
-  list, shorthand resolution, and hardware constraints.
-- [UQFF guide](/guides/quantization/uqff/) to quantize once and reuse.
-- [Online calibration](/guides/quantization/online-calibration/) to calibrate a served
-  model from its own traffic.
-- [Topology](/guides/perf/topology/) to pin individual layers to a different type.
+`mistralrs tune` runs the same check and prints the result instead of loading the model. It reads only the model's config files, so nothing large is downloaded:
+
+```bash
+mistralrs tune -m Qwen/Qwen3-4B
+```
+
+You get one row per format with its estimated size, share of GPU memory, how much context fits beside it, the quality label from the [bit width table](#pick-a-bit-width), and a status: `Recommended`, `Fits`, `Hybrid` (split across GPU and CPU), or `Too Large`. A ready-to-run command for the recommended row is printed below the table.
+
+`--profile` changes which widths `tune` prefers. It recommends the first one in the list that fits:
+
+| `--profile` | CUDA and CPU | Metal |
+|---|---|---|
+| `quality` | 8, 6, 5, 4, 3, 2 bits | 8, 6, 4, 3 bits |
+| `balanced` (default, and what `--quant auto` uses) | 6, 5, 4, 3 bits | 6, 4, 3 bits |
+| `fast` | 4, 3, 2 bits | 4, 3, 2 bits |
+
+Other options:
+
+```bash
+mistralrs tune -m Qwen/Qwen3-4B --isq q4k                 # prefer one format if it fits
+mistralrs tune -m Qwen/Qwen3-4B --json                    # machine-readable output
+mistralrs tune -m Qwen/Qwen3-4B --emit-config qwen.toml   # save the recommendation as a config
+mistralrs from-config -f qwen.toml                        # then run it
+```
+
+All flags are in the [CLI reference](/reference/cli/tune/).
+
+## imatrix
+
+An importance matrix (imatrix) records which weights matter most when the model runs on sample text, so the quantizer can keep more precision where it counts. It helps most at low bit widths, and only K-quants (`q2k` to `q6k`) use it. On Metal, name a K-quant (`--isq q4k`), because bit widths pick AFQ there.
+
+Pass one of these together with `--isq`:
+
+| Flag | What it does |
+|---|---|
+| `--imatrix <file>` | Uses an existing imatrix: a llama.cpp `.imatrix` file or a mistral.rs `.cimatrix` file. |
+| `--calibration-file <file>` | Runs a text file through the model at load time to build the imatrix, then quantizes. This repeats on every load. |
+
+You can't use both at once. In the SDKs, set `imatrix` or `calibration_file` on `Which` (Python), or call `.with_imatrix()` or `.with_calibration_file()` (Rust). Full examples: [Rust](/examples/rust/quantization/imatrix/), [Python](/examples/python/imatrix/).
+
+To build an imatrix from a server's real traffic instead, see [online calibration](/guides/quantization/online-calibration/).
+
+## Quantize only the experts of an MoE model
+
+`--isq-organization moqe` quantizes only the expert layers of a Mixture of Experts model and keeps the shared layers at their original precision. It's useful when the experts make up most of the model's parameters:
+
+```bash
+mistralrs serve -m microsoft/Phi-3.5-MoE-instruct --isq 4 --isq-organization moqe
+```
+
+Without it (`--isq-organization default`), every layer mistral.rs can quantize is quantized. The setting only matters when mistral.rs does the quantizing, including when you make a UQFF; it doesn't change a GGUF or UQFF that's already quantized. In the SDKs, use `organization=IsqOrganization.MoQE` (Python) or `.with_mixture_qexperts_isq()` (Rust). [Full example](/examples/rust/quantization/mixture-of-quant-experts/).
+
+## Requantize a running model
+
+If a model was quantized at load, you can switch it to another format without restarting the server:
+
+```bash
+curl -X POST localhost:1234/re_isq \
+  -H "Content-Type: application/json" \
+  -d '{"ggml_type": "Q4K"}'
+```
+
+This requantizes the weights already in memory, so moving to a higher bit width doesn't bring back precision that's already gone. It returns an error for an unquantized model, or a UQFF or GGUF loaded as is. The SDK equivalents are `runner.send_re_isq("Q4K")` (Python) and `model.re_isq_model(IsqType::Q4K).await?` (Rust).
+
+## Models that are already quantized
+
+These load as they are, with no conversion:
+
+- **UQFF**: picked up by `--quant` when a match exists, or loaded by name with `--from-uqff`. See [UQFF](/guides/quantization/uqff/).
+- **GGUF**: pick a file from a GGUF repo with `--quant`, or name one with `-f`. See [GGUF support](/reference/gguf-support/) for compatible models.
+- **GPTQ, AWQ, FP8, and NVFP4 checkpoints**: detected from the model's config, so leave out `--quant` and `--isq`. See the [quantization types reference](/reference/quantization-types/).

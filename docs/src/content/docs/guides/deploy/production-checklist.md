@@ -14,31 +14,28 @@ Work through this list before a `mistralrs serve` deployment receives traffic fr
 ## Reproducible startup
 
 - [ ] Move the launch command into a TOML config and start with `mistralrs from-config -f config.toml`. See the [TOML config reference](/reference/cli-toml-config/).
-- [ ] Pin versions: a container version tag (not `*-latest`) per the [Docker guide](/guides/deploy/docker/), and be aware model ids resolve to the `main` revision at download time.
+- [ ] Pin the container to a version tag, not `*-latest` (see the [Docker guide](/guides/deploy/docker/)).
+- [ ] Pin the model. A Hugging Face model ID always downloads the `main` revision, so an upstream change reaches you on the next download. To freeze a version, download it once and pass the local directory to `-m`.
 - [ ] Persist the model cache across restarts (volume at `HF_HOME`).
 
 ## Resource sizing
 
 - [ ] Run `mistralrs doctor` on the target host to confirm the expected accelerator and compiled features.
 - [ ] Run `mistralrs tune -m <model>` for a starting quantization and memory plan (it estimates from configs; it does not load or benchmark the model).
-- [ ] Set `--max-seqs` deliberately (default 32).
-- [ ] Size the [paged-attention](/guides/perf/paged-attention/) KV pool explicitly instead of relying on the implicit 90% budget, with one of:
-  - `--pa-context-len`
-  - `--pa-memory-mb`
-  - `--pa-memory-fraction`
-
-  See [throughput tuning](/guides/perf/throughput-tuning/).
+- [ ] Set `--max-seqs` to the number of requests you expect at once (default 32). Requests beyond it wait in a queue. See [concurrency](/guides/perf/throughput-tuning/#concurrency).
+- [ ] Send expected load and watch `mistralrs_paged_preemptions_total`. If it keeps climbing, the KV cache is too small: lower `--max-seqs` or give the cache more memory.
+- [ ] Decide whether the cache size may vary. By default it gets whatever memory is free at startup, so another process on the GPU means a smaller cache. Set `--kv-cache` (for example `16GiB` or `131072tokens`) to get the same size every time; loading then fails instead of starting with less. See [memory budget](/guides/perf/paged-attention/#memory-budget).
 
 ## Health, readiness, and metrics
 
 - [ ] Liveness: `GET /health` returns 200 when the server is listening. It does not verify model load.
 - [ ] Readiness: `GET /v1/models` includes a per-model `status` field (`loaded`, `unloaded`, `reloading`). Probe for the specific model id the caller needs, not just process liveness.
-- [ ] Scrape `GET /metrics`: Prometheus text format with per-request counters, latency histograms, in-flight request gauges, request-body histograms, and unlabeled `mistralrs_*` engine metrics. Details live in [observability](/guides/deploy/observability/) and the [HTTP API reference](/reference/http-api/).
+- [ ] Scrape `GET /metrics` with Prometheus and alert on error rate, time to first token, and queue length. [Observability](/guides/deploy/observability/) lists the metrics to watch.
 - [ ] Give startup probes a generous window; first-run model loading can take minutes.
 
 ## Logging
 
-- [ ] Default output is curated `INFO` startup logs, dependency warnings, and HTTP access logs for non-housekeeping requests. Use [observability](/guides/deploy/observability/) for request ids, Prometheus metrics, and access-log controls.
+- [ ] By default the server logs startup progress, warnings, and two access-log lines per request (health checks and metrics scrapes are skipped). See [observability](/guides/deploy/observability/) for JSON logs and request IDs.
 - [ ] Use `-v` for debug, `-vv` for trace, or `RUST_LOG` for an explicit filter.
 - [ ] Only use `-l/--log <path>` where request and response bodies can be stored safely; it logs payloads, not just metadata.
 
@@ -49,13 +46,13 @@ Work through this list before a `mistralrs serve` deployment receives traffic fr
 ## Dynamic LoRA
 
 - [ ] Declare adapters that must survive restart as preloads. Runtime changes do not survive a restart and must otherwise be replayed.
-- [ ] Pin remote adapter revisions, preferably to commit SHAs. The CLI accepts `--lora-modules '{"name":"production","path":"org/adapter","revision":"<commit>"}'`.
+- [ ] Pin remote adapter revisions, preferably to commit SHAs. The CLI accepts `--lora '{"name":"production","path":"org/adapter","revision":"<commit>"}'`.
 - [ ] Keep HTTP mutation behind authentication and set `MISTRALRS_LORA_ADAPTER_ROOT` to an operator-owned directory. Read-only discovery does not need mutation enabled.
 - [ ] Size `--lora-max-adapters` and `--lora-max-bytes` with enough headroom to replace an adapter without interrupting in-flight requests.
 - [ ] Use `expected_generation` on replacement and unload operations, then verify the published generation through `GET /v1/lora_adapters`.
 - [ ] Keep live mutation out of tensor-parallel deployments; preload adapters instead.
 
-See [LoRA and X-LoRA adapters](/guides/customize/lora-adapters/) for rollout, rollback, errors, and the vLLM migration table.
+See [LoRA and X-LoRA adapters](/guides/customize/lora-adapters/) for rollout, rollback, and errors.
 
 ## Multi-model
 

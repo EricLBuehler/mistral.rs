@@ -35,12 +35,16 @@ macro_rules! get_paths {
         $adapter_options:expr
     ) => {{
         let api = $crate::pipeline::hf::build_api($token_source, !$silent)?;
-        let revision = $revision.unwrap_or("main".to_string());
-        let api = api.repo(Repo::with_revision(
+        let source_revision = $revision.unwrap_or("main".to_string());
+        let source_model_id: String = $quantized_model_id.as_ref().cloned()
+            .unwrap_or_else(|| $this.model_id.clone());
+        let revision = $crate::pipeline::hf::model_source_revision(
+            &source_model_id, &source_revision, &$this.model_id,
+        ).to_string();
+        let api = api.repo(
             $this.model_id.clone(),
-            RepoType::Model,
             revision.clone(),
-        ));
+        );
         let model_id = std::path::Path::new(&$this.model_id);
         let dir_list = $crate::api_dir_list!(api, model_id, false, &revision).collect::<Vec<_>>();
         let tokenizer_filename = if let Some(ref p) = $this.tokenizer_json {
@@ -73,8 +77,20 @@ macro_rules! get_paths {
             tracing::trace!("Loading `hf_quant_config.json` at `{}`", $this.model_id);
             let _ = $crate::api_get_file!(api, "hf_quant_config.json", model_id, &revision);
         }
+        if dir_list.contains(&"calibration.json".to_string()) {
+            let config: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&config_filename)?)?;
+            if config["architectures"].as_array().is_some_and(|architectures| architectures.iter().any(|name| name == "D1Model")) {
+                let _ = $crate::api_get_file!(api, "calibration.json", model_id, &revision);
+            }
+        }
+        const CODEC_CONFIG: &str = "audio_tokenizer/config.json";
+        if dir_list.iter().any(|file| file == CODEC_CONFIG)
+            || model_id.join(CODEC_CONFIG).is_file()
+        {
+            let _ = $crate::api_get_file!(api, CODEC_CONFIG, model_id, &revision);
+        }
         let filenames = get_model_paths(
-            revision.clone(),
+            source_revision.clone(),
             &$token_source,
             $quantized_model_id.as_ref(),
             $quantized_filename.as_ref(),
@@ -86,7 +102,8 @@ macro_rules! get_paths {
             $this.model_id.clone(),
             $adapter_options,
             &$token_source,
-            revision.clone(),
+            source_revision.clone(),
+            &source_model_id,
         )?;
 
         let gen_conf = if dir_list.contains(&"generation_config.json".to_string()) {
@@ -209,11 +226,7 @@ macro_rules! get_embedding_paths {
     ) => {{
         let api = $crate::pipeline::hf::build_api($token_source, !$silent)?;
         let revision = $revision.unwrap_or("main".to_string());
-        let api = api.repo(Repo::with_revision(
-            $this.model_id.clone(),
-            RepoType::Model,
-            revision.clone(),
-        ));
+        let api = api.repo($this.model_id.clone(), revision.clone());
         let model_id = std::path::Path::new(&$this.model_id);
         let emb_dir_list =
             $crate::api_dir_list!(api, model_id, false, &revision).collect::<Vec<_>>();
@@ -313,13 +326,13 @@ macro_rules! get_embedding_paths {
             }
         }
 
-        Ok(Box::new($path_name {
+        Ok(Box::new($path_name::new(
             tokenizer_filename,
             config_filename,
             filenames,
             adapter_paths,
-            modules: parsed_modules,
-        }))
+            parsed_modules,
+        )))
     }};
 }
 
@@ -340,20 +353,15 @@ macro_rules! get_uqff_paths {
             .expect("Failed to read revision")
             .clone()
             .unwrap_or("main".to_string());
-        let api = api.repo(Repo::with_revision(
-            $this.model_id.to_string(),
-            RepoType::Model,
-            revision.clone(),
-        ));
+        let api = api.repo($this.model_id.to_string(), revision.clone());
 
         // Auto-discover UQFF shard siblings
         let available_files = $crate::pipeline::hf::list_repo_files(
             &api,
             Path::new(&$this.model_id),
-            false,
+            true,
             &revision,
-        )
-        .unwrap_or_default();
+        )?;
 
         let input_files: Vec<String> = $from_uqff.iter().map(|f| f.display().to_string()).collect();
         let input_count = input_files.len();
@@ -439,13 +447,16 @@ macro_rules! get_paths_gguf {
         $resolve_adapters:expr
     ) => {{
         let api = $crate::pipeline::hf::build_api($token_source, !$silent)?;
-        let revision = $revision.unwrap_or("main".to_string());
+        let source_revision = $revision.unwrap_or("main".to_string());
+        let source_model_id = $quantized_model_id;
         let this_model_id = $this.model_id.clone().unwrap_or($this.quantized_model_id.clone());
-        let api = api.repo(Repo::with_revision(
+        let revision = $crate::pipeline::hf::model_source_revision(
+            &source_model_id, &source_revision, &this_model_id,
+        ).to_string();
+        let api = api.repo(
             this_model_id.clone(),
-            RepoType::Model,
             revision.clone(),
-        ));
+        );
         let model_id = std::path::Path::new(&this_model_id);
 
         let dir_list = $crate::api_dir_list!(api, model_id, false, &revision)
@@ -489,9 +500,9 @@ macro_rules! get_paths_gguf {
         };
 
         let filenames = get_model_paths(
-            revision.clone(),
+            source_revision.clone(),
             &$token_source,
-            Some(&$quantized_model_id),
+            Some(&source_model_id),
             Some(&$quantized_filenames),
             &api,
             &model_id,
@@ -509,7 +520,8 @@ macro_rules! get_paths_gguf {
                     xlora_preload: $crate::pipeline::XLoraPreload::Load,
                 },
                 &$token_source,
-                revision.clone(),
+                source_revision.clone(),
+                &source_model_id,
             )?
         } else {
             $crate::pipeline::AdapterPaths::None
@@ -584,6 +596,17 @@ macro_rules! get_paths_gguf {
         } else {
             PathBuf::from_str("")?
         };
+
+        if dir_list.iter().any(|file| file == $crate::vision_models::lfm3_d1::config::CALIBRATION_FILENAME)
+            && $crate::pipeline::gguf::needs_d1_calibration(&config_filename)?
+        {
+            let _ = $crate::api_get_file!(
+                api,
+                $crate::vision_models::lfm3_d1::config::CALIBRATION_FILENAME,
+                model_id,
+                &revision
+            );
+        }
 
         let chat_template_json_filename = if dir_list.contains(&"chat_template.json".to_string()) {
             tracing::trace!("Loading `chat_template.json` at `{}`", this_model_id);
@@ -1073,7 +1096,7 @@ macro_rules! lora_model_loader {
         } else {
             vb
         };
-        let lora_layers = $crate::pipeline::normal::new_dynamic_lora_registry(&$config)?;
+        let lora_layers = std::sync::Arc::new($loader.new_lora_registry(&$config)?);
         let vb = vb.with_lora_registry(lora_layers.clone());
 
         let tracker = vb.tracker().clone();

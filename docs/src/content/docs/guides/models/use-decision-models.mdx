@@ -1,0 +1,113 @@
+---
+title: Use decision models
+description: Classify, score, and extract information with d1 through SystemOne or the native SDKs.
+---
+
+A decision model answers questions you define about some input and returns structured answers instead of prose. You give it the evidence, such as a customer message, a JSON record, an image, or a recording, plus named questions like "does this customer want to cancel?" or "which team should handle this?". For each question you get back a probability, a ranked choice, a rating, or a value copied out of the input. That suits routing, moderation, triage, scoring, and form extraction, where your code needs a value it can act on rather than text it has to parse.
+
+mistral.rs runs two d1 models:
+
+| Model | Accepts |
+| --- | --- |
+| `LiquidAI/d1-2B` | Text, images, and video |
+| `LiquidAI/d1-Omni-2B` | Text, images, video, and audio, including questions asked out loud |
+
+## Start a decision server
+
+```bash
+mistralrs serve -m LiquidAI/d1-Omni-2B
+```
+
+Send the evidence as `state` and the questions as `questions` to `/v1/systemone`:
+
+```bash
+curl http://localhost:1234/v1/systemone \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "model": "default",
+    "state": {"message": "Please cancel my subscription today."},
+    "questions": {
+      "cancel": {"type": "noul", "instructions": "Does the customer want to cancel?"},
+      "intent": {
+        "type": "choice",
+        "instructions": "What is the customer requesting?",
+        "criteria": {"cancel": "Cancel service", "billing": "Explain a payment", "other": null}
+      }
+    }
+  }'
+```
+
+Each question's name becomes its key in the response's `answers`. Here, `answers.cancel.noul` is the probability, from 0 to 1, that the answer is yes. `answers.intent.choice` is the option the model picked, with its `confidence` and a `probabilities` entry for every option. These are predictions, so you choose the cutoff your code acts on.
+
+`state` can be a string or any JSON value. Set it to `null` when the question is only about attached media, so no stray text sways the answer.
+
+The model answers questions in groups of up to `set_size`, reading the state and media once per group. Both d1 checkpoints default to 16, so a request with 20 questions reads the state twice. Leave `set_size` out to use the default.
+
+Decision requests don't generate text, so chat options like `temperature`, `max_tokens`, and `stream` return an error.
+
+## Select a question type
+
+| You want | `type` | What you get back |
+| --- | --- | --- |
+| A yes/no probability | `noul` | `noul`: probability of yes |
+| One option from a list | `choice`, with `criteria` mapping each option name to a description (or `null`) | `choice`, `confidence`, and `probabilities` |
+| Several options from a list | `choice` with `"multiple": true` | `choices`, plus an independent probability per option |
+| A rating on ordered levels | `score`, with `criteria` listing 2 to 10 levels from lowest to highest | `score`: the expected level from 0 to N-1, as a decimal |
+| Text copied from the state | `text` | `text`, its character `span`, and `found` |
+| A number or date read from the state | `number` or `date` | The parsed value and `found` |
+| An estimate within a range | `number` with `range: [min, max]` | `number` and an `interval` |
+| Where an object is in an image | `box` (one) or `boxes` (several) | Coordinates from 0 to 1 |
+
+Extraction only copies from the state; it never makes up text. Box questions need exactly one image. The [decision reference](/reference/decisions/) has every field and answer attribute.
+
+## Add images, video, or audio
+
+Attach media in a `media` list, using the same parts as [chat](/guides/models/multimodal-input/#content-parts-and-url-forms). The model sees them in order, before the state. To ask only about an image, set `state` to `null`:
+
+```json
+{
+  "state": null,
+  "media": [{"type": "image_url", "image_url": {"url": "https://example.com/shelf.jpg"}}],
+  "questions": {
+    "empty": {"type": "noul", "instructions": "Is the shelf empty?"}
+  }
+}
+```
+
+There's also an `images` field that takes a plain list of image URLs; those go before anything in `media`. Over HTTP, media must be a public URL or an inline data URL. As with chat, a video's soundtrack isn't used, so attach audio separately.
+
+With d1-Omni, you can ask a question out loud: put an audio part where the `instructions` string would go, for example `"instructions": {"type": "input_audio", "input_audio": {"data": "BASE64", "format": "wav"}}`.
+
+## Use GGUF
+
+```bash
+mistralrs serve -m LiquidAI/d1-Omni-2B-GGUF --quant 8
+```
+
+`LiquidAI/d1-Omni-2B-GGUF` publishes 8-bit and 16-bit files. `LiquidAI/d1-2B-GGUF` also has a 4-bit file, so `--quant 4` works there. The CLI downloads the matching projector for you.
+
+On its own, a GGUF file answers `noul`, single-option `choice`, and `score` questions. For every other type, including multi-option `choice`, also point `--tok-model-id` at the original model so mistral.rs can read its configuration and calibration:
+
+```bash
+mistralrs serve -m LiquidAI/d1-Omni-2B-GGUF --quant 8 \
+  --tok-model-id LiquidAI/d1-Omni-2B
+```
+
+For d1-2B, use `LiquidAI/d1-2B-GGUF` with `--tok-model-id LiquidAI/d1-2B`. With a local GGUF file, keep its projector in the same folder or pass it with `--mmproj`. `--tok-model-id` can also be a local folder that holds the matching `config.json` and `calibration.json`.
+
+## Python and Rust
+
+Load d1 like any multimodal model, then call `send_decision_request`:
+
+```python
+from mistralrs import DecisionQuestion, DecisionRequest, Runner, Which
+
+runner = Runner(which=Which.MultimodalPlain(model_id="LiquidAI/d1-Omni-2B"))
+response = runner.send_decision_request(DecisionRequest(
+    state={"message": "Please cancel my subscription."},
+    questions={"cancel": DecisionQuestion("noul", "Does the customer want to cancel?")},
+))
+print(response.answers["cancel"].noul)
+```
+
+In the SDKs, media can also be a local file. Complete examples: [HTTP](/examples/server/lfm3-d1/), [Python](/examples/python/lfm3-d1/), and [Rust](/examples/rust/models/lfm3-d1/).

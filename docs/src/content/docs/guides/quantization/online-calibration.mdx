@@ -1,59 +1,51 @@
 ---
 title: Online calibration
-description: Calibrate a served ISQ model using activation statistics from live traffic.
+description: Improve a served ISQ model's quantization using its own live traffic.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Online calibration observes the activations of a live model quantized with
-[ISQ (in-situ quantization)](/reference/quantization-types/), builds an
-[importance matrix](/guides/quantization/quantize-a-model/#imatrix) from that traffic,
-and requantizes the tracked layers. The layers are replaced without restarting the server. The
-model continues serving while statistics are collected; requests received during the apply step
-wait until it finishes.
+Online calibration improves a quantized model using the requests it's already serving. While it's on, mistral.rs records which weights matter most for your traffic, building an [importance matrix](/guides/quantization/quantize-a-model/#imatrix). When you apply it, mistral.rs requantizes the model with that data and swaps the new weights in without a restart.
 
-## Usage
+The model keeps serving while statistics are collected, though collecting adds some decode overhead. Requests that arrive while the new weights are being applied wait until that finishes.
 
-Serve any model with ISQ:
+Only K-quants (`q2k` to `q6k`) use the collected data, so serve with one of those.
+
+## Calibrate a running server
+
+Start the server with `--isq` and a K-quant, either from safetensors or from a GGUF file:
 
 ```bash
 mistralrs serve -m <model> --isq q4k
-```
-
-Online calibration also accepts an exact compatible GGUF source:
-
-```bash
 mistralrs serve -f /path/model-BF16.gguf --isq q4k
 ```
 
-Then drive the lifecycle on the surface of your choice. There is no CLI command for the
-lifecycle itself; it is driven over HTTP or from an SDK against the running server.
+Use `--isq`, not `--quant`: `--quant` may load a prebuilt UQFF, and calibration only works on models mistral.rs quantized itself. On Metal, name the format: `--isq 4` picks AFQ4 there, which doesn't use the collected data.
+
+Then start collecting, let traffic run, and apply:
 
 <Tabs>
 <TabItem label="HTTP">
 
 ```bash
-# begin observing live traffic; collection adds some decode overhead while on
+# start recording; adds some decode overhead until you apply
 curl -X POST localhost:1234/calibration/start
 
-# check per-layer collection progress
+# check progress
 curl localhost:1234/calibration/status
 
-# requantize from the source weights with the collected statistics and hot-swap
+# requantize with the collected data and swap the new weights in
 curl -X POST localhost:1234/calibration/apply \
   -H "Content-Type: application/json" \
   -d '{"save_cimatrix": "traffic.cimatrix"}'
 ```
 
-`status` reports how many layers are collecting and the token rows seen per layer. `apply`
-harvests the statistics, requantizes, and returns the pre-apply status. The optional
-`save_cimatrix` writes the collected importance matrix for reuse with `--imatrix`. Over HTTP it
-must be a bare file name and is written to the server's working directory.
+`save_cimatrix` is optional. Over HTTP it must be a bare file name ending in `.cimatrix`, and the file is written to the server's working directory.
 
 </TabItem>
 <TabItem label="Rust">
 
-The same lifecycle is exposed on [`Model`](https://docs.rs/mistralrs/latest/mistralrs/struct.Model.html):
+The same steps are methods on [`Model`](https://docs.rs/mistralrs/latest/mistralrs/struct.Model.html):
 
 ```rust
 model.begin_calibration().await?;
@@ -62,8 +54,7 @@ let status = model.calibration_status().await?;
 model.apply_calibration(Some("traffic.cimatrix".into())).await?;
 ```
 
-Each method has a `_with_model` variant for multi-model setups. See the
-[full example](/examples/rust/quantization/online-calibration/).
+On a multi-model setup, use the `_with_model` variant of each method. See the [full example](/examples/rust/quantization/online-calibration/).
 
 </TabItem>
 <TabItem label="Python">
@@ -75,29 +66,26 @@ status = runner.calibration_status()
 runner.apply_calibration(save_cimatrix="traffic.cimatrix")
 ```
 
-`calibration_status` returns a `CalibrationStatus` with `collecting`, `layers`,
-`layers_tracking`, `total_rows`, `min_rows`, and `max_rows` fields. See the
-[full example](/examples/python/online-calibration/).
+Each method takes an optional `model_id` for multi-model setups. See the [full example](/examples/python/online-calibration/).
 
 </TabItem>
 </Tabs>
 
-Activation collection is inactive until `start` and stops after `apply`.
+Status, start, and apply all return the same fields:
 
-## Requirements and behavior
+| Field | Meaning |
+|---|---|
+| `collecting` | Whether statistics are being recorded |
+| `layers` | Number of layers that can be calibrated |
+| `layers_tracking` | Number of those layers currently recording |
+| `total_rows`, `min_rows`, `max_rows` | Token rows seen across all layers, and by the least and most active layer |
 
-- The model must have been loaded with `--isq` from a supported safetensors or GGUF source;
-  `start` errors otherwise, including models loaded
-  [`--from-uqff`](/guides/quantization/uqff/).
-- Importance weighting applies to the K-quant types (`Q2K`-`Q6K`). Other Q types and AFQ collect
-  and requantize without using importance weights. HQQ, FP8, F8Q8, and MXFP4 do not support
-  collection, so `start` returns an error.
-- Safetensors layers are reloaded from the source checkpoint when possible. GGUF layers are
-  reloaded from the selected GGUF artifact. Layers that cannot be reloaded fall back to their
-  resident quantized weights; `apply` logs the fallback count.
-- Requantizing an already quantized GGUF or a resident quantized layer can compound quantization
-  loss. Use a high-precision source when output quality is the priority.
+`apply` returns the status as it was just before applying, then stops collection. Wait until `min_rows` is above zero before you apply: any layer that hasn't seen traffic yet is requantized without importance data.
 
-## See also
+If you saved a `.cimatrix`, you can reuse it on later loads with `--imatrix traffic.cimatrix` and skip collecting again.
 
-- [imatrix background](/guides/quantization/quantize-a-model/#imatrix).
+## What to know
+
+- **Which models work:** the model must have been quantized by mistral.rs at load with `--isq`, from safetensors or a GGUF file. `start` returns an error for unquantized models and for models loaded with [`--from-uqff`](/guides/quantization/uqff/).
+- **Which formats benefit:** K-quants use the importance data. Other `q*` formats and AFQ accept start and apply but requantize without it, so you gain nothing. HQQ, FP8, F8Q8, and MXFP4 can't collect at all, and `start` returns an error.
+- **Where the new weights come from:** mistral.rs requantizes from the original weights, either the safetensors checkpoint or the GGUF file you loaded. If a layer can't be reloaded from there, it's requantized from its current quantized weights instead, which loses more precision; the log reports how many layers did this. Starting from an already quantized GGUF has the same cost, so use BF16 safetensors or a BF16 GGUF when quality matters most.

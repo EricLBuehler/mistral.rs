@@ -2179,6 +2179,9 @@ class ServerProvenanceTests(unittest.TestCase):
             "--pa-cache-type",
             "f8e4m3",
             "--paged-attn=on",
+            "--gpu-memory-utilization=0.9",
+            "--max-model-len",
+            "32768",
             "--max-seqs",
             "16",
             "--prefix-cache-n",
@@ -2201,10 +2204,35 @@ class ServerProvenanceTests(unittest.TestCase):
         self.assertEqual(config["mtp_model"], "incoai/Qwen3.8-27B-DFlash2")
         self.assertEqual(config["pa_cache_type"], "f8e4m3")
         self.assertEqual(config["paged_attn"], "on")
+        self.assertEqual(config["gpu_memory_utilization"], "0.9")
+        self.assertIsNone(config["kv_cache"])
+        self.assertEqual(config["max_model_len"], "32768")
         self.assertEqual(config["max_seqs"], "16")
         self.assertEqual(config["prefix_cache_n"], "20")
         self.assertEqual(config["mtp_n_predict"], "7")
         self.assertEqual(config["mtp_draft_sampling"], "stochastic")
+
+    def test_command_capture_preserves_explicit_kv_capacity_and_default_goal(self) -> None:
+        for value in ("4GiB", "65536tokens"):
+            for arguments in (["--kv-cache", value], [f"--kv-cache={value}"]):
+                with self.subTest(arguments=arguments):
+                    config = soak.parse_serve_configuration(
+                        ["mistralrs", "serve", *arguments]
+                    )
+                    self.assertEqual(config["kv_cache"], value)
+                    self.assertIsNone(config["gpu_memory_utilization"])
+
+        config = soak.parse_serve_configuration(["mistralrs", "serve"])
+        self.assertIsNone(config["gpu_memory_utilization"])
+        self.assertIsNone(config["kv_cache"])
+        for field in (
+            "pa_context_len",
+            "pa_memory_mb",
+            "pa_memory_fraction",
+            "max_seq_len",
+            "max_batch_size",
+        ):
+            self.assertNotIn(field, config)
 
     def test_complete_provenance_requires_exact_git_binary_gpu_and_kv(self) -> None:
         provenance = {
@@ -4168,11 +4196,11 @@ class MultimodalOracleTests(unittest.TestCase):
                     "subcommand": "serve",
                     "model": "model",
                     "paged_attn": "auto",
-                    "pa_context_len": None,
-                    "pa_memory_mb": None,
-                    "pa_memory_fraction": None,
+                    "gpu_memory_utilization": None,
+                    "kv_cache": "4GiB",
                     "pa_block_size": None,
                     "pa_cache_type": "f8e4m3",
+                    "max_model_len": "32768",
                     "max_seqs": "16",
                     "prefix_cache_n": "20",
                     "max_num_batched_tokens": None,
@@ -4204,6 +4232,9 @@ class MultimodalOracleTests(unittest.TestCase):
     def test_provenance_rejects_meaningful_serving_knob_mismatches(self) -> None:
         expected = self.provenance()
         mismatches = {
+            "gpu_memory_utilization": "0.8",
+            "kv_cache": "65536tokens",
+            "max_model_len": "16384",
             "prefix_cache_n": "16",
             "mtp_n_predict": "5",
             "mtp_draft_sampling": "greedy",
@@ -4221,6 +4252,8 @@ class MultimodalOracleTests(unittest.TestCase):
         expected = self.provenance()
 
         for field in (
+            "kv_cache",
+            "max_model_len",
             "prefix_cache_n",
             "mtp_n_predict",
             "mtp_draft_sampling",

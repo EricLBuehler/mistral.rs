@@ -248,6 +248,17 @@ pub fn apply_recurrence_from_convolved(
         );
     }
 
+    #[cfg(feature = "metal")]
+    if mixed_qkv.device().is_metal()
+        && cache.state_layout == RecurrentStateLayout::GdnKeyMajor
+        && cache.recurrent_state.dtype() == DType::F32
+        && matches!(dims.head_k_dim, 64 | 128)
+    {
+        return recurrence_metal_from_convolved(
+            mixed_qkv, b, a, a_log, dt_bias, dims, batch_size, seq_len, cache, dtype,
+        );
+    }
+
     let q = mixed_qkv.narrow(D::Minus1, 0, dims.key_dim)?;
     let k = mixed_qkv.narrow(D::Minus1, dims.key_dim, dims.key_dim)?;
     let v = mixed_qkv.narrow(D::Minus1, dims.key_dim * 2, dims.value_dim)?;
@@ -666,6 +677,31 @@ fn recurrence_metal(
     let v_bh = prepare_kv_for_backend(v, dims, batch_size, seq_len, dims.head_v_dim)?;
     let g_bh = prepare_gate_for_backend(g, dims, batch_size, seq_len)?;
     let beta_bh = prepare_gate_for_backend(beta, dims, batch_size, seq_len)?;
+
+    if let Some(slots) = cache.slots.as_ref() {
+        if seq_len != 1 {
+            candle_core::bail!("pooled Metal GDN state only supports single-token decode");
+        }
+        let out = crate::metal::gdn::gated_delta_rule_pooled_decode_metal(
+            &q_bh.squeeze(1)?,
+            &k_bh.squeeze(1)?,
+            &v_bh.squeeze(1)?,
+            &g_bh.squeeze(1)?,
+            &beta_bh.squeeze(1)?,
+            &cache.recurrent_state,
+            slots,
+        )?;
+        let state_pool = cache.recurrent_state.clone();
+        return finish_recurrence(
+            RecurrenceOutput::BatchHeadMajor(out.unsqueeze(1)?),
+            state_pool,
+            dims,
+            batch_size,
+            seq_len,
+            cache,
+            dtype,
+        );
+    }
     let mut state_flat = prepare_state_for_backend(cache, dims, batch_size)?;
 
     let out_bh = if seq_len >= RECURRENCE_CHUNK_THRESHOLD {
@@ -691,6 +727,46 @@ fn recurrence_metal(
     finish_recurrence(
         RecurrenceOutput::BatchHeadMajor(out_bh),
         state_flat,
+        dims,
+        batch_size,
+        seq_len,
+        cache,
+        dtype,
+    )
+}
+
+#[cfg(feature = "metal")]
+#[allow(clippy::too_many_arguments)]
+fn recurrence_metal_from_convolved(
+    mixed_qkv: &Tensor,
+    b: &Tensor,
+    a: &Tensor,
+    a_log: &Tensor,
+    dt_bias: &Tensor,
+    dims: &GdnDims,
+    batch_size: usize,
+    seq_len: usize,
+    cache: &mut GdnLayerCache,
+    dtype: DType,
+) -> Result<Tensor> {
+    let state = cache.recurrent_state.contiguous()?;
+    let out = crate::metal::gdn::gdn_recurrence_from_convolved_metal(
+        crate::metal::gdn::RecurrenceFromConvolved {
+            mixed_qkv: &mixed_qkv.reshape((batch_size, seq_len, dims.conv_dim))?,
+            b,
+            a,
+            a_log: &a_log.to_dtype(DType::F32)?,
+            dt_bias: &dt_bias.to_dtype(DType::F32)?,
+            state: &state,
+            slots: cache.slots.as_ref(),
+            num_k_heads: dims.num_k_heads,
+            head_k_dim: dims.head_k_dim,
+            tiled_v_heads: dims.v_head_layout == GdnVHeadLayout::Tiled,
+        },
+    )?;
+    finish_recurrence(
+        RecurrenceOutput::TokenMajor(out),
+        state,
         dims,
         batch_size,
         seq_len,
@@ -878,6 +954,16 @@ fn causal_conv1d_update(
             .squeeze(1)?
             .to_dtype(x_t.dtype())?
             .contiguous()?;
+        if let Some(slots) = cache.slots.as_ref() {
+            return crate::metal::gdn::causal_conv1d_update_pooled_metal(
+                &x_t,
+                &weight,
+                &cache.conv_state,
+                slots,
+                dims.conv_kernel_size,
+            )?
+            .transpose(1, 2);
+        }
         let conv_state = cache.conv_state.contiguous()?;
         let (output, new_conv_state) = crate::metal::gdn::causal_conv1d_metal(
             &x_t,
@@ -992,25 +1078,23 @@ fn causal_conv1d_full(
         return Ok(output);
     }
 
-    let x_t = x.transpose(1, 2)?.contiguous()?;
-
     #[cfg(feature = "metal")]
-    if x_t.device().is_metal() {
+    if x.device().is_metal() {
         let weight = conv1d_weight
             .squeeze(1)?
-            .to_dtype(x_t.dtype())?
+            .to_dtype(x.dtype())?
             .contiguous()?;
-        let (output, new_conv_state) = crate::metal::gdn::causal_conv1d_metal(
-            &x_t,
+        let (output, new_conv_state) = crate::metal::gdn::causal_conv1d_prefill_metal(
+            x,
             &weight,
             &cache.conv_state,
-            false,
             dims.conv_kernel_size,
         )?;
         cache.conv_state = new_conv_state;
-        return output.transpose(1, 2);
+        return Ok(output);
     }
 
+    let x_t = x.transpose(1, 2)?.contiguous()?;
     let state_len = cache.conv_state.dim(2)?;
     if state_len != dims.conv_kernel_size {
         candle_core::bail!(
@@ -1153,6 +1237,394 @@ mod tests {
                 diff <= ASSERT_EPS,
                 "idx={idx} lhs={lhs} rhs={rhs} diff={diff}"
             );
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn metal_token_major_prefill_conv_matches_legacy_and_chunked_cpu() -> CandleResult<()> {
+        const BATCH: usize = 2;
+        const LENGTHS: [usize; 6] = [1, 3, 4, 7, 53, 512];
+        let metal = Device::new_metal(0)?;
+        for (dtype, tolerance) in [(DType::F16, 1e-3f32), (DType::BF16, 5e-3)] {
+            for kernel_size in [1, 4] {
+                let mut dims = dims(2, 4, 64, 65);
+                dims.conv_kernel_size = kernel_size;
+                for seq_len in LENGTHS {
+                    let input = Tensor::from_vec(
+                        patterned(BATCH * (seq_len + 2) * (dims.conv_dim + 2), 1, 0.5, 0.1),
+                        (BATCH, seq_len + 2, dims.conv_dim + 2),
+                        &Device::Cpu,
+                    )?
+                    .to_dtype(dtype)?;
+                    let slice_input =
+                        |input: &Tensor| input.narrow(1, 1, seq_len)?.narrow(2, 1, dims.conv_dim);
+                    let x_cpu = slice_input(&input)?.to_dtype(DType::F32)?;
+                    let x = slice_input(&input.to_device(&metal)?)?;
+                    let weight_cpu = Tensor::from_vec(
+                        patterned(dims.conv_dim * kernel_size, 2, 0.4, -0.1),
+                        (dims.conv_dim, 1, kernel_size),
+                        &Device::Cpu,
+                    )?
+                    .to_dtype(dtype)?
+                    .to_dtype(DType::F32)?;
+                    let initial_state = Tensor::from_vec(
+                        patterned(BATCH * dims.conv_dim * kernel_size, 3, 0.5, 0.2),
+                        (BATCH, dims.conv_dim, kernel_size),
+                        &Device::Cpu,
+                    )?
+                    .to_dtype(dtype)?
+                    .to_dtype(DType::F32)?;
+                    let cache = |device: &Device, dtype| -> CandleResult<GdnLayerCache> {
+                        Ok(GdnLayerCache::gathered(
+                            initial_state.to_dtype(dtype)?.to_device(device)?,
+                            Tensor::zeros(
+                                (BATCH, dims.num_v_heads, dims.head_k_dim, dims.head_v_dim),
+                                DType::F32,
+                                device,
+                            )?,
+                            RecurrentStateLayout::GdnKeyMajor,
+                        ))
+                    };
+                    let mut cpu_cache = cache(&Device::Cpu, DType::F32)?;
+                    let expected = causal_conv1d_full(&x_cpu, &weight_cpu, &dims, &mut cpu_cache)?;
+                    let weight = weight_cpu.to_dtype(dtype)?.to_device(&metal)?;
+                    let mut metal_cache = cache(&metal, dtype)?;
+                    let actual = causal_conv1d_full(&x, &weight, &dims, &mut metal_cache)?;
+                    assert!(actual.is_contiguous());
+
+                    let (legacy, legacy_state) = crate::metal::gdn::causal_conv1d_metal(
+                        &x.transpose(1, 2)?.contiguous()?,
+                        &weight.squeeze(1)?,
+                        &initial_state.to_dtype(dtype)?.to_device(&metal)?,
+                        false,
+                        kernel_size,
+                    )?;
+                    let values = |tensor: &Tensor| -> CandleResult<Vec<f32>> {
+                        tensor.to_dtype(DType::F32)?.flatten_all()?.to_vec1()
+                    };
+                    let actual_values = values(&actual)?;
+                    assert_eq!(actual_values, values(&legacy.transpose(1, 2)?)?);
+                    assert_eq!(values(&metal_cache.conv_state)?, values(&legacy_state)?);
+                    assert_eq!(
+                        values(&metal_cache.conv_state)?,
+                        values(&cpu_cache.conv_state)?
+                    );
+                    for (actual, expected) in actual_values.iter().zip(values(&expected)?) {
+                        assert!(
+                            (actual - expected).abs() <= tolerance,
+                            "{dtype:?} T={seq_len} W={kernel_size}: actual={actual}, expected={expected}"
+                        );
+                    }
+
+                    let mut chunked_cache = cache(&metal, dtype)?;
+                    let mut outputs = Vec::new();
+                    let mut offset = 0;
+                    for chunk_len in [1, 2, seq_len] {
+                        let chunk_len = chunk_len.min(seq_len - offset);
+                        if chunk_len == 0 {
+                            break;
+                        }
+                        outputs.push(causal_conv1d_full(
+                            &x.narrow(1, offset, chunk_len)?,
+                            &weight,
+                            &dims,
+                            &mut chunked_cache,
+                        )?);
+                        offset += chunk_len;
+                    }
+                    assert_eq!(actual_values, values(&Tensor::cat(&outputs, 1)?)?);
+                    assert_eq!(
+                        values(&metal_cache.conv_state)?,
+                        values(&chunked_cache.conv_state)?
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn metal_pooled_decode_from_convolved_matches_cpu() -> CandleResult<()> {
+        const POOL_ROWS: usize = 6;
+        let cpu = Device::Cpu;
+        let metal = Device::new_metal(0)?;
+        let slots = [2u32, 0, 5];
+        let batch_size = slots.len();
+        for (layout, dtype, tol) in [
+            (GdnVHeadLayout::Grouped, DType::F32, 1e-4f32),
+            (GdnVHeadLayout::Tiled, DType::F32, 1e-4),
+            (GdnVHeadLayout::Grouped, DType::BF16, 2e-2),
+        ] {
+            let dims = dims_with_layout(2, 4, 128, 128, layout);
+            let mixed = Tensor::from_vec(
+                patterned(batch_size * dims.conv_dim, 1, 0.4, 0.05),
+                (batch_size, 1, dims.conv_dim),
+                &cpu,
+            )?;
+            let b = Tensor::from_vec(
+                patterned(batch_size * dims.num_v_heads, 2, 0.8, 0.1),
+                (batch_size, 1, dims.num_v_heads),
+                &cpu,
+            )?;
+            let a = Tensor::from_vec(
+                patterned(batch_size * dims.num_v_heads, 3, 0.8, -0.05),
+                (batch_size, 1, dims.num_v_heads),
+                &cpu,
+            )?;
+            let a_log = Tensor::from_vec(
+                patterned(dims.num_v_heads, 4, 0.2, -0.2),
+                (dims.num_v_heads,),
+                &cpu,
+            )?;
+            let dt_bias = Tensor::from_vec(
+                patterned(dims.num_v_heads, 5, 0.3, 0.3),
+                (dims.num_v_heads,),
+                &cpu,
+            )?;
+            let state_len = dims.num_v_heads * dims.head_k_dim * dims.head_v_dim;
+            let pool = Tensor::from_vec(
+                patterned(POOL_ROWS * state_len, 6, 0.05, 0.0),
+                (
+                    POOL_ROWS,
+                    dims.num_v_heads,
+                    dims.head_k_dim,
+                    dims.head_v_dim,
+                ),
+                &cpu,
+            )?;
+            let slot_rows = slots.iter().map(|&s| s as usize).collect::<Vec<_>>();
+            let gathered = Tensor::cat(
+                &slot_rows
+                    .iter()
+                    .map(|&s| pool.narrow(0, s, 1))
+                    .collect::<CandleResult<Vec<_>>>()?,
+                0,
+            )?;
+            // Round inputs through the tested dtype so both sides see the same values.
+            let (mixed, b, a) = (
+                mixed.to_dtype(dtype)?.to_dtype(DType::F32)?,
+                b.to_dtype(dtype)?.to_dtype(DType::F32)?,
+                a.to_dtype(dtype)?.to_dtype(DType::F32)?,
+            );
+            let mut cpu_cache = GdnLayerCache {
+                conv_state: Tensor::zeros(
+                    (batch_size, dims.conv_dim, dims.conv_kernel_size),
+                    DType::F32,
+                    &cpu,
+                )?,
+                recurrent_state: gathered,
+                state_layout: RecurrentStateLayout::GdnKeyMajor,
+                slots: None,
+                pending_transitions: None,
+                deferred_state: None,
+            };
+            let expected = apply_recurrence_from_convolved(
+                &mixed,
+                &b,
+                &a,
+                &a_log,
+                &dt_bias,
+                &dims,
+                batch_size,
+                1,
+                &mut cpu_cache,
+                DType::F32,
+            )?;
+
+            let mut metal_cache = GdnLayerCache {
+                conv_state: Tensor::zeros(
+                    (POOL_ROWS, dims.conv_dim, dims.conv_kernel_size),
+                    DType::F32,
+                    &metal,
+                )?,
+                recurrent_state: pool.to_device(&metal)?,
+                state_layout: RecurrentStateLayout::GdnKeyMajor,
+                slots: Some(Tensor::new(&slots, &metal)?),
+                pending_transitions: None,
+                deferred_state: None,
+            };
+            let actual = apply_recurrence_from_convolved(
+                &mixed.to_dtype(dtype)?.to_device(&metal)?,
+                &b.to_dtype(dtype)?.to_device(&metal)?,
+                &a.to_dtype(dtype)?.to_device(&metal)?,
+                &a_log.to_device(&metal)?,
+                &dt_bias.to_device(&metal)?,
+                &dims,
+                batch_size,
+                1,
+                &mut metal_cache,
+                dtype,
+            )?;
+            let max_diff = |x: &Tensor, y: &Tensor| -> CandleResult<f32> {
+                (x.to_dtype(DType::F32)?.to_device(&cpu)?
+                    - y.to_dtype(DType::F32)?.to_device(&cpu)?)?
+                .abs()?
+                .flatten_all()?
+                .max(0)?
+                .to_scalar::<f32>()
+            };
+            let out_diff = max_diff(&actual, &expected)?;
+            let pool_after = metal_cache.recurrent_state.to_device(&cpu)?;
+            let mut state_diff = 0f32;
+            for (row, &slot) in slot_rows.iter().enumerate() {
+                state_diff = state_diff.max(max_diff(
+                    &pool_after.narrow(0, slot, 1)?,
+                    &cpu_cache.recurrent_state.narrow(0, row, 1)?,
+                )?);
+            }
+            let untouched = max_diff(&pool_after.narrow(0, 1, 1)?, &pool.narrow(0, 1, 1)?)?;
+            assert!(
+                out_diff < tol,
+                "{layout:?} {dtype:?}: output diff {out_diff}"
+            );
+            assert!(
+                state_diff < 1e-3,
+                "{layout:?} {dtype:?}: state diff {state_diff}"
+            );
+            assert_eq!(untouched, 0.0, "unselected pool rows must not change");
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn metal_multi_token_from_convolved_matches_cpu() -> CandleResult<()> {
+        const POOL_ROWS: usize = 5;
+        const SEQ: usize = 7;
+        let cpu = Device::Cpu;
+        let metal = Device::new_metal(0)?;
+        let slots = [3u32, 0];
+        let batch_size = slots.len();
+        for (layout, dtype, pooled, tol) in [
+            (GdnVHeadLayout::Grouped, DType::F32, false, 1e-4f32),
+            (GdnVHeadLayout::Tiled, DType::F32, false, 1e-4),
+            (GdnVHeadLayout::Grouped, DType::BF16, true, 3e-2),
+        ] {
+            let dims = dims_with_layout(2, 4, 128, 128, layout);
+            let round =
+                |t: Tensor| -> CandleResult<Tensor> { t.to_dtype(dtype)?.to_dtype(DType::F32) };
+            let mixed = round(Tensor::from_vec(
+                patterned(batch_size * SEQ * dims.conv_dim, 1, 0.4, 0.05),
+                (batch_size, SEQ, dims.conv_dim),
+                &cpu,
+            )?)?;
+            let b = round(Tensor::from_vec(
+                patterned(batch_size * SEQ * dims.num_v_heads, 2, 0.8, 0.1),
+                (batch_size, SEQ, dims.num_v_heads),
+                &cpu,
+            )?)?;
+            let a = round(Tensor::from_vec(
+                patterned(batch_size * SEQ * dims.num_v_heads, 3, 0.8, -0.05),
+                (batch_size, SEQ, dims.num_v_heads),
+                &cpu,
+            )?)?;
+            let a_log = Tensor::from_vec(
+                patterned(dims.num_v_heads, 4, 0.2, -0.2),
+                (dims.num_v_heads,),
+                &cpu,
+            )?;
+            let dt_bias = Tensor::from_vec(
+                patterned(dims.num_v_heads, 5, 0.3, 0.3),
+                (dims.num_v_heads,),
+                &cpu,
+            )?;
+            let state_len = dims.num_v_heads * dims.head_k_dim * dims.head_v_dim;
+            let pool = Tensor::from_vec(
+                patterned(POOL_ROWS * state_len, 6, 0.05, 0.0),
+                (
+                    POOL_ROWS,
+                    dims.num_v_heads,
+                    dims.head_k_dim,
+                    dims.head_v_dim,
+                ),
+                &cpu,
+            )?;
+            let rows = slots.iter().map(|&s| s as usize).collect::<Vec<_>>();
+            let gathered = Tensor::cat(
+                &rows
+                    .iter()
+                    .map(|&r| pool.narrow(0, r, 1))
+                    .collect::<CandleResult<Vec<_>>>()?,
+                0,
+            )?;
+            let mut cpu_cache = GdnLayerCache {
+                conv_state: Tensor::zeros(
+                    (batch_size, dims.conv_dim, dims.conv_kernel_size),
+                    DType::F32,
+                    &cpu,
+                )?,
+                recurrent_state: gathered.clone(),
+                state_layout: RecurrentStateLayout::GdnKeyMajor,
+                slots: None,
+                pending_transitions: None,
+                deferred_state: None,
+            };
+            let expected = apply_recurrence_from_convolved(
+                &mixed,
+                &b,
+                &a,
+                &a_log,
+                &dt_bias,
+                &dims,
+                batch_size,
+                SEQ,
+                &mut cpu_cache,
+                DType::F32,
+            )?;
+
+            let (state, slot_tensor) = if pooled {
+                (pool.to_device(&metal)?, Some(Tensor::new(&slots, &metal)?))
+            } else {
+                (gathered.to_device(&metal)?, None)
+            };
+            let mut metal_cache = GdnLayerCache {
+                conv_state: Tensor::zeros(
+                    (1, dims.conv_dim, dims.conv_kernel_size),
+                    DType::F32,
+                    &metal,
+                )?,
+                recurrent_state: state,
+                state_layout: RecurrentStateLayout::GdnKeyMajor,
+                slots: slot_tensor,
+                pending_transitions: None,
+                deferred_state: None,
+            };
+            let actual = apply_recurrence_from_convolved(
+                &mixed.to_dtype(dtype)?.to_device(&metal)?,
+                &b.to_dtype(dtype)?.to_device(&metal)?,
+                &a.to_dtype(dtype)?.to_device(&metal)?,
+                &a_log.to_device(&metal)?,
+                &dt_bias.to_device(&metal)?,
+                &dims,
+                batch_size,
+                SEQ,
+                &mut metal_cache,
+                dtype,
+            )?;
+            let max_diff = |x: &Tensor, y: &Tensor| -> CandleResult<f32> {
+                (x.to_dtype(DType::F32)?.to_device(&cpu)?
+                    - y.to_dtype(DType::F32)?.to_device(&cpu)?)?
+                .abs()?
+                .flatten_all()?
+                .max(0)?
+                .to_scalar::<f32>()
+            };
+            let tag = format!("{layout:?} {dtype:?} pooled={pooled}");
+            let out_diff = max_diff(&actual, &expected)?;
+            assert!(out_diff < tol, "{tag}: output diff {out_diff}");
+            let state_after = metal_cache.recurrent_state.to_device(&cpu)?;
+            for (i, &r) in rows.iter().enumerate() {
+                let got = if pooled {
+                    state_after.narrow(0, r, 1)?
+                } else {
+                    state_after.narrow(0, i, 1)?
+                };
+                let d = max_diff(&got, &cpu_cache.recurrent_state.narrow(0, i, 1)?)?;
+                assert!(d < 1e-3, "{tag}: state diff {d}");
+            }
         }
         Ok(())
     }

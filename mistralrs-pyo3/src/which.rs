@@ -2,9 +2,8 @@ use std::path::PathBuf;
 
 use either::Either;
 use mistralrs_core::{
-    AutoDeviceMapParams, DiffusionLoaderType, EmbeddingLoaderType, ModelDType,
-    MultimodalLoaderType, NormalLoaderType, DEFAULT_LORA_MAX_ADAPTERS, DEFAULT_LORA_MAX_BYTES,
-    DEFAULT_LORA_MAX_RANK,
+    DiffusionLoaderType, EmbeddingLoaderType, ModelDType, MultimodalLoaderType, NormalLoaderType,
+    DEFAULT_LORA_MAX_ADAPTERS, DEFAULT_LORA_MAX_BYTES, DEFAULT_LORA_MAX_RANK,
 };
 use pyo3::{pyclass, pymethods};
 
@@ -49,6 +48,7 @@ pub enum Architecture {
     GLM4MoeLite,
     GLM4Moe,
     Qwen3Moe,
+    Flint,
     SmolLm3,
     GraniteMoeHybrid,
     GptOss,
@@ -56,6 +56,7 @@ pub enum Architecture {
     HunYuanMoEV1,
     Qwen3Next,
     Lfm2,
+    Lfm3,
     Lfm2Moe,
 }
 
@@ -79,6 +80,7 @@ impl From<Architecture> for NormalLoaderType {
             Architecture::GLM4MoeLite => Self::GLM4MoeLite,
             Architecture::GLM4Moe => Self::GLM4Moe,
             Architecture::Qwen3Moe => Self::Qwen3Moe,
+            Architecture::Flint => Self::Flint,
             Architecture::SmolLm3 => Self::SmolLm3,
             Architecture::GraniteMoeHybrid => Self::GraniteMoeHybrid,
             Architecture::GptOss => Self::GptOss,
@@ -86,6 +88,7 @@ impl From<Architecture> for NormalLoaderType {
             Architecture::HunYuanMoEV1 => Self::HunYuanMoEV1,
             Architecture::Qwen3Next => Self::Qwen3Next,
             Architecture::Lfm2 => Self::Lfm2,
+            Architecture::Lfm3 => Self::Lfm3,
             Architecture::Lfm2Moe => Self::Lfm2Moe,
         }
     }
@@ -115,6 +118,10 @@ pub enum MultimodalArchitecture {
     LLaVANext,
     LLaVA,
     Lfm2Vl,
+    Lfm3Vl,
+    Lfm3Audio,
+    Lfm3Omni,
+    Lfm3D1,
     VLlama,
     Qwen2VL,
     Idefics3,
@@ -144,6 +151,10 @@ impl From<MultimodalArchitecture> for MultimodalLoaderType {
             MultimodalArchitecture::LLaVANext => MultimodalLoaderType::LLaVANext,
             MultimodalArchitecture::LLaVA => MultimodalLoaderType::LLaVA,
             MultimodalArchitecture::Lfm2Vl => MultimodalLoaderType::Lfm2Vl,
+            MultimodalArchitecture::Lfm3Vl => MultimodalLoaderType::Lfm3Vl,
+            MultimodalArchitecture::Lfm3Audio => MultimodalLoaderType::Lfm3Audio,
+            MultimodalArchitecture::Lfm3Omni => MultimodalLoaderType::Lfm3Omni,
+            MultimodalArchitecture::Lfm3D1 => MultimodalLoaderType::Lfm3D1,
             MultimodalArchitecture::VLlama => MultimodalLoaderType::VLlama,
             MultimodalArchitecture::Qwen2VL => MultimodalLoaderType::Qwen2VL,
             MultimodalArchitecture::Idefics3 => MultimodalLoaderType::Idefics3,
@@ -214,63 +225,6 @@ impl From<IsqOrganization> for mistralrs_core::IsqOrganization {
 }
 
 #[pyclass]
-#[pyo3(get_all)]
-#[derive(Debug, Clone, PartialEq)]
-pub struct TextAutoMapParams {
-    pub max_seq_len: usize,
-    pub max_batch_size: usize,
-}
-
-#[pymethods]
-impl TextAutoMapParams {
-    #[new]
-    #[pyo3(signature = (
-        max_seq_len = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
-        max_batch_size = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
-    ))]
-    pub fn new(max_seq_len: usize, max_batch_size: usize) -> Self {
-        Self {
-            max_seq_len,
-            max_batch_size,
-        }
-    }
-}
-
-#[pyclass]
-#[pyo3(get_all)]
-#[derive(Debug, Clone, PartialEq)]
-pub struct MultimodalAutoMapParams {
-    pub max_seq_len: usize,
-    pub max_batch_size: usize,
-    pub max_num_images: usize,
-    pub max_image_length: usize,
-}
-
-#[pymethods]
-impl MultimodalAutoMapParams {
-    #[new]
-    #[pyo3(signature = (
-        max_seq_len = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
-        max_batch_size = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
-        max_num_images = AutoDeviceMapParams::DEFAULT_MAX_NUM_IMAGES,
-        max_image_length = AutoDeviceMapParams::DEFAULT_MAX_IMAGE_LENGTH,
-    ))]
-    pub fn new(
-        max_seq_len: usize,
-        max_batch_size: usize,
-        max_num_images: usize,
-        max_image_length: usize,
-    ) -> Self {
-        Self {
-            max_seq_len,
-            max_batch_size,
-            max_num_images,
-            max_image_length,
-        }
-    }
-}
-
-#[pyclass]
 #[derive(Clone)]
 pub enum Which {
     #[pyo3(constructor = (
@@ -284,7 +238,6 @@ pub enum Which {
         dtype = ModelDType::Auto,
         imatrix = None,
         calibration_file = None,
-        auto_map_params = None,
         hf_cache_path = None,
         matformer_config_path = None,
         matformer_slice_name = None,
@@ -300,7 +253,6 @@ pub enum Which {
         dtype: ModelDType,
         imatrix: Option<PathBuf>,
         calibration_file: Option<PathBuf>,
-        auto_map_params: Option<TextAutoMapParams>,
         hf_cache_path: Option<PathBuf>,
         matformer_config_path: Option<PathBuf>,
         matformer_slice_name: Option<String>,
@@ -342,7 +294,6 @@ pub enum Which {
         write_uqff = None,
         from_uqff = None,
         dtype = ModelDType::Auto,
-        auto_map_params = None,
         hf_cache_path = None,
     ))]
     XLora {
@@ -356,7 +307,6 @@ pub enum Which {
         write_uqff: Option<PathBuf>,
         from_uqff: Option<Either<String, Vec<String>>>,
         dtype: ModelDType,
-        auto_map_params: Option<TextAutoMapParams>,
         hf_cache_path: Option<PathBuf>,
     },
 
@@ -369,7 +319,6 @@ pub enum Which {
         write_uqff = None,
         from_uqff = None,
         dtype = ModelDType::Auto,
-        auto_map_params = None,
         hf_cache_path = None,
         max_adapters = DEFAULT_LORA_MAX_ADAPTERS,
         max_rank = DEFAULT_LORA_MAX_RANK,
@@ -384,7 +333,6 @@ pub enum Which {
         write_uqff: Option<PathBuf>,
         from_uqff: Option<Either<String, Vec<String>>>,
         dtype: ModelDType,
-        auto_map_params: Option<TextAutoMapParams>,
         hf_cache_path: Option<PathBuf>,
         max_adapters: usize,
         max_rank: usize,
@@ -397,7 +345,6 @@ pub enum Which {
         tok_model_id = None,
         topology = None,
         dtype = ModelDType::Auto,
-        auto_map_params = None,
         *,
         tokenizer_json = None,
         mmproj_filename = None,
@@ -406,7 +353,6 @@ pub enum Which {
         imatrix = None,
         calibration_file = None,
         max_edge = None,
-        multimodal_auto_map_params = None,
         adapters = None,
         max_adapters = DEFAULT_LORA_MAX_ADAPTERS,
         max_rank = DEFAULT_LORA_MAX_RANK,
@@ -423,7 +369,6 @@ pub enum Which {
         tok_model_id: Option<String>,
         topology: Option<String>,
         dtype: ModelDType,
-        auto_map_params: Option<TextAutoMapParams>,
         tokenizer_json: Option<String>,
         mmproj_filename: Option<Either<String, Vec<String>>>,
         organization: Option<IsqOrganization>,
@@ -431,7 +376,6 @@ pub enum Which {
         imatrix: Option<PathBuf>,
         calibration_file: Option<PathBuf>,
         max_edge: Option<u32>,
-        multimodal_auto_map_params: Option<MultimodalAutoMapParams>,
         adapters: Option<Vec<LoraAdapter>>,
         max_adapters: usize,
         max_rank: usize,
@@ -451,7 +395,6 @@ pub enum Which {
         tgt_non_granular_index = None,
         topology = None,
         dtype = ModelDType::Auto,
-        auto_map_params = None,
     ))]
     XLoraGGUF {
         quantized_model_id: String,
@@ -462,7 +405,6 @@ pub enum Which {
         tgt_non_granular_index: Option<usize>,
         topology: Option<String>,
         dtype: ModelDType,
-        auto_map_params: Option<TextAutoMapParams>,
     },
 
     #[pyo3(constructor = (
@@ -473,7 +415,6 @@ pub enum Which {
         tok_model_id = None,
         topology = None,
         dtype = ModelDType::Auto,
-        auto_map_params = None,
     ))]
     LoraGGUF {
         quantized_model_id: String,
@@ -483,7 +424,6 @@ pub enum Which {
         tok_model_id: Option<String>,
         topology: Option<String>,
         dtype: ModelDType,
-        auto_map_params: Option<TextAutoMapParams>,
     },
 
     #[pyo3(constructor = (
@@ -494,7 +434,6 @@ pub enum Which {
         gqa = 1,
         topology = None,
         dtype = ModelDType::Auto,
-        auto_map_params = None,
     ))]
     #[allow(clippy::upper_case_acronyms)]
     GGML {
@@ -505,7 +444,6 @@ pub enum Which {
         gqa: usize,
         topology: Option<String>,
         dtype: ModelDType,
-        auto_map_params: Option<TextAutoMapParams>,
     },
 
     #[pyo3(constructor = (
@@ -519,7 +457,6 @@ pub enum Which {
         gqa = 1,
         topology = None,
         dtype = ModelDType::Auto,
-        auto_map_params = None,
     ))]
     XLoraGGML {
         quantized_model_id: String,
@@ -532,7 +469,6 @@ pub enum Which {
         gqa: usize,
         topology: Option<String>,
         dtype: ModelDType,
-        auto_map_params: Option<TextAutoMapParams>,
     },
 
     #[pyo3(constructor = (
@@ -545,7 +481,6 @@ pub enum Which {
         gqa = 1,
         topology = None,
         dtype = ModelDType::Auto,
-        auto_map_params = None,
     ))]
     LoraGGML {
         quantized_model_id: String,
@@ -557,7 +492,6 @@ pub enum Which {
         gqa: usize,
         topology: Option<String>,
         dtype: ModelDType,
-        auto_map_params: Option<TextAutoMapParams>,
     },
 
     #[pyo3(constructor = (
@@ -571,7 +505,6 @@ pub enum Which {
         max_edge = None,
         calibration_file = None,
         imatrix = None,
-        auto_map_params = None,
         hf_cache_path = None,
         matformer_config_path = None,
         matformer_slice_name = None,
@@ -589,7 +522,6 @@ pub enum Which {
         max_edge: Option<u32>,
         calibration_file: Option<PathBuf>,
         imatrix: Option<PathBuf>,
-        auto_map_params: Option<MultimodalAutoMapParams>,
         hf_cache_path: Option<PathBuf>,
         matformer_config_path: Option<PathBuf>,
         matformer_slice_name: Option<String>,
@@ -634,7 +566,7 @@ mod tests {
             .unwrap();
 
         assert!(signature.starts_with(
-            "(quantized_model_id, quantized_filename, tok_model_id=None, topology=None, dtype=..., auto_map_params=None, *"
+            "(quantized_model_id, quantized_filename, tok_model_id=None, topology=None, dtype=..., *"
         ));
         assert!(signature.contains("tokenizer_json=None"));
         assert!(signature.contains("mmproj_filename=None"));

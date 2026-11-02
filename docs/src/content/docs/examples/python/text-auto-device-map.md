@@ -12,12 +12,12 @@ Runnable Python SDK example `text_auto_device_map`.
 <!-- needs-header -->
 
 ```python
-from mistralrs import Runner, Which, ChatCompletionRequest, TextAutoMapParams
+from mistralrs import Runner, Which, ChatCompletionRequest
 
 runner = Runner(
+    memory_goal=0.9,
     which=Which.Plain(
         model_id="meta-llama/Llama-3.3-70B-Instruct",
-        auto_map_params=TextAutoMapParams(max_seq_len=4096, max_batch_size=2),
     ),
 )
 

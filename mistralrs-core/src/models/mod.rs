@@ -1,5 +1,6 @@
 pub(crate) mod deepseek2;
 pub(crate) mod deepseek3;
+pub(crate) mod flint;
 pub(crate) mod gemma;
 pub(crate) mod gemma2;
 pub(crate) mod glm4;
@@ -11,6 +12,7 @@ mod hunyuan_rope;
 pub(crate) mod hunyuan_v1_dense;
 pub(crate) mod hunyuan_v1_moe;
 pub(crate) mod lfm2;
+pub(crate) mod lfm3;
 pub(crate) mod llama;
 pub(crate) mod mistral;
 pub(crate) mod mixtral;

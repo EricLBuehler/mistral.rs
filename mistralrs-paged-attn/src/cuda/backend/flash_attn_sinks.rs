@@ -149,6 +149,7 @@ struct FlashAttnSinksVarlen {
     cu_seqlens_k: Tensor, // [B+1] u32
     softmax_scale: f32,
     window_size: usize,
+    packed_max_q_len: Option<usize>,
 }
 
 impl FlashAttnSinksVarlen {
@@ -164,7 +165,18 @@ impl FlashAttnSinksVarlen {
         let dtype = q.dtype();
         let dev = q.device();
         let out_shape = q_l.shape().clone();
-        let (batch_size, num_heads, max_q_len, head_dim) = q_l.shape().dims4()?;
+        let (batch_size, num_heads, max_q_len, head_dim) = match self.packed_max_q_len {
+            Some(max_q_len) => {
+                let (_, num_heads, head_dim) = q_l.shape().dims3()?;
+                (
+                    self.cu_seqlens_q.dim(0)? - 1,
+                    num_heads,
+                    max_q_len,
+                    head_dim,
+                )
+            }
+            None => q_l.shape().dims4()?,
+        };
 
         // Extract K storage [total_kv, num_kv_heads, D]
         let (k_s, k_l) = self.key.storage_and_layout();
@@ -268,6 +280,7 @@ impl FlashAttnSinksVarlen {
                 num_kv_heads as c_int,
                 head_dim as c_int,
                 self.window_size as c_int,
+                self.packed_max_q_len.is_some(),
                 dev.cuda_stream().cu_stream(),
             );
         }
@@ -339,6 +352,33 @@ pub fn flash_attn_sinks(
     q.apply_op1(op)
 }
 
+/// Fused causal sinks attention with packed Q/K/V and suffix-aligned query positions.
+#[allow(clippy::too_many_arguments)]
+pub fn flash_attn_sinks_varlen_packed(
+    q: &Tensor,
+    k: &Tensor,
+    v: &Tensor,
+    sinks: Option<&Tensor>,
+    cu_seqlens_q: &Tensor,
+    cu_seqlens_k: &Tensor,
+    max_q_len: usize,
+    softmax_scale: f32,
+    window_size: usize,
+) -> Result<Tensor> {
+    let q = q.contiguous()?;
+    let op = FlashAttnSinksVarlen {
+        key: k.contiguous()?,
+        value: v.contiguous()?,
+        sinks: sinks.map(|s| s.to_dtype(DType::F32)).transpose()?,
+        cu_seqlens_q: cu_seqlens_q.clone(),
+        cu_seqlens_k: cu_seqlens_k.clone(),
+        softmax_scale,
+        window_size,
+        packed_max_q_len: Some(max_q_len),
+    };
+    q.apply_op1(op)
+}
+
 /// Fused varlen flash attention with per-head sinks for prefill.
 ///
 /// Handles variable-length sequences within a batch. Q is padded,
@@ -379,6 +419,7 @@ pub fn flash_attn_sinks_varlen(
         cu_seqlens_k: cu_seqlens_k.clone(),
         softmax_scale,
         window_size,
+        packed_max_q_len: None,
     };
     q.apply_op1(op)
 }

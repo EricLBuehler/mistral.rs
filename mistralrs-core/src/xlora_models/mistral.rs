@@ -274,10 +274,6 @@ impl Attention {
             attention_mask,
             self.sliding_window,
         )?;
-        let attn_mask = match attn_mask {
-            Some(t) => AttentionMask::Custom(t),
-            None => AttentionMask::None,
-        };
 
         let attn_output = Sdpa.run_attention(
             &q,
@@ -585,7 +581,9 @@ impl XLoraModel {
         } else {
             self.cache.full().lock()
         };
-        let mut xs = self.embed_tokens.embedding_forward(input_ids, self.dtype)?;
+        let mut xs = self
+            .embed_tokens
+            .embedding_forward(input_ids, self.dtype.into())?;
         let attention_mask = CausalMasker.make_causal_mask(
             input_ids,
             &*cache,

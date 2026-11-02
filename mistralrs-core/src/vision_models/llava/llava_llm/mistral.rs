@@ -284,10 +284,6 @@ impl Attention {
                     attention_mask,
                     self.sliding_window,
                 )?;
-                let attn_mask = match attn_mask {
-                    Some(t) => AttentionMask::Custom(t),
-                    None => AttentionMask::None,
-                };
 
                 Sdpa.run_attention(
                     &q,
@@ -379,11 +375,10 @@ impl DecoderLayer {
             kv_cache,
             (&self.rope_parameter.0, &self.rope_parameter.1),
         )?;
-        xs = (xs + residual)?;
-        let residual = &xs;
-        let xs = self
-            .mlp
-            .forward(&xs.apply(&self.post_attention_layernorm)?)?;
+        let (residual, xs) = self
+            .post_attention_layernorm
+            .forward_add_rms_norm(&xs, residual)?;
+        let xs = self.mlp.forward(&xs)?;
         residual + xs
     }
 }
@@ -520,13 +515,15 @@ impl Model {
     }
 
     pub fn get_input_embeddings(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.embedding_forward(input_ids, self.dtype)
+        self.embed_tokens
+            .embedding_forward(input_ids, self.dtype.into())
     }
 
     pub fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
         self.forward_embeds(
             input_ids,
-            self.embed_tokens.embedding_forward(input_ids, self.dtype)?,
+            self.embed_tokens
+                .embedding_forward(input_ids, self.dtype.into())?,
             ctx,
         )
     }

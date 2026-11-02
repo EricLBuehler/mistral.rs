@@ -30,6 +30,7 @@ use crate::args::{
 };
 use crate::ui::build_ui_router;
 
+const DEFAULT_HF_REVISION: &str = "main";
 const MEBIBYTE_BYTES: usize = 1024 * 1024;
 
 /// Run the HTTP server with the specified model
@@ -55,21 +56,15 @@ pub async fn run_server(
     // Convert our clean args to ModelSelected for the existing loader infrastructure
     let matformer = runtime.matformer_selection();
     let original_model_id = model_id_of(&model_type).to_string();
-    apply_quant_resolution(&mut model_type, &global.token_source, &matformer).await?;
+    apply_quant_resolution(&mut model_type, &global.token_source, &matformer, None).await?;
     let api_id_override =
         (model_id_of(&model_type) != original_model_id).then_some(original_model_id);
     let model_selected = convert_to_model_selected(&model_type, &matformer)?;
     let (max_model_len, hf_config_overrides) = extract_hf_config_settings(&model_type);
 
     // Extract paged attention settings
-    let (
-        paged_attn,
-        paged_attn_gpu_mem,
-        paged_attn_gpu_mem_usage,
-        paged_ctxt_len,
-        paged_attn_block_size,
-        paged_cache_type,
-    ) = extract_paged_attn_settings(&model_type);
+    let (paged_attn, memory_goal, paged_attn_block_size, paged_cache_type) =
+        extract_paged_attn_settings(&model_type)?;
 
     // Extract device settings
     let (cpu, device_layers) = extract_device_settings(&model_type);
@@ -81,7 +76,7 @@ pub async fn run_server(
     // Build the MistralRs instance
     let mut builder = MistralRsForServerBuilder::new()
         .with_model(model_selected)
-        .with_max_seqs(runtime.max_seqs)
+        .with_max_seqs(runtime.max_seqs_for_serve())
         .with_max_num_batched_tokens(runtime.max_num_batched_tokens)
         .with_max_prefill_chunk_tokens(runtime.max_prefill_chunk_tokens)
         .with_max_decode_steps_before_prefill(runtime.max_decode_steps_before_prefill)
@@ -109,9 +104,7 @@ pub async fn run_server(
         .with_num_device_layers_optional(device_layers)
         .with_in_situ_quant_optional(isq)
         .with_model_id_override_optional(api_id_override)
-        .with_paged_attn_gpu_mem_optional(paged_attn_gpu_mem)
-        .with_paged_attn_gpu_mem_usage_optional(paged_attn_gpu_mem_usage)
-        .with_paged_ctxt_len_optional(paged_ctxt_len)
+        .with_memory_goal(memory_goal)
         .with_paged_attn_block_size_optional(paged_attn_block_size)
         .with_mtp_config_optional(runtime.mtp_config())
         .with_max_model_len_optional(max_model_len)
@@ -384,8 +377,8 @@ pub(crate) fn convert_to_model_selected(
                 imatrix: quantization.imatrix.clone(),
                 calibration_file: quantization.calibration_file.clone(),
                 max_edge: multimodal.max_edge,
-                max_seq_len: device.max_seq_len,
-                max_batch_size: device.max_batch_size,
+                max_seq_len: mistralrs_core::AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
+                max_batch_size: mistralrs_core::AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
                 max_num_images: multimodal.max_num_images,
                 max_image_length: multimodal.max_image_length,
                 hf_cache_path: device.hf_cache.clone(),
@@ -475,8 +468,8 @@ pub(crate) fn convert_to_model_selected(
                     max_edge: multimodal.max_edge,
                     calibration_file: quantization.calibration_file.clone(),
                     imatrix: quantization.imatrix.clone(),
-                    max_seq_len: device.max_seq_len,
-                    max_batch_size: device.max_batch_size,
+                    max_seq_len: mistralrs_core::AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
+                    max_batch_size: mistralrs_core::AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
                     max_num_images: multimodal.max_num_images.unwrap_or(1),
                     max_image_length: multimodal.max_image_length.unwrap_or(1024),
                     hf_cache_path: device.hf_cache.clone(),
@@ -579,8 +572,8 @@ fn convert_text_model(
             from_uqff: quantization.from_uqff.clone(),
             imatrix: quantization.imatrix.clone(),
             calibration_file: quantization.calibration_file.clone(),
-            max_seq_len: device.max_seq_len,
-            max_batch_size: device.max_batch_size,
+            max_seq_len: mistralrs_core::AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
+            max_batch_size: mistralrs_core::AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
             hf_cache_path: device.hf_cache.clone(),
             matformer_config_path: matformer.config_path.clone(),
             matformer_slice_name: matformer.slice_name.clone(),
@@ -606,8 +599,8 @@ fn convert_text_model(
             imatrix: quantization.imatrix.clone(),
             calibration_file: quantization.calibration_file.clone(),
             max_edge: multimodal.and_then(|options| options.max_edge),
-            max_seq_len: device.max_seq_len,
-            max_batch_size: device.max_batch_size,
+            max_seq_len: mistralrs_core::AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
+            max_batch_size: mistralrs_core::AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
             max_num_images: multimodal.and_then(|options| options.max_num_images),
             max_image_length: multimodal.and_then(|options| options.max_image_length),
             hf_cache_path: device.hf_cache.clone(),
@@ -636,8 +629,8 @@ fn convert_text_model(
                 .map(|p| p.to_string_lossy().to_string()),
             write_uqff: None,
             from_uqff: quantization.from_uqff.clone(),
-            max_seq_len: device.max_seq_len,
-            max_batch_size: device.max_batch_size,
+            max_seq_len: mistralrs_core::AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
+            max_batch_size: mistralrs_core::AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
             hf_cache_path: device.hf_cache.clone(),
         }),
 
@@ -666,8 +659,8 @@ fn convert_text_model(
             imatrix: quantization.imatrix.clone(),
             calibration_file: quantization.calibration_file.clone(),
             max_edge: multimodal.and_then(|options| options.max_edge),
-            max_seq_len: device.max_seq_len,
-            max_batch_size: device.max_batch_size,
+            max_seq_len: mistralrs_core::AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
+            max_batch_size: mistralrs_core::AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
             max_num_images: multimodal.and_then(|options| options.max_num_images),
             max_image_length: multimodal.and_then(|options| options.max_image_length),
             hf_cache_path: device.hf_cache.clone(),
@@ -693,8 +686,8 @@ fn convert_text_model(
                 .topology
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string()),
-            max_seq_len: device.max_seq_len,
-            max_batch_size: device.max_batch_size,
+            max_seq_len: mistralrs_core::AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
+            max_batch_size: mistralrs_core::AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
         }),
 
         (ModelFormat::Gguf, false, false, true) => Ok(ModelSelected::XLoraGGUF {
@@ -716,8 +709,8 @@ fn convert_text_model(
                 .topology
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string()),
-            max_seq_len: device.max_seq_len,
-            max_batch_size: device.max_batch_size,
+            max_seq_len: mistralrs_core::AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
+            max_batch_size: mistralrs_core::AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
         }),
 
         // GGML format
@@ -741,8 +734,8 @@ fn convert_text_model(
                 .topology
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string()),
-            max_seq_len: device.max_seq_len,
-            max_batch_size: device.max_batch_size,
+            max_seq_len: mistralrs_core::AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
+            max_batch_size: mistralrs_core::AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
         }),
 
         (ModelFormat::Ggml, false, true, false) => Ok(ModelSelected::LoraGGML {
@@ -773,8 +766,8 @@ fn convert_text_model(
                 .topology
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string()),
-            max_seq_len: device.max_seq_len,
-            max_batch_size: device.max_batch_size,
+            max_seq_len: mistralrs_core::AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
+            max_batch_size: mistralrs_core::AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
         }),
 
         (ModelFormat::Ggml, false, false, true) => Ok(ModelSelected::XLoraGGML {
@@ -806,8 +799,8 @@ fn convert_text_model(
                 .topology
                 .as_ref()
                 .map(|p| p.to_string_lossy().to_string()),
-            max_seq_len: device.max_seq_len,
-            max_batch_size: device.max_batch_size,
+            max_seq_len: mistralrs_core::AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
+            max_batch_size: mistralrs_core::AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
         }),
 
         (ModelFormat::Plain, false, true, false) => {
@@ -825,13 +818,20 @@ fn convert_text_model(
 
 pub(crate) fn extract_paged_attn_settings(
     model_type: &ModelType,
-) -> crate::args::PagedAttnBuilderFlags {
+) -> anyhow::Result<crate::args::PagedAttnBuilderFlags> {
     let cache = match model_type {
         ModelType::Auto { cache, .. } => cache,
         ModelType::Text { cache, .. } => cache,
         ModelType::Multimodal { cache, .. } => cache,
         ModelType::Embedding { cache, .. } => cache,
-        _ => return (None, None, None, None, None, PagedCacheType::Auto),
+        _ => {
+            return Ok((
+                None,
+                mistralrs_core::MemoryGoal::Auto,
+                None,
+                PagedCacheType::Auto,
+            ))
+        }
     };
 
     cache.paged_attn.clone().into_builder_flags()
@@ -979,7 +979,9 @@ pub(crate) async fn apply_quant_resolution(
     model_type: &mut ModelType,
     token_source: &mistralrs_core::TokenSource,
     matformer: &MatformerSelection,
+    revision: Option<&str>,
 ) -> Result<()> {
+    let revision = revision.unwrap_or(DEFAULT_HF_REVISION);
     if let Some(path) = device_options(model_type).hf_cache.clone() {
         mistralrs_core::set_hf_cache_path(path);
     }
@@ -1001,7 +1003,7 @@ pub(crate) async fn apply_quant_resolution(
     }
     let should_inspect_files = raw.is_some() || (is_explicit_gguf && exact_file.is_some());
     let repo_files = if should_inspect_files {
-        selected_model_files(&model_id, exact_file.as_deref(), token_source)?
+        selected_model_files(&model_id, exact_file.as_deref(), token_source, revision)?
     } else {
         None
     };
@@ -1086,8 +1088,11 @@ pub(crate) async fn apply_quant_resolution(
     let resolved = crate::commands::quant::resolve_quant(
         &raw,
         &model_id,
-        token_source,
-        &model_selected,
+        crate::commands::quant::QuantContext {
+            token_source,
+            model_selected: &model_selected,
+            revision,
+        },
         force_cpu,
     )
     .await?;
@@ -1107,6 +1112,7 @@ fn selected_model_files(
     model_id: &str,
     exact_file: Option<&str>,
     token_source: &mistralrs_core::TokenSource,
+    revision: &str,
 ) -> Result<Option<Vec<String>>> {
     let path = Path::new(model_id);
     if path.exists() {
@@ -1117,7 +1123,7 @@ fn selected_model_files(
     }
     Ok(mistralrs_core::probe_hf_repo_files(
         model_id,
-        "main",
+        revision,
         token_source,
     ))
 }
@@ -1554,6 +1560,7 @@ mod tests {
             &mut model_type,
             &mistralrs_core::TokenSource::None,
             &MatformerSelection::default(),
+            None,
         )
         .await
         .unwrap();
@@ -1606,6 +1613,7 @@ mod tests {
             &mut model_type,
             &mistralrs_core::TokenSource::None,
             &MatformerSelection::default(),
+            None,
         )
         .await
         .unwrap();
@@ -1650,6 +1658,7 @@ mod tests {
             &mut model_type,
             &mistralrs_core::TokenSource::None,
             &MatformerSelection::default(),
+            None,
         )
         .await
         .unwrap();
@@ -1697,6 +1706,7 @@ mod tests {
             &mut model_type,
             &mistralrs_core::TokenSource::None,
             &MatformerSelection::default(),
+            None,
         )
         .await
         .unwrap();
@@ -1739,6 +1749,7 @@ mod tests {
             &mut model_type,
             &mistralrs_core::TokenSource::None,
             &MatformerSelection::default(),
+            None,
         )
         .await
         .unwrap();
@@ -1779,6 +1790,7 @@ mod tests {
             &mut model_type,
             &mistralrs_core::TokenSource::None,
             &MatformerSelection::default(),
+            None,
         )
         .await
         .unwrap();
@@ -1822,6 +1834,7 @@ mod tests {
             &mut model_type,
             &mistralrs_core::TokenSource::None,
             &MatformerSelection::default(),
+            None,
         )
         .await
         .unwrap();
@@ -1872,6 +1885,7 @@ mod tests {
             &mut model_type,
             &mistralrs_core::TokenSource::None,
             &MatformerSelection::default(),
+            None,
         )
         .await
         .unwrap();
@@ -1906,6 +1920,7 @@ mod tests {
             &mut model_type,
             &mistralrs_core::TokenSource::None,
             &MatformerSelection::default(),
+            None,
         )
         .await
         .unwrap_err();
@@ -1939,6 +1954,7 @@ mod tests {
             &mut model_type,
             &mistralrs_core::TokenSource::None,
             &MatformerSelection::default(),
+            None,
         )
         .await
         .unwrap_err();
@@ -1977,6 +1993,7 @@ mod tests {
             &mut model_type,
             &mistralrs_core::TokenSource::None,
             &MatformerSelection::default(),
+            None,
         )
         .await
         .unwrap_err();
@@ -2013,6 +2030,7 @@ mod tests {
             &mut model_type,
             &mistralrs_core::TokenSource::None,
             &MatformerSelection::default(),
+            None,
         )
         .await
         .unwrap_err();
@@ -2120,11 +2138,7 @@ mod tests {
             imatrix: Some(PathBuf::from("model.imatrix")),
             ..QuantizationOptions::default()
         };
-        let device = DeviceOptions {
-            max_seq_len: 4096,
-            max_batch_size: 7,
-            ..DeviceOptions::default()
-        };
+        let device = DeviceOptions::default();
         let matformer = MatformerSelection {
             config_path: Some(PathBuf::from("matformer.csv")),
             slice_name: Some("slice".to_string()),
@@ -2153,8 +2167,8 @@ mod tests {
                 max_image_shape,
                 max_num_images,
             } => {
-                assert_eq!(max_seq_len, 4096);
-                assert_eq!(max_batch_size, 7);
+                assert_eq!(max_seq_len, AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN);
+                assert_eq!(max_batch_size, AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE);
                 assert_eq!(max_image_shape, (1536, 1536));
                 assert_eq!(max_num_images, 5);
             }
@@ -2200,11 +2214,7 @@ mod tests {
                 ..MultimodalAdapterOptions::default()
             },
             quantization: QuantizationOptions::default(),
-            device: DeviceOptions {
-                max_seq_len: 8192,
-                max_batch_size: 3,
-                ..DeviceOptions::default()
-            },
+            device: DeviceOptions::default(),
             cache: crate::args::CacheOptions::default(),
             multimodal: MultimodalOptions {
                 encoder_cache_memory_mb: None,
@@ -2227,8 +2237,8 @@ mod tests {
                 max_image_shape,
                 max_num_images,
             } => {
-                assert_eq!(max_seq_len, 8192);
-                assert_eq!(max_batch_size, 3);
+                assert_eq!(max_seq_len, AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN);
+                assert_eq!(max_batch_size, AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE);
                 assert_eq!(max_image_shape, (1024, 1024));
                 assert_eq!(max_num_images, 4);
             }
@@ -2440,8 +2450,6 @@ mod tests {
             },
             device: DeviceOptions {
                 hf_cache: Some(PathBuf::from("hf-cache")),
-                max_seq_len: 8192,
-                max_batch_size: 3,
                 ..DeviceOptions::default()
             },
             cache: crate::args::CacheOptions::default(),
@@ -2468,8 +2476,8 @@ mod tests {
                 max_image_shape,
                 max_num_images,
             } => {
-                assert_eq!(max_seq_len, 8192);
-                assert_eq!(max_batch_size, 3);
+                assert_eq!(max_seq_len, AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN);
+                assert_eq!(max_batch_size, AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE);
                 assert_eq!(max_image_shape, (1152, 1152));
                 assert_eq!(max_num_images, 4);
             }

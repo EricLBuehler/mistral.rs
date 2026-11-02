@@ -281,11 +281,11 @@ impl AudioEmbedding {
             }
         } else {
             // Return early if no audio tokens and not training
-            return self.wte.embedding_forward(&input_ids, self.dtype);
+            return self.wte.embedding_forward(&input_ids, self.dtype.into());
         };
 
         // Get initial hidden states from word embeddings
-        let mut hidden_states = self.wte.embedding_forward(&input_ids, self.dtype)?;
+        let mut hidden_states = self.wte.embedding_forward(&input_ids, self.dtype.into())?;
 
         // Verify that audio_embed_sizes sum matches positions count
         let total_audio_tokens = audio_embed_sizes.iter().sum::<usize>();

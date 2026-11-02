@@ -61,6 +61,7 @@ pub fn parse_request(
     validate_model_name(&oairequest.model, state.clone())?;
 
     Ok(Request::Normal(Box::new(NormalRequest {
+        audio_output: None,
         id: state.next_request_id(),
         queued_at: None,
         messages: RequestMessage::ImageGeneration {
@@ -184,7 +185,7 @@ pub fn match_responses(
         Response::ModelError(_, _) => unreachable!(),
         Response::Speech { .. } => unreachable!(),
         Response::Raw { .. } => unreachable!(),
-        Response::Embeddings { .. } => unreachable!(),
+        Response::Embeddings { .. } | Response::Decision { .. } => unreachable!(),
         Response::AgenticToolCallProgress { .. } => unreachable!(),
         Response::BlockDenoisingProgress(_) => unreachable!(),
         Response::AgenticToolApprovalRequired { .. } => unreachable!(),

@@ -2,6 +2,7 @@ use super::isq::{
     write_uqff_artifacts, UqffFullSer, UqffWriteConfig, UqffWriteRequest, WeightLoadingMode,
     WeightLoadingState,
 };
+use super::loaders::ModelDownload;
 use super::{
     get_model_paths, AnyMoePipelineMixin, CacheManagerMixin, EitherCache, ForwardInputsResult,
     GeneralMetadata, IsqPipelineMixin, Loader, MetadataMixin, ModelCategory, ModelKind, ModelPaths,
@@ -42,8 +43,6 @@ use anyhow::Context;
 use anyhow::Result;
 use candle_core::{Device, Tensor};
 use candle_nn::{Linear, Module};
-use hf_hub::Cache;
-use hf_hub::{Repo, RepoType};
 use mistralrs_quant::log::once_log_info;
 use mistralrs_quant::safetensors::MmapedSafetensors;
 use mistralrs_quant::IsqType;
@@ -170,25 +169,16 @@ impl EmbeddingLoaderBuilder {
 }
 
 impl Loader for EmbeddingLoader {
-    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
-    fn load_model_from_hf(
+    fn download_model_from_hf(
         &self,
         revision: Option<String>,
         token_source: TokenSource,
-        dtype: &dyn TryIntoDType,
-        device: &Device,
         silent: bool,
-        mapper: DeviceMapSetting,
-        in_situ_quant: Option<IsqType>,
-        paged_attn_config: Option<PagedAttentionConfig>,
-    ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
+    ) -> Result<ModelDownload> {
         let _progress_guard = ProgressScopeGuard::new(silent);
-        let cache = self
-            .hf_cache_path
-            .clone()
-            .map(Cache::new)
-            .unwrap_or_default();
-        GLOBAL_HF_CACHE.get_or_init(|| cache);
+        if let Some(cache) = self.hf_cache_path.as_ref() {
+            GLOBAL_HF_CACHE.get_or_init(|| cache.clone());
+        }
 
         let paths: anyhow::Result<Box<dyn ModelPaths>> = get_embedding_paths!(
             EmbeddingModelPaths,
@@ -208,15 +198,11 @@ impl Loader for EmbeddingLoader {
         if let Some(from_uqff) = self.config.from_uqff.clone() {
             *self.from_uqff.write().unwrap() = Some(get_uqff_paths!(&from_uqff, self, silent));
         }
-        self.load_model_from_path(
-            paths?.as_ref(),
-            dtype,
-            device,
-            silent,
-            mapper,
-            in_situ_quant,
-            paged_attn_config,
-        )
+        let mut download = ModelDownload::new(paths?);
+        if let Some(paths) = self.from_uqff.read().unwrap().as_ref() {
+            download.additional_files.extend(paths.iter().cloned());
+        }
+        Ok(download)
     }
 
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
@@ -243,7 +229,7 @@ impl Loader for EmbeddingLoader {
 
         if paged_attn_config.is_some() {
             warn!("PagedAttention is not supported for embedding models, disabling it.");
-            paged_attn_config = None;
+            super::disable_unsupported_paged_attention(&mut paged_attn_config)?;
         }
 
         debug!("Prompt chunk size is {ATTENTION_CHUNK_SIZE}.");
@@ -293,17 +279,26 @@ impl Loader for EmbeddingLoader {
         } else if let DeviceMapSetting::Auto(params) = mapper.clone() {
             // Initial dtype
             let dtype = dtype.try_into_dtype(&available_devices.iter().collect::<Vec<_>>())?;
+            let sizing_source = super::loaders::ResourceSource {
+                weights: None,
+                paths: paths.get_weight_filenames(),
+            };
+            let checkpoint = sizing_source.checkpoint_tensors()?;
+            let source_quantization = QuantizationConfigShim::get_quantization_config(&config)?;
 
             // ISQ or UQFF: quantized path
             // Match logic below where UQFF has priority
             let (layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
                 if let Some(reader) = uqff_reader.as_ref() {
                     let weight_pack_factor = reader.pack_factor(dtype)?;
-                    let quantization = AutoDeviceMapQuantization::uqff(reader);
-                    let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
+                    let quantization = AutoDeviceMapQuantization::uqff(reader)
+                        .with_checkpoint(&checkpoint)
+                        .with_source_quantization(source_quantization.as_ref());
+                    let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes_with_quantization(
                         &config,
                         dtype,
                         weight_pack_factor,
+                        Some(&quantization),
                         None,
                     )?;
                     let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
@@ -321,13 +316,16 @@ impl Loader for EmbeddingLoader {
                     )
                 } else if let Some(isq) = in_situ_quant {
                     let quantization =
-                        AutoDeviceMapQuantization::isq(Some(isq), self.config.topology.as_ref());
+                        AutoDeviceMapQuantization::isq(Some(isq), self.config.topology.as_ref())
+                            .with_checkpoint(&checkpoint)
+                            .with_source_quantization(source_quantization.as_ref());
                     let weight_pack_factor =
                         quantization.conservative_pack_factor(dtype, isq.pack_factor(dtype));
-                    let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
+                    let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes_with_quantization(
                         &config,
                         dtype,
                         weight_pack_factor,
+                        Some(&quantization),
                         None,
                     )?;
                     let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
@@ -369,22 +367,31 @@ impl Loader for EmbeddingLoader {
                         // Be sure to get the weight pack factor here; we might be loading a prequantized model.
                         let weight_pack_factor =
                             QuantizationConfigShim::get_quant_config_pack_factor(&config, dtype)?;
-                        let quantization =
-                            self.config.topology.as_ref().map(|topology| {
-                                AutoDeviceMapQuantization::isq(None, Some(topology))
-                            });
+                        let checkpoint_quantization =
+                            QuantizationConfigShim::get_quantization_config(&config)?;
+                        let quantization = AutoDeviceMapQuantization::checkpoint(
+                            checkpoint_quantization.as_ref(),
+                            self.config.topology.as_ref(),
+                        )
+                        .map(|quantization| {
+                            quantization
+                                .with_checkpoint(&checkpoint)
+                                .with_source_quantization(source_quantization.as_ref())
+                        });
                         let weight_pack_factor =
                             quantization
                                 .as_ref()
                                 .map_or(weight_pack_factor, |quantization| {
                                     quantization.conservative_pack_factor(dtype, weight_pack_factor)
                                 });
-                        let layer_sizes_in_bytes = self.inner.layer_sizes_in_bytes(
-                            &config,
-                            dtype,
-                            weight_pack_factor,
-                            None,
-                        )?;
+                        let layer_sizes_in_bytes =
+                            self.inner.layer_sizes_in_bytes_with_quantization(
+                                &config,
+                                dtype,
+                                weight_pack_factor,
+                                quantization.as_ref(),
+                                None,
+                            )?;
                         let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
                             &config,
                             dtype,
@@ -401,6 +408,29 @@ impl Loader for EmbeddingLoader {
                     }
                 };
 
+            let module_bytes = paths
+                .get_modules()
+                .context("Embedding models require the `modules.json` file.")?
+                .iter()
+                .try_fold(0usize, |total, module| -> Result<usize> {
+                    total
+                        .checked_add(module.runtime_size(dtype)?)
+                        .context("Embedding module size overflow")
+                })?;
+            let non_mapped_size_in_bytes = non_mapped_size_in_bytes
+                .checked_add(module_bytes)
+                .context("Embedding non-mapped size overflow")?;
+            let total_model_size_in_bytes = total_model_size_in_bytes
+                .checked_add(module_bytes)
+                .context("Embedding total size overflow")?;
+
+            let resources = self.inner.layer_resources(&config, sizing_source)?;
+            let mut layer_sizes_in_bytes = layer_sizes_in_bytes;
+            let total_model_size_in_bytes = super::loaders::add_resource_bytes(
+                &mut layer_sizes_in_bytes,
+                total_model_size_in_bytes,
+                &resources,
+            )?;
             let new = auto_device_map::get_device_layers(
                 &*self.inner,
                 &config,
@@ -412,6 +442,7 @@ impl Loader for EmbeddingLoader {
                 dtype,
                 &params,
                 paged_attn_config.as_mut(),
+                &resources,
             )?;
             mapper = DeviceMapSetting::Map(new);
         }
@@ -697,6 +728,9 @@ impl Loader for EmbeddingLoader {
                 sliding_window: None,
                 cache_config: None,
                 cache_engine: None,
+                memory_plan: None,
+                #[cfg(feature = "cuda")]
+                runtime_memory_reservation: None,
                 model_metadata: None,
                 modalities: Modalities {
                     input: vec![SupportedModality::Text],

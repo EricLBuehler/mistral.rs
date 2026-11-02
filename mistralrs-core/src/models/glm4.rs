@@ -382,10 +382,13 @@ impl DecoderLayer {
         let hidden_states =
             self.self_attn
                 .forward(&hidden_states, attention_mask, kv_cache, ctx, layer_idx)?;
-        let hidden_states = self.post_self_attn_layernorm.forward(&hidden_states)?;
-        let hidden_states = (residual + hidden_states)?;
-        let residual = &hidden_states;
-        let hidden_states = self.post_attention_layernorm.forward(&hidden_states)?;
+        let (residual, hidden_states) = self
+            .post_self_attn_layernorm
+            .forward_residual_then_rms_norm(
+                &hidden_states,
+                residual,
+                &self.post_attention_layernorm,
+            )?;
         let hidden_states = self.mlp.forward(&hidden_states)?;
         let hidden_states = self.post_mlp_layernorm.forward(&hidden_states)?;
         residual + hidden_states
@@ -563,7 +566,8 @@ impl Model {
     pub fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
         self.forward_embeds(
             input_ids,
-            self.embed_tokens.embedding_forward(input_ids, self.dtype)?,
+            self.embed_tokens
+                .embedding_forward(input_ids, self.dtype.into())?,
             ctx,
         )
     }

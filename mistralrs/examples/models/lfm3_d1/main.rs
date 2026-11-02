@@ -1,0 +1,34 @@
+//! Evaluate typed d1 questions with the native Rust SDK.
+//!
+//! Run with: `cargo run --release --example lfm3_d1 -p mistralrs`
+
+use anyhow::Result;
+use mistralrs::{DecisionQuestion, DecisionRequest, ModelBuilder};
+use serde_json::json;
+
+const DEFAULT_MODEL: &str = "LiquidAI/d1-2B";
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let model = ModelBuilder::new(DEFAULT_MODEL).build().await?;
+    let request = DecisionRequest::new(json!({
+        "customer": "Sam",
+        "message": "My card was charged twice. Please help today."
+    }))
+    .with_question(
+        "urgent",
+        DecisionQuestion::Noul {
+            instructions: "Does the customer need urgent help?".into(),
+            criteria: None,
+        },
+    )
+    .with_question(
+        "customer",
+        DecisionQuestion::Text {
+            instructions: "Extract the customer's name.".into(),
+        },
+    );
+    let result = model.send_decision_request(request).await?;
+    println!("{}", serde_json::to_string_pretty(&result)?);
+    Ok(())
+}

@@ -274,6 +274,37 @@ static int ggml_cuda_highest_compiled_arch(const int arch) {
 #define FAST_FP16_AVAILABLE
 #endif
 
+constexpr float MMQ_DS4_MAX_SUM = 65504.0f;
+
+static __device__ __forceinline__ half2 mmq_encode_ds4(const float d, const float sum) {
+    if (fabsf(sum) <= MMQ_DS4_MAX_SUM) {
+        return make_half2(d, sum);
+    }
+    // Negative scales mark sums normalized by the stored scale, keeping large finite sums representable.
+    const float rounded_d = __half2float(__float2half(d));
+    return make_half2(-d, sum / rounded_d);
+}
+
+static __device__ __forceinline__ float2 mmq_decode_ds4(const half2 ds) {
+    float2 value = __half22float2(ds);
+    if (value.x < 0.0f) {
+        value.x = -value.x;
+        value.y *= value.x;
+    }
+    return value;
+}
+
+static __device__ __forceinline__ float2 mmq_multiply_ds4(const half2 dm, const half2 ds) {
+#ifdef FAST_FP16_AVAILABLE
+    if (__low2float(ds) >= 0.0f) {
+        return __half22float2(__hmul2(dm, ds));
+    }
+#endif
+    const float2 dmf = __half22float2(dm);
+    const float2 dsf = mmq_decode_ds4(ds);
+    return make_float2(dmf.x * dsf.x, dmf.y * dsf.y);
+}
+
 // MMA (tensor core) availability
 #if __CUDA_ARCH__ == GGML_CUDA_CC_VOLTA
 #define VOLTA_MMA_AVAILABLE

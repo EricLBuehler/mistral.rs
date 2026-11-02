@@ -11,6 +11,123 @@ use std::sync::Arc;
 use crate::ShardedVarBuilder;
 
 const UQFF_DUMMY_TENSOR_MARKER: &str = "__mistralrs_uqff_dummy_tensor__";
+const CPU_LOAD_PAGE_ADVICE_THRESHOLD: usize = 32 << 20;
+
+fn streaming_cpu_load(device: &Device) -> bool {
+    device.is_cpu()
+        && crate::get_immediate_isq().is_some_and(|isq| {
+            isq.ty.is_some() || isq.overrides.iter().any(|entry| entry.ty.is_some())
+        })
+}
+
+#[cfg(target_os = "linux")]
+fn advise_load_pages(pointer: *const u8, len: usize, advice: libc::c_int) {
+    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+    if page <= 0 {
+        return;
+    }
+    let page = page as usize;
+    let start = (pointer as usize).div_ceil(page) * page;
+    let end = (pointer as usize + len) / page * page;
+    if end > start {
+        unsafe {
+            libc::madvise(start as *mut libc::c_void, end - start, advice);
+        }
+    }
+}
+
+fn cpu_weight_buffer<T>(elements: usize, streaming: bool) -> Vec<T> {
+    let data: Vec<T> = Vec::with_capacity(elements);
+    #[cfg(target_os = "linux")]
+    if streaming && elements * std::mem::size_of::<T>() >= CPU_LOAD_PAGE_ADVICE_THRESHOLD {
+        // THP compaction on these temporary buffers stalls SMMU invalidation on unified CUDA hosts.
+        advise_load_pages(
+            data.as_ptr().cast(),
+            elements * std::mem::size_of::<T>(),
+            libc::MADV_NOHUGEPAGE,
+        );
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = streaming;
+    data
+}
+
+fn release_loaded_pages(bytes: &[u8], streaming: bool) {
+    #[cfg(target_os = "linux")]
+    if streaming {
+        // Only copied, read-only checkpoint spans reach here; PLE keeps its own live maps.
+        advise_load_pages(bytes.as_ptr(), bytes.len(), libc::MADV_DONTNEED);
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = (bytes, streaming);
+}
+
+fn load_cpu_slices<T: WithDType + bytemuck::Pod>(
+    slices: safetensors::slice::SliceIterator<'_>,
+    shape: &[usize],
+    streaming: bool,
+) -> Result<Tensor> {
+    let streaming = streaming && slices.remaining_byte_len() >= CPU_LOAD_PAGE_ADVICE_THRESHOLD;
+    let mut data = cpu_weight_buffer::<T>(
+        slices.remaining_byte_len() / std::mem::size_of::<T>(),
+        streaming,
+    );
+    for slice in slices {
+        match bytemuck::try_cast_slice(slice) {
+            Ok(values) => data.extend_from_slice(values),
+            Err(bytemuck::PodCastError::TargetAlignmentGreaterAndInputNotAligned) => data.extend(
+                slice
+                    .chunks_exact(std::mem::size_of::<T>())
+                    .map(bytemuck::pod_read_unaligned::<T>),
+            ),
+            Err(error) => return Err(Error::msg(error)),
+        }
+        release_loaded_pages(slice, streaming);
+    }
+    Tensor::from_vec(data, shape, &Device::Cpu)
+}
+
+fn load_tensor_slices(
+    slices: safetensors::slice::SliceIterator<'_>,
+    shape: &[usize],
+    source_dtype: DType,
+    device: &Device,
+    dtype: DType,
+) -> Result<Tensor> {
+    if device.is_cpu() {
+        let streaming = streaming_cpu_load(device);
+        match source_dtype {
+            DType::F16 => {
+                return load_cpu_slices::<half::f16>(slices, shape, streaming)?.to_dtype(dtype)
+            }
+            DType::BF16 => {
+                return load_cpu_slices::<half::bf16>(slices, shape, streaming)?.to_dtype(dtype)
+            }
+            DType::F32 => return load_cpu_slices::<f32>(slices, shape, streaming)?.to_dtype(dtype),
+            _ => {}
+        }
+    }
+    let raw = collect_tensor_slices(slices);
+    Tensor::from_raw_buffer(&raw, source_dtype, shape, device)?.to_dtype(dtype)
+}
+
+fn collect_tensor_slices<'a>(
+    mut slices: safetensors::slice::SliceIterator<'a>,
+) -> std::borrow::Cow<'a, [u8]> {
+    let Some(first) = slices.next() else {
+        return std::borrow::Cow::Borrowed(&[]);
+    };
+    let remaining = slices.remaining_byte_len();
+    if remaining == 0 {
+        return std::borrow::Cow::Borrowed(first);
+    }
+    let mut bytes = Vec::with_capacity(first.len() + remaining);
+    bytes.extend_from_slice(first);
+    for slice in slices {
+        bytes.extend_from_slice(slice);
+    }
+    std::borrow::Cow::Owned(bytes)
+}
 
 fn marked_uqff_dummy_tensor(name: &str) -> Option<&str> {
     name.strip_prefix(UQFF_DUMMY_TENSOR_MARKER)
@@ -31,7 +148,15 @@ fn convert_slice<T: WithDType>(data: &[u8], shape: &[usize], device: &Device) ->
         // was correctly aligned.
         let data: &[T] =
             unsafe { std::slice::from_raw_parts(data.as_ptr() as *const T, elem_count) };
-        Tensor::from_slice(data, shape, device)
+        if streaming_cpu_load(device)
+            && data.len() * size_in_bytes >= CPU_LOAD_PAGE_ADVICE_THRESHOLD
+        {
+            let mut owned = cpu_weight_buffer(elem_count, true);
+            owned.extend_from_slice(data);
+            Tensor::from_vec(owned, shape, device)
+        } else {
+            Tensor::from_slice(data, shape, device)
+        }
     } else {
         // XXX: We need to specify `T` here, otherwise the compiler will infer u8 because of the following cast
         // Making this vector too small to fit a full f16/f32/f64 weights, resulting in out-of-bounds access
@@ -322,7 +447,13 @@ impl MmapedSafetensors {
     }
 
     pub fn load(&self, name: &str, dev: &Device, dtype: Option<DType>) -> Result<Tensor> {
-        self.get(name)?.load(dev, dtype)
+        let view = self.get(name)?;
+        let tensor = view.load(dev, dtype)?;
+        release_loaded_pages(
+            view.data(),
+            streaming_cpu_load(dev) && view.data().len() >= CPU_LOAD_PAGE_ADVICE_THRESHOLD,
+        );
+        Ok(tensor)
     }
 
     pub fn tensors(&self) -> Vec<(String, st::TensorView<'_>)> {
@@ -719,8 +850,7 @@ impl Backend for ShardedSafeTensors {
                         shape[dim] = block_size;
 
                         let view_dtype: DType = view_dtype.try_into()?;
-                        let raw: Vec<u8> = iterator.into_iter().flatten().cloned().collect();
-                        Tensor::from_raw_buffer(&raw, view_dtype, &shape, dev)?.to_dtype(dtype)?
+                        load_tensor_slices(iterator, &shape, view_dtype, dev, dtype)?
                     }
                     Self::SimpleBackend { b, .. } => {
                         let tensor = b.get(target_shape, path, Default::default(), dtype, dev)?;
@@ -786,8 +916,7 @@ impl Backend for ShardedSafeTensors {
                         shape[dim] = len;
 
                         let view_dtype: DType = view_dtype.try_into()?;
-                        let raw: Vec<u8> = iterator.into_iter().flatten().cloned().collect();
-                        Tensor::from_raw_buffer(&raw, view_dtype, &shape, dev)?.to_dtype(dtype)?
+                        load_tensor_slices(iterator, &shape, view_dtype, dev, dtype)?
                     }
                     Self::SimpleBackend { b, .. } => {
                         let tensor = b.get(target_shape, path, Default::default(), dtype, dev)?;
@@ -857,5 +986,132 @@ impl Backend for ShardedSafeTensors {
                 b.as_ref().contains_tensor(name)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sliced_checkpoint_loading_preserves_offsets_shapes_and_dtypes() -> Result<()> {
+        const SHAPE: (usize, usize, usize) = (4, 6, 8);
+        let dir = tempfile::tempdir().map_err(Error::wrap)?;
+        for dtype in [DType::F16, DType::BF16, DType::F32] {
+            let path = dir.path().join(format!("{dtype:?}.safetensors"));
+            let source = Tensor::from_vec(
+                (0..SHAPE.0 * SHAPE.1 * SHAPE.2)
+                    .map(|i| (i as f32 - 83.0) * 0.031)
+                    .collect::<Vec<_>>(),
+                SHAPE,
+                &Device::Cpu,
+            )?
+            .to_dtype(dtype)?;
+            candle_core::safetensors::save(&HashMap::from([("weight", source.clone())]), &path)?;
+            let vb = unsafe {
+                ShardedSafeTensors::sharded(
+                    &[&path],
+                    dtype,
+                    &Device::Cpu,
+                    None,
+                    Arc::new(|_| true),
+                )?
+            };
+            for dim in 0..3 {
+                let half = source.dim(dim)? / 2;
+                for (hint, offset, len) in [
+                    (
+                        Shard::Simple {
+                            dim,
+                            rank: 1,
+                            world_size: 2,
+                        },
+                        half,
+                        half,
+                    ),
+                    (
+                        Shard::Offset {
+                            dim,
+                            offset: 1,
+                            len: 2,
+                        },
+                        1,
+                        2,
+                    ),
+                ] {
+                    for target_dtype in [dtype, DType::F32] {
+                        let expected = source
+                            .narrow(dim, offset, len)?
+                            .to_dtype(target_dtype)?
+                            .force_contiguous()?;
+                        let actual =
+                            vb.get_with_hints_dtype(SHAPE, "weight", hint, target_dtype)?;
+                        assert_eq!(actual.dims(), expected.dims());
+                        assert_eq!(actual.dtype(), target_dtype);
+                        assert_eq!(
+                            actual
+                                .to_dtype(DType::F32)?
+                                .flatten_all()?
+                                .to_vec1::<f32>()?,
+                            expected
+                                .to_dtype(DType::F32)?
+                                .flatten_all()?
+                                .to_vec1::<f32>()?,
+                            "{dtype:?} {target_dtype:?} dim={dim} offset={offset}"
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn unaligned_checkpoint_slices_preserve_float_values() -> Result<()> {
+        use safetensors::slice::IndexOp;
+        const ROWS: usize = 4;
+        const COLS: usize = 8;
+        for (dtype, view_dtype) in [
+            (DType::F16, st::Dtype::F16),
+            (DType::BF16, st::Dtype::BF16),
+            (DType::F32, st::Dtype::F32),
+        ] {
+            let source = Tensor::from_vec(
+                (0..ROWS * COLS)
+                    .map(|i| (i as f32 - 13.0) / 7.0)
+                    .collect::<Vec<_>>(),
+                (ROWS, COLS),
+                &Device::Cpu,
+            )?
+            .to_dtype(dtype)?;
+            let values = source.flatten_all()?;
+            let bytes = match dtype {
+                DType::F16 => bytemuck::cast_slice(&values.to_vec1::<half::f16>()?).to_vec(),
+                DType::BF16 => bytemuck::cast_slice(&values.to_vec1::<half::bf16>()?).to_vec(),
+                DType::F32 => bytemuck::cast_slice(&values.to_vec1::<f32>()?).to_vec(),
+                _ => unreachable!(),
+            };
+            let mut aligned = vec![0u32; (bytes.len() + 1).div_ceil(std::mem::size_of::<u32>())];
+            let unaligned =
+                &mut bytemuck::cast_slice_mut::<_, u8>(&mut aligned)[1..bytes.len() + 1];
+            unaligned.copy_from_slice(&bytes);
+            let view = st::TensorView::new(view_dtype, vec![ROWS, COLS], unaligned)?;
+            let actual = load_tensor_slices(
+                view.slice((.., 1..3)).map_err(Error::wrap)?,
+                &[ROWS, 2],
+                dtype,
+                &Device::Cpu,
+                DType::F32,
+            )?;
+            assert_eq!(
+                actual.to_vec2::<f32>()?,
+                source
+                    .narrow(1, 1, 2)?
+                    .to_dtype(DType::F32)?
+                    .to_vec2::<f32>()?,
+                "{dtype:?}"
+            );
+        }
+        Ok(())
     }
 }

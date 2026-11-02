@@ -9,7 +9,7 @@
     "license": {
       "name": "MIT"
     },
-    "version": "0.9.4"
+    "version": "0.10.0"
   },
   "paths": {
     "/calibration/apply": {
@@ -216,7 +216,128 @@
         },
         "responses": {
           "200": {
-            "description": "Speech generation"
+            "description": "Encoded audio or speech events",
+            "content": {
+              "audio/mpeg": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpeechAudioFile"
+                }
+              },
+              "audio/ogg": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpeechAudioFile"
+                }
+              },
+              "audio/aac": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpeechAudioFile"
+                }
+              },
+              "audio/flac": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpeechAudioFile"
+                }
+              },
+              "audio/wav": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpeechAudioFile"
+                }
+              },
+              "audio/pcm": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpeechAudioFile"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpeechStreamEvent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid speech parameters or unsupported model capability"
+          }
+        }
+      }
+    },
+    "/v1/audio/transcriptions": {
+      "post": {
+        "tags": [
+          "Mistral.rs"
+        ],
+        "operationId": "audio_transcriptions",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/AudioTranscriptionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Transcript as JSON, text, or streaming events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudioTranscriptionResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/TranscriptionStreamEvent"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid audio or unsupported parameters"
+          }
+        }
+      }
+    },
+    "/v1/audio/translations": {
+      "post": {
+        "tags": [
+          "Mistral.rs"
+        ],
+        "operationId": "audio_translations",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/AudioTranslationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "English translation as JSON or text",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AudioTranscriptionResponse"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid audio or unsupported parameters"
           }
         }
       }
@@ -1396,6 +1517,39 @@
         }
       }
     },
+    "/v1/systemone": {
+      "post": {
+        "tags": [
+          "Mistral.rs"
+        ],
+        "operationId": "systemone",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SystemOneRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Named decision answers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemOneResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid question or unsupported model"
+          }
+        }
+      }
+    },
     "/v1/unload_lora_adapter": {
       "post": {
         "tags": [
@@ -1687,10 +1841,10 @@
           "source": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/AnthropicImageSource"
               },
               {
-                "$ref": "#/components/schemas/AnthropicImageSource"
+                "type": "null"
               }
             ]
           },
@@ -1908,10 +2062,10 @@
           "container": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/AnthropicContainer"
               },
               {
-                "$ref": "#/components/schemas/AnthropicContainer"
+                "type": "null"
               }
             ]
           },
@@ -1972,10 +2126,10 @@
           "grammar": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/Grammar"
               },
               {
-                "$ref": "#/components/schemas/Grammar"
+                "type": "null"
               }
             ]
           },
@@ -2036,10 +2190,10 @@
           "output_config": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/AnthropicOutputConfig"
               },
               {
-                "$ref": "#/components/schemas/AnthropicOutputConfig"
+                "type": "null"
               }
             ]
           },
@@ -2053,11 +2207,11 @@
           "reasoning_effort": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ReasoningEffort",
                 "description": "mistral.rs extension for local reasoning effort. \"none\" aliases \"off\"; \"max\" aliases \"xhigh\"."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -2071,10 +2225,10 @@
           "response_format": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/ResponseFormat"
               },
               {
-                "$ref": "#/components/schemas/ResponseFormat"
+                "type": "null"
               }
             ]
           },
@@ -2102,10 +2256,10 @@
           "system": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/AnthropicSystem"
               },
               {
-                "$ref": "#/components/schemas/AnthropicSystem"
+                "type": "null"
               }
             ]
           },
@@ -2119,20 +2273,20 @@
           "thinking": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/AnthropicThinking"
               },
               {
-                "$ref": "#/components/schemas/AnthropicThinking"
+                "type": "null"
               }
             ]
           },
           "tool_choice": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/AnthropicToolChoice"
               },
               {
-                "$ref": "#/components/schemas/AnthropicToolChoice"
+                "type": "null"
               }
             ]
           },
@@ -2175,10 +2329,10 @@
           "web_search_options": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/WebSearchOptions"
               },
               {
-                "$ref": "#/components/schemas/WebSearchOptions"
+                "type": "null"
               }
             ]
           }
@@ -2196,10 +2350,10 @@
           "format": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/AnthropicJsonOutputFormat"
               },
               {
-                "$ref": "#/components/schemas/AnthropicJsonOutputFormat"
+                "type": "null"
               }
             ]
           }
@@ -2482,10 +2636,10 @@
           "user_location": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/AnthropicWebSearchUserLocation"
               },
               {
-                "$ref": "#/components/schemas/AnthropicWebSearchUserLocation"
+                "type": "null"
               }
             ]
           }
@@ -2653,6 +2807,107 @@
           "pcm"
         ]
       },
+      "AudioTranscriptionRequest": {
+        "type": "object",
+        "required": [
+          "file",
+          "model"
+        ],
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary"
+          },
+          "language": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "response_format": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TranscriptionResponseFormat"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stream": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "temperature": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        }
+      },
+      "AudioTranscriptionResponse": {
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        }
+      },
+      "AudioTranslationRequest": {
+        "type": "object",
+        "required": [
+          "file",
+          "model"
+        ],
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary"
+          },
+          "model": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "response_format": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/TranscriptionResponseFormat"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "temperature": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        }
+      },
       "BuiltinToolChoice": {
         "type": "object",
         "required": [
@@ -2721,6 +2976,77 @@
           }
         }
       },
+      "ChatAudioConfig": {
+        "type": "object",
+        "required": [
+          "format"
+        ],
+        "properties": {
+          "format": {
+            "$ref": "#/components/schemas/ChatAudioFormat"
+          },
+          "voice": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ChatAudioFormat": {
+        "type": "string",
+        "enum": [
+          "wav",
+          "pcm16",
+          "mp3",
+          "flac",
+          "opus",
+          "aac"
+        ]
+      },
+      "ChatAudioReference": {
+        "type": "object",
+        "description": "Represents a single message in a conversation\n\n### Examples\n\n```ignore\nuse either::Either;\nuse mistralrs_server_core::openai::{Message, MessageContent};\n\n// User message\nlet user_msg = Message {\n    audio: None,\n    content: Some(MessageContent(Either::Left(\"What's 2+2?\".to_string()))),\n    role: \"user\".to_string(),\n    name: None,\n    tool_calls: None,\n    tool_call_id: None,\n    reasoning_content: None,\n};\n\n// System message\nlet system_msg = Message {\n    audio: None,\n    content: Some(MessageContent(Either::Left(\"You are a helpful assistant.\".to_string()))),\n    role: \"system\".to_string(),\n    name: None,\n    tool_calls: None,\n    tool_call_id: None,\n    reasoning_content: None,\n};\n```",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        }
+      },
+      "ChatAudioResponse": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expires_at": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "transcript": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "ChatCompletionChunkChoice": {
         "type": "object",
         "required": [
@@ -2750,6 +3076,16 @@
           "role"
         ],
         "properties": {
+          "audio": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ChatAudioResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "content": {
             "type": [
               "string",
@@ -2822,10 +3158,10 @@
           "usage": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/CompletionUsageResponse"
               },
               {
-                "$ref": "#/components/schemas/CompletionUsageResponse"
+                "type": "null"
               }
             ]
           }
@@ -2841,11 +3177,11 @@
           "adapter": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/AdapterSelection",
                 "description": "Adapter alias or exact generation to activate for this request."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -2856,6 +3192,17 @@
             ],
             "description": "Permission policy for agentic tools.",
             "example": null
+          },
+          "audio": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ChatAudioConfig",
+                "description": "Audio format and optional default voice for speech output."
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "chat_template_kwargs": {
             "type": [
@@ -2948,11 +3295,11 @@
           "grammar": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/Grammar",
                 "description": "Constrain output with a regex, JSON schema, Lark, or LLGuidance grammar."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -3023,6 +3370,16 @@
             "description": "Drop tokens below this fraction of the top token's probability.",
             "example": null
           },
+          "modalities": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Output modalities: text (default), audio, or both."
+          },
           "model": {
             "type": "string",
             "description": "Model ID; \"default\" targets the only loaded model.",
@@ -3046,11 +3403,11 @@
           "reasoning_effort": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ReasoningEffort",
                 "description": "Reasoning effort level for models and templates that support it.\nValid values are \"off\", \"low\", \"medium\", \"high\", and \"xhigh\".\n\"none\" is accepted as an alias for \"off\"."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -3066,11 +3423,11 @@
           "response_format": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ResponseFormat",
                 "description": "Force plain text or JSON-schema constrained output."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -3094,11 +3451,11 @@
           "stop": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/StopTokens",
                 "description": "Sequences where generation stops."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -3122,11 +3479,11 @@
           "tool_choice": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ToolChoice",
                 "description": "Controls which (if any) tool the model must call."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -3179,11 +3536,11 @@
           "web_search_options": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/WebSearchOptions",
                 "description": "Enable the built-in web search tool."
+              },
+              {
+                "type": "null"
               }
             ]
           }
@@ -3282,6 +3639,16 @@
           "role"
         ],
         "properties": {
+          "audio": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ChatAudioResponse"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "content": {
             "type": [
               "string",
@@ -3380,11 +3747,11 @@
           "adapter": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/AdapterSelection",
                 "description": "Adapter alias or exact generation to activate for this request."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -3451,11 +3818,11 @@
           "grammar": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/Grammar",
                 "description": "Constrain output with a regex, JSON schema, Lark, or LLGuidance grammar."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -3554,11 +3921,11 @@
           "stop": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/StopTokens",
                 "description": "Sequences where generation stops."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -3589,11 +3956,11 @@
           "tool_choice": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ToolChoice",
                 "description": "Controls which (if any) tool the model must call."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -3746,10 +4113,10 @@
           "prompt_tokens_details": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/PromptTokensDetailsResponse"
               },
               {
-                "$ref": "#/components/schemas/PromptTokensDetailsResponse"
+                "type": "null"
               }
             ]
           },
@@ -3818,6 +4185,585 @@
           },
           "source": {
             "$ref": "#/components/schemas/SourceMeta"
+          }
+        }
+      },
+      "DecisionAnswer": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "noul",
+              "type"
+            ],
+            "properties": {
+              "noul": {
+                "type": "number",
+                "format": "double"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "noul"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "probabilities",
+              "type"
+            ],
+            "properties": {
+              "choice": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "choices": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "string"
+                }
+              },
+              "confidence": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "probabilities": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "choice"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "score",
+              "confidence",
+              "probabilities",
+              "legend",
+              "type"
+            ],
+            "properties": {
+              "confidence": {
+                "type": "number",
+                "format": "double"
+              },
+              "legend": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "probabilities": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "score": {
+                "type": "number",
+                "format": "double"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "score"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "found",
+              "type"
+            ],
+            "properties": {
+              "found": {
+                "type": "number",
+                "format": "double"
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "span": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "text": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "text"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "properties": {
+              "found": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "interval": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                }
+              },
+              "number": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "span": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "text": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "number"
+                ]
+              },
+              "unit": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "found",
+              "type"
+            ],
+            "properties": {
+              "date": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "found": {
+                "type": "number",
+                "format": "double"
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "span": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "text": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "date"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "found",
+              "confidence",
+              "type"
+            ],
+            "properties": {
+              "box": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/DecisionBox"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "confidence": {
+                "type": "number",
+                "format": "double"
+              },
+              "found": {
+                "type": "number",
+                "format": "double"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "box"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "boxes",
+              "count",
+              "at_least",
+              "presence",
+              "type"
+            ],
+            "properties": {
+              "at_least": {
+                "type": "boolean"
+              },
+              "boxes": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/DecisionFoundBox"
+                }
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "presence": {
+                "type": "array",
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "boxes"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "DecisionAudioSource": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "audio_url",
+              "type"
+            ],
+            "properties": {
+              "audio_url": {
+                "$ref": "#/components/schemas/DecisionUrl"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "audio_url"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "input_audio",
+              "type"
+            ],
+            "properties": {
+              "input_audio": {
+                "$ref": "#/components/schemas/DecisionInputAudio"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "input_audio"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "DecisionBox": {
+        "type": "object",
+        "required": [
+          "top",
+          "bottom",
+          "left",
+          "right"
+        ],
+        "properties": {
+          "bottom": {
+            "type": "number",
+            "format": "double"
+          },
+          "left": {
+            "type": "number",
+            "format": "double"
+          },
+          "right": {
+            "type": "number",
+            "format": "double"
+          },
+          "top": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "DecisionFoundBox": {
+        "type": "object",
+        "required": [
+          "box",
+          "found",
+          "confidence"
+        ],
+        "properties": {
+          "box": {
+            "$ref": "#/components/schemas/DecisionBox"
+          },
+          "confidence": {
+            "type": "number",
+            "format": "double"
+          },
+          "found": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "DecisionInputAudio": {
+        "type": "object",
+        "required": [
+          "data",
+          "format"
+        ],
+        "properties": {
+          "data": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string"
+          }
+        }
+      },
+      "DecisionInstructionSource": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "$ref": "#/components/schemas/DecisionAudioSource"
+          }
+        ]
+      },
+      "DecisionMediaSource": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "image_url",
+              "type"
+            ],
+            "properties": {
+              "image_url": {
+                "$ref": "#/components/schemas/DecisionUrl"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "image_url"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "audio_url",
+              "type"
+            ],
+            "properties": {
+              "audio_url": {
+                "$ref": "#/components/schemas/DecisionUrl"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "audio_url"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "input_audio",
+              "type"
+            ],
+            "properties": {
+              "input_audio": {
+                "$ref": "#/components/schemas/DecisionInputAudio"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "input_audio"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "video_url",
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "video_url"
+                ]
+              },
+              "video_url": {
+                "$ref": "#/components/schemas/DecisionUrl"
+              }
+            }
+          }
+        ]
+      },
+      "DecisionResponse": {
+        "type": "object",
+        "required": [
+          "answers",
+          "usage"
+        ],
+        "properties": {
+          "answers": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/DecisionAnswer"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "usage": {
+            "$ref": "#/components/schemas/DecisionUsage"
+          }
+        }
+      },
+      "DecisionUrl": {
+        "type": "object",
+        "required": [
+          "url"
+        ],
+        "properties": {
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "DecisionUsage": {
+        "type": "object",
+        "required": [
+          "input_tokens",
+          "output_tokens"
+        ],
+        "properties": {
+          "input_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "output_tokens": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },
@@ -3898,11 +4844,11 @@
           "encoding_format": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/EmbeddingEncodingFormat",
                 "description": "Return embeddings as float arrays or base64-encoded strings."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -4592,19 +5538,28 @@
       },
       "Message": {
         "type": "object",
-        "description": "Represents a single message in a conversation\n\n### Examples\n\n```ignore\nuse either::Either;\nuse mistralrs_server_core::openai::{Message, MessageContent};\n\n// User message\nlet user_msg = Message {\n    content: Some(MessageContent(Either::Left(\"What's 2+2?\".to_string()))),\n    role: \"user\".to_string(),\n    name: None,\n    tool_calls: None,\n    tool_call_id: None,\n    reasoning_content: None,\n};\n\n// System message\nlet system_msg = Message {\n    content: Some(MessageContent(Either::Left(\"You are a helpful assistant.\".to_string()))),\n    role: \"system\".to_string(),\n    name: None,\n    tool_calls: None,\n    tool_call_id: None,\n    reasoning_content: None,\n};\n```",
         "required": [
           "role"
         ],
         "properties": {
+          "audio": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/ChatAudioReference"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "content": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/MessageContent",
                 "description": "The message content"
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -5131,30 +6086,30 @@
           "filters": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/WebSearchFilters"
               },
               {
-                "$ref": "#/components/schemas/WebSearchFilters"
+                "type": "null"
               }
             ]
           },
           "image_settings": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/WebSearchImageSettings"
               },
               {
-                "$ref": "#/components/schemas/WebSearchImageSettings"
+                "type": "null"
               }
             ]
           },
           "return_token_budget": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/WebSearchReturnTokenBudget"
               },
               {
-                "$ref": "#/components/schemas/WebSearchReturnTokenBudget"
+                "type": "null"
               }
             ]
           },
@@ -5170,10 +6125,10 @@
           "search_context_size": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/SearchContextSize"
               },
               {
-                "$ref": "#/components/schemas/SearchContextSize"
+                "type": "null"
               }
             ]
           },
@@ -5183,10 +6138,10 @@
           "user_location": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/OpenAiWebSearchUserLocation"
               },
               {
-                "$ref": "#/components/schemas/OpenAiWebSearchUserLocation"
+                "type": "null"
               }
             ]
           }
@@ -5251,11 +6206,11 @@
           "adapter": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/AdapterSelection",
                 "description": "Adapter alias or exact generation to activate for this request."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -5319,11 +6274,11 @@
           "grammar": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/Grammar",
                 "description": "Grammar for constrained generation (mistral.rs extension)"
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -5441,11 +6396,11 @@
           "reasoning": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ReasoningConfig",
                 "description": "Configuration for reasoning/thinking behavior"
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -5460,11 +6415,11 @@
           "response_format": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ResponseFormat",
                 "description": "Response format (legacy, prefer `text` field)"
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -5480,11 +6435,11 @@
           "stop": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/StopTokens",
                 "description": "Stop sequences to end generation"
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -5505,11 +6460,11 @@
           "stream_options": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/StreamOptions",
                 "description": "Stream options for controlling streaming behavior"
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -5524,22 +6479,22 @@
           "text": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/TextConfig",
                 "description": "Text output configuration"
+              },
+              {
+                "type": "null"
               }
             ]
           },
           "tool_choice": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ToolChoice",
                 "description": "Controls how the model uses tools"
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -5580,11 +6535,11 @@
           "truncation": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/TruncationStrategy",
                 "description": "Truncation strategy when input exceeds context window"
+              },
+              {
+                "type": "null"
               }
             ]
           }
@@ -6853,22 +7808,22 @@
           "effort": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ReasoningEffort",
                 "description": "Effort level for reasoning (off, low, medium, high, xhigh). \"none\" aliases \"off\"."
+              },
+              {
+                "type": "null"
               }
             ]
           },
           "summary": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ReasoningSummary",
                 "description": "Accepted for compatibility; currently does not change the response."
+              },
+              {
+                "type": "null"
               }
             ]
           }
@@ -7012,11 +7967,11 @@
           "error": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ResponseError",
                 "description": "Error information (if status is failed)"
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -7035,11 +7990,11 @@
           "incomplete_details": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/IncompleteDetails",
                 "description": "Details about why response is incomplete"
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -7142,22 +8097,22 @@
           "text": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/TextConfig",
                 "description": "Text configuration from the request"
+              },
+              {
+                "type": "null"
               }
             ]
           },
           "tool_choice": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ToolChoice",
                 "description": "Tool choice configuration from the request"
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -7190,22 +8145,22 @@
           "truncation": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/TruncationStrategy",
                 "description": "Truncation strategy used"
+              },
+              {
+                "type": "null"
               }
             ]
           },
           "usage": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ResponseUsage",
                 "description": "Token usage information"
+              },
+              {
+                "type": "null"
               }
             ]
           }
@@ -7240,11 +8195,11 @@
           "input_tokens_details": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/InputTokensDetails",
                 "description": "Detailed input token breakdown"
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -7256,11 +8211,11 @@
           "output_tokens_details": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/OutputTokensDetails",
                 "description": "Detailed output token breakdown"
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -7318,10 +8273,10 @@
           "delta": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/ResponsesDelta"
               },
               {
-                "$ref": "#/components/schemas/ResponsesDelta"
+                "type": "null"
               }
             ]
           },
@@ -7338,10 +8293,10 @@
           "usage": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/ResponsesUsage"
               },
               {
-                "$ref": "#/components/schemas/ResponsesUsage"
+                "type": "null"
               }
             ]
           }
@@ -7384,11 +8339,11 @@
           "adapter": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/AdapterSelection",
                 "description": "Adapter alias or exact generation to activate for this request."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -7450,11 +8405,11 @@
           "grammar": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/Grammar",
                 "description": "Constrain output with a regex, JSON schema, Lark, or LLGuidance grammar."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -7628,11 +8583,11 @@
           "response_format": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ResponseFormat",
                 "description": "Force plain text or JSON-schema constrained output."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -7649,11 +8604,11 @@
           "stop": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/StopTokens",
                 "description": "Sequences where generation stops."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -7685,11 +8640,11 @@
           "tool_choice": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/ToolChoice",
                 "description": "Controls which (if any) tool the model must call."
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -7911,10 +8866,10 @@
           "error": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/ResponsesError"
               },
               {
-                "$ref": "#/components/schemas/ResponsesError"
+                "type": "null"
               }
             ]
           },
@@ -7924,10 +8879,10 @@
           "incomplete_details": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/ResponsesIncompleteDetails"
               },
               {
-                "$ref": "#/components/schemas/ResponsesIncompleteDetails"
+                "type": "null"
               }
             ]
           },
@@ -7962,10 +8917,10 @@
           "usage": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/ResponsesUsage"
               },
               {
-                "$ref": "#/components/schemas/ResponsesUsage"
+                "type": "null"
               }
             ]
           }
@@ -8047,10 +9002,10 @@
           "input_tokens_details": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/ResponsesInputTokensDetails"
               },
               {
-                "$ref": "#/components/schemas/ResponsesInputTokensDetails"
+                "type": "null"
               }
             ]
           },
@@ -8061,10 +9016,10 @@
           "output_tokens_details": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/ResponsesOutputTokensDetails"
               },
               {
-                "$ref": "#/components/schemas/ResponsesOutputTokensDetails"
+                "type": "null"
               }
             ]
           },
@@ -8281,18 +9236,28 @@
           }
         }
       },
+      "SpeechAudioFile": {
+        "type": "string",
+        "format": "binary"
+      },
       "SpeechGenerationRequest": {
         "type": "object",
         "description": "Speech generation request",
         "required": [
-          "input",
-          "response_format"
+          "input"
         ],
         "properties": {
           "input": {
             "type": "string",
             "description": "The text content to convert to speech.",
             "example": "[S1] Dia is an open weights text to dialogue model. [S2] You get full control over scripts and voices. [S1] Wow. Amazing. (laughs) [S2] Try it now on Git hub or Hugging Face."
+          },
+          "instructions": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Additional directions for how to speak the input."
           },
           "model": {
             "type": "string",
@@ -8302,6 +9267,90 @@
           "response_format": {
             "$ref": "#/components/schemas/AudioResponseFormat",
             "description": "The desired audio format for the generated speech."
+          },
+          "speed": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Playback speed between 0.25 and 4.0, default 1.0."
+          },
+          "stream_format": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Raw audio (`audio`, default) or server-sent audio events (`sse`)."
+          },
+          "voice": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "This model's voice, currently only `default`."
+          }
+        }
+      },
+      "SpeechStreamEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "audio",
+              "type"
+            ],
+            "properties": {
+              "audio": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "speech.audio.delta"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "usage",
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "speech.audio.done"
+                ]
+              },
+              "usage": {
+                "$ref": "#/components/schemas/SpeechTokenUsage"
+              }
+            }
+          }
+        ]
+      },
+      "SpeechTokenUsage": {
+        "type": "object",
+        "required": [
+          "input_tokens",
+          "output_tokens",
+          "total_tokens"
+        ],
+        "properties": {
+          "input_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "output_tokens": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "total_tokens": {
+            "type": "integer",
+            "minimum": 0
           }
         }
       },
@@ -8334,6 +9383,279 @@
           }
         }
       },
+      "SystemOneQuestion": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "instructions",
+              "type"
+            ],
+            "properties": {
+              "criteria": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": {},
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "instructions": {
+                "$ref": "#/components/schemas/DecisionInstructionSource"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "noul"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "instructions",
+              "criteria",
+              "type"
+            ],
+            "properties": {
+              "criteria": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "instructions": {
+                "$ref": "#/components/schemas/DecisionInstructionSource"
+              },
+              "multiple": {
+                "type": "boolean"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "choice"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "instructions",
+              "criteria",
+              "type"
+            ],
+            "properties": {
+              "criteria": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "instructions": {
+                "$ref": "#/components/schemas/DecisionInstructionSource"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "score"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "instructions",
+              "type"
+            ],
+            "properties": {
+              "instructions": {
+                "$ref": "#/components/schemas/DecisionInstructionSource"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "text"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "instructions",
+              "type"
+            ],
+            "properties": {
+              "instructions": {
+                "$ref": "#/components/schemas/DecisionInstructionSource"
+              },
+              "range": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "number",
+                  "format": "double"
+                }
+              },
+              "step": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "format": "double"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "number"
+                ]
+              },
+              "unit": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "instructions",
+              "type"
+            ],
+            "properties": {
+              "instructions": {
+                "$ref": "#/components/schemas/DecisionInstructionSource"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "date"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "instructions",
+              "type"
+            ],
+            "properties": {
+              "instructions": {
+                "$ref": "#/components/schemas/DecisionInstructionSource"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "box"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "instructions",
+              "type"
+            ],
+            "properties": {
+              "instructions": {
+                "$ref": "#/components/schemas/DecisionInstructionSource"
+              },
+              "max": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "boxes"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "SystemOneRequest": {
+        "type": "object",
+        "required": [
+          "questions"
+        ],
+        "properties": {
+          "images": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "media": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DecisionMediaSource"
+            }
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "questions": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/SystemOneQuestion"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "set_size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "state": {}
+        },
+        "additionalProperties": false
+      },
+      "SystemOneResponse": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/DecisionResponse"
+          },
+          {
+            "type": "object",
+            "required": [
+              "model"
+            ],
+            "properties": {
+              "model": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
       "TextConfig": {
         "type": "object",
         "description": "Text output configuration",
@@ -8341,11 +9663,11 @@
           "format": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/TextFormat",
                 "description": "Format for text output"
+              },
+              {
+                "type": "null"
               }
             ]
           }
@@ -8501,6 +9823,53 @@
           "function"
         ]
       },
+      "TranscriptionResponseFormat": {
+        "type": "string",
+        "enum": [
+          "json",
+          "text"
+        ]
+      },
+      "TranscriptionStreamEvent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "delta",
+              "type"
+            ],
+            "properties": {
+              "delta": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "transcript.text.delta"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "text",
+              "type"
+            ],
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "transcript.text.done"
+                ]
+              }
+            }
+          }
+        ]
+      },
       "TruncationStrategy": {
         "type": "string",
         "description": "Truncation strategy for input",
@@ -8536,14 +9905,6 @@
             ],
             "description": "Optional HF revision"
           },
-          "max_batch_size": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "description": "Optional max batch size for tuning",
-            "minimum": 0
-          },
           "max_image_length": {
             "type": [
               "integer",
@@ -8560,14 +9921,6 @@
             "description": "Optional max num images (multimodal)",
             "minimum": 0
           },
-          "max_seq_len": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "description": "Optional max sequence length for tuning",
-            "minimum": 0
-          },
           "model_id": {
             "type": "string",
             "example": "meta-llama/Llama-3.2-3B-Instruct"
@@ -8575,11 +9928,11 @@
           "profile": {
             "oneOf": [
               {
-                "type": "null"
-              },
-              {
                 "$ref": "#/components/schemas/TuneProfileRequest",
                 "description": "Optional tuning profile"
+              },
+              {
+                "type": "null"
               }
             ]
           },
@@ -8729,30 +10082,30 @@
           "filters": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/WebSearchFilters"
               },
               {
-                "$ref": "#/components/schemas/WebSearchFilters"
+                "type": "null"
               }
             ]
           },
           "image_settings": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/WebSearchImageSettings"
               },
               {
-                "$ref": "#/components/schemas/WebSearchImageSettings"
+                "type": "null"
               }
             ]
           },
           "return_token_budget": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/WebSearchReturnTokenBudget"
               },
               {
-                "$ref": "#/components/schemas/WebSearchReturnTokenBudget"
+                "type": "null"
               }
             ]
           },
@@ -8768,10 +10121,10 @@
           "search_context_size": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/SearchContextSize"
               },
               {
-                "$ref": "#/components/schemas/SearchContextSize"
+                "type": "null"
               }
             ]
           },
@@ -8785,10 +10138,10 @@
           "user_location": {
             "oneOf": [
               {
-                "type": "null"
+                "$ref": "#/components/schemas/WebSearchUserLocation"
               },
               {
-                "$ref": "#/components/schemas/WebSearchUserLocation"
+                "type": "null"
               }
             ]
           }

@@ -23,14 +23,17 @@ quant = "4"
 
 `mistralrs from-config -f this.toml` runs the server.
 
+Memory sizing and device placement are automatic. For optional overrides, see [paged attention and KV caching](/guides/perf/paged-attention/#memory-budget).
+
 ## Top-level fields
 
 | Field | Type | Applies to | Purpose |
 |---|---|---|---|
 | `command` | string | both | `"serve"` or `"run"`. |
 | `default_model_id` | string | serve | Model id treated as the default. Must match one of the `[[models]]` entries. |
-| `thinking` | bool | run | Legacy thinking toggle (alias: `enable_thinking`). If both reasoning controls are omitted, thinking defaults on. Maps to `--thinking` on `mistralrs run`. |
-| `reasoning_effort` | string | run | `off`, `low`, `medium`, `high`, or `xhigh`; `none` aliases `off`. Omit to leave effort unspecified. Maps to `--reasoning-effort`. |
+| `thinking` | bool | run | Turns thinking on or off (alias `enable_thinking`). If this and `reasoning_effort` are both omitted, thinking is on. Maps to `--thinking`. |
+| `reasoning_effort` | string | run | `off` (or `none`), `low`, `medium`, `high`, or `xhigh`. Omit to leave it unset. Maps to `--reasoning-effort`. |
+| `adapter` | string | run | Alias of the LoRA adapter to start with, from `[models.adapter]`. Omit to run the base model. See [adapters](#adapters). |
 
 ## `[global]` section
 
@@ -46,9 +49,12 @@ quant = "4"
 
 | Field | CLI flag | Default | Purpose |
 |---|---|---|---|
-| `max_seqs` | `--max-seqs` | 32 | Max concurrent sequences. |
+| `max_seqs` | `--max-seqs` | 1 for `run`, 32 for `serve` | Max concurrent sequences. An explicit value overrides the command default. |
+| `max_num_batched_tokens` | `--max-num-batched-tokens` | 4096 | Most tokens processed in one step, across all requests. Must be nonzero. |
+| `max_prefill_chunk_tokens` | `--max-prefill-chunk-tokens` | 512 | Largest piece of a new prompt read in one step while other requests are generating. Models with recurrent layers, such as Qwen3.5, read every prompt in pieces up to this size. CUDA and Metal only. Must be nonzero. |
+| `max_decode_steps_before_prefill` | `--max-decode-steps-before-prefill` | 8 | Most generation steps to run before a waiting prompt gets a turn. Must be nonzero. |
 | `no_kv_cache` | `--no-kv-cache` | false | Disable KV cache entirely. |
-| `prefix_cache_n` | `--prefix-cache-n` | 16 | Prefix caches retained (0 to disable). |
+| `prefix_cache_n` | `--prefix-cache-n` | up to 16 | How many prefixes the prefix cache keeps. Unset, mistral.rs may keep fewer on models with recurrent layers to fit memory. `0` turns prefix caching off. See [prefix caching](/guides/perf/throughput-tuning/#prefix-caching). |
 | `chat_template` | `-c`, `--chat-template` | not set | Custom chat template file (`.json` or `.jinja`), applied to every model. Per-model `chat_template` in `[[models]]` overrides it. |
 | `jinja_explicit` | `-j`, `--jinja-explicit` | not set | Explicit Jinja template override. Per-model `jinja_explicit` also exists. |
 | `matformer_config_path` | `--matformer-config-path` | not set | MatFormer (nested-submodel) slice config (CSV/JSON). |
@@ -70,6 +76,8 @@ quant = "4"
 | `shell_workdir` | `--shell-workdir` | per-session temp dir | Root directory for per-session shell working directories. Requires `enable_shell` (or `agent`). |
 | `skills_dir` | `--skills-dir` | system temp dir | Directory for uploaded OpenAI-compatible Skills. Requires `enable_shell` (or `agent`). |
 | `agent_permission` | `--agent-permission` | `auto` | `auto`, `ask`, or `deny`: whether model-requested agent actions run automatically, require approval, or are denied. `code_exec_permission` / `--code-exec-permission` are accepted as aliases. |
+
+To tune `max_num_batched_tokens`, `max_prefill_chunk_tokens`, and `max_decode_steps_before_prefill`, see [prefill and decode scheduling](/guides/perf/throughput-tuning/#prefill-and-decode-scheduling).
 
 ## `[server]` section (serve only)
 
@@ -97,12 +105,22 @@ The MCP *client* configuration (`mcp_config`) lives under `[runtime]`, not `[ser
 
 | Field | CLI flag | Default | Purpose |
 |---|---|---|---|
-| `mode` | `--paged-attn` | `auto` | `auto` (on for CUDA, off for Metal/CPU), `on`, or `off`. |
-| `context_len` | `--pa-context-len` | not set | Allocate KV cache for this context length. |
-| `memory_mb` | `--pa-memory-mb` | not set | KV cache budget in MB. Conflicts with `context_len`. |
-| `memory_fraction` | `--pa-memory-fraction` | not set | KV cache budget as fraction of VRAM (0.0 to 1.0). Conflicts with `context_len` and `memory_mb`. |
-| `block_size` | `--pa-block-size` | not set | Tokens per block. |
-| `cache_type` | `--pa-cache-type` | `auto` | KV cache quantization type. |
+| `mode` | `--paged-attn` | `auto` | `auto` (on for CUDA and Metal, off for CPU), `on`, or `off`. |
+| `gpu_memory_utilization` | `--gpu-memory-utilization` | not set | Cap on the fraction of GPU memory used by weights, working memory, and KV cache together, such as `0.9`. Conflicts with `kv_cache`. |
+| `kv_cache` | `--kv-cache` | not set | Fixed KV cache size shared by all requests, such as `"4GiB"` or `"65536tokens"`. Conflicts with `gpu_memory_utilization`. |
+| `block_size` | `--pa-block-size` | 32 on CUDA and Metal | Tokens per block. |
+| `cache_type` | `--pa-cache-type` | `auto` | KV cache data type: `auto`, or `f8e4m3` for an FP8 cache that uses half the memory of BF16. |
+
+For automatic sizing, omit both `gpu_memory_utilization` and `kv_cache` (`kv_cache = "auto"` isn't accepted). Setting either one needs paging, so it can't be combined with `mode = "off"`.
+
+To give the model a fixed cache budget, add this to the minimal example:
+
+```toml
+[paged_attn]
+kv_cache = "4GiB"
+```
+
+The budget is shared by all requests, and it's the total across the model's GPUs. Use `max_model_len` in `[[models]]` to limit each request's context. See [memory budgets](/guides/perf/paged-attention/#memory-budget) for help choosing a setting.
 
 ## `[sandbox]` section
 
@@ -139,13 +157,25 @@ Each `[[models]]` entry can carry nested sections whose field shapes mirror the 
 
 | Section | Purpose |
 |---|---|
-| `[models.format]` | Weight format selection and overrides (`format`, `quantized_file`, `mmproj`, `tok_model_id`, and GGML `gqa`). |
-| `[models.adapter]` | LoRA/X-LoRA adapter configuration. |
-| `[models.quantization]` | Quantization and artifact selection: `quant` (same as `--quant`), `isq` (explicit ISQ, same as `--isq`), `from_uqff`, `isq_organization`, `imatrix`, `calibration_file`. |
-| `[models.device]` | Device placement: `cpu`, `device_layers`, `topology`, `hf_cache`, `max_seq_len`, `max_batch_size`. `cpu` must be consistent across every entry. |
+| `[models.format]` | Weight format and file overrides: `format`, `quantized_file`, `mmproj`, `tok_model_id`, and GGML `gqa`. |
+| `[models.adapter]` | LoRA, legacy LoRA, or X-LoRA adapters. See [adapters](#adapters). |
+| `[models.quantization]` | `quant` (same as `--quant`), `isq`, `from_uqff`, `isq_organization`, `imatrix`, `calibration_file`. See [quantize a model](/guides/quantization/quantize-a-model/). |
+| `[models.device]` | Device placement: `cpu`, `device_layers`, `topology`, `hf_cache`. `cpu` must be consistent across every entry. |
 | `[models.multimodal]` | Multimodal load-time caps (image/video/audio limits). |
 
-Dynamic LoRA uses structured adapter entries and explicit per-request selection. For `command = "run"`, the top-level `adapter` key selects the initial alias; omit it to run the base model.
+### Adapters
+
+`[models.adapter]` takes one of three adapter modes per model:
+
+| Mode | Keys | Use it for |
+|---|---|---|
+| Dynamic LoRA | `enable_lora`, `lora`, `lora_max_adapters`, `lora_max_rank`, `lora_max_bytes` | Adapters chosen per request, on text models and on the language model of multimodal models, including GGUF. |
+| Legacy LoRA | `legacy_lora`, `legacy_lora_order` | One fixed adapter on a GGML model or Phi-3 GGUF. |
+| X-LoRA | `xlora`, `xlora_order`, `tgt_non_granular_index` | An X-LoRA checkpoint on a plain or GGML text model, or Phi-3 GGUF. |
+
+The modes can't be combined, and each `*_order` key is required with its adapter key. Multimodal models take only dynamic LoRA, on the language model: vision, audio, and projector adapters aren't supported. See [LoRA adapters](/guides/customize/lora-adapters/) for details.
+
+Dynamic LoRA adapters are picked per request. With `command = "run"`, the top-level `adapter` key picks the one to start with:
 
 ```toml
 command = "run"
@@ -165,9 +195,12 @@ lora_max_rank = 256
 lora_max_bytes = 8589934592
 ```
 
-`revision` is optional and defaults to `main` for each remote adapter independently of the base model revision. It is ignored for local adapter directories. `enable_lora` is needed only when no adapter is preloaded. `lora_max_adapters`, `lora_max_rank`, and `lora_max_bytes` limit loaded adapters.
+- Each `lora` entry needs a unique, nonempty `alias` and a `source`: a Hugging Face repo or a local directory.
+- `revision` sets the Hugging Face revision of a remote adapter, such as `refs/pr/7`. It defaults to `main`, not the base model's revision, and is ignored for local directories.
+- `enable_lora = true` turns on dynamic LoRA with no adapter preloaded. Any `lora` entry turns it on too.
+- `lora_max_adapters` (default 16), `lora_max_rank` (default 256), and `lora_max_bytes` (default 8 GiB) limit loaded adapters. See [adapter limits](/guides/customize/lora-adapters/#adapter-limits).
 
-The CLI and server use the same dynamic adapter configuration for supported GGUF models:
+GGUF models take the same keys:
 
 ```toml
 command = "serve"
@@ -183,10 +216,6 @@ lora = [
   { alias = "philosophy", source = "closestfriend/brie-qwen2.5-0.5b" },
 ]
 ```
-
-Multimodal GGUF supports dynamic language-model LoRA. Vision, audio, and projector adapters are not
-supported. Legacy LoRA and X-LoRA remain unavailable with multimodal GGUF. GGML uses `legacy_lora`
-together with `legacy_lora_order`; legacy static GGUF mode remains available for Phi3.
 
 ## Multi-model example
 
@@ -215,8 +244,7 @@ model_id = "google/gemma-4-E4B-it"
 quant = "4"
 ```
 
-When a multimodal GGUF repository contains an unambiguous compatible set, the model ID and
-quantization level also select its projector and supporting assets:
+For a multimodal GGUF repo, `model_id` and `quant` are enough when the repo has a single compatible projector:
 
 ```toml
 [[models]]
@@ -226,8 +254,7 @@ model_id = "unsloth/gemma-4-E4B-it-GGUF"
 quant = "4"
 ```
 
-Use the format overrides only when you want an exact artifact or asset source. The filename suffix
-still selects GGUF automatically:
+To choose exact files, set them in `[models.format]`. `mmproj` picks the projector, and `tok_model_id` sets where the config, tokenizer, and processor come from. A `.gguf` filename is enough to select the GGUF format:
 
 ```toml
 [[models]]
@@ -253,14 +280,12 @@ Invalid configs abort startup with a message identifying the problem:
 
 Flag interactions that hold on the command line and as TOML keys:
 
-- `quant` (CLI `--quant`, TOML key `quant`) selects a matching GGUF or [UQFF (Universal Quantized File Format)](/reference/uqff-format/) artifact when available. Source checkpoints without a matching UQFF use [ISQ (in-situ quantization)](/reference/quantization-types/). It conflicts with `isq` (`--isq`, the explicit ISQ level) and `from_uqff` (`--from-uqff`). `mistralrs tune` evaluates explicit levels and rejects `quant = "auto"` (`--quant auto`).
-- `--calibration-file` conflicts with `--imatrix`.
-- Multimodal GGUF repositories select a projector when one compatible candidate can be identified.
-  Use `mmproj` (`--mmproj`) to choose explicitly and `tok_model_id` (`--tok-model-id`) to override
-  the configuration, tokenizer, and processor source. Dynamic language-model LoRA keeps the
-  selected projector. Vision, audio, and projector adapters are unsupported. Legacy LoRA and
-  X-LoRA cannot be combined with a multimodal projector.
-- Dynamic LoRA (`enable_lora` or `lora`), legacy GGUF/GGML LoRA (`legacy_lora` with `legacy_lora_order`), and X-LoRA (`xlora` with `xlora_order`) are mutually exclusive. Dynamic `lora` entries require unique, nonempty aliases and sources. Supported GGUF uses dynamic LoRA; GGML uses legacy mode, and legacy static GGUF mode remains available for Phi3. `tgt_non_granular_index` requires `xlora`.
+- `quant` (`--quant`) sets a bit width such as `"4"`, a format name, or `"auto"`, and loads a prebuilt quantized copy when one exists. See [how mistral.rs chooses what to load](/guides/quantization/quantize-a-model/#how-mistralrs-chooses-what-to-load).
+  - `"auto"` always quantizes: it picks the highest bit width that fits, from 6 bits down to 2. Omit `quant` for full precision.
+  - `quant` conflicts with `isq` (`--isq`) and `from_uqff` (`--from-uqff`).
+  - `mistralrs tune` needs an explicit level and rejects `"auto"`.
+- `calibration_file` (`--calibration-file`) conflicts with `imatrix` (`--imatrix`).
+- Dynamic LoRA, legacy LoRA, and X-LoRA are mutually exclusive. See [adapters](#adapters).
 - `--matformer-slice-name` requires `--matformer-config-path`.
 - `mistralrs run`: `--image`, `--video`, and `--audio` require `-i`/`--input`.
 - `mistralrs bench`: `--prompt-len` and `--depth` accept comma-separated values for sweeps.
@@ -270,7 +295,18 @@ Flag interactions that hold on the command line and as TOML keys:
 
 ## Server behavior notes
 
-- **CORS and body limit.** Not exposed as CLI flags or TOML keys. Defaults: any origin; methods `GET`, `POST`, `PUT`, `DELETE`; allowed headers `Content-Type`, `Authorization`, `x-api-key`, `anthropic-version`, `anthropic-beta`, `x-request-id`; exposed headers `x-request-id`; 50 MB request body limit. Configure programmatically through `MistralRsServerRouterBuilder` in `mistralrs-server-core`.
-- **Authentication.** mistral.rs does not implement authentication. Put a reverse proxy (nginx, Caddy, Traefik) in front for auth and TLS. OpenAI-protocol clients always send `Authorization: Bearer ...` because the OpenAI SDK requires an API key; mistral.rs does not validate the header.
-- **Logging and metrics.** Access logs are written to normal server stdout/stderr by default, with request ids and route/status/latency metadata. `GET /metrics` exposes Prometheus HTTP metrics by default. See [observability](/guides/deploy/observability/).
-- **Payload logging.** `-v` enables debug detail and `-vv` trace-level file/cache internals; `RUST_LOG` module filters (e.g. `RUST_LOG=mistralrs_core=debug,tower_http=info`) override both. `-l <path>` logs all requests and responses to a file.
+- **Authentication.** mistral.rs does not implement authentication. Put a reverse proxy (nginx, Caddy, Traefik) in front for auth and TLS. OpenAI SDK clients send an `Authorization: Bearer ...` header because the SDK requires an API key. mistral.rs doesn't check it, so any value works.
+- **Logging and metrics.** Access logs go to the server's stdout/stderr by default, with the request id, route, status, and latency. `GET /metrics` exposes [Prometheus metrics](/reference/metrics/) by default. See [observability](/guides/deploy/observability/).
+- **Payload logging.** `-v` turns on debug logging and `-vv` trace logging. A `RUST_LOG` filter such as `RUST_LOG=mistralrs_core=debug,tower_http=info` overrides both. `-l <path>` logs all requests and responses to a file.
+
+### CORS and request body limit
+
+These have no CLI flag or TOML key. To change the allowed origins or the body limit, build the server yourself with `MistralRsServerRouterBuilder` from `mistralrs-server-core`.
+
+| Setting | Default | Builder method |
+|---|---|---|
+| Allowed origins | Any | `with_allowed_origins` |
+| Request body limit | 50 MiB | `with_max_body_limit` |
+| Allowed methods | `GET`, `POST`, `PUT`, `DELETE` | fixed |
+| Allowed headers | `Content-Type`, `Authorization`, `x-api-key`, `anthropic-version`, `anthropic-beta`, `x-request-id`, `request-id` | fixed |
+| Exposed headers | `x-request-id`, `request-id` | fixed |

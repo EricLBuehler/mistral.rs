@@ -219,6 +219,7 @@ pub(crate) fn afq_dequantize_op(
     cpu_backend::afq_dequantize_op(w_q, scales, biases, group_size, bits)
 }
 
+#[cfg(feature = "metal")]
 pub(crate) fn afq_embedding_op(
     ids: &Tensor,
     w_q: &Tensor,
@@ -244,7 +245,6 @@ pub(crate) fn afq_embedding_op(
     let mut out_shape = ids.dims().to_vec();
     out_shape.push(hidden_size);
 
-    #[cfg(feature = "metal")]
     if w_q.device().is_metal() {
         let ids = ids
             .to_device(w_q.device())?
@@ -308,16 +308,9 @@ pub(crate) fn afq_embedding_op(
         )));
     }
 
-    #[cfg(feature = "cuda")]
-    if w_q.device().is_cuda() {
-        return cuda_backend::afq_embedding_op(ids, w_q, scales, biases, group_size, bits);
-    }
-
-    if w_q.device().is_cpu() {
-        return cpu_backend::afq_embedding_op(ids, w_q, scales, biases, group_size, bits);
-    }
-
-    candle_core::bail!("AFQ embedding_forward is only supported on Metal, CUDA, and CPU")
+    candle_core::bail!(
+        "AFQ embedding kernels run on Metal; other devices use the shared row gather"
+    )
 }
 
 fn make_dummy_indices(x: &Tensor) -> Result<Tensor> {
@@ -517,27 +510,30 @@ pub(crate) fn afq_mm_op(
                         scales.dtype(),
                         "afq-qmm-splitk-intermediate",
                     )?;
-                    let encoder = device.command_encoder()?;
-                    encoder.set_label("afq-qmm-splitk");
-                    crate::metal_kernels::call_afq_qmm_splitk(
-                        device.device(),
-                        &encoder,
-                        crate::metal_kernels::Kernels::global(),
-                        scales.dtype(),
-                        x_s.buffer(),
-                        x.layout().start_offset() * x.dtype().size_in_bytes(),
-                        w_s.buffer(),
-                        s_s.buffer(),
-                        b_s.buffer(),
-                        &intermediate,
-                        m_outer,
-                        n_out,
-                        k_in,
-                        split_k,
-                        bits,
-                        group_size,
-                    )
-                    .map_err(candle_core::Error::wrap)?;
+                    // The guard holds candle's command mutex; `sum` below needs it again.
+                    {
+                        let encoder = device.command_encoder()?;
+                        encoder.set_label("afq-qmm-splitk");
+                        crate::metal_kernels::call_afq_qmm_splitk(
+                            device.device(),
+                            &encoder,
+                            crate::metal_kernels::Kernels::global(),
+                            scales.dtype(),
+                            x_s.buffer(),
+                            x.layout().start_offset() * x.dtype().size_in_bytes(),
+                            w_s.buffer(),
+                            s_s.buffer(),
+                            b_s.buffer(),
+                            &intermediate,
+                            m_outer,
+                            n_out,
+                            k_in,
+                            split_k,
+                            bits,
+                            group_size,
+                        )
+                        .map_err(candle_core::Error::wrap)?;
+                    }
 
                     let intermediate_tensor = Tensor::from((
                         Storage::Metal(MetalStorage::new(
@@ -600,33 +596,15 @@ pub(crate) fn afq_mm_op(
 
         return Ok(output);
     }
+    if lhs_indices.is_some() || rhs_indices.is_some() {
+        candle_core::bail!("AFQ indexed matmul is Metal-only; use AfqLayer::gather_forward");
+    }
     #[cfg(feature = "cuda")]
     if x.device().is_cuda() {
-        return cuda_backend::afq_mm_op(
-            x,
-            w,
-            scales,
-            biases,
-            lhs_indices,
-            rhs_indices,
-            group_size,
-            bits,
-            transpose,
-        );
+        return cuda_backend::afq_mm_op(x, w, scales, biases, group_size, bits, transpose);
     }
 
-    // CPU fallback for non-accelerated devices
-    cpu_backend::afq_mm_op(
-        x,
-        w,
-        scales,
-        biases,
-        lhs_indices,
-        rhs_indices,
-        group_size,
-        bits,
-        transpose,
-    )
+    cpu_backend::afq_mm_op(x, w, scales, biases, group_size, bits, transpose)
 }
 
 /// Stable wrapper around candle's `call_mlx_arg_sort` for u32 keys. Candle's
@@ -765,6 +743,11 @@ pub fn metal_moe_weighted_reduce_flat(
         Storage::Metal(MetalStorage::new(output, device.clone(), out_elems, dtype)),
         Shape::from(vec![num_tokens, hidden]),
     )))
+}
+
+#[cfg(feature = "metal")]
+pub fn afq_sorted_gather_supported(group_size: AfqGroupSize, bits: AfqBits) -> bool {
+    matches!(group_size, AfqGroupSize::Med) && matches!(bits, AfqBits::Four | AfqBits::Eight)
 }
 
 /// Sorted-MoE tiled grouped GEMM via the MLX-ported `affine_gather_qmm_rhs`
@@ -1022,8 +1005,9 @@ mod cpu_tests {
     use candle_core::{DType, Device, Result, Tensor, D};
 
     use crate::{
-        afq::ops::{afq_dequantize_op, afq_embedding_op},
-        AfqBits, AfqGroupSize,
+        afq::ops::afq_dequantize_op,
+        embedding::{RowCodec, ScaleGrid, ScaleType},
+        AfqBits, AfqGroupSize, EmbeddingTable,
     };
 
     use super::afq_quantize_op;
@@ -1070,7 +1054,15 @@ mod cpu_tests {
         let (w_q, scales, biases) = afq_quantize_op(&xs, group_size, bits)?;
         let ids = Tensor::from_vec(vec![3u32, 1, 3, 15], (2, 2), &device)?;
 
-        let got = afq_embedding_op(&ids, &w_q, &scales, &biases, group_size, bits)?;
+        let grid = ScaleGrid::per_row(ScaleType::from_dtype(scales.dtype())?, group_size as usize);
+        let codec = RowCodec::Afq {
+            bits: bits as usize,
+            grid,
+        };
+        let got = EmbeddingTable::new(codec, 16, 64, &w_q)
+            .with_scales(&scales)
+            .with_aux(&biases)
+            .gather(&ids, DType::F32.into())?;
         let expected = afq_dequantize_op(&w_q, &scales, &biases, group_size, bits)?
             .index_select(&ids.flatten_all()?, 0)?
             .reshape((2, 2, 64))?;
@@ -1681,78 +1673,12 @@ mod cpu_backend {
         .to_dtype(scales.dtype())
     }
 
-    pub(crate) fn afq_embedding_op(
-        ids: &Tensor,
-        w_q: &Tensor,
-        scales: &Tensor,
-        biases: &Tensor,
-        group_size: usize,
-        bits: usize,
-    ) -> Result<Tensor> {
-        let device = Device::Cpu;
-        let ids_vec = ids
-            .to_device(&device)?
-            .to_dtype(DType::U32)?
-            .flatten_all()?
-            .to_vec1::<u32>()?;
-        let codes = w_q.flatten_all()?.to_vec1::<u32>()?;
-        let sc = scales
-            .flatten_all()?
-            .to_dtype(DType::F32)?
-            .to_vec1::<f32>()?;
-        let bs = biases
-            .flatten_all()?
-            .to_dtype(DType::F32)?
-            .to_vec1::<f32>()?;
-
-        let packed_row = w_q.dim(D::Minus1)?;
-        let rows = codes.len() / packed_row;
-        let hidden = packed_row * 32 / bits;
-        let groups_per_row = hidden / group_size;
-        if sc.len() != rows * groups_per_row || bs.len() != rows * groups_per_row {
-            candle_core::bail!("Scales and biases do not match the embedding matrix.");
-        }
-
-        let mut out = vec![0f32; ids_vec.len() * hidden];
-        let q_mask = (1u32 << bits) - 1;
-        for (out_row, &row_id) in ids_vec.iter().enumerate() {
-            let row = row_id as usize;
-            if row >= rows {
-                candle_core::bail!("Embedding id {row} is out of range for {rows} rows.");
-            }
-            let row_base = row * packed_row;
-            let out_base = out_row * hidden;
-            for g in 0..groups_per_row {
-                let scale = sc[row * groups_per_row + g];
-                let bias = bs[row * groups_per_row + g];
-                for i in 0..group_size {
-                    let j = g * group_size + i;
-                    let bit_off = j * bits;
-                    let word_id = bit_off / 32;
-                    let shift = bit_off % 32;
-                    let mut q = (codes[row_base + word_id] >> shift) & q_mask;
-                    if shift + bits > 32 {
-                        q |= (codes[row_base + word_id + 1] << (32 - shift)) & q_mask;
-                    }
-                    out[out_base + j] = bias + q as f32 * scale;
-                }
-            }
-        }
-
-        let mut out_shape = ids.dims().to_vec();
-        out_shape.push(hidden);
-        Tensor::from_vec(out, out_shape, &device)?.to_dtype(scales.dtype())
-    }
-
     /// Very simple (and slow) matmul after full de‑quantisation.  Handles 2‑D tensors.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn afq_mm_op(
         x: &Tensor,
         w: &Tensor,
         scales: &Tensor,
         biases: &Tensor,
-        _lhs_indices: Option<&Tensor>,
-        _rhs_indices: Option<&Tensor>,
         group_size: usize,
         bits: usize,
         transpose: bool,
@@ -1775,155 +1701,6 @@ mod cuda_backend {
     use crate::afq::ffi;
     use candle_core::{cuda::cudarc::driver::DevicePtr, CudaStorage, DType, Result, Tensor, D};
     use half::{bf16, f16};
-
-    macro_rules! dispatch_afq_embedding {
-        ($postfix:ident, $scalar:ty, $wq:expr, $scales:expr, $biases:expr, $ids:expr, $out:expr, $bits:expr, $group_size:expr, $num_ids:expr, $hidden:expr) => {{
-            paste::paste! {
-                match ($bits, $group_size) {
-                    (2, 32) => ffi::[<afq_embedding_2bit_gs32_ $postfix>](
-                        $wq as *const u8,
-                        $scales as *const $scalar,
-                        $biases as *const $scalar,
-                        $ids as *const u32,
-                        $out as *mut $scalar,
-                        $num_ids as i32,
-                        $hidden as i32,
-                    ),
-                    (2, 64) => ffi::[<afq_embedding_2bit_gs64_ $postfix>](
-                        $wq as *const u8,
-                        $scales as *const $scalar,
-                        $biases as *const $scalar,
-                        $ids as *const u32,
-                        $out as *mut $scalar,
-                        $num_ids as i32,
-                        $hidden as i32,
-                    ),
-                    (2, 128) => ffi::[<afq_embedding_2bit_gs128_ $postfix>](
-                        $wq as *const u8,
-                        $scales as *const $scalar,
-                        $biases as *const $scalar,
-                        $ids as *const u32,
-                        $out as *mut $scalar,
-                        $num_ids as i32,
-                        $hidden as i32,
-                    ),
-                    (3, 32) => ffi::[<afq_embedding_3bit_gs32_ $postfix>](
-                        $wq as *const u8,
-                        $scales as *const $scalar,
-                        $biases as *const $scalar,
-                        $ids as *const u32,
-                        $out as *mut $scalar,
-                        $num_ids as i32,
-                        $hidden as i32,
-                    ),
-                    (3, 64) => ffi::[<afq_embedding_3bit_gs64_ $postfix>](
-                        $wq as *const u8,
-                        $scales as *const $scalar,
-                        $biases as *const $scalar,
-                        $ids as *const u32,
-                        $out as *mut $scalar,
-                        $num_ids as i32,
-                        $hidden as i32,
-                    ),
-                    (3, 128) => ffi::[<afq_embedding_3bit_gs128_ $postfix>](
-                        $wq as *const u8,
-                        $scales as *const $scalar,
-                        $biases as *const $scalar,
-                        $ids as *const u32,
-                        $out as *mut $scalar,
-                        $num_ids as i32,
-                        $hidden as i32,
-                    ),
-                    (4, 32) => ffi::[<afq_embedding_4bit_gs32_ $postfix>](
-                        $wq as *const u8,
-                        $scales as *const $scalar,
-                        $biases as *const $scalar,
-                        $ids as *const u32,
-                        $out as *mut $scalar,
-                        $num_ids as i32,
-                        $hidden as i32,
-                    ),
-                    (4, 64) => ffi::[<afq_embedding_4bit_gs64_ $postfix>](
-                        $wq as *const u8,
-                        $scales as *const $scalar,
-                        $biases as *const $scalar,
-                        $ids as *const u32,
-                        $out as *mut $scalar,
-                        $num_ids as i32,
-                        $hidden as i32,
-                    ),
-                    (4, 128) => ffi::[<afq_embedding_4bit_gs128_ $postfix>](
-                        $wq as *const u8,
-                        $scales as *const $scalar,
-                        $biases as *const $scalar,
-                        $ids as *const u32,
-                        $out as *mut $scalar,
-                        $num_ids as i32,
-                        $hidden as i32,
-                    ),
-                    (6, 32) => ffi::[<afq_embedding_6bit_gs32_ $postfix>](
-                        $wq as *const u8,
-                        $scales as *const $scalar,
-                        $biases as *const $scalar,
-                        $ids as *const u32,
-                        $out as *mut $scalar,
-                        $num_ids as i32,
-                        $hidden as i32,
-                    ),
-                    (6, 64) => ffi::[<afq_embedding_6bit_gs64_ $postfix>](
-                        $wq as *const u8,
-                        $scales as *const $scalar,
-                        $biases as *const $scalar,
-                        $ids as *const u32,
-                        $out as *mut $scalar,
-                        $num_ids as i32,
-                        $hidden as i32,
-                    ),
-                    (6, 128) => ffi::[<afq_embedding_6bit_gs128_ $postfix>](
-                        $wq as *const u8,
-                        $scales as *const $scalar,
-                        $biases as *const $scalar,
-                        $ids as *const u32,
-                        $out as *mut $scalar,
-                        $num_ids as i32,
-                        $hidden as i32,
-                    ),
-                    (8, 32) => ffi::[<afq_embedding_8bit_gs32_ $postfix>](
-                        $wq as *const u8,
-                        $scales as *const $scalar,
-                        $biases as *const $scalar,
-                        $ids as *const u32,
-                        $out as *mut $scalar,
-                        $num_ids as i32,
-                        $hidden as i32,
-                    ),
-                    (8, 64) => ffi::[<afq_embedding_8bit_gs64_ $postfix>](
-                        $wq as *const u8,
-                        $scales as *const $scalar,
-                        $biases as *const $scalar,
-                        $ids as *const u32,
-                        $out as *mut $scalar,
-                        $num_ids as i32,
-                        $hidden as i32,
-                    ),
-                    (8, 128) => ffi::[<afq_embedding_8bit_gs128_ $postfix>](
-                        $wq as *const u8,
-                        $scales as *const $scalar,
-                        $biases as *const $scalar,
-                        $ids as *const u32,
-                        $out as *mut $scalar,
-                        $num_ids as i32,
-                        $hidden as i32,
-                    ),
-                    _ => candle_core::bail!(
-                        "Unsupported bits/group_size combination: {}/{}",
-                        $bits,
-                        $group_size
-                    ),
-                }
-            }
-        }};
-    }
 
     /// CUDA-accelerated AFQ quantization
     pub(crate) fn afq_quantize_op(
@@ -2318,136 +2095,6 @@ mod cuda_backend {
                 Ok((w_q, scales, biases))
             }
             other => candle_core::bail!("Unsupported dtype for AFQ CUDA quantization: {other:?}"),
-        }
-    }
-
-    pub(crate) fn afq_embedding_op(
-        ids: &Tensor,
-        w_q: &Tensor,
-        scales: &Tensor,
-        biases: &Tensor,
-        group_size: usize,
-        bits: usize,
-    ) -> Result<Tensor> {
-        let dev = crate::utils::get_cuda_device(w_q)?;
-        let ids = ids
-            .to_device(w_q.device())?
-            .to_dtype(DType::U32)?
-            .contiguous()?;
-
-        let packed_row = w_q.dim(D::Minus1)?;
-        let hidden = packed_row * 32 / bits;
-        let groups_per_row = hidden / group_size;
-        if scales.dim(D::Minus1)? != groups_per_row || biases.dim(D::Minus1)? != groups_per_row {
-            candle_core::bail!("Scales and biases do not match the embedding matrix.");
-        }
-
-        let num_ids = ids.elem_count();
-        let mut out_shape = ids.dims().to_vec();
-        out_shape.push(hidden);
-
-        let (wq_s, _) = w_q.storage_and_layout();
-        let Storage::Cuda(wq_s) = &*wq_s else {
-            candle_core::bail!("Expected CUDA storage");
-        };
-        let (s_s, _) = scales.storage_and_layout();
-        let Storage::Cuda(s_s) = &*s_s else {
-            candle_core::bail!("Expected CUDA storage");
-        };
-        let (b_s, _) = biases.storage_and_layout();
-        let Storage::Cuda(b_s) = &*b_s else {
-            candle_core::bail!("Expected CUDA storage");
-        };
-        let (ids_s, _) = ids.storage_and_layout();
-        let Storage::Cuda(ids_s) = &*ids_s else {
-            candle_core::bail!("Expected CUDA storage");
-        };
-
-        let (wq_ptr, _wq_guard) =
-            crate::utils::slice_ptr(wq_s.as_cuda_slice::<u32>()?, w_q.layout().start_offset());
-        let (ids_ptr, _ids_guard) =
-            crate::utils::slice_ptr(ids_s.as_cuda_slice::<u32>()?, ids.layout().start_offset());
-
-        match scales.dtype() {
-            DType::F16 => {
-                let output_buf = unsafe { dev.alloc::<f16>(num_ids * hidden)? };
-                let (s_ptr, _s_guard) = crate::utils::slice_ptr(
-                    s_s.as_cuda_slice::<f16>()?,
-                    scales.layout().start_offset(),
-                );
-                let (b_ptr, _b_guard) = crate::utils::slice_ptr(
-                    b_s.as_cuda_slice::<f16>()?,
-                    biases.layout().start_offset(),
-                );
-                let (out_ptr, out_guard) = output_buf.device_ptr(output_buf.stream());
-
-                unsafe {
-                    dispatch_afq_embedding!(
-                        f16, f16, wq_ptr, s_ptr, b_ptr, ids_ptr, out_ptr, bits, group_size,
-                        num_ids, hidden
-                    );
-                }
-                drop(out_guard);
-
-                let output_storage = CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
-                Ok(Tensor::from((
-                    Storage::Cuda(output_storage),
-                    candle_core::Shape::from(out_shape),
-                )))
-            }
-            DType::F32 => {
-                let output_buf = unsafe { dev.alloc::<f32>(num_ids * hidden)? };
-                let (s_ptr, _s_guard) = crate::utils::slice_ptr(
-                    s_s.as_cuda_slice::<f32>()?,
-                    scales.layout().start_offset(),
-                );
-                let (b_ptr, _b_guard) = crate::utils::slice_ptr(
-                    b_s.as_cuda_slice::<f32>()?,
-                    biases.layout().start_offset(),
-                );
-                let (out_ptr, out_guard) = output_buf.device_ptr(output_buf.stream());
-
-                unsafe {
-                    dispatch_afq_embedding!(
-                        f32, f32, wq_ptr, s_ptr, b_ptr, ids_ptr, out_ptr, bits, group_size,
-                        num_ids, hidden
-                    );
-                }
-                drop(out_guard);
-
-                let output_storage = CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
-                Ok(Tensor::from((
-                    Storage::Cuda(output_storage),
-                    candle_core::Shape::from(out_shape),
-                )))
-            }
-            DType::BF16 => {
-                let output_buf = unsafe { dev.alloc::<bf16>(num_ids * hidden)? };
-                let (s_ptr, _s_guard) = crate::utils::slice_ptr(
-                    s_s.as_cuda_slice::<bf16>()?,
-                    scales.layout().start_offset(),
-                );
-                let (b_ptr, _b_guard) = crate::utils::slice_ptr(
-                    b_s.as_cuda_slice::<bf16>()?,
-                    biases.layout().start_offset(),
-                );
-                let (out_ptr, out_guard) = output_buf.device_ptr(output_buf.stream());
-
-                unsafe {
-                    dispatch_afq_embedding!(
-                        bf16, bf16, wq_ptr, s_ptr, b_ptr, ids_ptr, out_ptr, bits, group_size,
-                        num_ids, hidden
-                    );
-                }
-                drop(out_guard);
-
-                let output_storage = CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
-                Ok(Tensor::from((
-                    Storage::Cuda(output_storage),
-                    candle_core::Shape::from(out_shape),
-                )))
-            }
-            other => candle_core::bail!("Unsupported dtype for AFQ CUDA embedding: {other:?}"),
         }
     }
 
@@ -2938,29 +2585,15 @@ mod cuda_backend {
     }
 
     /// CUDA-accelerated AFQ fused matmul
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn afq_mm_op(
         x: &Tensor,
         w: &Tensor,
         scales: &Tensor,
         biases: &Tensor,
-        _lhs_indices: Option<&Tensor>,
-        _rhs_indices: Option<&Tensor>,
         group_size: usize,
         bits: usize,
         transpose: bool,
     ) -> Result<Tensor> {
-        // For indexed matmul, fall back to dequantize + matmul for now
-        if _lhs_indices.is_some() || _rhs_indices.is_some() {
-            let w_dequant =
-                afq_dequantize_op(w, scales, biases, group_size, bits)?.to_dtype(x.dtype())?;
-            return if transpose {
-                x.broadcast_matmul(&w_dequant.t()?)
-            } else {
-                x.broadcast_matmul(&w_dequant)
-            };
-        }
-
         if !transpose {
             // Non-transposed matmul: fall back to dequantize + matmul
             let w_dequant =
@@ -3561,5 +3194,63 @@ mod cuda_backend {
             }
             other => candle_core::bail!("Unsupported dtype for AFQ CUDA matmul: {other:?}"),
         }
+    }
+}
+
+#[cfg(all(test, feature = "metal"))]
+mod qmv_rows_tests {
+    #![allow(clippy::cast_precision_loss)]
+
+    use candle_core::{Device, Result, Tensor};
+
+    use super::{afq_mm_op, afq_quantize_op};
+    use crate::{AfqBits, AfqGroupSize};
+
+    fn quantized(device: &Device, k: usize, n: usize) -> Result<(Tensor, Tensor, Tensor)> {
+        let w = Tensor::randn(0f32, 1., (n, k), device)?.to_dtype(candle_core::DType::BF16)?;
+        afq_quantize_op(&w, AfqGroupSize::Med, AfqBits::Four)
+    }
+
+    fn mm(x: &Tensor, q: &(Tensor, Tensor, Tensor)) -> Result<Tensor> {
+        afq_mm_op(
+            x,
+            &q.0,
+            &q.1,
+            &q.2,
+            None,
+            None,
+            AfqGroupSize::Med,
+            AfqBits::Four,
+            true,
+        )
+    }
+
+    fn max_rel_err(actual: &Tensor, reference: &Tensor) -> Result<f32> {
+        let actual = actual.to_dtype(candle_core::DType::F32)?.flatten_all()?;
+        let reference = reference.to_dtype(candle_core::DType::F32)?.flatten_all()?;
+        let err = (actual - &reference)?.abs()?.max(0)?.to_scalar::<f32>()?;
+        let scale = reference.abs()?.max(0)?.to_scalar::<f32>()?;
+        Ok(err / scale)
+    }
+
+    #[test]
+    fn small_batch_rows_match_dequantized_reference() -> Result<()> {
+        let device = Device::new_metal(0)?;
+        let q = quantized(&device, 5120, 1024)?;
+        let w = super::afq_dequantize_op(&q.0, &q.1, &q.2, AfqGroupSize::Med, AfqBits::Four)?
+            .to_dtype(candle_core::DType::F32)?;
+        for rows in [1usize, 2, 3, 4, 5, 8, 9] {
+            let x = Tensor::randn(0f32, 1., (rows, 1, 5120), &device)?
+                .to_dtype(candle_core::DType::BF16)?;
+            let reference = x
+                .to_dtype(candle_core::DType::F32)?
+                .reshape((rows, 5120))?
+                .matmul(&w.t()?)?;
+            let actual = mm(&x, &q)?.reshape((rows, 1024))?;
+            let err = max_rel_err(&actual, &reference)?;
+            // BF16 output rounding is ~4e-3 relative; anything larger is a real error.
+            assert!(err < 1e-2, "rows={rows}: max relative error {err}");
+        }
+        Ok(())
     }
 }

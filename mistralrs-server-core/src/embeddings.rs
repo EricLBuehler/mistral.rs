@@ -258,6 +258,7 @@ async fn fetch_embedding(
     let (tx, mut rx) = create_response_channel(Some(1));
 
     let request = Request::Normal(Box::new(NormalRequest {
+        audio_output: None,
         id: state.next_request_id(),
         queued_at: None,
         messages: RequestMessage::Embedding { prompt },
@@ -307,6 +308,7 @@ async fn fetch_embedding_tokens(
     let (tx, mut rx) = create_response_channel(Some(1));
 
     let request = Request::Normal(Box::new(NormalRequest {
+        audio_output: None,
         id: state.next_request_id(),
         queued_at: None,
         messages: RequestMessage::EmbeddingTokens { prompt: tokens },
@@ -383,6 +385,7 @@ async fn process_embedding_response(
             | Response::CompletionModelError(_, _)
             | Response::ImageGeneration(_)
             | Response::Speech { .. }
+            | Response::Decision { .. }
             | Response::Raw { .. }
             | Response::AgenticToolCallProgress { .. }
             | Response::BlockDenoisingProgress(_)

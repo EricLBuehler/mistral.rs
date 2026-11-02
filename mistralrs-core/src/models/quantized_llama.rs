@@ -23,6 +23,19 @@ use crate::utils::progress::{new_multi_progress, NiceProgressBar};
 // Default fallback for models that don't specify context_length
 const DEFAULT_MAX_SEQ_LEN: u32 = 4096;
 
+fn attention_output_rows(
+    output: &Tensor,
+    mask: &AttentionMask,
+    batch: usize,
+    query_len: usize,
+) -> Result<Tensor> {
+    if mask.is_none() {
+        output.reshape((batch, query_len, ()))
+    } else {
+        output.transpose(1, 2)?.reshape((batch, query_len, ()))
+    }
+}
+
 struct Mlp {
     feed_forward_w1: Arc<dyn QuantMethod>,
     feed_forward_w2: Arc<dyn QuantMethod>,
@@ -114,11 +127,7 @@ impl LayerWeights {
             }
         };
 
-        let y = if mask.is_custom() {
-            y.transpose(1, 2)?.reshape((b_sz, seq_len, ()))?
-        } else {
-            y.reshape((b_sz, seq_len, ()))?
-        };
+        let y = attention_output_rows(&y, mask, b_sz, seq_len)?;
 
         let y = self.attention_wo.forward(&y.to_dtype(x.dtype())?)?;
         Ok(y)
@@ -373,5 +382,33 @@ impl ModelWeights {
         let x = self.norm.forward(&layer_in)?;
         let x = extract_logits(&x, context_lens)?;
         self.output.forward(&x.contiguous()?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn structured_prefill_preserves_query_head_order() -> Result<()> {
+        let head_major = Tensor::from_vec(
+            vec![0f32, 1., 4., 5., 2., 3., 6., 7.],
+            (1, 2, 2, 2),
+            &Device::Cpu,
+        )?;
+        let custom = AttentionMask::Custom(Tensor::zeros((2, 2), DType::F32, &Device::Cpu)?);
+        for mask in [AttentionMask::CausalFlash, custom] {
+            let output = attention_output_rows(&head_major, &mask, 1, 2)?;
+            assert_eq!(
+                output.to_vec3::<f32>()?,
+                vec![vec![vec![0., 1., 2., 3.], vec![4., 5., 6., 7.]]]
+            );
+        }
+        let row_major = Tensor::arange(0f32, 8., &Device::Cpu)?.reshape((1, 2, 2, 2))?;
+        assert_eq!(
+            attention_output_rows(&row_major, &AttentionMask::None, 1, 2)?.to_vec3::<f32>()?,
+            vec![vec![vec![0., 1., 2., 3.], vec![4., 5., 6., 7.]]]
+        );
+        Ok(())
     }
 }

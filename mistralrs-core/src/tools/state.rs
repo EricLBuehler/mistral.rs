@@ -199,6 +199,13 @@ impl ToolCallState {
         }
     }
 
+    pub(crate) fn mark_grammar_accepting(&mut self) {
+        if matches!(self.grammar, ToolGrammarState::Active { .. }) {
+            self.obligation
+                .mark_satisfied(self.matcher.requires_tool_call());
+        }
+    }
+
     pub(crate) fn clear_active_grammar(&mut self) -> bool {
         let ToolGrammarState::Active { forced } = self.grammar else {
             return false;
@@ -274,6 +281,13 @@ impl ToolCallState {
         let parse_text = parser_text.unwrap_or(&visible_text);
         let (tool_use_still_possible, tool_use_is_done) =
             self.matcher.prefix_could_be_tool(parse_text)?;
+        if !is_done
+            && self.matcher.requires_tool_call()
+            && !tool_use_still_possible
+            && !tool_use_is_done
+        {
+            return Ok(ToolCallParse::empty(Some(visible_text)));
+        }
         let (mut content, tool_calls) = self
             .matcher
             .get_call_with_content(parse_text)
@@ -388,6 +402,99 @@ mod tests {
 
         assert!(lark(&grammar).contains("json_call"));
         assert_eq!(grammar.grammars.len(), 2);
+    }
+
+    #[test]
+    fn flint_shared_prefix_activates_native_grammar() {
+        let tools = vec![tool("get_weather")];
+        let mut state =
+            ToolCallState::new(ToolChoice::Auto, Some(&tools), Some(ToolCallFormat::Flint))
+                .unwrap();
+        assert!(state
+            .maybe_activate_continuation_grammar(Some("Hello"))
+            .is_none());
+        let grammar = state
+            .maybe_activate_continuation_grammar(Some("<tool_call>"))
+            .unwrap();
+        assert!(lark(&grammar).contains("flint_call"));
+        assert!(!lark(&grammar).contains("json_call"));
+    }
+
+    #[test]
+    fn flint_streaming_retains_all_calls_after_optional_reasoning() {
+        use crate::reasoning_parsers::TagReasoningContext;
+
+        let tools = vec![tool("get_weather")];
+        let mut state =
+            ToolCallState::new(ToolChoice::Auto, Some(&tools), Some(ToolCallFormat::Flint))
+                .unwrap();
+        let mut reasoning = TagReasoningContext::new_think_tags();
+        let text = "<think>Check both cities.</think><tool_call>get_weather<arg_key>city</arg_key><arg_value>Paris</arg_value></tool_call><tool_call>get_weather<arg_key>city</arg_key><arg_value>Tokyo</arg_value></tool_call>";
+        for byte in text.bytes() {
+            reasoning.process_bytes(&[byte]);
+            if let Some(content) = reasoning.content() {
+                if content.contains("<tool_call>") {
+                    assert_eq!(state.prefix_status(&content).unwrap(), (true, false));
+                }
+            }
+        }
+        reasoning.finalize();
+        let parsed = state
+            .parse_streaming(reasoning.get_content_delta(), text, None, true, true)
+            .unwrap();
+        assert_eq!(
+            reasoning.reasoning_content().as_deref(),
+            Some("Check both cities.")
+        );
+        assert!(parsed.content.is_none());
+        assert_eq!(parsed.tool_calls.len(), 2);
+        assert_eq!(
+            parsed.tool_calls[0].function.arguments,
+            r#"{"city":"Paris"}"#
+        );
+        assert_eq!(
+            parsed.tool_calls[1].function.arguments,
+            r#"{"city":"Tokyo"}"#
+        );
+    }
+
+    #[test]
+    fn flint_required_streaming_allows_text_before_a_call() {
+        let tools = vec![tool("get_weather")];
+        for choice in [
+            ToolChoice::Required,
+            ToolChoice::NamedFunction(NamedFunctionToolChoice {
+                tp: ToolType::Function,
+                name: "get_weather".to_string(),
+            }),
+        ] {
+            let mut state =
+                ToolCallState::new(choice, Some(&tools), Some(ToolCallFormat::Flint)).unwrap();
+            assert!(state
+                .maybe_force_required_grammar(32768, 32768, false)
+                .is_none());
+            let text = "I will check the weather.";
+            let parsed = state
+                .parse_streaming(Some(text.to_string()), text, None, true, false)
+                .unwrap();
+            assert_eq!(parsed.content.as_deref(), Some(text));
+            assert!(state.required_tool_call_unsatisfied());
+            let call = "<tool_call>get_weather<arg_key>city</arg_key><arg_value>Paris</arg_value></tool_call>";
+            let parsed = state
+                .parse_streaming(Some(call.to_string()), call, None, true, true)
+                .unwrap();
+            assert_eq!(parsed.tool_calls.len(), 1);
+            assert!(!state.required_tool_call_unsatisfied());
+        }
+        let mut state = ToolCallState::new(
+            ToolChoice::Required,
+            Some(&tools),
+            Some(ToolCallFormat::Flint),
+        )
+        .unwrap();
+        assert!(state
+            .parse_streaming(Some("No call.".to_string()), "No call.", None, true, true)
+            .is_err());
     }
 
     #[test]
@@ -625,6 +732,19 @@ mod tests {
 
         assert!(state.is_stop_token_blocked(2, Some(&[2]), &[]));
         assert!(state.is_stop_token_blocked(9, None, &[9]));
+    }
+
+    #[test]
+    fn accepting_non_tool_grammar_does_not_satisfy_required_call() {
+        let tools = vec![tool("get_weather")];
+        let mut state = ToolCallState::new(ToolChoice::Required, Some(&tools), None).unwrap();
+        state.mark_grammar_accepting();
+        assert!(state.required_tool_call_unsatisfied());
+        assert!(state.is_stop_token_blocked(2, Some(&[2]), &[]));
+        state.mark_grammar_active(true);
+        state.mark_grammar_accepting();
+        assert!(!state.required_tool_call_unsatisfied());
+        assert!(!state.is_stop_token_blocked(2, Some(&[2]), &[]));
     }
 
     #[test]

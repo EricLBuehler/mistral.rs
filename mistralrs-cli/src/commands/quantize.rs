@@ -8,7 +8,8 @@ use anyhow::{Context, Result};
 use tracing::{info, warn};
 
 use mistralrs_core::{
-    expand_isq_value, initialize_logging, IsqType, ModelSelected, TokenSource, UqffWriteConfig,
+    expand_isq_value, initialize_logging, IsqType, ModelSelected, PrefixCacheCapacity, TokenSource,
+    UqffWriteConfig,
 };
 use mistralrs_server_core::mistralrs_for_server_builder::{defaults, MistralRsForServerBuilder};
 
@@ -307,7 +308,7 @@ pub async fn run_quantize(mut model_type: QuantizeModelType, global: GlobalOptio
         .with_no_kv_cache(defaults::NO_KV_CACHE)
         .with_token_source(global.token_source.clone())
         .with_interactive_mode(defaults::INTERACTIVE_MODE)
-        .with_prefix_cache_n(0)
+        .with_prefix_cache_n(PrefixCacheCapacity::DISABLED)
         .set_paged_attn(Some(false))
         .with_cpu(cpu)
         .with_num_device_layers_optional(device_layers)
@@ -441,16 +442,19 @@ Generated with [mistral.rs](https://github.com/EricLBuehler/mistral.rs) {mistral
 
 ## Install
 
-Install [mistral.rs](https://github.com/EricLBuehler/mistral.rs) ([full guide](https://docs.mistralrs.dev/guides/install/)):
+Install [mistral.rs](https://github.com/EricLBuehler/mistral.rs) ([full guide](https://docs.mistralrs.dev/quickstart/)):
+
+Review the recommended settings, then choose **Install**. Use **Customize** to change the version or acceleration.
 
 **Linux/macOS:**
-```
-curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.sh | sh
+```bash
+curl -fsSL https://mistralrs.dev/install.sh | sh
+. "$HOME/.mistralrs/env"
 ```
 
 **Windows (PowerShell):**
-```
-irm https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/install.ps1 | iex
+```powershell
+irm https://mistralrs.dev/install.ps1 | iex
 ```
 
 ## Examples
@@ -566,8 +570,8 @@ fn convert_to_model_selected(
                 imatrix: quantization.imatrix.clone(),
                 calibration_file: quantization.calibration_file.clone(),
                 max_edge: multimodal.max_edge,
-                max_seq_len: device.max_seq_len,
-                max_batch_size: device.max_batch_size,
+                max_seq_len: mistralrs_core::AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
+                max_batch_size: mistralrs_core::AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
                 max_num_images: multimodal.max_num_images,
                 max_image_length: multimodal.max_image_length,
                 hf_cache_path: device.hf_cache.clone(),
@@ -612,8 +616,8 @@ fn convert_to_model_selected(
                 from_uqff: None,
                 imatrix: quantization.imatrix.clone(),
                 calibration_file: quantization.calibration_file.clone(),
-                max_seq_len: device.max_seq_len,
-                max_batch_size: device.max_batch_size,
+                max_seq_len: mistralrs_core::AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
+                max_batch_size: mistralrs_core::AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
                 hf_cache_path: device.hf_cache.clone(),
                 matformer_config_path: None,
                 matformer_slice_name: None,
@@ -667,8 +671,8 @@ fn convert_to_model_selected(
                 max_edge: multimodal.max_edge,
                 calibration_file: quantization.calibration_file.clone(),
                 imatrix: quantization.imatrix.clone(),
-                max_seq_len: device.max_seq_len,
-                max_batch_size: device.max_batch_size,
+                max_seq_len: mistralrs_core::AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
+                max_batch_size: mistralrs_core::AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
                 max_num_images: multimodal.max_num_images.unwrap_or(1),
                 max_image_length: multimodal.max_image_length.unwrap_or(1024),
                 hf_cache_path: device.hf_cache.clone(),
@@ -743,8 +747,8 @@ fn convert_gguf_source(
         imatrix: quantization.imatrix.clone(),
         calibration_file: quantization.calibration_file.clone(),
         max_edge: multimodal.and_then(|options| options.max_edge),
-        max_seq_len: device.max_seq_len,
-        max_batch_size: device.max_batch_size,
+        max_seq_len: mistralrs_core::AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN,
+        max_batch_size: mistralrs_core::AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE,
         max_num_images: multimodal.and_then(|options| options.max_num_images),
         max_image_length: multimodal.and_then(|options| options.max_image_length),
         hf_cache_path: device.hf_cache.clone(),

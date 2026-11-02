@@ -5,7 +5,7 @@ runner = Runner(
         model_id="mistralai/Mistral-7B-Instruct-v0.1",
         arch=Architecture.Mistral,
     ),
-    pa_gpu_mem=4096,
+    memory_goal="4GiB",
     pa_blk_size=32,
 )
 

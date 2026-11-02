@@ -5,6 +5,7 @@ mod protocol;
 mod session;
 mod shell;
 pub mod tools;
+mod workdir;
 
 use std::collections::HashMap;
 use std::fmt;
@@ -13,8 +14,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use mistralrs_mcp::{
-    CalledFunction, ToolCallbackKind, ToolCallbackWithTool, ToolCallbacksWithTools, ToolFile,
-    ToolOutput,
+    AgentToolSource, CalledFunction, ToolCallbackKind, ToolCallbackWithTool,
+    ToolCallbacksWithTools, ToolFile, ToolOutput,
 };
 use mistralrs_sandbox::{NetworkMode, Sandbox, SandboxPolicy};
 use protocol::{ExecuteFile, ExecuteOutputSpec};
@@ -520,6 +521,7 @@ impl CodeExecutionManager {
             ToolCallbackWithTool {
                 callback: ToolCallbackKind::Multimodal(execute_callback),
                 tool: execute_tool,
+                source: AgentToolSource::BuiltIn,
             },
         );
 
@@ -561,6 +563,7 @@ impl CodeExecutionManager {
             ToolCallbackWithTool {
                 callback: ToolCallbackKind::Text(reset_callback),
                 tool: reset_tool,
+                source: AgentToolSource::BuiltIn,
             },
         );
 
@@ -575,6 +578,7 @@ impl CodeExecutionManager {
             ToolCallbackWithTool {
                 callback: ToolCallbackKind::Text(read_file_stub),
                 tool: tools::build_read_file_tool(),
+                source: AgentToolSource::BuiltIn,
             },
         );
 
@@ -588,6 +592,7 @@ impl CodeExecutionManager {
             ToolCallbackWithTool {
                 callback: ToolCallbackKind::Text(list_files_stub),
                 tool: tools::build_list_files_tool(),
+                source: AgentToolSource::BuiltIn,
             },
         );
 

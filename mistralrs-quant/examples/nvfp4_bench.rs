@@ -10,6 +10,7 @@ const SAMPLES: usize = 5;
 const BLOCK_SIZE: usize = 16;
 const EXPERTS: usize = 8;
 const TOPK: usize = 4;
+const GLOBAL_SCALE_VARIANTS: usize = 4;
 const ACTIVATIONS: [f32; 4] = [6.0, 3.0, 1.5, 0.0];
 const DENSE_SHAPES: [(usize, usize, usize); 9] = [
     (1, 5120, 5120),
@@ -35,6 +36,10 @@ struct Options {
     dtype: DType,
     graph: bool,
     a4: bool,
+    experts: usize,
+    topk: usize,
+    shape: Option<(usize, usize, usize)>,
+    per_route: bool,
 }
 
 impl Options {
@@ -45,6 +50,10 @@ impl Options {
             dtype: DType::BF16,
             graph: false,
             a4: true,
+            experts: EXPERTS,
+            topk: TOPK,
+            shape: None,
+            per_route: false,
         };
         let mut args = env::args().skip(1);
         while let Some(arg) = args.next() {
@@ -67,11 +76,47 @@ impl Options {
                 "--f16" => options.dtype = DType::F16,
                 "--w4a16" => options.a4 = false,
                 "--graph" => options.graph = true,
+                "--experts" | "--topk" => {
+                    let value: usize = args
+                        .next()
+                        .ok_or_else(|| candle_core::Error::msg(format!("missing value for {arg}")))?
+                        .parse()
+                        .map_err(candle_core::Error::msg)?;
+                    if arg == "--experts" {
+                        options.experts = value;
+                    } else {
+                        options.topk = value;
+                    }
+                }
+                "--shape" => {
+                    let value = args
+                        .next()
+                        .ok_or_else(|| candle_core::Error::msg("missing M,N,K shape"))?;
+                    let dims = value
+                        .split(',')
+                        .map(str::parse::<usize>)
+                        .collect::<std::result::Result<Vec<_>, _>>()
+                        .map_err(candle_core::Error::msg)?;
+                    let [m, n, k] = dims.as_slice() else {
+                        candle_core::bail!("shape must be M,N,K")
+                    };
+                    options.shape = Some((*m, *n, *k));
+                }
+                "--per-route" => options.per_route = true,
                 _ => candle_core::bail!("unknown option {arg}"),
             }
         }
         if options.iterations == 0 {
             candle_core::bail!("iterations must be positive");
+        }
+        if options.experts == 0 || options.topk == 0 || options.topk > options.experts {
+            candle_core::bail!("experts and topk must be positive with topk <= experts");
+        }
+        if options
+            .shape
+            .is_some_and(|(m, n, k)| m == 0 || n == 0 || k == 0 || k % BLOCK_SIZE != 0)
+        {
+            candle_core::bail!("shape dimensions must be positive and K divisible by {BLOCK_SIZE}");
         }
         Ok(options)
     }
@@ -168,8 +213,8 @@ fn run_case(
     per_route: bool,
 ) -> Result<()> {
     let (tokens, n, k) = shape;
-    let experts = if routed { EXPERTS } else { 1 };
-    let topk = if routed { TOPK } else { 1 };
+    let experts = if routed { options.experts } else { 1 };
+    let topk = if routed { options.topk } else { 1 };
     let input_rows = if per_route { tokens * topk } else { tokens };
     let input = (0..input_rows)
         .flat_map(|row| std::iter::repeat_n(ACTIVATIONS[row % ACTIVATIONS.len()], k))
@@ -184,7 +229,9 @@ fn run_case(
     let scales = Tensor::full(F8E4M3::from_f32(1.0), (experts, n, k / BLOCK_SIZE), device)?;
     let globals = Tensor::from_vec(
         (0..experts)
-            .flat_map(|expert| std::iter::repeat_n((expert + 1) as f32 / k as f32, n))
+            .flat_map(|expert| {
+                std::iter::repeat_n((expert % GLOBAL_SCALE_VARIANTS + 1) as f32 / k as f32, n)
+            })
             .collect::<Vec<_>>(),
         (experts, n),
         device,
@@ -220,7 +267,8 @@ fn run_case(
     let values = output.flatten_all()?.to_vec1::<f32>()?;
     for (route, row) in values.chunks_exact(n).enumerate() {
         let input_row = if per_route { route } else { route / topk };
-        let expected = ACTIVATIONS[input_row % ACTIVATIONS.len()] * (ids[route] + 1) as f32;
+        let expected = ACTIVATIONS[input_row % ACTIVATIONS.len()]
+            * (ids[route] as usize % GLOBAL_SCALE_VARIANTS + 1) as f32;
         if row.iter().any(|&value| value != expected) {
             candle_core::bail!("benchmark output mismatch at route {route}, expected {expected}");
         }
@@ -231,6 +279,7 @@ fn run_case(
             "tokens": tokens, "n": n, "k": k, "experts": experts, "topk": topk,
             "per_route": per_route, "a4": options.a4, "dtype": format!("{:?}", options.dtype),
             "graph": options.graph, "iterations": options.iterations, "samples": SAMPLES,
+            "weight_cache": "warm",
             "gpu_ms_median": gpu_ms, "host_ms_median": host_ms,
         })
     );
@@ -240,6 +289,9 @@ fn run_case(
 fn main() -> Result<()> {
     let options = Options::parse()?;
     let device = Device::new_cuda(0)?;
+    if let Some(shape) = options.shape {
+        return run_case(&device, &options, shape, true, options.per_route);
+    }
     if options.suite != "moe" {
         for shape in DENSE_SHAPES {
             if options.suite != "decode" || shape.0 <= 4 {

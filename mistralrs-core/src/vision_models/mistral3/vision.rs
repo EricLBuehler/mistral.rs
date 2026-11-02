@@ -136,7 +136,10 @@ impl Attention {
         let attn_weights = (query_states.matmul(&key_states.t()?)? * self.scale)?;
 
         let attn_weights = match attention_mask {
-            AttentionMask::None | AttentionMask::CausalFlash => attn_weights,
+            AttentionMask::None
+            | AttentionMask::CausalFlash
+            | AttentionMask::Bidirectional
+            | AttentionMask::ChunkedCausal { .. } => attn_weights,
             AttentionMask::Custom(mask) => attn_weights.broadcast_add(mask)?,
         };
 

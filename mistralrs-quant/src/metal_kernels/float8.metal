@@ -7,29 +7,12 @@ using namespace metal;
 // ————————————————————————————————————————————————————————————————
 
 inline float fp8_e4m3_to_float(uchar v) {
-  const uint sign = (v >> 7) & 0x1;
-  const uint exp_bits = (v >> 3) & 0xF;
-  const uint man_bits = v & 0x7;
-
-  // handle zero / subnormals
-  if (exp_bits == 0) {
-    if (man_bits == 0) {
-      return sign ? -0.0f : 0.0f;
-    }
-    // subnormal: mantissa / 2^(bias + mantissa_bits)
-    float m = float(man_bits) / float(1 << 3);
-    float val = ldexp(m, 1 - 7 - 3);
-    return sign ? -val : val;
-  }
-  // handle NaN: E4M3 has no infinity, only NaN when exp=15 and mantissa=7
-  if (exp_bits == 0xF && man_bits == 0x7) {
+  if ((v & 0x7F) == 0x7F) {
     return NAN;
   }
-  // normalised (including exp_bits == 0xF with mantissa 0-6)
-  float mant = 1.0f + float(man_bits) / float(1 << 3);
-  int expn = int(exp_bits) - 7;
-  float val = ldexp(mant, expn);
-  return sign ? -val : val;
+  // FP16's bias is eight larger; scaling after conversion also preserves FP8 subnormals.
+  const ushort bits = (ushort(v & 0x80) << 8) | (ushort(v & 0x7F) << 7);
+  return float(as_type<half>(bits)) * 256.f;
 }
 
 inline uchar float_to_fp8_e4m3(float f) {

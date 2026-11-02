@@ -1,7 +1,7 @@
 //! Quantize command argument structs for UQFF generation
 
 use clap::{Args, Subcommand, ValueEnum};
-use mistralrs_core::{AutoDeviceMapParams, IsqOrganization, ModelDType, NormalLoaderType};
+use mistralrs_core::{IsqOrganization, ModelDType, NormalLoaderType};
 use std::path::PathBuf;
 
 use super::{FormatOptions, ModelFormat};
@@ -91,14 +91,14 @@ pub struct QuantizeModelSourceOptions {
     #[arg(short = 't', long)]
     pub tokenizer: Option<PathBuf>,
 
-    /// Model data type
+    /// Weight data type: `auto`, `bf16`, `f16`, or `f32`. `auto` picks the best one for the device.
     #[arg(long, default_value = "auto", value_parser = parse_dtype)]
     pub dtype: ModelDType,
 
     #[command(flatten)]
     pub format: QuantizeFormatOptions,
 
-    /// Select an input GGUF artifact by bit width or quant name
+    /// Which GGUF file to read from a GGUF repo, by bit width or quant name such as `q4k`
     #[arg(long, conflicts_with = "quantized_file")]
     pub quant: Option<String>,
 }
@@ -113,7 +113,7 @@ pub struct QuantizePlainModelSourceOptions {
     #[arg(short = 't', long)]
     pub tokenizer: Option<PathBuf>,
 
-    /// Model data type
+    /// Weight data type: `auto`, `bf16`, `f16`, or `f32`. `auto` picks the best one for the device.
     #[arg(long, default_value = "auto", value_parser = parse_dtype)]
     pub dtype: ModelDType,
 }
@@ -128,7 +128,7 @@ pub struct QuantizeFormatOptions {
     #[arg(short = 'f', long)]
     pub quantized_file: Option<String>,
 
-    /// GGUF projector override; auto-selected when unambiguous (semicolon-separated for multiple)
+    /// GGUF vision or audio projector file(s), separated by semicolons. Auto-selected when there is only one.
     #[arg(long)]
     pub mmproj: Option<String>,
 
@@ -204,20 +204,22 @@ impl From<QuantizeModelFormat> for ModelFormat {
 /// Quantization options for UQFF generation (ISQ-related only, no from_uqff)
 #[derive(Args, Clone)]
 pub struct QuantizeQuantizationOptions {
-    /// Output UQFF quantization type(s). Multiple values can be comma-separated or specified
-    /// via repeated --isq flags (e.g., "--isq q4k,q8_0" or "--isq q4k --isq q8_0").
+    /// Quantization type(s) to write, such as `q4k` or `4`. Comma-separate or repeat the flag for
+    /// several, e.g. `--isq q4k,q8_0`.
     #[arg(long = "isq", required = true, value_delimiter = ',')]
     pub in_situ_quant: Vec<String>,
 
-    /// ISQ organization strategy: default or moqe
+    /// Which layers to quantize: `default` for all supported layers, or `moqe` for only the experts
+    /// of a mixture-of-experts model, leaving the rest unquantized
     #[arg(long)]
     pub isq_organization: Option<IsqOrganization>,
 
-    /// imatrix file for enhanced quantization
+    /// Importance matrix (imatrix) file, which tells the quantizer which weights matter most and
+    /// improves quality at low bit widths
     #[arg(long)]
     pub imatrix: Option<PathBuf>,
 
-    /// Calibration file for imatrix generation
+    /// Text file to compute an importance matrix from, instead of passing `--imatrix`
     #[arg(long, conflicts_with = "imatrix")]
     pub calibration_file: Option<PathBuf>,
 }
@@ -229,25 +231,17 @@ pub struct QuantizeDeviceOptions {
     #[arg(long)]
     pub cpu: bool,
 
-    /// Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20")
+    /// Layers per device as `ORD:NUM;...`, e.g. `0:10;1:20` puts 10 layers on GPU 0 and 20 on GPU 1
     #[arg(short = 'n', long, value_delimiter = ';')]
     pub device_layers: Option<Vec<String>>,
 
-    /// Topology YAML file for device mapping
+    /// YAML file setting the device and quantization for each layer range
     #[arg(long)]
     pub topology: Option<PathBuf>,
 
     /// Custom Hugging Face cache directory
     #[arg(long)]
     pub hf_cache: Option<PathBuf>,
-
-    /// Max sequence length for automatic device mapping
-    #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
-    pub max_seq_len: usize,
-
-    /// Max batch size for automatic device mapping
-    #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
-    pub max_batch_size: usize,
 }
 
 /// Output options for UQFF generation
@@ -282,7 +276,7 @@ pub struct QuantizeMultimodalOptions {
     #[arg(long)]
     pub max_num_images: Option<usize>,
 
-    /// Maximum image dimension for device mapping
+    /// Largest image side, in pixels, to reserve memory for when placing layers on devices
     #[arg(long)]
     pub max_image_length: Option<usize>,
 }
@@ -299,31 +293,33 @@ pub struct QuantizeDefaultOptions {
     #[arg(short = 't', long)]
     pub tokenizer: Option<PathBuf>,
 
-    /// Model data type
+    /// Weight data type: `auto`, `bf16`, `f16`, or `f32`. `auto` picks the best one for the device.
     #[arg(long, default_value = "auto", value_parser = parse_dtype)]
     pub dtype: ModelDType,
 
     #[command(flatten)]
     pub format: QuantizeFormatOptions,
 
-    /// Select an input GGUF artifact by bit width or quant name
+    /// Which GGUF file to read from a GGUF repo, by bit width or quant name such as `q4k`
     #[arg(long, conflicts_with = "quantized_file")]
     pub quant: Option<String>,
 
-    /// Output UQFF quantization type(s). Multiple values can be comma-separated or specified
-    /// via repeated --isq flags (e.g., "--isq q4k,q8_0" or "--isq q4k --isq q8_0").
+    /// Quantization type(s) to write, such as `q4k` or `4`. Comma-separate or repeat the flag for
+    /// several, e.g. `--isq q4k,q8_0`.
     #[arg(long = "isq", value_delimiter = ',')]
     pub in_situ_quant: Vec<String>,
 
-    /// ISQ organization strategy: default or moqe
+    /// Which layers to quantize: `default` for all supported layers, or `moqe` for only the experts
+    /// of a mixture-of-experts model, leaving the rest unquantized
     #[arg(long)]
     pub isq_organization: Option<IsqOrganization>,
 
-    /// imatrix file for enhanced quantization
+    /// Importance matrix (imatrix) file, which tells the quantizer which weights matter most and
+    /// improves quality at low bit widths
     #[arg(long)]
     pub imatrix: Option<PathBuf>,
 
-    /// Calibration file for imatrix generation
+    /// Text file to compute an importance matrix from, instead of passing `--imatrix`
     #[arg(long, conflicts_with = "imatrix")]
     pub calibration_file: Option<PathBuf>,
 
@@ -331,25 +327,17 @@ pub struct QuantizeDefaultOptions {
     #[arg(long)]
     pub cpu: bool,
 
-    /// Device layer mapping (format: ORD:NUM;... e.g., "0:10;1:20")
+    /// Layers per device as `ORD:NUM;...`, e.g. `0:10;1:20` puts 10 layers on GPU 0 and 20 on GPU 1
     #[arg(short = 'n', long, value_delimiter = ';')]
     pub device_layers: Option<Vec<String>>,
 
-    /// Topology YAML file for device mapping
+    /// YAML file setting the device and quantization for each layer range
     #[arg(long)]
     pub topology: Option<PathBuf>,
 
     /// Custom Hugging Face cache directory
     #[arg(long)]
     pub hf_cache: Option<PathBuf>,
-
-    /// Max sequence length for automatic device mapping
-    #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_SEQ_LEN)]
-    pub max_seq_len: usize,
-
-    /// Max batch size for automatic device mapping
-    #[arg(long, default_value_t = AutoDeviceMapParams::DEFAULT_MAX_BATCH_SIZE)]
-    pub max_batch_size: usize,
 
     /// Output path: a `.uqff` file path (single ISQ) or a directory (auto-names files per ISQ type).
     #[arg(short = 'o', long = "output")]
@@ -375,7 +363,7 @@ pub struct QuantizeDefaultOptions {
     #[arg(long)]
     pub max_num_images: Option<usize>,
 
-    /// Maximum image dimension for device mapping
+    /// Largest image side, in pixels, to reserve memory for when placing layers on devices
     #[arg(long)]
     pub max_image_length: Option<usize>,
 }
@@ -410,8 +398,6 @@ impl QuantizeDefaultOptions {
                 device_layers: self.device_layers,
                 topology: self.topology,
                 hf_cache: self.hf_cache,
-                max_seq_len: self.max_seq_len,
-                max_batch_size: self.max_batch_size,
             },
             output: QuantizeOutputOptions {
                 output_path,

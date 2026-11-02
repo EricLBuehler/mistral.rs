@@ -760,6 +760,7 @@ constant bool use_partitioning [[function_constant(10)]];
 constant bool use_alibi [[function_constant(20)]];
 constant bool use_fp8_scales [[function_constant(30)]];
 constant bool use_sinks [[function_constant(40)]];
+constant bool paged_cache_hnd [[function_constant(50)]];
 
 template <typename T, typename CACHE_T, int HEAD_SIZE, int BLOCK_SIZE,
           int NUM_THREADS, int NUM_SIMD_LANES, int PARTITION_SIZE = 0>
@@ -795,6 +796,7 @@ template <typename T, typename CACHE_T, int HEAD_SIZE, int BLOCK_SIZE,
     const constant int &kv_head_stride [[buffer(17)]],
     const device float *sinks
     [[buffer(18), function_constant(use_sinks)]], // [num_heads]
+    const constant int &sliding_window [[buffer(19)]],
     threadgroup char *shared_mem [[threadgroup(0)]],
     uint3 threadgroup_position_in_grid [[threadgroup_position_in_grid]],
     uint3 threadgroups_per_grid [[threadgroups_per_grid]],
@@ -807,8 +809,23 @@ template <typename T, typename CACHE_T, int HEAD_SIZE, int BLOCK_SIZE,
   const int thread_idx = thread_position_in_threadgroup.x;
   constexpr bool USE_PARTITIONING = PARTITION_SIZE > 0;
   const uint32_t context_len = context_lens[seq_idx];
+  const int first_token = sliding_window > 0 ? max(0, int(context_len) - sliding_window) : 0;
   if (USE_PARTITIONING && partition_idx * PARTITION_SIZE >= context_len) {
     // No work to do. Terminate the thread block.
+    return;
+  }
+
+  if (USE_PARTITIONING && (partition_idx + 1) * PARTITION_SIZE <= first_token) {
+    const int head = threadgroup_position_in_grid.x;
+    const int heads = threadgroups_per_grid.x;
+    const int index = (seq_idx * heads + head) * max_num_partitions + partition_idx;
+    if (thread_idx == 0) {
+      exp_sums[index] = 0.f;
+      max_logits[index] = -FLT_MAX;
+    }
+    for (int d = thread_idx; d < HEAD_SIZE; d += NUM_THREADS) {
+      out[index * HEAD_SIZE + d] = T(0);
+    }
     return;
   }
 
@@ -917,20 +934,23 @@ template <typename T, typename CACHE_T, int HEAD_SIZE, int BLOCK_SIZE,
       for (int j = 0; j < NUM_VECS_PER_THREAD; j++) {
         const device CACHE_T *k_ptr =
             k_cache + physical_block_number * kv_block_stride +
-            kv_head_idx * kv_head_stride + physical_block_offset * x;
+            kv_head_idx * kv_head_stride;
         const int vec_idx = thread_group_offset + j * THREAD_GROUP_SIZE;
         const int offset1 = (vec_idx * VEC_SIZE) / x;
         const int offset2 = (vec_idx * VEC_SIZE) % x;
+        const int key_offset = paged_cache_hnd
+            ? physical_block_offset * HEAD_SIZE + vec_idx * VEC_SIZE
+            : physical_block_offset * x + offset1 * BLOCK_SIZE * x + offset2;
 
         if constexpr (is_uchar<CACHE_T>()) {
           // FP8 support
           Quant_vec k_vec_quant = *reinterpret_cast<const device Quant_vec *>(
-              k_ptr + offset1 * BLOCK_SIZE * x + offset2);
+              k_ptr + key_offset);
           k_vecs[j] = fp8_convert<K_vec, Quant_vec>(k_vec_quant, *k_scale);
         } else {
           // Non-FP8 default
           k_vecs[j] = *reinterpret_cast<const device K_vec *>(
-              k_ptr + offset1 * BLOCK_SIZE * x + offset2);
+              k_ptr + key_offset);
         }
       }
 
@@ -946,12 +966,12 @@ template <typename T, typename CACHE_T, int HEAD_SIZE, int BLOCK_SIZE,
 
       // Add the ALiBi bias if slopes are given.
       qk +=
-          (alibi_slope != 0) ? alibi_slope * (token_idx - context_len + 1) : 0;
+          (alibi_slope != 0) ? alibi_slope * (token_idx - int(context_len) + 1) : 0;
 
       if (thread_group_offset == 0) {
         // Store the partial reductions to shared memory.
         // NOTE: It is required to zero out the masked logits.
-        const bool mask = token_idx >= context_len;
+        const bool mask = token_idx >= context_len || token_idx < first_token;
         logits[token_idx - start_token_idx] = mask ? 0.f : qk;
         // Update the max value.
         qk_max = mask ? qk_max : max(qk_max, qk);
@@ -989,7 +1009,7 @@ template <typename T, typename CACHE_T, int HEAD_SIZE, int BLOCK_SIZE,
   // Get the sum of the exp values.
   float exp_sum = 0.f;
   for (int i = thread_idx; i < num_tokens; i += NUM_THREADS) {
-    float val = exp(logits[i] - qk_max);
+    float val = i + start_token_idx < first_token ? 0.f : exp(logits[i] - qk_max);
     logits[i] = val;
     exp_sum += val;
   }
@@ -1070,20 +1090,36 @@ template <typename T, typename CACHE_T, int HEAD_SIZE, int BLOCK_SIZE,
 
         if constexpr (is_uchar<CACHE_T>()) {
           // FP8 support
-          V_quant_vec v_quant_vec =
-              *reinterpret_cast<const device V_quant_vec *>(v_ptr + offset);
+          V_quant_vec v_quant_vec;
+          if (paged_cache_hnd) {
+            thread CACHE_T *values = reinterpret_cast<thread CACHE_T *>(&v_quant_vec);
+#pragma unroll
+            for (int j = 0; j < V_VEC_SIZE; ++j) {
+              values[j] = v_ptr[(physical_block_offset + j) * HEAD_SIZE + row_idx];
+            }
+          } else {
+            v_quant_vec = *reinterpret_cast<const device V_quant_vec *>(v_ptr + offset);
+          }
           v_vec = fp8_convert<V_vec, V_quant_vec>(v_quant_vec, *v_scale);
         } else {
           // Non-FP8 default
-          v_vec = *reinterpret_cast<const device V_vec *>(v_ptr + offset);
+          if (paged_cache_hnd) {
+            thread T *values = reinterpret_cast<thread T *>(&v_vec);
+#pragma unroll
+            for (int j = 0; j < V_VEC_SIZE; ++j) {
+              values[j] = v_ptr[(physical_block_offset + j) * HEAD_SIZE + row_idx];
+            }
+          } else {
+            v_vec = *reinterpret_cast<const device V_vec *>(v_ptr + offset);
+          }
         }
 
-        if (block_idx == num_context_blocks - 1) {
+        if (block_idx == num_context_blocks - 1 || block_idx * BLOCK_SIZE < first_token) {
           thread T *v_vec_ptr = reinterpret_cast<thread T *>(&v_vec);
 #pragma unroll
           for (int j = 0; j < V_VEC_SIZE; j++) {
             v_vec_ptr[j] =
-                token_idx + j < context_len ? v_vec_ptr[j] : zero_value;
+                token_idx + j < context_len && token_idx + j >= first_token ? v_vec_ptr[j] : zero_value;
           }
         }
         accs[i] += dot(logits_vec, v_vec);
@@ -1312,6 +1348,7 @@ template <typename T, int HEAD_SIZE, int NUM_THREADS, int NUM_SIMD_LANES,
       const constant int &kv_block_stride [[buffer(16)]],                      \
       const constant int &kv_head_stride [[buffer(17)]],                       \
       const device float *sinks [[buffer(18), function_constant(use_sinks)]],  \
+      const constant int &sliding_window [[buffer(19)]],                      \
       threadgroup char *shared_mem [[threadgroup(0)]],                         \
       uint3 threadgroup_position_in_grid [[threadgroup_position_in_grid]],     \
       uint3 threadgroups_per_grid [[threadgroups_per_grid]],                   \
@@ -1411,7 +1448,8 @@ template <typename T, int HEAD_SIZE, int NUM_THREADS, int NUM_SIMD_LANES,
 // TODO: tune num_threads = 256
 // NOTE: partition_size = 512
 #define instantiate_paged_attention_v2_reduce(type, num_simd_lanes)            \
-  instantiate_paged_attention_v2_reduce_heads(type, 256, num_simd_lanes, 512);
+  instantiate_paged_attention_v2_reduce_heads(type, 256, num_simd_lanes, 512); \
+  instantiate_paged_attention_v2_reduce_heads(type, 256, num_simd_lanes, 128);
 
 instantiate_paged_attention_v1(float, float, 32);
 instantiate_paged_attention_v1(bfloat16_t, bfloat16_t, 32);

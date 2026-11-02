@@ -28,7 +28,7 @@ mistralrs-quant = { workspace = true }
 candle-core = { workspace = true }
 
 clap = { workspace = true }
-clap_complete = "4.5"
+clap_complete = "4.6.11"
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -53,7 +53,7 @@ image = { workspace = true }
 comfy-table = "7"
 dirs = { workspace = true }
 walkdir = { workspace = true }
-crossterm = "0.28"
+crossterm = "0.29"
 fuzzy-matcher = "0.3"
 
 [features]

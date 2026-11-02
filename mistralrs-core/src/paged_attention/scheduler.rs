@@ -35,6 +35,15 @@ use super::CacheConfig;
 /// Bucket key: (sequence length bucket, cached prefix, raw request, media, token offset)
 type BucketKey = (usize, usize, Option<usize>, u8, usize);
 
+fn reusable_prefix_len(seq: &Sequence, num_tokens: usize) -> usize {
+    // Speech placeholder tokens omit generated codebooks, so only the prompt is reusable.
+    if seq.audio_output().is_some() {
+        num_tokens.min(seq.prompt_tokens())
+    } else {
+        num_tokens
+    }
+}
+
 const RAGGED_PROMPT_BUCKET_TOKENS: usize = 256;
 #[derive(Clone, Copy)]
 enum BatchKind {
@@ -70,7 +79,7 @@ pub struct PagedAttentionSchedulerOutput {
 }
 
 impl PagedAttentionSchedulerOutput {
-    #[cfg(any(test, feature = "cuda"))]
+    #[cfg(any(test, feature = "cuda", feature = "metal"))]
     pub(crate) fn retain_prompt_prefix(&mut self, retained: usize) -> Option<usize> {
         assert!(retained > 0);
         assert_eq!(self.num_cached_tokens.len(), self.scheduled.len());
@@ -1014,8 +1023,11 @@ impl PagedAttentionScheduler {
 
             let clamped = {
                 let seq_guard = get_mut_arcmutex!(seq);
+                let reusable = reusable_prefix_len(&seq_guard, computed.num_computed_tokens)
+                    / self.block_size
+                    * self.block_size;
                 let clamped = clamp_prefix_cache_len_for_mm_features(
-                    computed.num_computed_tokens,
+                    reusable,
                     self.block_size,
                     seq_guard.mm_features(),
                 );
@@ -1294,7 +1306,8 @@ impl PagedAttentionScheduler {
             for seq in running {
                 let seq_guard = get_mut_arcmutex!(seq);
                 let seq_id = *seq_guard.id();
-                let num_computed_tokens = seq_guard.num_computed_tokens();
+                let num_computed_tokens =
+                    reusable_prefix_len(&seq_guard, seq_guard.num_computed_tokens());
                 self.ensure_block_hashes(
                     seq_id,
                     seq_guard.get_toks(),
@@ -1350,7 +1363,8 @@ impl PagedAttentionScheduler {
             let seq_guard = get_mut_arcmutex!(seq);
             if seq_guard.is_finished_paged_attn() {
                 let id = *seq_guard.id();
-                let num_computed_tokens = seq_guard.num_computed_tokens();
+                let num_computed_tokens =
+                    reusable_prefix_len(&seq_guard, seq_guard.num_computed_tokens());
                 if self.prefix_caching_enabled
                     && !matches!(seq_guard.getstate(), SequenceState::Error)
                     && num_computed_tokens >= self.block_size
@@ -1417,7 +1431,7 @@ impl PagedAttentionScheduler {
         seq_guard.clear_staged_speculative_tokens();
         let seq_id = *seq_guard.id();
         self.preempted_sequence_ids.push(seq_id);
-        let num_computed_tokens = seq_guard.num_computed_tokens();
+        let num_computed_tokens = reusable_prefix_len(&seq_guard, seq_guard.num_computed_tokens());
 
         self.ensure_block_hashes(
             seq_id,
@@ -1934,6 +1948,105 @@ mod tests {
         assert_eq!(
             scheduler.seq_block_hashes[&seq_id],
             compute_block_hashes(&tokens, scheduler.block_size, &[], &[])
+        );
+    }
+
+    fn test_speech_sequence(
+        id: usize,
+        prompt_len: usize,
+        generated_len: usize,
+    ) -> Arc<Mutex<Sequence>> {
+        let seq = test_sequence(id, prompt_len);
+        {
+            let mut seq = get_mut_arcmutex!(seq);
+            seq.set_audio_output(Some(crate::ChatAudioRequest {
+                mode: crate::ChatAudioMode::TextAudio,
+                format: crate::ChatAudioFormat::Wav,
+            }));
+            for _ in 0..generated_len {
+                seq.add_token(
+                    Logprobs {
+                        token: 2,
+                        logprob: 0.0,
+                        bytes: None,
+                        top_logprobs: None,
+                    },
+                    Vec::new(),
+                    None,
+                );
+            }
+            let len = seq.len();
+            seq.set_num_computed_tokens(len);
+        }
+        seq
+    }
+
+    #[test]
+    fn speech_decode_blocks_are_not_cached_on_preempt_finish_or_eager_cache() {
+        for path in ["preempt", "finish", "eager"] {
+            let mut scheduler = test_scheduler();
+            let seq_id = 10;
+            let seq =
+                test_speech_sequence(seq_id, scheduler.block_size + 3, scheduler.block_size * 2);
+            let tokens = get_mut_arcmutex!(seq).get_toks().to_vec();
+            let hashes = compute_block_hashes(&tokens, scheduler.block_size, &[], &[]);
+            assert!(get_mut_arcmutex!(scheduler.kv_cache_manager)
+                .allocate_slots(seq_id, tokens.len(), &[])
+                .is_some());
+            match path {
+                "preempt" => scheduler._preempt(seq),
+                "finish" => {
+                    get_mut_arcmutex!(seq).set_state(SequenceState::Done(StopReason::Eos));
+                    scheduler.running.push_back(seq);
+                    scheduler.free_finished_sequence_groups();
+                }
+                "eager" => {
+                    scheduler.running.push_back(seq);
+                    let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+                    scheduler.schedule(&logger, None);
+                }
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                get_mut_arcmutex!(scheduler.kv_cache_manager)
+                    .get_computed_blocks(&hashes, tokens.len() + 1)
+                    .num_computed_tokens,
+                scheduler.block_size,
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn speech_replay_prefix_hits_stop_at_the_prompt_boundary() {
+        let mut scheduler = test_scheduler();
+        let seq = test_speech_sequence(0, scheduler.block_size + 3, scheduler.block_size * 2);
+        let tokens = get_mut_arcmutex!(seq).get_toks().to_vec();
+        let hashes = compute_block_hashes(&tokens, scheduler.block_size, &[], &[]);
+        {
+            let mut kv_mgr = get_mut_arcmutex!(scheduler.kv_cache_manager);
+            assert!(kv_mgr.allocate_slots(99, tokens.len(), &[]).is_some());
+            kv_mgr.cache_blocks(99, &hashes, tokens.len());
+            kv_mgr.free(99);
+            assert!(
+                kv_mgr
+                    .get_computed_blocks(&hashes, tokens.len())
+                    .num_computed_tokens
+                    > scheduler.block_size
+            );
+        }
+        {
+            let mut seq = get_mut_arcmutex!(seq);
+            seq.set_state(SequenceState::Waiting);
+            seq.set_num_computed_tokens(0);
+        }
+        scheduler.waiting.push_back(seq);
+        let logger = IntervalLogger::new(std::time::Duration::from_secs(3600), None);
+        let output = scheduler.schedule(&logger, None);
+        assert_eq!(output.num_cached_tokens, [scheduler.block_size]);
+        assert_eq!(
+            get_mut_arcmutex!(output.scheduled[0]).prefix_cache_len(),
+            scheduler.block_size
         );
     }
 

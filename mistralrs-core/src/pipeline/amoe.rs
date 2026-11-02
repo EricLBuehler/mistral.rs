@@ -1,8 +1,9 @@
+use super::loaders::ModelDownload;
 use std::{
     any::Any,
     fs::{self, File},
     io::Read,
-    path::Path,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 
@@ -49,7 +50,58 @@ pub struct AnyMoePipeline {
     config: AnyMoeConfig,
 }
 
+pub(crate) fn download_expert_files(
+    source_model_id: &str,
+    model_id: &str,
+    token: &TokenSource,
+    revision: &str,
+    silent: bool,
+) -> anyhow::Result<Vec<PathBuf>> {
+    let revision = super::hf::model_source_revision(source_model_id, revision, model_id);
+    let api = super::hf::build_api(token, !silent)?.repo(model_id, revision);
+    let model_path = Path::new(model_id);
+    super::hf::list_repo_files(&api, model_path, true, revision)?
+        .into_iter()
+        .filter(|filename| filename.ends_with(".safetensors"))
+        .map(|filename| super::hf::get_file(&api, model_path, &filename, revision))
+        .collect()
+}
+
 impl Loader for AnyMoeLoader {
+    fn download_model_from_hf(
+        &self,
+        revision: Option<String>,
+        token_source: TokenSource,
+        silent: bool,
+    ) -> anyhow::Result<ModelDownload> {
+        let mut download =
+            self.target
+                .download_model_from_hf(revision.clone(), token_source.clone(), silent)?;
+        let revision = revision.as_deref().unwrap_or("main");
+        let source_model_id = self.target.get_id();
+        for model_id in &self.model_ids {
+            download.additional_files.extend(download_expert_files(
+                &source_model_id,
+                model_id,
+                &token_source,
+                revision,
+                silent,
+            )?);
+        }
+        if !self.config.training {
+            if let Some(model_id) = self.config.gate_model_id.as_ref() {
+                download.additional_files.extend(download_expert_files(
+                    &source_model_id,
+                    model_id,
+                    &token_source,
+                    revision,
+                    silent,
+                )?);
+            }
+        }
+        Ok(download)
+    }
+
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     fn load_model_from_hf(
         &self,
@@ -275,6 +327,10 @@ impl MetadataMixin for AnyMoePipeline {
 
 #[async_trait::async_trait]
 impl Pipeline for AnyMoePipeline {
+    fn release_generation_sequences(&self, sequence_ids: &[usize]) {
+        get_mut_arcmutex!(self.target).release_generation_sequences(sequence_ids);
+    }
+
     fn requires_uniform_prompt_batch(&self) -> bool {
         get_mut_arcmutex!(self.target).requires_uniform_prompt_batch()
     }

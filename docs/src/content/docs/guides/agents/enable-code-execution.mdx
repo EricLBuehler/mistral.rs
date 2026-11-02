@@ -1,21 +1,19 @@
 ---
 title: Enable code execution
-description: Turn on the Python executor, declare output files, and understand the subprocess lifecycle.
+description: Let the model run Python, keep state across calls, and return the files it writes.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-`--enable-code-execution` registers a Python execution tool with the model. The tool runs Python in a subprocess; on Linux and macOS it is wrapped in an [OS-level sandbox](/reference/sandbox/) by default (`--sandbox auto`).
+Code execution gives the model a Python interpreter. The model writes code, mistral.rs runs it, and the model reads the output before it answers. Use it for math, data analysis, charts, and file conversion.
+
+Start the server with `--enable-code-execution`, or with `--agent` to also turn on web search and shell:
 
 ```bash
 mistralrs serve --enable-code-execution -m <model>
 ```
 
-The `code-execution` Cargo feature is in the default feature set; binaries built with `--no-default-features` need it added explicitly. The code execution and file helper tools use [strict tool calling](/guides/agents/tool-calling-basics/#strict-tool-calling) by default.
-
-Server startup makes the tool available. HTTP requests opt into it per request with the OpenAI-compatible `code_interpreter` tool; without that tool, the request stays a plain chat request even when the server has code execution enabled. The web UI sends the tool when its Code Execution toggle is on.
-
-Native SDK users enable code execution on the runner or model builder, then opt in on each request with the SDK request helper: the Python SDK via `Runner(..., code_execution_config=CodeExecutionConfig())` plus `ChatCompletionRequest.enable_code_execution=True`, and the Rust SDK via `.with_code_execution(...)` (shown in the [output-files tabs](#declaring-output-files) below).
+Starting the server this way makes the tool available, but each request decides whether to use it. Add the OpenAI-style `code_interpreter` tool to a request to let the model run code; requests without it stay plain chat. The web UI adds the tool when its Code Execution toggle is on.
 
 ```json
 {
@@ -28,29 +26,27 @@ Native SDK users enable code execution on the runner or model builder, then opt 
 }
 ```
 
-Only `{"type":"auto"}` containers are supported today. Container ids, `file_ids`, `memory_limit`, and OpenAI's container lifecycle endpoints are not implemented.
+Always use `"container": {"type": "auto"}`. A request with a container ID, `file_ids`, or `memory_limit` is rejected. To give Python your own files, attach them as [input files](/guides/agents/file-inputs/) and they'll appear in its working directory.
+
+In the Python and Rust SDKs, enable code execution when you build the model and again on each request, as the [examples below](#declaring-output-files) show.
 
 ## Configuration
 
-| Flag | Default | Purpose |
+| Flag | Default | What it does |
 |---|---|---|
-| `--code-exec-python <path>` | `python` on Windows, `python3` elsewhere | Python interpreter. |
-| `--code-exec-timeout <secs>` | 60 | Per-call timeout in seconds. |
-| `--code-exec-workdir <path>` | per-session temp dir | Working directory for Python and produced files. |
-| `--agent-permission <mode>` | `auto` | `auto`, `ask`, or `deny`; see [permissions and approvals](/guides/agents/permissions-and-approvals/). |
-| `--sandbox <mode>` | `auto` | OS-level sandbox: `auto`, `on`, `off`; see the [sandbox reference](/reference/sandbox/). |
+| `--code-exec-python <path>` | `python3` (`python` on Windows) | The interpreter to run. Point it at a virtualenv's Python so the model can import your packages. |
+| `--code-exec-timeout <secs>` | 60 | How long one call may run before it's interrupted. |
+| `--code-exec-workdir <path>` | a new temp directory per session | Where Python runs and where output files are collected. See [working directory](#working-directory). |
+| `--agent-permission <mode>` | `auto` | `auto` runs code right away, `ask` waits for your app or user to approve, `deny` refuses. See [permissions and approvals](/guides/agents/permissions-and-approvals/). |
+| `--sandbox <mode>` | `auto` | `auto` sandboxes Python on Linux and macOS, `on` also fails at startup if part of the sandbox is unavailable, `off` gives Python full access to the host. See [isolation](#isolation). |
 
-Permissioning is separate from sandboxing: the permission mode decides whether a model-requested action may run at all, the sandbox decides what Python can access after it starts.
-
-When sandbox CPU limits are enforced and the configured code execution timeout exceeds `max_cpu_secs`, mistral.rs raises `max_cpu_secs` to match and logs a warning.
+The sandbox caps CPU time at 600 seconds per session by default. If you set a longer `--code-exec-timeout`, the cap is raised to match.
 
 ## Declaring output files
 
-Apps can declare required output files on the request. Then:
+Python returns every file it creates or changes in its working directory, so a chart saved as `plot.png` comes back without extra setup. Hidden files and dependency or cache folders (`node_modules`, `__pycache__`, `venv`, and similar) are skipped.
 
-- The model is told which files are expected.
-- Matching files written into the working directory come back as first-class `File` objects on the response, or as `file_produced` Server-Sent Events (SSE) when streaming.
-- Missing declared files come back as error placeholders, so the app always knows what came back.
+To make sure you get a particular file, list it in the request's `files`. The model is told to produce it, and if it doesn't, you get an error entry for that name instead of nothing.
 
 <Tabs>
 <TabItem label="HTTP">
@@ -66,7 +62,7 @@ Apps can declare required output files on the request. Then:
 }
 ```
 
-The response gains a top-level `files` array with id, name, mime type, size, and inline body for small files.
+The response gets a top-level `files` array. Each entry has an ID, name, MIME type, size, and, for files up to 8 MiB, the contents inline.
 
 </TabItem>
 <TabItem label="Python">
@@ -114,50 +110,41 @@ for f in resp.files.as_deref().unwrap_or_default() {
 </TabItem>
 </Tabs>
 
-The code execution tool also accepts an `outputs` parameter so the model can list files it wrote that were not declared on the request. Files declared via `request.files` are surfaced regardless.
+For downloading large files and where files appear in each API, see [files](/guides/agents/agentic-runtime/#files).
 
-The full files contract is in [agentic runtime for apps](/guides/agents/agentic-runtime/#files): size policy, file-access behavior, and fetch-by-id endpoints. The wire schema lives in the [HTTP API reference](/reference/http-api/).
+## What the model sees
+
+After each call, the model gets back:
+
+- Everything the code printed to stdout and stderr.
+- The exception, if one was raised.
+- The value of the last expression, as in a notebook cell.
+- Plots. Matplotlib figures from `plt.show()`, `savefig()`, or an animation are captured as images, so a vision model can look at the chart it made.
+- The output files and how long the call took.
+
+Code can't prompt for input: `input()` and reads from stdin raise an error. When a call runs past the timeout, mistral.rs interrupts it as Ctrl-C would and waits 3 seconds. If Python recovers, the session keeps its state; if not, the interpreter is killed and the next call starts a fresh one. On Windows the interpreter is killed right away.
+
+Your app sees the same results in [tool progress events](/guides/agents/agentic-runtime/#stream-a-run-over-http).
 
 ## Sessions and state
 
-Each session gets its own Python subprocess on first call. Subsequent calls reuse it; variables, imports, and open file handles persist within the session. Without a session id, each request gets a fresh interpreter. See [sessions](/guides/agents/persist-sessions/); the subprocess itself is never part of exported session state.
+Requests that share a `session_id` share one Python process, so variables, imports, and open files carry over from call to call. A new session gets a fresh interpreter. The model can also reset the interpreter itself with a built-in reset tool.
 
-Subprocesses idle for more than 1 hour are reaped (the reaper runs every 5 minutes). A reaped session's subprocess is killed; the next call against the session id starts a fresh one.
-
-## How the executor works
-
-The engine talks to the subprocess over a one-request-one-response stdio protocol. Requests are either `Execute` (code plus the declared `outputs` list) or `Reset`. `Reset` tears down user state while keeping the subprocess alive.
-
-A response carries:
-
-- `stdout` and `stderr`.
-- Any exception raised.
-- The last expression's repr.
-- Captured images and video frames as base64 (matplotlib figures are captured as PNG).
-- The requested output files.
-- The execution time.
-
-During execution:
-
-- stdout and stderr are redirected to per-request buffers and returned in the tool result.
-- Matplotlib is forced to a non-interactive backend, and `plt.show()`, `savefig()`, and animation writes are hooked to capture figures as image and video-frame data on the response.
-- stdin is replaced with a stub: `input()` and any `sys.stdin` read raise a `RuntimeError` instead of blocking.
-
-On timeout (`--code-exec-timeout`, default 60 seconds), the engine sends `SIGINT` and waits briefly for a graceful response. A responding subprocess keeps the session alive; a non-responding one is killed and replaced. Non-Unix platforms skip the graceful path and go straight to kill.
-
-When streaming, progress is emitted as `agentic_tool_call_progress` SSE events; complete events carry the same fields, named `stdout`, `stderr`, `exception`, `images_base64`, `video_frames_base64`, `working_directory`, and `execution_time_ms`.
+An interpreter that's been idle for an hour is shut down. The next call in that session starts a fresh one, without the old variables. [Exported sessions](/guides/agents/persist-sessions/) keep the conversation and tool history but not the interpreter.
 
 ## Working directory
 
-Without `--code-exec-workdir`, each session gets a unique `mistralrs-code-<random>` temp directory, deleted when the session ends. With `--code-exec-workdir /path`, all sessions share that directory: outputs are inspectable across sessions, but anything written there persists and is visible to subsequent sessions.
+Without `--code-exec-workdir`, each session gets its own new temp directory named `mistralrs-code-<random>`. mistral.rs deletes it when the session has been idle for an hour, or when your app drops the session. If the server is killed, for example with Ctrl+C, directories of live sessions are left behind.
 
-`--code-exec-workdir` chooses where Python starts and where output files are collected; it does not turn the sandbox on or off. When the sandbox is enabled, the directory is included as the writable working directory.
+With `--code-exec-workdir /path` (or `.` for the current directory), every session runs in that same directory. Files persist across sessions, and each session can see and overwrite what earlier ones wrote.
+
+The working directory doesn't turn the sandbox on or off. When the sandbox is on, it's the one place Python can write.
 
 ## Isolation
 
-**The CLI sandboxes by default; the SDKs do not.** The CLI and TOML entry points default to `--sandbox auto`, which enables the OS-level sandbox on Linux and macOS. The programmatic `CodeExecutionConfig` (Python and Rust SDKs) ships with no sandbox by default. It engages only once you attach a `SandboxPolicy`, so embedding apps must choose one explicitly. Layers, limits, threat model, and tuning are documented in the [sandbox reference](/reference/sandbox/).
+**The CLI sandboxes Python by default; the SDKs don't.** On Linux and macOS, `--sandbox auto` restricts what Python can read and write, and on Linux it also caps memory, CPU time, and process count. In the Python and Rust SDKs, `CodeExecutionConfig` runs Python with no sandbox unless you attach a `SandboxPolicy`. Profiles, network modes, and limits are in the [sandbox reference](/reference/sandbox/).
 
-For deployments where code execution must leave the mistralrs host entirely, use [`--tool-dispatch-url`](/guides/agents/tool-calling-basics/#dispatch-url).
+To run code somewhere other than the mistral.rs host, leave code execution off, define your own tool, and send its calls to a service you control with [`--tool-dispatch-url`](/guides/agents/tool-calling-basics/#dispatch-url).
 
 ## See also
 

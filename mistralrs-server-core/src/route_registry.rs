@@ -33,6 +33,8 @@ pub const ANTHROPIC_COUNT_TOKENS_ROUTE: RouteInfo =
 pub const COMPLETIONS_ROUTE: RouteInfo =
     RouteInfo::new("/v1/completions", "POST", RouteKind::OpenAi);
 pub const EMBEDDINGS_ROUTE: RouteInfo = RouteInfo::new("/v1/embeddings", "POST", RouteKind::OpenAi);
+pub const SYSTEMONE_ROUTE: RouteInfo =
+    RouteInfo::new("/v1/systemone", "POST", RouteKind::MistralRs);
 pub const MODELS_ROUTE: RouteInfo = RouteInfo::new("/v1/models", "GET", RouteKind::OpenAi);
 pub const LOAD_LORA_ADAPTER_ROUTE: RouteInfo =
     RouteInfo::new("/v1/load_lora_adapter", "POST", RouteKind::MistralRs);
@@ -85,6 +87,10 @@ pub const CONTAINER_FILE_CONTENT_ROUTE: RouteInfo = RouteInfo::new(
 );
 pub const SPEECH_GENERATION_ROUTE: RouteInfo =
     RouteInfo::new("/v1/audio/speech", "POST", RouteKind::OpenAi);
+pub const AUDIO_TRANSCRIPTIONS_ROUTE: RouteInfo =
+    RouteInfo::new("/v1/audio/transcriptions", "POST", RouteKind::OpenAi);
+pub const AUDIO_TRANSLATIONS_ROUTE: RouteInfo =
+    RouteInfo::new("/v1/audio/translations", "POST", RouteKind::OpenAi);
 pub const AGENT_APPROVAL_ROUTE: RouteInfo = RouteInfo::new(
     "/v1/agent/approvals/{approval_id}",
     "POST",
@@ -134,8 +140,11 @@ pub const MISTRALRS_API_ROUTES: &[RouteInfo] = &[
     ANTHROPIC_COUNT_TOKENS_ROUTE,
     COMPLETIONS_ROUTE,
     EMBEDDINGS_ROUTE,
+    SYSTEMONE_ROUTE,
     IMAGE_GENERATION_ROUTE,
     SPEECH_GENERATION_ROUTE,
+    AUDIO_TRANSCRIPTIONS_ROUTE,
+    AUDIO_TRANSLATIONS_ROUTE,
     FILES_ROUTE,
     FILE_ROUTE,
     FILE_CONTENT_ROUTE,

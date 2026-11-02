@@ -40,6 +40,18 @@ fn tools_for_chat_template(
     }
 }
 
+fn chat_enable_thinking(
+    audio_output: bool,
+    enable_thinking: Option<bool>,
+    reasoning_effort: Option<crate::ReasoningEffort>,
+) -> Option<bool> {
+    if audio_output && reasoning_effort.is_none() {
+        enable_thinking.or(Some(false))
+    } else {
+        enable_thinking
+    }
+}
+
 fn choice_seed(seed: Option<u64>, response_index: usize) -> Option<u64> {
     seed.map(|seed| {
         let stream = u64::try_from(response_index).expect("choice index must fit into u64");
@@ -52,6 +64,14 @@ fn first_unknown_token_id(tokenizer: &tokenizers::Tokenizer, token_ids: &[u32]) 
         .iter()
         .copied()
         .find(|token_id| tokenizer.id_to_token(*token_id).is_none())
+}
+
+fn needs_sequence_preallocated_cache(category: &ModelCategory, paged_cache: bool) -> bool {
+    !paged_cache
+        && matches!(
+            category,
+            ModelCategory::Text | ModelCategory::Multimodal { .. }
+        )
 }
 
 impl Engine {
@@ -153,10 +173,70 @@ impl Engine {
             },
             None => None,
         };
+        let speech_request = matches!(request.messages, RequestMessage::SpeechGeneration { .. });
+        let supports_chat_audio = if speech_request || request.audio_output.is_some() {
+            let pipeline = get_mut_arcmutex!(self.pipeline);
+            matches!(
+                pipeline.category(),
+                ModelCategory::Text | ModelCategory::Multimodal { .. }
+            ) && pipeline
+                .get_metadata()
+                .modalities
+                .output
+                .contains(&crate::SupportedModality::Audio)
+        } else {
+            false
+        };
+        if speech_request && supports_chat_audio {
+            if request.is_streaming || request.sampling_params.n_choices != 1 {
+                let _ = request.response.send(Response::ValidationError(
+                    "Speech generation requires one non-streaming choice; use chat audio for streaming".into(),
+                )).await;
+                return;
+            }
+            super::speech::adapt_request(&mut request);
+        }
         let is_chat = matches!(
             request.messages,
             RequestMessage::Chat { .. } | RequestMessage::MultimodalChat { .. }
         );
+        if let Some(audio) = request.audio_output {
+            let error = if !is_chat || !supports_chat_audio {
+                Some("The requested model does not support chat audio output")
+            } else if request.return_logprobs || request.return_raw_logits {
+                Some("Audio output does not support logprobs or raw logits")
+            } else if !matches!(request.constraint, crate::Constraint::None)
+                || request
+                    .tools
+                    .as_ref()
+                    .is_some_and(|tools| !tools.is_empty())
+                || request
+                    .logits_processors
+                    .as_ref()
+                    .is_some_and(|processors| !processors.is_empty())
+            {
+                Some("Audio output does not support tools, constrained decoding, or custom logits processors")
+            } else if request.is_streaming && audio.format != crate::ChatAudioFormat::Pcm16 {
+                Some("Streaming audio requires PCM16 output")
+            } else {
+                None
+            };
+            if let Some(error) = error {
+                request
+                    .response
+                    .send(Response::ValidationError(error.into()))
+                    .await
+                    .unwrap_or_else(|_| warn!("Receiver disconnected"));
+                return;
+            }
+        }
+        if let Err(error) = crate::audio_output::prepare_response(&mut request) {
+            let _ = request
+                .response
+                .send(Response::ValidationError(error.into()))
+                .await;
+            return;
+        }
         let echo_prompt = matches!(
             request.messages,
             RequestMessage::Completion {
@@ -191,7 +271,8 @@ impl Engine {
             | RequestMessage::ImageGeneration { .. }
             | RequestMessage::SpeechGeneration { .. }
             | RequestMessage::Embedding { .. }
-            | RequestMessage::EmbeddingTokens { .. } => None,
+            | RequestMessage::EmbeddingTokens { .. }
+            | RequestMessage::Decision(_) => None,
         };
         let truncate_sequence = request.truncate_sequence;
         if is_chat
@@ -224,6 +305,7 @@ impl Engine {
             ) => (),
             (ModelCategory::Diffusion, RequestMessage::ImageGeneration { .. }) => (),
             (ModelCategory::Speech, RequestMessage::SpeechGeneration { .. }) => (),
+            (ModelCategory::Decision { .. }, RequestMessage::Decision(_)) => (),
             (
                 ModelCategory::Embedding,
                 RequestMessage::Embedding { .. } | RequestMessage::EmbeddingTokens { .. },
@@ -286,7 +368,8 @@ impl Engine {
         };
 
         let seq_step_type = match &request.messages {
-            RequestMessage::ImageGeneration { .. }
+            RequestMessage::Decision(_)
+            | RequestMessage::ImageGeneration { .. }
             | RequestMessage::SpeechGeneration { .. }
             | RequestMessage::Embedding { .. }
             | RequestMessage::EmbeddingTokens { .. } => SeqStepType::OneShot,
@@ -306,7 +389,15 @@ impl Engine {
         };
         let mut added_seq = false;
 
+        let decision = if let RequestMessage::Decision(input) = &request.messages {
+            handle_request_error!(input.validate(), request.response);
+            Some(Arc::new(input.clone()))
+        } else {
+            None
+        };
+
         let (mut prompt_tokens, prompt_text) = match request.messages {
+            RequestMessage::Decision(_) => (vec![u32::MAX], String::new()),
             RequestMessage::Chat {
                 messages,
                 enable_thinking,
@@ -320,6 +411,11 @@ impl Engine {
                 enable_thinking,
                 reasoning_effort,
             } => {
+                let enable_thinking = chat_enable_thinking(
+                    request.audio_output.is_some(),
+                    enable_thinking,
+                    reasoning_effort,
+                );
                 let pipeline = &*get_mut_arcmutex!(self.pipeline);
                 let tools = tools_for_chat_template(
                     request.tools.as_deref(),
@@ -630,9 +726,9 @@ impl Engine {
                 .eos_tok
                 .clone();
 
-            let seq_preallocated_cache = if matches!(
-                get_mut_arcmutex!(self.pipeline).category(),
-                ModelCategory::Text | ModelCategory::Multimodal { .. }
+            let seq_preallocated_cache = if needs_sequence_preallocated_cache(
+                &get_mut_arcmutex!(self.pipeline).category(),
+                block_size.is_some(),
             ) {
                 let (metadata, device, needs_preallocated_cache) = {
                     let pipeline = get_mut_arcmutex!(self.pipeline);
@@ -791,6 +887,8 @@ impl Engine {
                 eos_toks,
                 choice_seed(request.seed, response_index),
             );
+            seq.set_audio_output(request.audio_output);
+            seq.decision = decision.clone();
             if let Some(adapter_lease) = &adapter_lease {
                 seq.bind_adapter(adapter_lease.clone());
             }
@@ -839,11 +937,8 @@ impl Engine {
                 }
             }
 
-            // Run the inputs processor to normalize multimodal prompts before prefix-cache lookup.
-            // Rely on the sequence's attached modalities rather than just the top-level request
-            // fields so historical images/audios in a reconstructed multi-turn conversation
-            // still get their prompt rewrite and mm-feature setup before cache matching.
-            if seq.has_images() || seq.has_audios() || seq.has_videos() {
+            // Media expansion and speech output markers must precede prefix matching and scheduler chunk boundaries.
+            if seq.needs_prompt_planning() {
                 let pipeline = get_mut_arcmutex!(self.pipeline);
                 let result = pipeline
                     .get_processor()
@@ -873,7 +968,7 @@ impl Engine {
                 return;
             }
 
-            let prefill_cache = if seq.return_raw_logits {
+            let prefill_cache = if seq.return_raw_logits || seq.decision.is_some() {
                 None
             } else {
                 handle_seq_error!(
@@ -1133,6 +1228,27 @@ mod tests {
     use ahash::AHashMap;
     use indexmap::IndexMap;
     use tokenizers::{models::wordlevel::WordLevel, Tokenizer};
+
+    #[test]
+    fn paged_requests_do_not_allocate_a_second_sequence_kv_cache() {
+        assert!(!needs_sequence_preallocated_cache(
+            &ModelCategory::Text,
+            true
+        ));
+        assert!(needs_sequence_preallocated_cache(
+            &ModelCategory::Text,
+            false
+        ));
+        for category in [
+            ModelCategory::Audio,
+            ModelCategory::Speech,
+            ModelCategory::Diffusion,
+            ModelCategory::Embedding,
+        ] {
+            assert!(!needs_sequence_preallocated_cache(&category, false));
+            assert!(!needs_sequence_preallocated_cache(&category, true));
+        }
+    }
 
     #[test]
     fn choice_seeds_are_stable_and_distinct() {

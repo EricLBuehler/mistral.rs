@@ -198,10 +198,6 @@ impl LayerWeights {
 
         let (k, v, attn_mask) =
             Cache::update_kv_cache_sliding_window(kv_cache, k, v, mask, Some(self.sliding_window))?;
-        let attn_mask = match attn_mask {
-            Some(t) => AttentionMask::Custom(t),
-            None => AttentionMask::None,
-        };
 
         let y = Sdpa.run_attention(
             &q,

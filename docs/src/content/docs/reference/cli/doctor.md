@@ -16,4 +16,3 @@ mistralrs doctor [OPTIONS]
 | Option | Default | Description |
 |---|---|---|
 | `--json` | `false` | Output JSON instead of human-readable text |
-

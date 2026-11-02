@@ -6,16 +6,18 @@ sidebar:
 ---
 ## `RequestedFile`
 
-A required output file declared on a request. The runtime tells the
-model about declared files; if produced by a tool, they surface in
-`ChatCompletionResponse.files`. If missing, an error placeholder is
-surfaced instead.
+An output file the model must produce. Pass a list of them as `ChatCompletionRequest.files`.
 
-| Field | Type |
-| --- | --- |
-| `name` | `str` |
-| `format` | `str \| None` |
-| `description` | `str \| None` |
+The model is told to write each file with a tool, so the request also needs a tool that can, such
+as code execution or the shell. Otherwise the request fails. Written files appear in
+`ChatCompletionResponse.files`. A file the model never wrote appears there as an error placeholder,
+for which `File.is_error()` returns True.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `name` | `str` | File name the model must write. |
+| `format` | `str \| None` | File format, such as `csv`. Inferred from the name's extension if unset. |
+| `description` | `str \| None` | What the file should contain, shown to the model. |
 
 ### `RequestedFile.__init__`
 
@@ -30,19 +32,21 @@ __init__(
 
 ## `InputFile`
 
-User-provided input file attached to a chat request.
+A file you give the model. Pass a list of them as `ChatCompletionRequest.input_files`.
 
-Text-like files are previewed in prompt context and can be paginated by
-the built-in file tools when the agentic runtime is active. Binary files
-are stored and mounted into shell/code workdirs, but are metadata-only in
-prompt context.
+- The model sees each file's name, ID, MIME type, and size.
+- For a text file, it also sees the first 4,096 characters, and up to 32,768 across all files. It can
+  read the rest with the built-in `mistralrs_read_file` tool.
+- When the Python or shell tool runs, every file, text or binary, is copied into its working directory.
 
-| Field | Type |
-| --- | --- |
-| `id` | `str` |
-| `name` | `str` |
-| `mime_type` | `str \| None` |
-| `bytes` | `int` |
+See [file inputs](/guides/agents/file-inputs/).
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `id` | `str` | ID assigned when the object is created. |
+| `name` | `str` | File name shown to the model. |
+| `mime_type` | `str \| None` | MIME type. Inferred from the name's extension if unset. |
+| `bytes` | `int` | Size in bytes. |
 
 ### `InputFile.__init__`
 
@@ -75,33 +79,33 @@ from_path(
 
 Where a file was produced.
 
-| Field | Type |
-| --- | --- |
-| `tool` | `str` |
-| `round` | `int` |
-| `turn` | `int` |
+| Field | Type | Description |
+| --- | --- | --- |
+| `tool` | `str` | Name of the tool that wrote it. |
+| `round` | `int` | Tool-call round within the turn, counting from 0. |
+| `turn` | `int` | Turn within the session, counting from 0. Always 0 without a session. |
 
 
 ## `File`
 
-First-class output from an agentic run.
+A file that the model wrote during an agent run, such as a CSV from the Python tool. Read them from
+`ChatCompletionResponse.files`.
 
-Files exist independently of the transcript. The body is inline for
-small files (`text` for text content, `data_base64` for binary). Large
-files have a server-side url and `text`/`data_base64` will be `None` -
-use `is_truncated()` to detect.
+A file's body is in `text` for text files and in `data_base64` for binary ones. Bodies over 8 MiB
+are left out of the response: `text` and `data_base64` are `None` and `is_truncated()` returns True.
+Fetch the full file with `Runner.find_file(file.id)`.
 
-| Field | Type |
-| --- | --- |
-| `id` | `str` |
-| `name` | `str` |
-| `format` | `str \| None` |
-| `mime_type` | `str \| None` |
-| `bytes` | `int` |
-| `source` | `FileSource` |
-| `text` | `str \| None` |
-| `data_base64` | `str \| None` |
-| `preview` | `str \| None` |
+| Field | Type | Description |
+| --- | --- | --- |
+| `id` | `str` | File ID, for `Runner.find_file`. |
+| `name` | `str` | File name. |
+| `format` | `str \| None` | File format, such as `csv`, from the name's extension. |
+| `mime_type` | `str \| None` | MIME type. |
+| `bytes` | `int` | Size in bytes. |
+| `source` | `FileSource` | Which tool wrote the file, and when. |
+| `text` | `str \| None` | Body of a text file. `None` for binary files and truncated bodies. |
+| `data_base64` | `str \| None` | Base64 body of a binary file. `None` for text files and truncated bodies. |
+| `preview` | `str \| None` | Short preview of a text file, or the full text when there is no preview. |
 
 ### `File.is_text`
 
@@ -109,11 +113,15 @@ use `is_truncated()` to detect.
 is_text() -> bool
 ```
 
+True for a text file.
+
 ### `File.is_binary`
 
 ```text
 is_binary() -> bool
 ```
+
+True for a binary file.
 
 ### `File.is_image`
 
@@ -121,11 +129,15 @@ is_binary() -> bool
 is_image() -> bool
 ```
 
+True if the MIME type starts with `image/`.
+
 ### `File.is_video`
 
 ```text
 is_video() -> bool
 ```
+
+True if the MIME type starts with `video/`.
 
 ### `File.is_error`
 
@@ -133,17 +145,23 @@ is_video() -> bool
 is_error() -> bool
 ```
 
+True for the placeholder of a requested file the model never wrote.
+
 ### `File.is_truncated`
 
 ```text
 is_truncated() -> bool
 ```
 
+True if the body was left out of the response because it was too large.
+
 ### `File.save`
 
 ```text
 save(path: str) -> None
 ```
+
+Write the body to `path`. Raises `OSError` for a truncated body or an error placeholder.
 
 ---
 

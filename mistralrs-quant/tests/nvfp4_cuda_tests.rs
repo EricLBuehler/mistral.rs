@@ -343,7 +343,7 @@ fn nvfp4_medium_decode_warmup_supports_offset_views_and_graph_replay() -> Result
             activation_global_scale: Some(&activation_global),
         };
         register_nvfp4_shape(args, dtype)?;
-        warmup_moe_kernels(&device)?;
+        warmup_moe_kernels(&device, true)?;
         let warmed_count = cutile::tile_kernel::jit_compile_count();
         let expected = fixture.reference_columns(true, ACTIVATION_GLOBAL, &columns);
         let _htod_cache_guard = device.as_cuda_device()?.enable_cuda_graph_htod_cache();
@@ -455,7 +455,7 @@ fn nvfp4_grouped_prefill_warmup_supports_graph_replay() -> Result<()> {
         activation_global_scale: Some(&activation_global),
     };
     register_nvfp4_shape(args, DType::BF16)?;
-    warmup_moe_kernels(&device)?;
+    warmup_moe_kernels(&device, true)?;
     let _htod_cache_guard = device.as_cuda_device()?.enable_cuda_graph_htod_cache();
     x.slice_set(&source, 0, 0)?;
     device.synchronize()?;
@@ -699,15 +699,13 @@ fn nvfp4_gather_matches_selected_experts() -> Result<()> {
 fn nvfp4_warmup_supports_cuda_graph_replay() -> Result<()> {
     let _gpu_guard = CUDA_TEST_LOCK.lock().unwrap();
     use candle_core::cuda::cudarc::driver::sys;
-    use mistralrs_quant::cutile::{
-        register_nvfp4_routing, register_nvfp4_shape, warmup_moe_kernels,
-    };
+    use mistralrs_quant::cutile::{register_moe_routing, register_nvfp4_shape, warmup_moe_kernels};
 
     let Some(device) = nvfp4_device()? else {
         return Ok(());
     };
     let stream = device.as_cuda_device()?.cuda_stream();
-    register_nvfp4_routing(&device, GRAPH_EXPERTS, GRAPH_TOPK)?;
+    register_moe_routing(&device, GRAPH_EXPERTS, GRAPH_TOPK)?;
     let fixture = Fixture::new(GRAPH_ROWS, GRAPH_N, GRAPH_K, DType::BF16);
     let source = Tensor::from_vec(fixture.x.clone(), (GRAPH_ROWS, GRAPH_K), &device)?
         .to_dtype(DType::BF16)?;
@@ -757,7 +755,7 @@ fn nvfp4_warmup_supports_cuda_graph_replay() -> Result<()> {
         };
         register_nvfp4_shape(dense, DType::BF16)?;
         register_nvfp4_shape(routed, DType::BF16)?;
-        warmup_moe_kernels(&device)?;
+        warmup_moe_kernels(&device, true)?;
         let _htod_cache_guard = device.as_cuda_device()?.enable_cuda_graph_htod_cache();
         for rows in [1, GRAPH_ROWS, GRAPH_ROWS * GRAPH_TOPK] {
             Tensor::zeros((rows, GRAPH_N.next_power_of_two()), DType::BF16, &device)?
@@ -934,7 +932,7 @@ fn nvfp4_merged_views_and_shared_activation_support_graph_replay() -> Result<()>
                 ShardedSafeTensors::wrap(tensors, dtype, device.clone()),
             )?
             .expect("compatible projections should merge");
-            warmup_moe_kernels(&device)?;
+            warmup_moe_kernels(&device, true)?;
             let _htod_cache_guard = device.as_cuda_device()?.enable_cuda_graph_htod_cache();
             x.slice_set(&source, 0, 0)?;
             device.synchronize()?;
@@ -954,7 +952,7 @@ fn nvfp4_merged_views_and_shared_activation_support_graph_replay() -> Result<()>
                 let packed = group.packed.forward(&x)?;
                 let decode = group.constituents[1].forward(&x.narrow(0, 0, 1)?)?;
                 let separate = if a4 {
-                    let (first, second, _) = mistralrs_quant::try_fused_quantized_qkv(
+                    let (first, second, _) = mistralrs_quant::try_fused_qkv(
                         &x,
                         &*group.constituents[0],
                         &*group.constituents[1],
@@ -1082,8 +1080,7 @@ fn nvfp4_prequantized_forward_materializes_strided_values_and_scales() -> Result
 #[test]
 fn nvfp4_shared_activation_rejects_diverging_live_calibration() -> Result<()> {
     use mistralrs_quant::{
-        try_forward_with_shared_quantized_activation, Nvfp4ActivationMode, Nvfp4Layer,
-        Nvfp4LayerParts, QuantMethod,
+        forward_group, GroupKind, Nvfp4ActivationMode, Nvfp4Layer, Nvfp4LayerParts, QuantMethod,
     };
     let _gpu_guard = CUDA_TEST_LOCK.lock().unwrap();
     let Some(device) = nvfp4_device()? else {
@@ -1114,30 +1111,24 @@ fn nvfp4_shared_activation_rejects_diverging_live_calibration() -> Result<()> {
         let first = make_layer(shared_scale.clone())?;
         let same = make_layer(shared_scale.clone())?;
         let independent = make_layer(independent_scale.clone())?;
-        assert!(
-            try_forward_with_shared_quantized_activation(&input, &[&first, &independent])?
-                .is_none()
-        );
+        assert!(forward_group(&input, &[&first, &independent], GroupKind::Dense)?.is_none());
         independent_scale.reshape(1)?.slice_set(
             &Tensor::new(&[ACTIVATION_GLOBAL * 2.0], &device)?,
             0,
             0,
         )?;
         assert_eq!(
-            first.activation_quantization_global_scale(),
-            independent.activation_quantization_global_scale()
+            first.activation_calibration().global_scale(),
+            independent.activation_calibration().global_scale()
         );
-        assert!(
-            try_forward_with_shared_quantized_activation(&input, &[&first, &independent])?
-                .is_none()
-        );
+        assert!(forward_group(&input, &[&first, &independent], GroupKind::Dense)?.is_none());
         for factor in [1.0f32, 2.0, 0.5, 1.0] {
             shared_scale.reshape(1)?.slice_set(
                 &Tensor::new(&[ACTIVATION_GLOBAL * factor], &device)?,
                 0,
                 0,
             )?;
-            let outputs = try_forward_with_shared_quantized_activation(&input, &[&first, &same])?
+            let outputs = forward_group(&input, &[&first, &same], GroupKind::Dense)?
                 .expect("one live calibration buffer must remain eligible");
             for (output, method) in outputs.iter().zip([&first, &same]) {
                 let expected = method

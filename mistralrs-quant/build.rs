@@ -3,6 +3,8 @@ const CUTLASS_COMMIT: &str = "7127592069c2fe01b041e174ba4345ef9b279671";
 #[cfg(feature = "cuda")]
 const NVFP4_CUTLASS_COMMIT: &str = "b46b16d003484063bca4ed365e44095c4c6ed633";
 #[cfg(feature = "cuda")]
+const NVFP4_CUTLASS_COMPUTE_CAP_ENV: &str = "MISTRALRS_NVFP4_CUTLASS_COMPUTE_CAP";
+#[cfg(feature = "cuda")]
 const DEEPGEMM_CUTLASS_COMMIT: &str = "f3fde58372d33e9a5650ba7b80fc48b3b49d40c8";
 #[cfg(feature = "cuda")]
 const CUTLASS_COMMIT_ENV: &str = "MISTRALRS_CUTLASS_COMMIT";
@@ -15,8 +17,7 @@ mod cuda_toolkit;
 
 #[cfg(feature = "cuda")]
 use cuda_toolkit::{
-    nvfp4_cutlass_supported_for_build, parse_cuda_version_from_nvcc,
-    SUPPORTED_CUDA_TOOLKIT_VERSIONS,
+    nvfp4_cutlass_arch_for_build, parse_cuda_version_from_nvcc, SUPPORTED_CUDA_TOOLKIT_VERSIONS,
 };
 
 #[cfg(feature = "cuda")]
@@ -117,11 +118,10 @@ fn main() -> Result<(), String> {
     println!("cargo::rustc-check-cfg=cfg(has_cutlass_fp8_sm90_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_deepgemm_fp8_sm90_provider)");
     println!("cargo::rustc-check-cfg=cfg(has_scalar_fp8_kernels)");
-    println!("cargo::rustc-check-cfg=cfg(has_vector_fp8_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_mxfp4_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_mxfp4_wmma_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_cutlass_moe_kernels)");
-    println!("cargo::rustc-check-cfg=cfg(has_nvfp4_cutlass_sm121_kernels)");
+    println!("cargo::rustc-check-cfg=cfg(has_nvfp4_cutlass_kernels)");
     println!("cargo::rustc-check-cfg=cfg(cuda_ge_13000)");
 
     #[cfg(feature = "cuda")]
@@ -188,7 +188,6 @@ fn main() -> Result<(), String> {
         if cc_over_80 || legacy_fp8 {
             println!("cargo:rustc-cfg=has_blockwise_fp8_kernels");
             println!("cargo:rustc-cfg=has_scalar_fp8_kernels");
-            println!("cargo:rustc-cfg=has_vector_fp8_kernels");
             // WMMA tensor core MXFP4 kernel (FP16/BF16 WMMA requires SM >= 80)
         }
         let cutlass_fp8_sm90 = compute_cap == 90 && cuda_major >= 12 && !target.contains("msvc");
@@ -291,7 +290,7 @@ fn main() -> Result<(), String> {
                 .build_lib(prepare_cuda_archive(out_dir.join("libmistralrsdeepgemm.a")))
                 .expect("Build mistral DeepGEMM provider failed!");
         }
-        if nvfp4_cutlass_supported_for_build(
+        if let Some(nvfp4_arch) = nvfp4_cutlass_arch_for_build(
             (cuda_major, cuda_minor),
             compute_cap,
             cfg!(feature = "cutile"),
@@ -304,8 +303,8 @@ fn main() -> Result<(), String> {
                 .out_dir(&nvfp4_build_dir)
                 .source_files(["kernels/nvfp4_cutlass/nvfp4_cutlass.cu"])
                 .watch(["kernels/nvfp4_cutlass"])
-                .compute_cap_arch("121a")
-                .with_compute_override_arch("nvfp4_cutlass.cu", "121a")
+                .compute_cap_arch(&nvfp4_arch)
+                .with_compute_override_arch("nvfp4_cutlass.cu", &nvfp4_arch)
                 .arg("-std=c++17")
                 .arg("-O3")
                 .arg("--expt-relaxed-constexpr")
@@ -323,7 +322,8 @@ fn main() -> Result<(), String> {
             nvfp4_builder
                 .build_lib(prepare_cuda_archive(out_dir.join("libmistralrsnvfp4.a")))
                 .expect("Build mistral NVFP4 provider failed!");
-            println!("cargo:rustc-cfg=has_nvfp4_cutlass_sm121_kernels");
+            println!("cargo:rustc-cfg=has_nvfp4_cutlass_kernels");
+            println!("cargo:rustc-env={NVFP4_CUTLASS_COMPUTE_CAP_ENV}={compute_cap}");
             println!("cargo:rustc-link-lib=mistralrsnvfp4");
         }
         println!("cargo:rustc-link-search={}", out_dir.display());

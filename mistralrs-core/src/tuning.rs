@@ -1,8 +1,8 @@
 use std::path::{Path, PathBuf};
 
+use crate::pipeline::hf::{resolve_hf_cache, HubRepo};
 use anyhow::{Context, Result};
 use candle_core::{DType, Device};
-use hf_hub::{api::sync::ApiRepo, Cache, Repo, RepoType};
 use serde::{Deserialize, Serialize};
 
 use crate::device_map::{DeviceLayerMapMetadata, DeviceMapMetadata};
@@ -242,18 +242,12 @@ fn load_config_artifacts(
         return Ok((config, sentence_transformers));
     }
 
-    let cache = hf_cache_path
-        .map(Cache::new)
-        .unwrap_or_else(Cache::from_env);
+    let cache = resolve_hf_cache(hf_cache_path);
     GLOBAL_HF_CACHE.get_or_init(|| cache.clone());
 
     let api = build_api_with_cache(token_source, false, Some(cache))?;
     let revision = hf_revision.unwrap_or_else(|| "main".to_string());
-    let api = api.repo(Repo::with_revision(
-        model_id.to_string(),
-        RepoType::Model,
-        revision,
-    ));
+    let api = api.repo(model_id.to_string(), revision);
 
     let config_path = api_get_file(&api, model_id, "config.json")?;
     let config = std::fs::read_to_string(&config_path).with_context(|| {
@@ -269,7 +263,7 @@ fn load_config_artifacts(
     Ok((config, sentence_transformers))
 }
 
-fn api_get_file(api: &ApiRepo, model_id: &str, file: &str) -> Result<PathBuf> {
+fn api_get_file(api: &HubRepo, model_id: &str, file: &str) -> Result<PathBuf> {
     let model_id = Path::new(model_id);
     if model_id.exists() {
         let path = model_id.join(file);
@@ -455,11 +449,17 @@ fn map_for_candidate(
 ) -> Result<(DeviceMapMetadata, usize)> {
     let pack_factor = isq.map(|i| i.pack_factor(dtype)).unwrap_or(1);
     let quantization = AutoDeviceMapQuantization::isq(isq, topology);
-    let layer_sizes = loader.layer_sizes_in_bytes(config, dtype, pack_factor, None)?;
+    let layer_sizes = loader.layer_sizes_in_bytes_with_quantization(
+        config,
+        dtype,
+        pack_factor,
+        Some(&quantization),
+        None,
+    )?;
     let non_mapped =
         loader.non_mapped_size_in_bytes(config, dtype, pack_factor, Some(&quantization), None)?;
     let total = layer_sizes.iter().sum::<usize>() + non_mapped;
-    let map = crate::pipeline::get_device_layers_for_loader(
+    let (map, total) = crate::pipeline::get_device_layers_for_loader(
         loader,
         config,
         loader.num_layers(config)?,

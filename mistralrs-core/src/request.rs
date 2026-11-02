@@ -40,6 +40,105 @@ pub enum ImageGenerationResponseFormat {
 
 pub type MessageContent = Either<String, Vec<IndexMap<String, Value>>>;
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub enum ChatAudioMode {
+    Audio,
+    TextAudio,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub enum ChatAudioFormat {
+    Wav,
+    Pcm16,
+    Mp3,
+    Flac,
+    Opus,
+    Aac,
+}
+
+impl ChatAudioFormat {
+    pub fn content_type(self) -> &'static str {
+        match self {
+            Self::Wav => "audio/wav",
+            Self::Pcm16 => "audio/pcm",
+            Self::Mp3 => "audio/mpeg",
+            Self::Flac => "audio/flac",
+            Self::Opus => "audio/ogg; codecs=opus",
+            Self::Aac => "audio/aac",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChatAudioRequest {
+    pub mode: ChatAudioMode,
+    pub format: ChatAudioFormat,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+pub struct ChatAudioConfig {
+    pub format: ChatAudioFormat,
+    pub voice: Option<String>,
+}
+
+impl ChatAudioRequest {
+    pub fn from_modalities(
+        modalities: Option<&[String]>,
+        audio: Option<&ChatAudioConfig>,
+        streaming: bool,
+    ) -> anyhow::Result<Option<Self>> {
+        let Some(modalities) = modalities else {
+            anyhow::ensure!(
+                audio.is_none(),
+                "audio requires modalities containing audio"
+            );
+            return Ok(None);
+        };
+        let mut text = false;
+        let mut speech = false;
+        for modality in modalities {
+            match modality.as_str() {
+                "text" if !text => text = true,
+                "audio" if !speech => speech = true,
+                _ => anyhow::bail!("modalities must contain unique text and/or audio entries"),
+            }
+        }
+        anyhow::ensure!(text || speech, "modalities must not be empty");
+        if !speech {
+            anyhow::ensure!(
+                audio.is_none(),
+                "audio requires modalities containing audio"
+            );
+            return Ok(None);
+        }
+        let audio = audio.ok_or_else(|| anyhow::anyhow!("Audio output requires audio.format"))?;
+        anyhow::ensure!(
+            audio
+                .voice
+                .as_deref()
+                .is_none_or(|voice| voice == "default"),
+            "This model uses its default voice; set audio.voice to default or omit it"
+        );
+        anyhow::ensure!(
+            !streaming || audio.format == ChatAudioFormat::Pcm16,
+            "Streaming audio requires audio.format=pcm16"
+        );
+        Ok(Some(Self {
+            mode: if text {
+                ChatAudioMode::TextAudio
+            } else {
+                ChatAudioMode::Audio
+            },
+            format: audio.format,
+        }))
+    }
+}
+
 /// Reasoning effort passed to chat templates. `none` is a parse-only alias for `off`.
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
 #[cfg_attr(feature = "pyo3_macros", pyo3::pyclass(eq, eq_int))]
@@ -188,6 +287,7 @@ pub fn resolve_reasoning_controls(
 #[derive(Clone, Debug, Serialize, Deserialize)]
 /// Message or messages for a [`Request`].
 pub enum RequestMessage {
+    Decision(crate::decision::DecisionRequest),
     Chat {
         messages: Vec<IndexMap<String, MessageContent>>,
         enable_thinking: Option<bool>,
@@ -413,6 +513,8 @@ impl WebSearchOptions {
 /// - `return_raw_logits`: Return raw logits.
 /// - `truncate_sequence`: Whether to truncate the prompt if it exceeds the model's maximum context length.
 pub struct NormalRequest {
+    #[serde(default)]
+    pub audio_output: Option<ChatAudioRequest>,
     pub messages: RequestMessage,
     pub sampling_params: SamplingParams,
     /// Initializes an independent sampling stream for every generated choice.
@@ -473,6 +575,23 @@ pub struct NormalRequest {
 }
 
 impl NormalRequest {
+    pub fn decision(
+        input: crate::decision::DecisionRequest,
+        response: Sender<Response>,
+        id: usize,
+        model_id: Option<String>,
+    ) -> Self {
+        let mut request = Self::new_simple(
+            RequestMessage::Decision(input),
+            SamplingParams::deterministic(),
+            response,
+            id,
+            None,
+            None,
+        );
+        request.model_id = model_id;
+        request
+    }
     pub(crate) fn response_is_closed(&self) -> bool {
         self.response.is_closed()
     }
@@ -503,6 +622,7 @@ impl NormalRequest {
     ) -> Self {
         Self {
             messages,
+            audio_output: None,
             sampling_params,
             seed: None,
             response,

@@ -27,6 +27,7 @@ template <> inline bfloat16_t to_cache<bfloat16_t, bfloat16_t>(bfloat16_t v) {
 template <> inline half to_cache<half, half>(half v) { return v; }
 
 constant bool use_fp8_scales [[function_constant(10)]];
+constant bool reshape_cache_hnd [[function_constant(50)]];
 
 template <typename KV_T, typename CACHE_T>
 [[kernel]] void reshape_and_cache(
@@ -73,11 +74,12 @@ template <typename KV_T, typename CACHE_T>
     const int x_idx = head_offset / x;
     const int x_offset = head_offset % x;
 
-    const int64_t tgt_key_idx =
+    const int64_t hnd_idx = ((block_idx * num_heads + head_idx) * block_size + block_offset) * head_size + head_offset;
+    const int64_t tgt_key_idx = reshape_cache_hnd ? hnd_idx :
         block_idx * num_heads * (head_size / x) * block_size * x +
         head_idx * (head_size / x) * block_size * x + x_idx * block_size * x +
         block_offset * x + x_offset;
-    const int64_t tgt_value_idx =
+    const int64_t tgt_value_idx = reshape_cache_hnd ? hnd_idx :
         block_idx * num_heads * head_size * block_size +
         head_idx * head_size * block_size + head_offset * block_size +
         block_offset;

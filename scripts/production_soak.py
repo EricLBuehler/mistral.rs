@@ -326,11 +326,11 @@ SERVER_COMMAND_SECRET_FLAGS = frozenset(
 )
 SERVE_CONFIGURATION_FLAGS = (
     "--paged-attn",
-    "--pa-context-len",
-    "--pa-memory-mb",
-    "--pa-memory-fraction",
+    "--gpu-memory-utilization",
+    "--kv-cache",
     "--pa-block-size",
     "--pa-cache-type",
+    "--max-model-len",
     "--max-seqs",
     "--prefix-cache-n",
     "--max-num-batched-tokens",
@@ -11334,20 +11334,7 @@ def comparable_server_provenance(provenance: dict[str, Any]) -> dict[str, Any]:
     serve_fields = (
         "subcommand",
         "model",
-        "paged_attn",
-        "pa_context_len",
-        "pa_memory_mb",
-        "pa_memory_fraction",
-        "pa_block_size",
-        "pa_cache_type",
-        "max_seqs",
-        "prefix_cache_n",
-        "max_num_batched_tokens",
-        "max_prefill_chunk_tokens",
-        "max_decode_steps_before_prefill",
-        "mtp_model",
-        "mtp_n_predict",
-        "mtp_draft_sampling",
+        *(flag.removeprefix("--").replace("-", "_") for flag in SERVE_CONFIGURATION_FLAGS),
     )
     return {
         "git_revision": build.get("git_revision"),

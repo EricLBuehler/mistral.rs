@@ -26,6 +26,7 @@ template <> inline bfloat16_t from_cache<uchar, bfloat16_t>(uchar v) {
 }
 
 constant bool use_fp8_scales [[function_constant(10)]];
+constant bool gather_cache_hnd [[function_constant(50)]];
 
 /// Gather K and V from paged KV cache into contiguous output tensors.
 ///
@@ -107,12 +108,13 @@ template <typename CACHE_T, typename OUT_T>
     // K: [block_id, head_idx, d/x, slot, d%x]
     const int x_idx = d / x;
     const int x_offset = d % x;
-    const long k_src_idx = (long)block_id * k_block_stride +
+    const long hnd_idx = ((long(block_id) * num_kv_heads + head_idx) * block_size + slot) * head_size + d;
+    const long k_src_idx = gather_cache_hnd ? hnd_idx : (long)block_id * k_block_stride +
                            head_idx * k_head_stride + x_idx * block_size * x +
                            slot * x + x_offset;
 
     // V: [block_id, head_idx, d, slot]
-    const long v_src_idx = (long)block_id * v_block_stride +
+    const long v_src_idx = gather_cache_hnd ? hnd_idx : (long)block_id * v_block_stride +
                            head_idx * v_head_stride + d * block_size + slot;
 
     if (use_fp8_scales) {

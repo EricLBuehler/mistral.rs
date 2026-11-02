@@ -318,9 +318,7 @@ __launch_bounds__(BR *WARP_SIZE) __global__ void flash_attn_sinks_varlen_kernel(
     const unsigned int *__restrict__ cu_seqlens_q, // [B+1]
     const unsigned int *__restrict__ cu_seqlens_k, // [B+1]
     const float scale, const int max_q_len, const int num_heads,
-    const int num_kv_heads,
-    const int window_size // 0 = no window (full)
-) {
+    const int num_kv_heads, const int window_size, const bool packed_q) {
   constexpr int D_PAD = ((HEAD_DIM + WARP_SIZE - 1) / WARP_SIZE) * WARP_SIZE;
   constexpr int EPT = D_PAD / WARP_SIZE;
   constexpr int BLOCK_SIZE = BR * WARP_SIZE;
@@ -345,6 +343,9 @@ __launch_bounds__(BR *WARP_SIZE) __global__ void flash_attn_sinks_varlen_kernel(
   const int my_kv_len =
       (int)(cu_seqlens_k[batch_idx + 1] - cu_seqlens_k[batch_idx]);
 
+  if (q_tile_idx * BR >= my_q_len)
+    return;
+
   const int q_row = q_tile_idx * BR + warp_id;
 
   // Out-of-bounds warps must NOT return early: they participate in cooperative
@@ -358,11 +359,11 @@ __launch_bounds__(BR *WARP_SIZE) __global__ void flash_attn_sinks_varlen_kernel(
   // only used inside the q_row_valid guard)
   const int kv_offset = my_kv_len - my_q_len;
 
-  // Q offset: padded [B, H, max_q_len, D]
-  // For out-of-bounds q_row this may index into padding but q_reg will be
-  // zero-masked below, so no correctness issue.
   const int q_offset =
-      ((batch_idx * num_heads + head_idx) * max_q_len + q_row) * HEAD_DIM;
+      packed_q
+          ? (((int)cu_seqlens_q[batch_idx] + q_row) * num_heads + head_idx) *
+                HEAD_DIM
+          : ((batch_idx * num_heads + head_idx) * max_q_len + q_row) * HEAD_DIM;
 
   // Load Q row into registers (pre-scaled); out-of-bounds rows get zeros
   float q_reg[EPT];
@@ -614,7 +615,7 @@ void flash_attn_sinks_varlen_launch(
     const void *Q, const void *K, const void *V, void *O, const float *sinks,
     const unsigned int *cu_seqlens_q, const unsigned int *cu_seqlens_k,
     float scale, int batch_size, int max_q_len, int num_heads, int num_kv_heads,
-    int head_dim, int window_size, cudaStream_t stream) {
+    int head_dim, int window_size, bool packed_q, cudaStream_t stream) {
   constexpr int BR = 8;
   const dim3 grid(num_heads, batch_size, (max_q_len + BR - 1) / BR);
   const dim3 block(WARP_SIZE * BR);
@@ -626,7 +627,7 @@ void flash_attn_sinks_varlen_launch(
           reinterpret_cast<const scalar_t *>(K),                               \
           reinterpret_cast<const scalar_t *>(V),                               \
           reinterpret_cast<scalar_t *>(O), sinks, cu_seqlens_q, cu_seqlens_k,  \
-          scale, max_q_len, num_heads, num_kv_heads, window_size);             \
+          scale, max_q_len, num_heads, num_kv_heads, window_size, packed_q);   \
   FA_CUDA_CHECK(cudaGetLastError())
 
   switch (head_dim) {
@@ -669,28 +670,31 @@ extern "C" void flash_attn_sinks_varlen_f16(
     const void *Q, const void *K, const void *V, void *O, const float *sinks,
     const unsigned int *cu_seqlens_q, const unsigned int *cu_seqlens_k,
     float scale, int batch_size, int max_q_len, int num_heads, int num_kv_heads,
-    int head_dim, int window_size, cudaStream_t stream) {
+    int head_dim, int window_size, bool packed_q, cudaStream_t stream) {
   flash_attn_sinks_varlen_launch<__half>(
       Q, K, V, O, sinks, cu_seqlens_q, cu_seqlens_k, scale, batch_size,
-      max_q_len, num_heads, num_kv_heads, head_dim, window_size, stream);
+      max_q_len, num_heads, num_kv_heads, head_dim, window_size, packed_q,
+      stream);
 }
 
 extern "C" void flash_attn_sinks_varlen_bf16(
     const void *Q, const void *K, const void *V, void *O, const float *sinks,
     const unsigned int *cu_seqlens_q, const unsigned int *cu_seqlens_k,
     float scale, int batch_size, int max_q_len, int num_heads, int num_kv_heads,
-    int head_dim, int window_size, cudaStream_t stream) {
+    int head_dim, int window_size, bool packed_q, cudaStream_t stream) {
   flash_attn_sinks_varlen_launch<__nv_bfloat16>(
       Q, K, V, O, sinks, cu_seqlens_q, cu_seqlens_k, scale, batch_size,
-      max_q_len, num_heads, num_kv_heads, head_dim, window_size, stream);
+      max_q_len, num_heads, num_kv_heads, head_dim, window_size, packed_q,
+      stream);
 }
 
 extern "C" void flash_attn_sinks_varlen_f32(
     const void *Q, const void *K, const void *V, void *O, const float *sinks,
     const unsigned int *cu_seqlens_q, const unsigned int *cu_seqlens_k,
     float scale, int batch_size, int max_q_len, int num_heads, int num_kv_heads,
-    int head_dim, int window_size, cudaStream_t stream) {
+    int head_dim, int window_size, bool packed_q, cudaStream_t stream) {
   flash_attn_sinks_varlen_launch<float>(
       Q, K, V, O, sinks, cu_seqlens_q, cu_seqlens_k, scale, batch_size,
-      max_q_len, num_heads, num_kv_heads, head_dim, window_size, stream);
+      max_q_len, num_heads, num_kv_heads, head_dim, window_size, packed_q,
+      stream);
 }

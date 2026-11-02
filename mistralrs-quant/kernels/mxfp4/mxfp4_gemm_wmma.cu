@@ -23,6 +23,8 @@
 #include <mma.h>
 #include <stdio.h>
 
+#include "../common/fp_codecs.cuh"
+
 using namespace nvcuda::wmma;
 
 #define CEILDIV(x, y) (((x) + (y) - 1) / (y))
@@ -39,84 +41,13 @@ using namespace nvcuda::wmma;
 
 namespace mxfp4_wmma {
 
-// ---------------------------------------------------------------------------
-// Helpers (duplicated from mxfp4_gemm.cu to keep this file self-contained)
-// ---------------------------------------------------------------------------
-
-__device__ __forceinline__ float e8m0_to_float(uint8_t e) {
-  return __uint_as_float((uint32_t)e << 23);
-}
-
-__device__ __forceinline__ int2 get_int_from_table_16(const int q4,
-                                                      const uint32_t table0,
-                                                      const uint32_t table1,
-                                                      const uint32_t table2,
-                                                      const uint32_t table3) {
-  uint32_t tmp[2];
-  const uint32_t low_high_selection = 0x32103210 | ((q4 & 0x88888888) >> 1);
-
-#pragma unroll
-  for (uint32_t i = 0; i < 2; ++i) {
-    const uint32_t shift = 16 * i;
-    const uint32_t low = __byte_perm(table0, table1, q4 >> shift);
-    const uint32_t high = __byte_perm(table2, table3, q4 >> shift);
-    tmp[i] = __byte_perm(low, high, low_high_selection >> shift);
-  }
-
-  return make_int2(__byte_perm(tmp[0], tmp[1], 0x6420),
-                   __byte_perm(tmp[0], tmp[1], 0x7531));
-}
-
-// Dequantize 8 FP4 nibbles from one int32 and store as fp16
-__device__ __forceinline__ void dequant_store_8_f16(int q4, float scale,
-                                                    uint32_t L0, uint32_t L1,
-                                                    uint32_t L2, uint32_t L3,
-                                                    half *dst) {
-  int2 w = get_int_from_table_16(q4, L0, L1, L2, L3);
-  dst[0] = __float2half((float)(int8_t)(w.x) * scale);
-  dst[1] = __float2half((float)(int8_t)(w.y) * scale);
-  dst[2] = __float2half((float)(int8_t)(w.x >> 8) * scale);
-  dst[3] = __float2half((float)(int8_t)(w.y >> 8) * scale);
-  dst[4] = __float2half((float)(int8_t)(w.x >> 16) * scale);
-  dst[5] = __float2half((float)(int8_t)(w.y >> 16) * scale);
-  dst[6] = __float2half((float)(int8_t)(w.x >> 24) * scale);
-  dst[7] = __float2half((float)(int8_t)(w.y >> 24) * scale);
-}
-
-// Dequantize 8 FP4 nibbles from one int32 and store as bf16
-__device__ __forceinline__ void dequant_store_8_bf16(int q4, float scale,
-                                                     uint32_t L0, uint32_t L1,
-                                                     uint32_t L2, uint32_t L3,
-                                                     __nv_bfloat16 *dst) {
-  int2 w = get_int_from_table_16(q4, L0, L1, L2, L3);
-  dst[0] = __float2bfloat16((float)(int8_t)(w.x) * scale);
-  dst[1] = __float2bfloat16((float)(int8_t)(w.y) * scale);
-  dst[2] = __float2bfloat16((float)(int8_t)(w.x >> 8) * scale);
-  dst[3] = __float2bfloat16((float)(int8_t)(w.y >> 8) * scale);
-  dst[4] = __float2bfloat16((float)(int8_t)(w.x >> 16) * scale);
-  dst[5] = __float2bfloat16((float)(int8_t)(w.y >> 16) * scale);
-  dst[6] = __float2bfloat16((float)(int8_t)(w.x >> 24) * scale);
-  dst[7] = __float2bfloat16((float)(int8_t)(w.y >> 24) * scale);
-}
-
-// Dispatch dequant by type
 template <typename T>
-__device__ __forceinline__ void
-dequant_store_8(int q4, float scale, uint32_t L0, uint32_t L1, uint32_t L2,
-                uint32_t L3, T *dst);
-
-template <>
-__device__ __forceinline__ void
-dequant_store_8<half>(int q4, float scale, uint32_t L0, uint32_t L1,
-                      uint32_t L2, uint32_t L3, half *dst) {
-  dequant_store_8_f16(q4, scale, L0, L1, L2, L3, dst);
-}
-
-template <>
-__device__ __forceinline__ void
-dequant_store_8<__nv_bfloat16>(int q4, float scale, uint32_t L0, uint32_t L1,
-                               uint32_t L2, uint32_t L3, __nv_bfloat16 *dst) {
-  dequant_store_8_bf16(q4, scale, L0, L1, L2, L3, dst);
+__device__ __forceinline__ void dequant_store_8(int q4, float scale, T *dst) {
+  float w[8];
+  e2m1x8_to_float_doubled(q4, w);
+#pragma unroll
+  for (int i = 0; i < 8; ++i)
+    dst[i] = static_cast<T>(w[i] * scale);
 }
 
 // ---------------------------------------------------------------------------
@@ -154,12 +85,6 @@ __launch_bounds__(BLOCK_THREADS) __global__
                                   const T *__restrict__ bias,
                                   T *__restrict__ output, int M, int N, int K,
                                   bool has_bias) {
-  // LUT in registers (values 2x scaled, compensated by 0.5f in scale)
-  const uint32_t LUT0 = 0x03020100;
-  const uint32_t LUT1 = 0x0C080604;
-  const uint32_t LUT2 = 0xFDFEFF00;
-  const uint32_t LUT3 = 0xF4F8FAFC;
-
   const int scale_stride = CEILDIV(K, MXFP4_BLOCK_SIZE);
 
   extern __shared__ uint8_t smem_bytes[];
@@ -225,10 +150,10 @@ __launch_bounds__(BLOCK_THREADS) __global__
             0.5f;
 
         T *dst = &B_sh[ln * K_BLK];
-        dequant_store_8<T>(w_vec.x, scale, LUT0, LUT1, LUT2, LUT3, dst);
-        dequant_store_8<T>(w_vec.y, scale, LUT0, LUT1, LUT2, LUT3, dst + 8);
-        dequant_store_8<T>(w_vec.z, scale, LUT0, LUT1, LUT2, LUT3, dst + 16);
-        dequant_store_8<T>(w_vec.w, scale, LUT0, LUT1, LUT2, LUT3, dst + 24);
+        dequant_store_8<T>(w_vec.x, scale, dst);
+        dequant_store_8<T>(w_vec.y, scale, dst + 8);
+        dequant_store_8<T>(w_vec.z, scale, dst + 16);
+        dequant_store_8<T>(w_vec.w, scale, dst + 24);
       } else {
         // Zero-fill invalid rows
         T *dst = &B_sh[ln * K_BLK];
@@ -315,11 +240,6 @@ __launch_bounds__(BLOCK_THREADS) __global__
         const uint32_t *__restrict__ indices, T *__restrict__ output,
         int num_tokens, int topk, int num_experts, int N, int K, bool has_bias,
         bool input_has_topk_dim) {
-  const uint32_t LUT0 = 0x03020100;
-  const uint32_t LUT1 = 0x0C080604;
-  const uint32_t LUT2 = 0xFDFEFF00;
-  const uint32_t LUT3 = 0xF4F8FAFC;
-
   const int scale_stride = CEILDIV(K, MXFP4_BLOCK_SIZE);
   const int expert_id = blockIdx.y;
   const int n_base = blockIdx.x * N_BLK;
@@ -415,10 +335,10 @@ __launch_bounds__(BLOCK_THREADS) __global__
                                                 k_base / MXFP4_BLOCK_SIZE])) *
               0.5f;
           T *dst = &B_sh[ln * K_BLK];
-          dequant_store_8<T>(w_vec.x, scale, LUT0, LUT1, LUT2, LUT3, dst);
-          dequant_store_8<T>(w_vec.y, scale, LUT0, LUT1, LUT2, LUT3, dst + 8);
-          dequant_store_8<T>(w_vec.z, scale, LUT0, LUT1, LUT2, LUT3, dst + 16);
-          dequant_store_8<T>(w_vec.w, scale, LUT0, LUT1, LUT2, LUT3, dst + 24);
+          dequant_store_8<T>(w_vec.x, scale, dst);
+          dequant_store_8<T>(w_vec.y, scale, dst + 8);
+          dequant_store_8<T>(w_vec.z, scale, dst + 16);
+          dequant_store_8<T>(w_vec.w, scale, dst + 24);
         } else {
           T *dst = &B_sh[ln * K_BLK];
 #pragma unroll
