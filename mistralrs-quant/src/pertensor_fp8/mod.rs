@@ -249,7 +249,7 @@ impl PerTensorFP8Linear {
         false
     }
 
-    #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+    #[cfg(all(feature = "cuda", has_fp8_mma_kernels))]
     fn w8a16_view<'a>(&'a self, weight: &'a Tensor) -> crate::moe::grouped_fp8::Fp8WeightView<'a> {
         let [n, k] = self.weight_shape;
         crate::moe::grouped_fp8::Fp8WeightView {
@@ -266,7 +266,7 @@ impl PerTensorFP8Linear {
 
     // The retained-E4M3 kernel replaces the resident dequantized copy whenever it serves the model dtype.
     fn w8a16_kernel_supported(&self) -> bool {
-        #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+        #[cfg(all(feature = "cuda", has_fp8_mma_kernels))]
         if let Some(weight) = self.weight.as_ref() {
             return crate::moe::grouped_fp8::dense_supported(
                 self.w8a16_view(weight),
@@ -276,7 +276,7 @@ impl PerTensorFP8Linear {
         false
     }
 
-    #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+    #[cfg(all(feature = "cuda", has_fp8_mma_kernels))]
     fn try_w8a16_kernel(&self, input: &Tensor) -> Result<Option<Tensor>> {
         let Some(weight) = self.weight.as_ref() else {
             return Ok(None);
@@ -602,7 +602,7 @@ impl QuantMethod for PerTensorFP8Linear {
         if let Some(result) = self.try_cutile_w8a8(x)? {
             return Ok(result);
         }
-        #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels))]
+        #[cfg(all(feature = "cuda", has_fp8_mma_kernels))]
         if let Some(result) = self.try_w8a16_kernel(x)? {
             return Ok(result);
         }

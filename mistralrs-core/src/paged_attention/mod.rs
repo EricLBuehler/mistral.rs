@@ -35,9 +35,9 @@ pub use cache_allocation::allocate_cache;
 pub(crate) use cache_engine::configured_metal_cache_layout;
 pub use cache_engine::{CacheConfig, CacheEngine, PagedCacheType};
 use candle_core::{DType, Device};
-pub(crate) use config::with_attention_features;
 #[cfg(feature = "metal")]
 pub(crate) use config::AttentionFeaturesConfig;
+pub(crate) use config::{with_attention_features, with_legacy_fp8_backend};
 pub use config::{
     HybridPagedKvCacheConfig, KvCacheLayout, KvCacheTopology, ModelConfigLike, ModelConfigMetadata,
     PrefixPrefillAttentionFeatures,

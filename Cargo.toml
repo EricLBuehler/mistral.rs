@@ -48,10 +48,10 @@ license = "MIT"
 rust-version = "1.95"
 
 [workspace.dependencies]
-candle-core = { version = "0.11.1" }
-candle-nn = { version = "0.11.1" }
-candle-flash-attn-v3 = { version = "0.11.1" }
-candle-metal-kernels = { version = "0.11.1" }
+candle-core = { version = "0.11.0", git = "https://github.com/haricot/candle.git", rev = "bfce966ad4d61a48801eb6af4db8b8eabebc01a8" }
+candle-nn = { version = "0.11.0", git = "https://github.com/haricot/candle.git", rev = "bfce966ad4d61a48801eb6af4db8b8eabebc01a8" }
+candle-flash-attn-v3 = { version = "0.11.0", git = "https://github.com/haricot/candle.git", rev = "bfce966ad4d61a48801eb6af4db8b8eabebc01a8" }
+candle-metal-kernels = { version = "0.11.0", git = "https://github.com/haricot/candle.git", rev = "bfce966ad4d61a48801eb6af4db8b8eabebc01a8" }
 # candle-core = { path = "../candle/candle-core", version = "0.11.0" }
 # candle-nn = { path = "../candle/candle-nn", version = "0.11.0" }
 # candle-flash-attn-v3 = { path = "../candle/candle-flash-attn-v3", version = "0.11.0" }
@@ -167,7 +167,7 @@ interprocess = "2.2.3"
 urlencoding = "2.1.3"
 scraper = "0.25.0"
 html2text = "0.16.6"
-zip = { version = "9.1.3", default-features = false, features = ["deflate"] }
+zip = { version = "9.1.3", default-features = false, features = ["deflate"], git = "https://github.com/zip-rs/zip2.git", rev = "af2ed2a3e12af1fdd733b1886b3e9067bf510be5" }
 ordered-float = "5.1.0"
 hashbrown = "0.16.1"
 parking_lot = "0.12.5"

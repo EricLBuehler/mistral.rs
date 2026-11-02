@@ -96,6 +96,7 @@ fn main() -> Result<()> {
 
     // Declare expected cfg values for check-cfg lint
     println!("cargo::rustc-check-cfg=cfg(has_fp8)");
+    println!("cargo::rustc-check-cfg=cfg(has_fp8_legacy_sm61)");
     println!("cargo::rustc-check-cfg=cfg(has_fa3_fp8_paged)");
 
     println!("cargo:rerun-if-changed=build.rs");
@@ -258,6 +259,10 @@ fn main() -> Result<()> {
         println!("cargo:rustc-cfg=has_fa3_fp8_paged");
     }
 
+    if using_fp8 && allow_legacy_fp8 && compute_cap == 61 {
+        println!("cargo:rustc-cfg=has_fp8_legacy_sm61");
+    }
+
     if using_fp8 {
         println!("cargo:rustc-cfg=has_fp8");
     }
@@ -268,6 +273,7 @@ fn main() -> Result<()> {
 fn main() -> Result<(), String> {
     // Declare expected cfg values for check-cfg lint
     println!("cargo::rustc-check-cfg=cfg(has_fp8)");
+    println!("cargo::rustc-check-cfg=cfg(has_fp8_legacy_sm61)");
     println!("cargo::rustc-check-cfg=cfg(has_fa3_fp8_paged)");
 
     mistralrs_metal_compile::compile_metallibs(&PAGED_ATTENTION_METAL_SOURCE_SET)
@@ -277,6 +283,7 @@ fn main() -> Result<(), String> {
 fn main() -> Result<()> {
     // Declare expected cfg values for check-cfg lint
     println!("cargo::rustc-check-cfg=cfg(has_fp8)");
+    println!("cargo::rustc-check-cfg=cfg(has_fp8_legacy_sm61)");
     println!("cargo::rustc-check-cfg=cfg(has_fa3_fp8_paged)");
     Ok(())
 }

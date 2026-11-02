@@ -246,11 +246,16 @@ pub(crate) fn with_attention_features(
 pub(crate) struct AttentionFeaturesConfig<M> {
     base: M,
     fallback: Option<PrefixPrefillAttentionFeatures>,
+    force_standard: bool,
 }
 
 impl<M> AttentionFeaturesConfig<M> {
     pub(crate) fn new(base: M, fallback: Option<PrefixPrefillAttentionFeatures>) -> Self {
-        Self { base, fallback }
+        Self {
+            base,
+            fallback,
+            force_standard: false,
+        }
     }
 }
 
@@ -303,11 +308,19 @@ where
     }
 
     fn attention_backend_kind(&self) -> AttentionBackendKind {
-        self.base.attention_backend_kind()
+        if self.force_standard {
+            AttentionBackendKind::Standard
+        } else {
+            self.base.attention_backend_kind()
+        }
     }
 
     fn kv_cache_layout(&self) -> KvCacheLayout {
-        self.base.kv_cache_layout()
+        if self.force_standard {
+            select_kv_cache_layout(self.base.kv_cache_layout(), self)
+        } else {
+            self.base.kv_cache_layout()
+        }
     }
 
     fn kv_cache_elements_per_token(&self) -> usize {
@@ -351,11 +364,23 @@ where
     }
 
     fn attention_backend_kind_for_layer(&self, layer_idx: usize) -> AttentionBackendKind {
-        self.base.attention_backend_kind_for_layer(layer_idx)
+        if self.force_standard {
+            AttentionBackendKind::Standard
+        } else {
+            self.base.attention_backend_kind_for_layer(layer_idx)
+        }
     }
 
     fn kv_cache_layout_for_layer(&self, layer_idx: usize) -> KvCacheLayout {
-        self.base.kv_cache_layout_for_layer(layer_idx)
+        if self.force_standard {
+            select_kv_cache_layout_for_layer(
+                self.base.kv_cache_layout_for_layer(layer_idx),
+                self,
+                layer_idx,
+            )
+        } else {
+            self.base.kv_cache_layout_for_layer(layer_idx)
+        }
     }
 
     fn prefix_prefill_attention_features(
@@ -787,3 +812,5 @@ mod tests {
         assert_eq!(config.kv_cache_layout(), KvCacheLayout::Standard);
     }
 }
+
+include!("legacy_fp8_backend.rs");

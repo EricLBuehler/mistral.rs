@@ -13,7 +13,7 @@ enum Codec : int {
   DENSE_F32 = 0, DENSE_F16 = 1, DENSE_BF16 = 2,
   Q4_0 = 3, Q4_1 = 4, Q5_0 = 5, Q5_1 = 6, Q8_0 = 7, Q8_1 = 8,
   Q2K = 9, Q3K = 10, Q4K = 11, Q5K = 12, Q6K = 13, Q8K = 14,
-  IQ4_NL = 15, FP4 = 16, FP8 = 17, AFQ = 18, SYM_INT4 = 19, SYM_INT8 = 20,
+  IQ4_NL = 15, FP4 = 16, FP8 = 17, AFQ = 18, SYM_INT4 = 19, SYM_INT8 = 20, MXFP4 = 21,
 };
 
 struct EmbeddingGatherConfig {
@@ -136,6 +136,14 @@ inline float decode(constant EmbeddingGatherConfig &a, const device uchar *data,
     const int ql = (b[64 * n + l + 32 * (quarter & 1)] >> (quarter >= 2 ? 4 : 0)) & 15;
     const int qh = (b[128 + 32 * n + l] >> (2 * quarter)) & 3;
     return read_half(b + 208) * sc * ((ql | (qh << 4)) - 32);
+  } else if (C == MXFP4) {
+    const device uchar *b = data + (col / 32) * 17;
+    const uint e = b[0];
+    const float d = as_type<float>(e < 2 ? (0x00200000u << e) : ((e - 1) << 23));
+    const uint c = col % 32;
+    const int code = (b[1 + c % 16] >> (c < 16 ? 0 : 4)) & 15;
+    const float q = (code & 8) ? -fp4_values[code & 7] : fp4_values[code & 7];
+    return (2.0f * q) * d;
   } else if (C == FP4) {
     const int code = (data[col / 2] >> (4 * (col % 2))) & 15;
     const float q = (code & 8) ? -fp4_values[code & 7] : fp4_values[code & 7];
@@ -219,6 +227,7 @@ EMBEDDING_CODEC(17)
 EMBEDDING_CODEC(18)
 EMBEDDING_CODEC(19)
 EMBEDDING_CODEC(20)
+EMBEDDING_CODEC(21)
 #undef EMBEDDING_CODEC
 #undef EMBEDDING_INSTANCE
 

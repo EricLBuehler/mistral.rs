@@ -230,6 +230,7 @@ fn main() -> Result<(), String> {
                 "*_wmma.cu",
                 "moe_data.cu",
                 "grouped_mm_*.cu",
+                "grouped_fp8.cu",
             ]
         };
         if !cc_over_80 && !legacy_fp8 {
