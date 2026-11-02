@@ -7,6 +7,7 @@ use axum::{
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::json;
+use std::collections::HashSet;
 use std::fs::File;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -16,10 +17,12 @@ use uuid::Uuid;
 
 use mistralrs::speech_utils;
 
-use crate::ui::chat::{append_chat_message, set_chat_tail, update_chat, write_chat};
+use crate::ui::chat::{
+    append_chat_message, read_chat, set_chat_tail, summarize, update_chat, write_chat,
+};
 use crate::ui::types::{
-    AppState, ChatFile, ChatMessage, DeleteChatRequest, LoadChatRequest, NewChatRequest,
-    RenameChatRequest, SelectRequest,
+    chat_id_from_filename, AppState, ChatFile, ChatMessage, DeleteChatRequest, LoadChatRequest,
+    NewChatRequest, RenameChatRequest, SelectRequest,
 };
 use crate::ui::utils::get_cache_dir;
 
@@ -393,31 +396,44 @@ pub async fn select_model(
 }
 
 pub async fn list_chats(Extension(app): Extension<Arc<AppState>>) -> impl IntoResponse {
-    let dir = &app.chats_dir;
+    let mut entries = match fs::read_dir(&app.chats_dir).await {
+        Ok(e) => e,
+        Err(e) => {
+            error!("list chats error: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "list failed").into_response();
+        }
+    };
+    let mut cache = app.chat_summaries.lock().await;
+    let mut seen = HashSet::new();
     let mut chats = Vec::new();
-
-    if let Ok(mut entries) = fs::read_dir(dir).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let filename = entry.file_name().to_string_lossy().to_string();
-            let id = filename
-                .strip_suffix(".json")
-                .unwrap_or(&filename)
-                .to_string();
-            if let Ok(bytes) = fs::read(entry.path()).await {
-                if let Ok(chat) = serde_json::from_slice::<ChatFile>(&bytes) {
-                    let mut value = serde_json::to_value(&chat).unwrap();
-                    value["id"] = serde_json::Value::String(id);
-                    chats.push(value);
-                }
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let filename = entry.file_name().to_string_lossy().to_string();
+        let Some(id) = chat_id_from_filename(&filename) else {
+            continue;
+        };
+        let Ok(mtime) = entry.metadata().await.and_then(|m| m.modified()) else {
+            continue;
+        };
+        seen.insert(id.to_string());
+        if let Some((cached_mtime, summary)) = cache.get(id) {
+            if *cached_mtime == mtime {
+                chats.push(summary.clone());
+                continue;
             }
         }
+        match read_chat(&entry.path()).await {
+            Ok(chat) => {
+                let updated_at = chrono::DateTime::<Utc>::from(mtime).to_rfc3339();
+                let summary = summarize(id.to_string(), &chat, updated_at);
+                cache.insert(id.to_string(), (mtime, summary.clone()));
+                chats.push(summary);
+            }
+            Err(e) => error!("skipping unreadable chat {}: {}", filename, e),
+        }
     }
-    chats.sort_by(|a, b| {
-        let a_date = a["created_at"].as_str().unwrap_or("");
-        let b_date = b["created_at"].as_str().unwrap_or("");
-        b_date.cmp(a_date)
-    });
-    Json(json!({ "chats": chats }))
+    cache.retain(|id, _| seen.contains(id));
+    chats.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    Json(json!({ "chats": chats })).into_response()
 }
 
 pub async fn new_chat(

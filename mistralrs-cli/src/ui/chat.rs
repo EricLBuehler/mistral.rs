@@ -3,9 +3,10 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::fs;
 
-use crate::ui::types::{AppState, ChatFile, ChatMessage};
+use crate::ui::types::{AppState, ChatFile, ChatMessage, ChatSummary};
 
 const TMP_SUFFIX: &str = "tmp";
+const PREVIEW_CHARS: usize = 80;
 
 pub async fn read_chat(path: &Path) -> Result<ChatFile> {
     let bytes = fs::read(path)
@@ -48,6 +49,22 @@ pub async fn append_chat_message(
 
 pub async fn set_chat_tail(app: &Arc<AppState>, chat_id: &str, tail: Option<String>) -> Result<()> {
     update_chat(app, chat_id, |chat| chat.tail = tail).await
+}
+
+pub fn summarize(id: String, chat: &ChatFile, updated_at: String) -> ChatSummary {
+    let preview = chat
+        .messages
+        .iter()
+        .find(|m| m.role == "user" && !m.content.trim().is_empty())
+        .map(|m| m.content.trim().chars().take(PREVIEW_CHARS).collect());
+    ChatSummary {
+        id,
+        title: chat.title.clone(),
+        model: chat.model.clone(),
+        created_at: chat.created_at.clone(),
+        updated_at,
+        preview,
+    }
 }
 
 // client retries resend the same message id, so replace instead of duplicating
@@ -101,6 +118,14 @@ mod tests {
         assert_eq!(c.messages.len(), 2);
         assert_eq!(c.messages[0].content, "retried");
         assert_eq!(c.tail.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn summary_previews_first_user_message() {
+        let mut c = chat();
+        upsert_message(&mut c, msg("a", &"x".repeat(200)));
+        let s = summarize("chat_1".into(), &c, "t".into());
+        assert_eq!(s.preview.unwrap().len(), PREVIEW_CHARS);
     }
 
     #[tokio::test]

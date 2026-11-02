@@ -189,6 +189,15 @@ export interface ChatFile {
   tail?: string | null;
 }
 
+export interface ChatSummary {
+  id: string;
+  title: string | null;
+  model: string;
+  created_at: string;
+  updated_at: string;
+  preview: string | null;
+}
+
 export interface ChatMessageRecord {
   id?: string;
   parent_id?: string | null;

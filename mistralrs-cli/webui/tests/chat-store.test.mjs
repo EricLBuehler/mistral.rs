@@ -70,7 +70,9 @@ class FakeServer {
       return new Response("ok");
     }
     if (path.endsWith("api/load_chat")) return json(this.chat(body.id));
-    if (path.endsWith("api/list_chats")) return json({ chats: [...this.chats].map(([id, c]) => ({ ...c, id })) });
+    if (path.endsWith("api/list_chats")) {
+      return json({ chats: [...this.chats].map(([id, c]) => ({ id, title: c.title, model: c.model, created_at: c.created_at, updated_at: c.created_at, preview: null })) });
+    }
     if (path.endsWith("api/delete_chat")) {
       this.chats.delete(body.id);
       return new Response("ok");

@@ -11,6 +11,7 @@
   import { settingsStore } from "./lib/stores/settings.svelte";
   import * as api from "./lib/services/api";
   import { onMount } from "svelte";
+  import { installCopyHandler } from "./lib/utils/markdown";
 
   let startupError = $state<string | null>(null);
   let starting = $state(true);
@@ -44,11 +45,20 @@
     }
   }
 
+  const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+  let systemDark = $state(darkQuery.matches);
+
+  $effect(() => {
+    const dark = settingsStore.theme === "dark" || (settingsStore.theme === "system" && systemDark);
+    document.documentElement.classList.toggle("dark", dark);
+  });
+
   onMount(() => {
-    if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
-      document.documentElement.classList.add("dark");
-    }
+    const onChange = (e: MediaQueryListEvent) => (systemDark = e.matches);
+    darkQuery.addEventListener("change", onChange);
+    installCopyHandler();
     init();
+    return () => darkQuery.removeEventListener("change", onChange);
   });
 </script>
 

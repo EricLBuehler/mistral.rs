@@ -4,6 +4,7 @@ import type {
   ChatCompletionMessage,
   ChatFile,
   ChatMessageRecord,
+  ChatSummary,
   StreamOptions,
   StreamBlock,
   File as ProducedFile,
@@ -117,7 +118,7 @@ class ChatStore {
   /** Derived view: messages on the active path, root to tail. Updated by `rebuildPath()`. */
   messages = $state<DisplayMessage[]>([]);
 
-  chats = $state<ChatFile[]>([]);
+  chats = $state<ChatSummary[]>([]);
   currentChatId = $state<string | null>(null);
   /** Agentic session ID; survives turns and (via sidecar) server restarts. */
   currentSessionId = $state<string | null>(null);
@@ -250,10 +251,7 @@ class ChatStore {
 
   async refreshChats() {
     try {
-      const { chats } = await api.listChats();
-      this.chats = chats.sort(
-        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
-      );
+      this.chats = (await api.listChats()).chats;
     } catch (e) {
       console.error("Failed to list chats:", e);
     }

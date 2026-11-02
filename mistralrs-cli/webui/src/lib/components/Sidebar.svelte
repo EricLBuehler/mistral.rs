@@ -1,6 +1,6 @@
 <script lang="ts">
   import { chatStore } from "../stores/chat.svelte";
-  import type { ChatFile } from "../types";
+  import type { ChatSummary } from "../types";
   import { onMount } from "svelte";
 
   let editingId = $state<string | null>(null);
@@ -21,17 +21,14 @@
     if (title) await chatStore.renameChat(id, title);
   }
 
-  function getChatLabel(chat: ChatFile): string {
+  const LABEL_CHARS = 40;
+
+  function getChatLabel(chat: ChatSummary): string {
     if (chat.title) return chat.title;
-    const firstMsg = chat.messages.find((m) => m.role === "user");
-    if (firstMsg) {
-      return firstMsg.content.slice(0, 40) + (firstMsg.content.length > 40 ? "..." : "");
+    if (chat.preview) {
+      return chat.preview.length > LABEL_CHARS ? `${chat.preview.slice(0, LABEL_CHARS)}...` : chat.preview;
     }
     return `Chat ${chat.id}`;
-  }
-
-  function turnCount(chat: ChatFile): number {
-    return chat.messages.filter((m) => m.role === "user").length;
   }
 </script>
 
@@ -56,7 +53,6 @@
     <div class="space-y-0.5">
       {#each chatStore.chats as chat (chat.id)}
         {@const isActive = chatStore.currentChatId === chat.id}
-        {@const turns = turnCount(chat)}
         <div
           class="group flex items-center rounded-lg px-2 py-1.5 text-sm transition-colors
           {isActive
@@ -68,25 +64,25 @@
               class="flex-1 rounded border border-blue-300 bg-white px-1.5 py-0.5 text-sm dark:border-blue-600 dark:bg-gray-800"
               bind:value={editTitle}
               onkeydown={(e: KeyboardEvent) => {
-                if (e.key === "Enter") saveRename(chat.id!);
+                if (e.key === "Enter") saveRename(chat.id);
                 if (e.key === "Escape") editingId = null;
               }}
-              onblur={() => saveRename(chat.id!)}
+              onblur={() => saveRename(chat.id)}
             />
           {:else}
             <button
               class="flex min-w-0 flex-1 flex-col items-start text-left"
-              onclick={() => chatStore.loadChat(chat.id!)}
+              onclick={() => chatStore.loadChat(chat.id)}
             >
               <span class="w-full truncate">{getChatLabel(chat)}</span>
               <span class="w-full truncate font-mono text-[10.5px] {isActive ? 'text-blue-600 dark:text-blue-300' : 'text-gray-400 dark:text-gray-500'}">
-                {chat.model}{turns > 0 ? ` · ${turns} turn${turns === 1 ? '' : 's'}` : ''}
+                {chat.model}
               </span>
             </button>
             <div class="flex shrink-0 opacity-0 group-hover:opacity-100">
               <button
                 class="rounded p-0.5 text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300"
-                onclick={() => startRename(chat.id!, getChatLabel(chat))}
+                onclick={() => startRename(chat.id, getChatLabel(chat))}
                 title="Rename"
               >
                 <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -95,7 +91,7 @@
               </button>
               <button
                 class="rounded p-0.5 text-gray-400 hover:text-red-500 dark:text-gray-500 dark:hover:text-red-400"
-                onclick={() => chatStore.deleteChat(chat.id!)}
+                onclick={() => chatStore.deleteChat(chat.id)}
                 title="Delete"
               >
                 <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

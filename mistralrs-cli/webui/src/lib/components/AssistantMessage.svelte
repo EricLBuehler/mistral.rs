@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { DisplayMessage } from "../types";
-  import { renderMarkdown } from "../utils/markdown";
+  import { renderMarkdownBlocks } from "../utils/markdown";
   import ThinkingBlock from "./ThinkingBlock.svelte";
   import CodeExecution from "./CodeExecution.svelte";
   import ShellTool from "./ShellTool.svelte";
@@ -103,7 +103,9 @@
       {:else if block.type === "content"}
         <div class="rounded-2xl rounded-bl-md bg-gray-100 px-4 py-2.5 shadow-sm dark:bg-gray-800">
           <div class="markdown-content text-sm leading-relaxed text-gray-900 dark:text-gray-100">
-            {@html renderMarkdown(block.content)}
+            {#each renderMarkdownBlocks(block.content, streaming && i === renderedBlocks.length - 1) as html, j (j)}
+              {@html html}
+            {/each}
           </div>
         </div>
       {:else if block.type === "file"}

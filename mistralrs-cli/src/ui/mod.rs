@@ -207,6 +207,7 @@ pub async fn build_ui_router(
         current_chat: tokio::sync::RwLock::new(None),
         next_chat_id: tokio::sync::RwLock::new(next_id),
         chat_write_lock: tokio::sync::Mutex::new(()),
+        chat_summaries: tokio::sync::Mutex::new(Default::default()),
         default_params: GenerationParams::default(),
         search_enabled: enable_search,
         search_embedding_model,

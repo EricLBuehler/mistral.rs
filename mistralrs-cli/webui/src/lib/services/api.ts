@@ -2,6 +2,7 @@ import type {
   UiModelInfo,
   ChatFile,
   ChatMessageRecord,
+  ChatSummary,
   Capabilities,
   Settings,
 } from "../types";
@@ -58,7 +59,7 @@ export async function selectModel(name: string): Promise<void> {
 
 // === Chat endpoints ===
 
-export async function listChats(): Promise<{ chats: ChatFile[] }> {
+export async function listChats(): Promise<{ chats: ChatSummary[] }> {
   return get("list_chats");
 }
 

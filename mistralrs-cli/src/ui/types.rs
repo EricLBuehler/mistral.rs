@@ -1,6 +1,8 @@
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 use tokio::sync::RwLock;
 
 use mistralrs::{ModelGenerationDefaults, SearchEmbeddingModel};
@@ -70,6 +72,16 @@ pub struct ChatFile {
     /// Active leaf id. Walking `parent_id` from here yields the current conversation path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tail: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct ChatSummary {
+    pub id: String,
+    pub title: Option<String>,
+    pub model: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub preview: Option<String>,
 }
 
 /// Default generation parameters
@@ -152,6 +164,8 @@ pub struct AppState {
     pub next_chat_id: RwLock<u32>,
     /// Serializes read-modify-write of chat files so concurrent saves can't drop each other.
     pub chat_write_lock: tokio::sync::Mutex<()>,
+    /// Sidebar summaries keyed by chat id, invalidated by file mtime.
+    pub chat_summaries: tokio::sync::Mutex<HashMap<String, (SystemTime, ChatSummary)>>,
     /// Default generation parameters
     pub default_params: GenerationParams,
     /// Whether web search is enabled
@@ -177,6 +191,12 @@ impl AppState {
     pub fn chat_session_path(&self, chat_id: &str) -> Option<PathBuf> {
         chat_file_path(&self.chats_dir, chat_id, CHAT_SESSION_FILE_EXT)
     }
+}
+
+/// Chat id for a file in chats_dir, or None for session sidecars and temp files.
+pub fn chat_id_from_filename(name: &str) -> Option<&str> {
+    let id = name.strip_suffix(&format!(".{CHAT_FILE_EXT}"))?;
+    (!name.ends_with(&format!(".{CHAT_SESSION_FILE_EXT}"))).then_some(id)
 }
 
 // ids are server-generated (`chat_<n>`), so anything else is a client trying to leave chats_dir
@@ -217,7 +237,14 @@ pub struct RenameChatRequest {
 
 #[cfg(test)]
 mod tests {
-    use super::{chat_file_path, GenerationParams, ModelGenerationDefaults};
+    use super::{chat_file_path, chat_id_from_filename, GenerationParams, ModelGenerationDefaults};
+
+    #[test]
+    fn only_chat_files_are_listed() {
+        assert_eq!(chat_id_from_filename("chat_3.json"), Some("chat_3"));
+        assert_eq!(chat_id_from_filename("chat_3.session.json"), None);
+        assert_eq!(chat_id_from_filename("chat_3.json.tmp"), None);
+    }
 
     #[test]
     fn chat_paths_stay_inside_chats_dir() {
