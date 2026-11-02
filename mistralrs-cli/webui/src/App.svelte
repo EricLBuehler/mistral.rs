@@ -6,17 +6,18 @@
   import SettingsPanel from "./lib/components/SettingsPanel.svelte";
   import ToolsPanel from "./lib/components/ToolsPanel.svelte";
   import StatusBar from "./lib/components/StatusBar.svelte";
-  import { chatStore } from "./lib/stores/chat.svelte";
+  import Notice from "./lib/components/Notice.svelte";
   import { modelStore } from "./lib/stores/models.svelte";
   import { settingsStore } from "./lib/stores/settings.svelte";
   import * as api from "./lib/services/api";
   import { onMount } from "svelte";
 
-  onMount(async () => {
-    if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
-      document.documentElement.classList.add("dark");
-    }
+  let startupError = $state<string | null>(null);
+  let starting = $state(true);
 
+  async function init() {
+    starting = true;
+    startupError = null;
     try {
       const { models } = await api.listModels();
       modelStore.models = models;
@@ -27,28 +28,46 @@
       } else if (models.length > 0) {
         modelStore.selectModel(models[0].name);
       }
-
       if (settings.defaults) {
         settingsStore.applyDefaults(settings.defaults);
       }
 
-      try {
-        const caps = await api.getCapabilities();
-        modelStore.capabilities = caps;
-        if (caps.search_enabled) settingsStore.enableSearch = true;
-        if (caps.code_execution_enabled) settingsStore.enableCodeExecution = true;
-        if (caps.shell_enabled) settingsStore.enableShell = true;
-      } catch {
-        // Capabilities endpoint might not exist on older servers
-      }
+      const caps = await api.getCapabilities();
+      modelStore.capabilities = caps;
+      if (caps.search_enabled) settingsStore.enableSearch = true;
+      if (caps.code_execution_enabled) settingsStore.enableCodeExecution = true;
+      if (caps.shell_enabled) settingsStore.enableShell = true;
     } catch (e) {
-      console.error("Failed to initialize:", e);
+      startupError = e instanceof Error ? e.message : String(e);
+    } finally {
+      starting = false;
     }
+  }
+
+  onMount(() => {
+    if (window.matchMedia("(prefers-color-scheme: dark)").matches) {
+      document.documentElement.classList.add("dark");
+    }
+    init();
   });
 </script>
 
+{#if startupError}
+  <div class="flex h-screen items-center justify-center bg-white p-6 dark:bg-gray-950">
+    <div class="max-w-md space-y-3 text-center" role="alert">
+      <h1 class="text-base font-semibold text-gray-900 dark:text-gray-100">Can't reach the mistral.rs server</h1>
+      <p class="break-words font-mono text-xs text-gray-500 dark:text-gray-400">{startupError}</p>
+      <button
+        class="rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-60 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800"
+        onclick={init}
+        disabled={starting}
+      >{starting ? "Retrying..." : "Retry"}</button>
+    </div>
+  </div>
+{:else}
 <div class="flex h-screen flex-col overflow-hidden">
   <ModelBar />
+  <Notice />
 
   <div class="flex min-h-0 flex-1">
     {#if settingsStore.sidebarOpen}
@@ -102,3 +121,4 @@
 
   <StatusBar />
 </div>
+{/if}

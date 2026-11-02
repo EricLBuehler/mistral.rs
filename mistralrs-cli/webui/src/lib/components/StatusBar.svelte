@@ -23,8 +23,8 @@
         <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-green-500"></span>
         streaming
       </span>
-      <span><span class="text-gray-400 dark:text-gray-500">tok/s</span> <span class="text-gray-700 dark:text-gray-200">{chatStore.streamingTokRate.toFixed(1)}</span></span>
-      <span><span class="text-gray-400 dark:text-gray-500">tok</span> <span class="text-gray-700 dark:text-gray-200">{chatStore.streamingTokens}</span></span>
+      <span title="Estimated while streaming; the server's exact count appears on the message when it finishes"><span class="text-gray-400 dark:text-gray-500">tok/s</span> <span class="text-gray-700 dark:text-gray-200">~{chatStore.streamingTokRate.toFixed(1)}</span></span>
+      <span><span class="text-gray-400 dark:text-gray-500">tok</span> <span class="text-gray-700 dark:text-gray-200">~{chatStore.streamingTokens}</span></span>
       <span><span class="text-gray-400 dark:text-gray-500">elapsed</span> <span class="text-gray-700 dark:text-gray-200">{elapsedSec()}s</span></span>
     {:else}
       <span class="flex items-center gap-1.5">

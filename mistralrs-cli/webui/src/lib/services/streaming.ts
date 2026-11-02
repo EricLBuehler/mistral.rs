@@ -160,9 +160,12 @@ export async function streamChatCompletion(
               if (chunk.session_id) {
                 callbacks.onSessionId(chunk.session_id);
               }
+              if (chunk.usage) {
+                callbacks.onUsage(chunk.usage);
+              }
             }
-          } catch {
-            // Skip malformed JSON
+          } catch (e) {
+            console.warn("Skipping malformed SSE event:", data, e);
           }
         }
       }

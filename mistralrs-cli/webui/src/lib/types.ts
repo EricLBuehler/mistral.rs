@@ -44,6 +44,8 @@ export interface Usage {
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
+  prompt_tokens_details?: { cached_tokens: number };
+  avg_compl_tok_per_sec?: number;
 }
 
 export interface AgenticToolCallProgress {
@@ -189,7 +191,7 @@ export interface ChatFile {
 
 export interface ChatMessageRecord {
   id?: string;
-  parent_id?: string;
+  parent_id?: string | null;
   role: string;
   content: string;
   images?: string[];
@@ -201,6 +203,10 @@ export interface ChatMessageRecord {
   tokens?: number;
   model?: string;
   session_id?: string;
+  prompt_tokens?: number;
+  cached_prompt_tokens?: number;
+  decode_tok_per_sec?: number;
+  error?: string;
 }
 
 export interface Capabilities {
@@ -237,8 +243,14 @@ export interface DisplayMessage {
   elapsedMs?: number;
   /** Time from request send to first token in milliseconds. */
   ttftMs?: number;
-  /** Approximate token count (4 chars per token client-side estimate). */
+  /** Server-reported completion tokens. */
   tokens?: number;
+  promptTokens?: number;
+  cachedPromptTokens?: number;
+  /** Server-reported decode rate. */
+  decodeTokPerSec?: number;
+  /** Request failure; kept out of the history sent to the model. */
+  error?: string;
   /** Server-reported model that produced this message. */
   model?: string;
   /** Agentic session id this assistant message was generated under. Branches each pin their own. */
@@ -285,6 +297,7 @@ export interface StreamCallbacks {
   onFile: (file: File) => void;
   onFinishReason: (reason: string) => void;
   onSessionId: (id: string) => void;
+  onUsage: (usage: Usage) => void;
   onDone: () => void;
   onError: (error: string) => void;
 }

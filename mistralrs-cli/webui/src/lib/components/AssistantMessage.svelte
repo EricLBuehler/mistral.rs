@@ -73,13 +73,15 @@
     return `${(ms / 1000).toFixed(2)}s`;
   }
 
-  function fmtDecodeRate(tokens?: number, elapsedMs?: number, ttftMs?: number): string | null {
-    if (!tokens || !elapsedMs) return null;
-    const decodeMs = elapsedMs - (ttftMs ?? 0);
+  function fmtDecodeRate(m: DisplayMessage): string | null {
+    if (m.decodeTokPerSec) return `${m.decodeTokPerSec.toFixed(1)} tok/s`;
+    if (!m.tokens || !m.elapsedMs) return null;
+    const decodeMs = m.elapsedMs - (m.ttftMs ?? 0);
     if (decodeMs <= 0) return null;
-    const r = tokens / (decodeMs / 1000);
-    return `${r.toFixed(1)} tok/s`;
+    return `~${(m.tokens / (decodeMs / 1000)).toFixed(1)} tok/s`;
   }
+
+  let decodeRate = $derived(fmtDecodeRate(message));
 </script>
 
 <div class="flex w-full justify-start">
@@ -111,6 +113,13 @@
       {/if}
     {/each}
 
+    {#if message.error}
+      <div class="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300" role="alert">
+        <div class="font-medium">Request failed</div>
+        <div class="mt-0.5 whitespace-pre-wrap break-words font-mono text-xs">{message.error}</div>
+      </div>
+    {/if}
+
     <!-- "Working..." spinner: shown until end/stop signal received -->
     {#if streaming}
       <div class="flex items-center gap-2 px-1 text-xs text-gray-500 dark:text-gray-400">
@@ -123,13 +132,18 @@
     {/if}
 
     <!-- Per-message footer (only shown after streaming completes) -->
-    {#if !streaming && (message.finishReason || message.tokens || message.elapsedMs)}
+    {#if !streaming && (message.finishReason || message.tokens || message.elapsedMs || message.error)}
       <div class="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 font-mono text-[11px] text-gray-400 dark:text-gray-500">
         {#if message.tokens}
           <span><span class="text-gray-500 dark:text-gray-400">{message.tokens}</span> tok</span>
         {/if}
-        {#if fmtDecodeRate(message.tokens, message.elapsedMs, message.ttftMs)}
-          <span class="text-gray-500 dark:text-gray-400">{fmtDecodeRate(message.tokens, message.elapsedMs, message.ttftMs)}</span>
+        {#if decodeRate}
+          <span class="text-gray-500 dark:text-gray-400">{decodeRate}</span>
+        {/if}
+        {#if message.promptTokens}
+          <span>
+            <span class="text-gray-400 dark:text-gray-500">prompt</span> {message.promptTokens}{#if message.cachedPromptTokens}<span class="text-gray-400 dark:text-gray-500"> ({message.cachedPromptTokens} cached)</span>{/if}
+          </span>
         {/if}
         {#if fmtElapsed(message.ttftMs)}
           <span><span class="text-gray-400 dark:text-gray-500">ttft</span> {fmtElapsed(message.ttftMs)}</span>

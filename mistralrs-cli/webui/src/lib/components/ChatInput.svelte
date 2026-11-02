@@ -61,6 +61,7 @@
       }
     }
 
+    const draft = { text: inputValue, images: pendingImages, videos: pendingVideos };
     inputValue = "";
     pendingImages = [];
     pendingVideos = [];
@@ -68,11 +69,17 @@
       textareaEl.style.height = "auto";
     }
 
-    await chatStore.sendMessage(
+    const sent = await chatStore.sendMessage(
       content,
       imageUrls.length ? imageUrls : undefined,
       videoUrls.length ? videoUrls : undefined,
     );
+    if (!sent) {
+      inputValue = draft.text;
+      pendingImages = draft.images;
+      pendingVideos = draft.videos;
+      autoResize();
+    }
   }
 
   function handleKeydown(e: KeyboardEvent) {

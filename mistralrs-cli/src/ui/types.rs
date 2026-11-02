@@ -17,7 +17,7 @@ pub struct UiModelInfo {
     pub generation_defaults: GenerationParams,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Default, Serialize, Deserialize)]
 pub struct ChatMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -45,6 +45,15 @@ pub struct ChatMessage {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_prompt_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decode_tok_per_sec: Option<f64>,
+    /// Request failure shown in the UI; never sent back to the model as history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -141,6 +150,8 @@ pub struct AppState {
     pub speech_dir: String,
     pub current_chat: RwLock<Option<String>>,
     pub next_chat_id: RwLock<u32>,
+    /// Serializes read-modify-write of chat files so concurrent saves can't drop each other.
+    pub chat_write_lock: tokio::sync::Mutex<()>,
     /// Default generation parameters
     pub default_params: GenerationParams,
     /// Whether web search is enabled

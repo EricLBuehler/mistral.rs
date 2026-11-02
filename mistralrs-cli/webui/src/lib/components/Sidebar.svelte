@@ -1,42 +1,14 @@
 <script lang="ts">
   import { chatStore } from "../stores/chat.svelte";
-  import * as api from "../services/api";
   import type { ChatFile } from "../types";
   import { onMount } from "svelte";
 
-  let chats = $state<ChatFile[]>([]);
   let editingId = $state<string | null>(null);
   let editTitle = $state("");
 
-  async function refreshChats() {
-    try {
-      const result = await api.listChats();
-      chats = result.chats.sort(
-        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-      );
-    } catch {
-      // ignore
-    }
-  }
-
   onMount(() => {
-    refreshChats();
+    chatStore.refreshChats();
   });
-
-  async function handleNewChat() {
-    await chatStore.newChat();
-    await refreshChats();
-  }
-
-  async function handleLoadChat(id: string) {
-    await chatStore.loadChat(id);
-    await refreshChats();
-  }
-
-  async function handleDeleteChat(id: string) {
-    await chatStore.deleteChat(id);
-    await refreshChats();
-  }
 
   function startRename(id: string, currentTitle: string) {
     editingId = id;
@@ -44,11 +16,9 @@
   }
 
   async function saveRename(id: string) {
-    if (editTitle.trim()) {
-      await api.renameChat(id, editTitle.trim());
-      await refreshChats();
-    }
+    const title = editTitle.trim();
     editingId = null;
+    if (title) await chatStore.renameChat(id, title);
   }
 
   function getChatLabel(chat: ChatFile): string {
@@ -69,7 +39,7 @@
   <!-- New chat button -->
   <div class="p-3">
     <button
-      onclick={handleNewChat}
+      onclick={() => chatStore.newChat()}
       class="flex w-full items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
     >
       <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -84,7 +54,7 @@
   <!-- Chat list -->
   <div class="flex-1 overflow-y-auto p-2">
     <div class="space-y-0.5">
-      {#each chats as chat}
+      {#each chatStore.chats as chat (chat.id)}
         {@const isActive = chatStore.currentChatId === chat.id}
         {@const turns = turnCount(chat)}
         <div
@@ -106,7 +76,7 @@
           {:else}
             <button
               class="flex min-w-0 flex-1 flex-col items-start text-left"
-              onclick={() => handleLoadChat(chat.id!)}
+              onclick={() => chatStore.loadChat(chat.id!)}
             >
               <span class="w-full truncate">{getChatLabel(chat)}</span>
               <span class="w-full truncate font-mono text-[10.5px] {isActive ? 'text-blue-600 dark:text-blue-300' : 'text-gray-400 dark:text-gray-500'}">
@@ -125,7 +95,7 @@
               </button>
               <button
                 class="rounded p-0.5 text-gray-400 hover:text-red-500 dark:text-gray-500 dark:hover:text-red-400"
-                onclick={() => handleDeleteChat(chat.id!)}
+                onclick={() => chatStore.deleteChat(chat.id!)}
                 title="Delete"
               >
                 <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { modelStore } from "../stores/models.svelte";
   import { settingsStore } from "../stores/settings.svelte";
+  import { chatStore } from "../stores/chat.svelte";
   import * as api from "../services/api";
   import type { UiModelInfo } from "../types";
   import ParamPopover from "./ParamPopover.svelte";
@@ -27,7 +28,7 @@
 
   async function pickModel(name: string) {
     dropdownOpen = false;
-    if (name === modelStore.selectedModel) return;
+    if (name === modelStore.selectedModel || chatStore.isStreaming) return;
     modelStore.selectModel(name);
     try {
       await api.selectModel(name);
@@ -64,8 +65,10 @@
   <!-- Model dropdown chip -->
   <div class="relative" bind:this={dropdownEl}>
     <button
-      class="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1 text-sm hover:border-gray-300 dark:border-gray-800 dark:bg-gray-900 dark:hover:border-gray-700"
+      class="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1 text-sm hover:border-gray-300 disabled:cursor-not-allowed disabled:opacity-60 dark:border-gray-800 dark:bg-gray-900 dark:hover:border-gray-700"
       onclick={() => (dropdownOpen = !dropdownOpen)}
+      disabled={chatStore.isStreaming}
+      title={chatStore.isStreaming ? "Can't switch models while a reply is streaming" : undefined}
       aria-haspopup="listbox"
       aria-expanded={dropdownOpen}
     >

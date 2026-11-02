@@ -49,8 +49,6 @@ pub(crate) const UI_RENAME_CHAT_ROUTE: RouteInfo =
     RouteInfo::new("/api/rename_chat", "POST", RouteKind::Ui);
 pub(crate) const UI_APPEND_MESSAGE_ROUTE: RouteInfo =
     RouteInfo::new("/api/append_message", "POST", RouteKind::Ui);
-pub(crate) const UI_EDIT_MESSAGE_ROUTE: RouteInfo =
-    RouteInfo::new("/api/edit_message", "POST", RouteKind::Ui);
 pub(crate) const UI_SET_TAIL_ROUTE: RouteInfo =
     RouteInfo::new("/api/set_tail", "POST", RouteKind::Ui);
 pub(crate) const UI_FORK_SESSION_ROUTE: RouteInfo =
@@ -208,6 +206,7 @@ pub async fn build_ui_router(
         speech_dir: speech_dir.to_string_lossy().to_string(),
         current_chat: tokio::sync::RwLock::new(None),
         next_chat_id: tokio::sync::RwLock::new(next_id),
+        chat_write_lock: tokio::sync::Mutex::new(()),
         default_params: GenerationParams::default(),
         search_enabled: enable_search,
         search_embedding_model,
@@ -229,7 +228,6 @@ pub async fn build_ui_router(
         .route(UI_LOAD_CHAT_ROUTE.path, post(load_chat))
         .route(UI_RENAME_CHAT_ROUTE.path, post(rename_chat))
         .route(UI_APPEND_MESSAGE_ROUTE.path, post(append_message))
-        .route(UI_EDIT_MESSAGE_ROUTE.path, post(edit_message))
         .route(UI_SET_TAIL_ROUTE.path, post(set_tail))
         .route(UI_FORK_SESSION_ROUTE.path, post(fork_session))
         .route(UI_SAVE_CHAT_SESSION_ROUTE.path, post(save_chat_session))
