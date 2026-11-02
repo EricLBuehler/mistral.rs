@@ -2,6 +2,9 @@ import type {
   DisplayMessage,
   AgenticToolCallProgress,
   ChatCompletionMessage,
+  Attachments,
+  MessageContent,
+  TextAttachment,
   ChatFile,
   ChatMessageRecord,
   ChatSummary,
@@ -27,6 +30,18 @@ const CHARS_PER_TOKEN_ESTIMATE = 4;
 const SEARCH_DEBOUNCE_MS = 150;
 export const STOPPED_FINISH_REASON = "stopped";
 
+const MIN_FENCE_LENGTH = 3;
+
+function fenced(file: TextAttachment): string {
+  const longestRun = Math.max(0, ...(file.text.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = "`".repeat(Math.max(MIN_FENCE_LENGTH, longestRun + 1));
+  return `${file.name}:\n${fence}\n${file.text}\n${fence}`;
+}
+
+export function promptText(content: string, files: TextAttachment[] | undefined): string {
+  return [...(files ?? []).map(fenced), content].filter(Boolean).join("\n\n");
+}
+
 function inferenceMediaUrl(url: string): string {
   if (!UI_UPLOAD_URL.test(url)) return url;
   return `mistralrs-upload:${url.slice("uploads/".length)}`;
@@ -51,6 +66,8 @@ function toRecord(m: DisplayMessage): ChatMessageRecord {
     content: m.content,
     images: m.images,
     videos: m.videos,
+    audios: m.audios,
+    files: m.files,
     blocks: m.blocks,
     finish_reason: m.finishReason ?? undefined,
     elapsed_ms: m.elapsedMs,
@@ -73,6 +90,8 @@ function fromRecord(m: ChatMessageRecord, id: string, parentId: string | null): 
     content: m.content,
     images: m.images,
     videos: m.videos,
+    audios: m.audios,
+    files: m.files,
     blocks: m.blocks,
     finishReason: m.finish_reason,
     elapsedMs: m.elapsed_ms,
@@ -288,8 +307,8 @@ class ChatStore {
   // ===== send/generate =====
 
   /** Returns false when nothing was sent, so the caller can keep the user's draft. */
-  async sendMessage(content: string, imageUrls?: string[], videoUrls?: string[]): Promise<boolean> {
-    if (!content.trim() && !imageUrls?.length && !videoUrls?.length) return false;
+  async sendMessage(content: string, attachments: Attachments = {}): Promise<boolean> {
+    if (!content.trim() && !Object.values(attachments).some((list) => list?.length)) return false;
     if (this.isStreaming) return false;
     const model = modelStore.selectedModel;
     if (!model) return false;
@@ -310,8 +329,10 @@ class ChatStore {
       parentId: this.tailId,
       role: "user",
       content,
-      images: imageUrls,
-      videos: videoUrls,
+      images: attachments.images,
+      videos: attachments.videos,
+      audios: attachments.audios,
+      files: attachments.files,
     };
     this.insertNode(userMsg);
     this.saveMessage(chatId, userMsg);
@@ -325,22 +346,29 @@ class ChatStore {
     if (settingsStore.systemPrompt.trim()) {
       apiMessages.push({ role: "system", content: settingsStore.systemPrompt });
     }
+    const turns: { role: "user" | "assistant"; text: string; media: MessageContent[] }[] = [];
     for (const msg of this.messages) {
       if (msg.role === "system") continue;
       if (msg.error && !msg.content) continue;
-      const media = [
-        ...(msg.images ?? []).map((url) => ({
-          type: "image_url" as const,
-          image_url: { url: inferenceMediaUrl(url) },
-        })),
-        ...(msg.videos ?? []).map((url) => ({
-          type: "video_url" as const,
-          video_url: { url: inferenceMediaUrl(url) },
-        })),
+      const text = msg.role === "user" ? promptText(msg.content, msg.files) : msg.content;
+      const media: MessageContent[] = [
+        ...(msg.images ?? []).map((url) => ({ type: "image_url" as const, image_url: { url: inferenceMediaUrl(url) } })),
+        ...(msg.videos ?? []).map((url) => ({ type: "video_url" as const, video_url: { url: inferenceMediaUrl(url) } })),
+        ...(msg.audios ?? []).map((url) => ({ type: "audio_url" as const, audio_url: { url } })),
       ];
+      const prev = turns.at(-1);
+      // A failed reply is skipped above; merging keeps roles alternating for strict chat templates.
+      if (msg.role === "user" && prev?.role === "user") {
+        prev.text = [prev.text, text].filter(Boolean).join("\n\n");
+        prev.media.push(...media);
+        continue;
+      }
+      turns.push({ role: msg.role, text, media });
+    }
+    for (const turn of turns) {
       apiMessages.push({
-        role: msg.role,
-        content: media.length ? [{ type: "text", text: msg.content }, ...media] : msg.content,
+        role: turn.role,
+        content: turn.media.length ? [{ type: "text", text: turn.text }, ...turn.media] : turn.text,
       });
     }
     return apiMessages;
@@ -652,6 +680,8 @@ class ChatStore {
       content: newContent,
       images: node.images,
       videos: node.videos,
+      audios: node.audios,
+      files: node.files,
     };
     this.insertNode(edited);
     this.saveMessage(chatId, edited);

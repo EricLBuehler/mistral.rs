@@ -19,6 +19,12 @@ pub struct UiModelInfo {
     pub generation_defaults: GenerationParams,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+pub struct TextAttachment {
+    pub name: String,
+    pub text: String,
+}
+
 #[derive(Default, Serialize, Deserialize)]
 pub struct ChatMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -31,6 +37,10 @@ pub struct ChatMessage {
     pub images: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub videos: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audios: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<TextAttachment>>,
     /// Rich display blocks (reasoning, tool calls with results/images) for UI rendering.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocks: Option<serde_json::Value>,

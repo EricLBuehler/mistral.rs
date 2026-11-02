@@ -128,8 +128,8 @@ beforeEach(async () => {
   modelStore.selectedModel = "m";
 });
 
-async function sendAndReply(text, reply, usage) {
-  const sending = chatStore.sendMessage(text);
+async function sendAndReply(text, reply, usage, attachments) {
+  const sending = chatStore.sendMessage(text, attachments);
   await until(() => fake.streams.length > 0 && chatStore.isStreaming, "stream start");
   const stream = fake.streams.at(-1);
   stream.content(reply);
@@ -218,8 +218,26 @@ test("request errors are shown but never sent back to the model", { timeout: TES
 
   await sendAndReply("second", "ok");
   const lastRequest = fake.requests.filter((r) => r.path.endsWith("completions")).at(-1);
-  assert.deepEqual(lastRequest.body.messages.map((m) => m.role), ["user", "user"]);
+  assert.deepEqual(lastRequest.body.messages, [{ role: "user", content: "first\n\nsecond" }]);
   assert.ok(!JSON.stringify(lastRequest.body.messages).includes("boom"));
+});
+
+test("text files and audio reach the model and survive a reload", { timeout: TEST_TIMEOUT_MS }, async () => {
+  const audio = "data:audio/wav;base64,UklGRg==";
+  const files = [{ name: "notes.md", text: "has ``` inside" }];
+  await sendAndReply("summarize", "ok", undefined, { audios: [audio], files });
+
+  const request = fake.requests.filter((r) => r.path.endsWith("completions")).at(-1);
+  assert.deepEqual(request.body.messages[0].content, [
+    { type: "text", text: "notes.md:\n````\nhas ``` inside\n````\n\nsummarize" },
+    { type: "audio_url", audio_url: { url: audio } },
+  ]);
+
+  await chatStore.loadChat("chat_1");
+  const user = chatStore.messages[0];
+  assert.equal(user.content, "summarize");
+  assert.deepEqual(user.audios, [audio]);
+  assert.deepEqual(user.files, files);
 });
 
 test("failing to create a chat reports it and lets the caller keep the draft", { timeout: TEST_TIMEOUT_MS }, async () => {

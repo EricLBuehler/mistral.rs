@@ -27,6 +27,10 @@ class ModelStore {
     return this.selectedModelKind === "multimodal";
   }
 
+  acceptsInput(modality: string): boolean {
+    return this.selectedInputModalities.includes(modality);
+  }
+
   get isSpeech(): boolean {
     return this.selectedModelKind === "speech";
   }

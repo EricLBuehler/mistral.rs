@@ -9,6 +9,7 @@
   import Download from "@lucide/svelte/icons/download";
   import ChevronLeft from "@lucide/svelte/icons/chevron-left";
   import ChevronRight from "@lucide/svelte/icons/chevron-right";
+  import FileText from "@lucide/svelte/icons/file-text";
 
   let { message }: { message: DisplayMessage } = $props();
   let copied = $state(false);
@@ -112,6 +113,29 @@
             {/if}
             {@render downloadButton(vid, isGif ? `video-${i + 1}.gif` : `video-${i + 1}.mp4`, isGif ? "Download GIF" : "Download video")}
           </div>
+        {/each}
+      </div>
+    {/if}
+
+    {#if message.audios?.length}
+      <div class="mb-2 flex flex-col gap-2">
+        {#each message.audios as aud, i (i)}
+          <audio src={aud} controls class="h-9 max-w-full"></audio>
+        {/each}
+      </div>
+    {/if}
+
+    {#if message.files?.length}
+      <div class="mb-2 flex flex-col gap-1.5">
+        {#each message.files as file, i (i)}
+          <details class="group/file rounded-md border border-line bg-background">
+            <summary class="flex cursor-pointer list-none items-center gap-2 px-2.5 py-1.5 text-xs">
+              <FileText class="h-3.5 w-3.5 shrink-0 text-muted" />
+              <span class="truncate font-mono text-muted-strong">{file.name}</span>
+              <ChevronRight class="ml-auto h-3.5 w-3.5 shrink-0 text-muted transition-transform group-open/file:rotate-90" />
+            </summary>
+            <pre class="max-h-72 overflow-auto border-t border-line px-3 py-2 font-mono text-xs text-code">{file.text}</pre>
+          </details>
         {/each}
       </div>
     {/if}

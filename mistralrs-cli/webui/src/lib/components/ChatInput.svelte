@@ -1,19 +1,44 @@
 <script lang="ts">
   import { chatStore } from "../stores/chat.svelte";
   import { modelStore } from "../stores/models.svelte";
-  import * as api from "../services/api";
+  import type { TextAttachment } from "../types";
   import ArrowUp from "@lucide/svelte/icons/arrow-up";
   import Square from "@lucide/svelte/icons/square";
   import Paperclip from "@lucide/svelte/icons/paperclip";
   import X from "@lucide/svelte/icons/x";
+  import FileText from "@lucide/svelte/icons/file-text";
+  import AudioLines from "@lucide/svelte/icons/audio-lines";
 
   let { placeholder = "Message mistral.rs" }: { placeholder?: string } = $props();
 
   let textareaEl: HTMLTextAreaElement;
   let inputValue = $state("");
-  let pendingImages = $state<{ file: File; url: string; uploadedUrl?: string }[]>([]);
-  let pendingVideos = $state<{ file: File; url: string; uploadedUrl?: string }[]>([]);
+  type PendingMedia = { file: File; url: string };
+
+  const MAX_TEXT_FILE_BYTES = 1024 * 1024;
+  const TEXT_FILE_EXTENSIONS =
+    ".txt,.md,.py,.js,.ts,.json,.csv,.xml,.yaml,.yml,.toml,.html,.css,.rs,.go,.c,.h,.cpp,.java,.sh,.log";
+  const IMAGE_ACCEPT = "image/*";
+  const VIDEO_ACCEPT = "video/*,.gif,.mp4,.avi,.mov,.mkv,.webm,.m4v";
+  const AUDIO_ACCEPT = "audio/*";
+
+  let pendingImages = $state<PendingMedia[]>([]);
+  let pendingVideos = $state<PendingMedia[]>([]);
+  let pendingAudios = $state<PendingMedia[]>([]);
+  let pendingFiles = $state<TextAttachment[]>([]);
   let isDragging = $state(false);
+
+  let canImage = $derived(modelStore.acceptsInput("vision"));
+  let canVideo = $derived(modelStore.acceptsInput("video"));
+  let canAudio = $derived(modelStore.acceptsInput("audio"));
+  let accept = $derived(
+    [TEXT_FILE_EXTENSIONS, canImage && IMAGE_ACCEPT, canVideo && VIDEO_ACCEPT, canAudio && AUDIO_ACCEPT]
+      .filter(Boolean)
+      .join(","),
+  );
+  let hasAttachments = $derived(
+    pendingImages.length + pendingVideos.length + pendingAudios.length + pendingFiles.length > 0,
+  );
 
   function fileToDataUrl(file: File): Promise<string> {
     return new Promise((resolve, reject) => {
@@ -30,60 +55,47 @@
     textareaEl.style.height = Math.min(textareaEl.scrollHeight, 200) + "px";
   }
 
+  async function dataUrls(list: PendingMedia[]): Promise<string[] | undefined> {
+    if (!list.length) return undefined;
+    return Promise.all(list.map((m) => fileToDataUrl(m.file)));
+  }
+
   async function handleSend() {
     if (chatStore.isStreaming) return;
     const content = inputValue.trim();
-    if (!content && !pendingImages.length && !pendingVideos.length) return;
+    if (!content && !hasAttachments) return;
 
-    // Encode as data URLs; the /v1/chat/completions endpoint only accepts
-    // http/https/data sources, not the server's relative `uploads/...` paths.
-    const imageUrls: string[] = [];
-    for (const img of pendingImages) {
-      if (!img.uploadedUrl) {
-        try {
-          img.uploadedUrl = await fileToDataUrl(img.file);
-        } catch (e) {
-          console.error("Failed to read image:", e);
-          continue;
-        }
-      }
-      if (img.uploadedUrl) {
-        imageUrls.push(img.uploadedUrl);
-      }
+    // Data URLs because /v1/chat/completions only accepts http/https/data sources, not `uploads/...` paths.
+    let images, videos, audios;
+    try {
+      [images, videos, audios] = await Promise.all([
+        dataUrls(pendingImages),
+        dataUrls(pendingVideos),
+        dataUrls(pendingAudios),
+      ]);
+    } catch (e) {
+      chatStore.lastError = `Couldn't read an attachment: ${e instanceof Error ? e.message : String(e)}`;
+      return;
     }
 
-    const videoUrls: string[] = [];
-    for (const vid of pendingVideos) {
-      if (!vid.uploadedUrl) {
-        try {
-          vid.uploadedUrl = await fileToDataUrl(vid.file);
-        } catch (e) {
-          console.error("Failed to read video:", e);
-          continue;
-        }
-      }
-      if (vid.uploadedUrl) {
-        videoUrls.push(vid.uploadedUrl);
-      }
-    }
-
-    const draft = { text: inputValue, images: pendingImages, videos: pendingVideos };
+    const draft = { text: inputValue, images: pendingImages, videos: pendingVideos, audios: pendingAudios, files: pendingFiles };
+    const files = pendingFiles.length ? pendingFiles : undefined;
     inputValue = "";
     pendingImages = [];
     pendingVideos = [];
+    pendingAudios = [];
+    pendingFiles = [];
     if (textareaEl) {
       textareaEl.style.height = "auto";
     }
 
-    const sent = await chatStore.sendMessage(
-      content,
-      imageUrls.length ? imageUrls : undefined,
-      videoUrls.length ? videoUrls : undefined,
-    );
+    const sent = await chatStore.sendMessage(content, { images, videos, audios, files });
     if (!sent) {
       inputValue = draft.text;
       pendingImages = draft.images;
       pendingVideos = draft.videos;
+      pendingAudios = draft.audios;
+      pendingFiles = draft.files;
       autoResize();
     }
   }
@@ -108,26 +120,29 @@
     input.value = "";
   }
 
-  async function addFile(file: File) {
-    if (file.type.startsWith("video/") || file.name.endsWith(".gif")) {
-      const url = URL.createObjectURL(file);
-      pendingVideos = [...pendingVideos, { file, url }];
-    } else if (file.type.startsWith("image/")) {
-      const url = URL.createObjectURL(file);
-      pendingImages = [...pendingImages, { file, url }];
-    } else if (file.type.startsWith("audio/")) {
-      try {
-        await api.uploadAudio(file);
-      } catch (e) {
-        console.error("Audio upload failed:", e);
-      }
-    } else {
-      try {
-        await api.uploadText(file);
-      } catch (e) {
-        console.error("Text upload failed:", e);
-      }
+  async function addTextFile(file: File) {
+    if (file.size > MAX_TEXT_FILE_BYTES) {
+      chatStore.lastError = `${file.name} is too large to attach (limit ${MAX_TEXT_FILE_BYTES / 1024 / 1024} MB)`;
+      return;
     }
+    const text = await file.text();
+    if (text.includes("\u0000")) {
+      chatStore.lastError = `${file.name} doesn't look like a text file`;
+      return;
+    }
+    pendingFiles = [...pendingFiles, { name: file.name, text }];
+  }
+
+  async function addFile(file: File) {
+    const isVideo = file.type.startsWith("video/") || file.name.toLowerCase().endsWith(".gif");
+    const isImage = !isVideo && file.type.startsWith("image/");
+    const isAudio = file.type.startsWith("audio/");
+    const media = (list: PendingMedia[]) => [...list, { file, url: URL.createObjectURL(file) }];
+    if (isVideo && canVideo) pendingVideos = media(pendingVideos);
+    else if (isImage && canImage) pendingImages = media(pendingImages);
+    else if (isAudio && canAudio) pendingAudios = media(pendingAudios);
+    else if (isVideo || isImage || isAudio) chatStore.lastError = `${modelStore.selectedModel} can't take ${file.name}`;
+    else await addTextFile(file);
   }
 
   function removeImage(index: number) {
@@ -138,6 +153,15 @@
   function removeVideo(index: number) {
     URL.revokeObjectURL(pendingVideos[index].url);
     pendingVideos = pendingVideos.filter((_, i) => i !== index);
+  }
+
+  function removeAudio(index: number) {
+    URL.revokeObjectURL(pendingAudios[index].url);
+    pendingAudios = pendingAudios.filter((_, i) => i !== index);
+  }
+
+  function removeFile(index: number) {
+    pendingFiles = pendingFiles.filter((_, i) => i !== index);
   }
 
   function handleDragOver(e: DragEvent) {
@@ -172,6 +196,16 @@
   </button>
 {/snippet}
 
+{#snippet chip(Icon: typeof FileText, name: string, onclick: () => void, label: string)}
+  <div class="flex h-16 max-w-48 items-center gap-2 rounded-md border border-line bg-background pl-2.5 pr-1">
+    <Icon class="h-4 w-4 shrink-0 text-muted" />
+    <span class="truncate font-mono text-xs text-muted-strong" title={name}>{name}</span>
+    <button class="shrink-0 rounded p-0.5 text-muted hover:bg-surface-raised hover:text-foreground" {onclick} aria-label={label} title={label}>
+      <X class="h-3 w-3" />
+    </button>
+  </div>
+{/snippet}
+
 <div
   class="relative rounded-lg border bg-surface shadow-sm shadow-black/5 transition-colors {isDragging ? 'border-accent' : 'border-line-strong focus-within:border-muted'}"
   role="region"
@@ -186,7 +220,7 @@
     </div>
   {/if}
 
-  {#if pendingImages.length > 0 || pendingVideos.length > 0}
+  {#if hasAttachments}
     <div class="flex flex-wrap gap-2 px-3 pt-3">
       {#each pendingImages as img, i}
         <div class="relative h-16 w-16 overflow-hidden rounded-md border border-line">
@@ -206,6 +240,12 @@
           {@render removeButton(() => removeVideo(i), "Remove video")}
         </div>
       {/each}
+      {#each pendingAudios as aud, i}
+        {@render chip(AudioLines, aud.file.name, () => removeAudio(i), "Remove audio")}
+      {/each}
+      {#each pendingFiles as f, i}
+        {@render chip(FileText, f.name, () => removeFile(i), "Remove file")}
+      {/each}
     </div>
   {/if}
 
@@ -222,13 +262,13 @@
   ></textarea>
 
   <div class="flex items-center gap-2 px-2 pb-2">
-    {#if modelStore.isMultimodal}
+    {#if modelStore.selectedModel}
       <label class="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-muted hover:bg-surface-raised hover:text-foreground" title="Attach files">
         <Paperclip class="h-4 w-4" />
         <input
           type="file"
           class="hidden"
-          accept="image/*,video/*,audio/*,.gif,.mp4,.avi,.mov,.mkv,.webm,.m4v,.txt,.md,.py,.js,.ts,.json,.csv,.xml,.yaml,.yml,.toml,.html,.css"
+          {accept}
           multiple
           onchange={handleFileSelect}
           aria-label="Attach files"
@@ -250,7 +290,7 @@
     {:else}
       <button
         onclick={handleSend}
-        disabled={!modelStore.selectedModel || (!inputValue.trim() && !pendingImages.length && !pendingVideos.length)}
+        disabled={!modelStore.selectedModel || (!inputValue.trim() && !hasAttachments)}
         class="ml-auto inline-flex h-8 w-8 items-center justify-center rounded-md bg-fill text-on-fill hover:opacity-90 disabled:bg-surface-raised disabled:text-muted"
         title="Send message"
         aria-label="Send message"
