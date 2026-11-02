@@ -8,8 +8,29 @@ use super::ToolFormatParser;
 use crate::{tools::CalledFunctionParameters, Tool};
 
 const PREFIX: &str = "<tool_calls";
-const START: &str = "<tool_calls>";
-const END: &str = "</tool_calls>";
+pub(super) const START: &str = "<tool_calls>";
+pub(super) const END: &str = "</tool_calls>";
+
+/// Parses one JSON value from `rest` and requires it be immediately followed, modulo
+/// whitespace, by `</tool_calls>` - so a closing tag inside a string argument can't end the
+/// call early the way a plain `str::find` would. Returns the raw JSON body text and the
+/// offset in `rest` right after the closing tag.
+pub(super) fn locate_call(rest: &str) -> Option<(&str, usize)> {
+    let mut stream =
+        serde_json::Deserializer::from_str(rest).into_iter::<Vec<CalledFunctionParameters>>();
+    let calls = stream.next()?.ok()?;
+    if calls.is_empty() {
+        return None;
+    }
+    let consumed = stream.byte_offset();
+    let after = &rest[consumed..];
+    let trimmed_after = after.trim_start();
+    if !trimmed_after.starts_with(END) {
+        return None;
+    }
+    let end_of_tag = consumed + (after.len() - trimmed_after.len()) + END.len();
+    Some((rest[..consumed].trim(), end_of_tag))
+}
 
 pub struct HunyuanParser;
 
@@ -50,16 +71,9 @@ impl ToolFormatParser for HunyuanParser {
             return Ok(None);
         };
         let rest = &message[start + START.len()..];
-        let Some(end) = rest.find(END) else {
+        let Some((body, _)) = locate_call(rest) else {
             return Ok(None);
         };
-        let body = rest[..end].trim();
-        let Ok(calls) = serde_json::from_str::<Vec<CalledFunctionParameters>>(body) else {
-            return Ok(None);
-        };
-        if calls.is_empty() {
-            return Ok(None);
-        }
         Ok(Some(body.to_string()))
     }
 }
@@ -86,6 +100,19 @@ mod tests {
         let (calls, content) = extract_model_specific_message(message).unwrap().unwrap();
 
         assert_eq!(calls, r#"[{"name":"search","arguments":{}}]"#);
+        assert_eq!(content, "beforeafter");
+    }
+
+    #[test]
+    fn keeps_closing_tag_found_inside_a_string_argument() {
+        let message = r#"before<tool_calls>[{"name":"echo","arguments":{"value":"</tool_calls> and <tool_calls> kept"}}]</tool_calls>after"#;
+        let (calls, content) = extract_model_specific_message(message).unwrap().unwrap();
+
+        let calls: serde_json::Value = serde_json::from_str(&calls).unwrap();
+        assert_eq!(
+            calls[0]["arguments"]["value"],
+            "</tool_calls> and <tool_calls> kept"
+        );
         assert_eq!(content, "beforeafter");
     }
 
