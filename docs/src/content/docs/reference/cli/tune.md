@@ -20,7 +20,7 @@ mistralrs tune [OPTIONS] [COMMAND]
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
 | `--dtype <DTYPE>` | `auto` | Weight data type: `auto`, `bf16`, `f16`, or `f32`. `auto` picks the best one for the device |
 | `--hf-overrides <HF_OVERRIDES>` |  | JSON to merge into the model's `config.json`; nested objects merge key by key |
-| `--max-model-len <MAX_MODEL_LEN>` |  | Maximum context length, in tokens |
+| `--max-model-len <MAX_MODEL_LEN>` |  | Most tokens (prompt plus output) one request may use; default: what the model and KV cache allow |
 | `--format <FORMAT>` |  | Model file format. Auto-detected from `-f` when omitted<br>`plain`: Safetensors weights<br>`gguf`: GGUF file<br>`ggml`: GGML file |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
 | `--mmproj <MMPROJ>` |  | GGUF vision or audio projector file(s), separated by semicolons. Auto-selected when there is only one |
@@ -64,7 +64,7 @@ mistralrs tune auto [OPTIONS] --model-id <MODEL_ID>
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
 | `--dtype <DTYPE>` | `auto` | Weight data type: `auto`, `bf16`, `f16`, or `f32`. `auto` picks the best one for the device |
 | `--hf-overrides <HF_OVERRIDES>` |  | JSON to merge into the model's `config.json`; nested objects merge key by key |
-| `--max-model-len <MAX_MODEL_LEN>` |  | Maximum context length, in tokens |
+| `--max-model-len <MAX_MODEL_LEN>` |  | Most tokens (prompt plus output) one request may use; default: what the model and KV cache allow |
 | `--format <FORMAT>` |  | Model file format. Auto-detected from `-f` when omitted<br>`plain`: Safetensors weights<br>`gguf`: GGUF file<br>`ggml`: GGML file |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
 | `--mmproj <MMPROJ>` |  | GGUF vision or audio projector file(s), separated by semicolons. Auto-selected when there is only one |
@@ -105,7 +105,7 @@ mistralrs tune text [OPTIONS] --model-id <MODEL_ID>
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
 | `--dtype <DTYPE>` | `auto` | Weight data type: `auto`, `bf16`, `f16`, or `f32`. `auto` picks the best one for the device |
 | `--hf-overrides <HF_OVERRIDES>` |  | JSON to merge into the model's `config.json`; nested objects merge key by key |
-| `--max-model-len <MAX_MODEL_LEN>` |  | Maximum context length, in tokens |
+| `--max-model-len <MAX_MODEL_LEN>` |  | Most tokens (prompt plus output) one request may use; default: what the model and KV cache allow |
 | `--format <FORMAT>` |  | Model file format. Auto-detected from `-f` when omitted<br>`plain`: Safetensors weights<br>`gguf`: GGUF file<br>`ggml`: GGML file |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
 | `--mmproj <MMPROJ>` |  | GGUF vision or audio projector file(s), separated by semicolons. Auto-selected when there is only one |
@@ -142,7 +142,7 @@ mistralrs tune multimodal [OPTIONS] --model-id <MODEL_ID>
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
 | `--dtype <DTYPE>` | `auto` | Weight data type: `auto`, `bf16`, `f16`, or `f32`. `auto` picks the best one for the device |
 | `--hf-overrides <HF_OVERRIDES>` |  | JSON to merge into the model's `config.json`; nested objects merge key by key |
-| `--max-model-len <MAX_MODEL_LEN>` |  | Maximum context length, in tokens |
+| `--max-model-len <MAX_MODEL_LEN>` |  | Most tokens (prompt plus output) one request may use; default: what the model and KV cache allow |
 | `--format <FORMAT>` |  | Model file format. Auto-detected from `-f` when omitted<br>`plain`: Safetensors weights<br>`gguf`: GGUF file<br>`ggml`: GGML file |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
 | `--mmproj <MMPROJ>` |  | GGUF vision or audio projector file(s), separated by semicolons. Auto-selected when there is only one |
@@ -183,7 +183,7 @@ mistralrs tune diffusion [OPTIONS] --model-id <MODEL_ID>
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
 | `--dtype <DTYPE>` | `auto` | Weight data type: `auto`, `bf16`, `f16`, or `f32`. `auto` picks the best one for the device |
 | `--hf-overrides <HF_OVERRIDES>` |  | JSON to merge into the model's `config.json`; nested objects merge key by key |
-| `--max-model-len <MAX_MODEL_LEN>` |  | Maximum context length, in tokens |
+| `--max-model-len <MAX_MODEL_LEN>` |  | Most tokens (prompt plus output) one request may use; default: what the model and KV cache allow |
 | `--cpu` | `false` | Force CPU-only execution |
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Layers per device as `ORD:NUM;...`, e.g. `0:10;1:20` puts 10 layers on GPU 0 and 20 on GPU 1. Omit for automatic mapping |
 | `--topology <TOPOLOGY>` |  | YAML file setting the device and quantization for each layer range |
@@ -204,7 +204,7 @@ mistralrs tune speech [OPTIONS] --model-id <MODEL_ID>
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
 | `--dtype <DTYPE>` | `auto` | Weight data type: `auto`, `bf16`, `f16`, or `f32`. `auto` picks the best one for the device |
 | `--hf-overrides <HF_OVERRIDES>` |  | JSON to merge into the model's `config.json`; nested objects merge key by key |
-| `--max-model-len <MAX_MODEL_LEN>` |  | Maximum context length, in tokens |
+| `--max-model-len <MAX_MODEL_LEN>` |  | Most tokens (prompt plus output) one request may use; default: what the model and KV cache allow |
 | `--cpu` | `false` | Force CPU-only execution |
 | `-n, --device-layers <DEVICE_LAYERS>` |  | Layers per device as `ORD:NUM;...`, e.g. `0:10;1:20` puts 10 layers on GPU 0 and 20 on GPU 1. Omit for automatic mapping |
 | `--topology <TOPOLOGY>` |  | YAML file setting the device and quantization for each layer range |
@@ -225,7 +225,7 @@ mistralrs tune embedding [OPTIONS] --model-id <MODEL_ID>
 | `-a, --arch <ARCH>` |  | Model architecture (auto-detected if not specified) |
 | `--dtype <DTYPE>` | `auto` | Weight data type: `auto`, `bf16`, `f16`, or `f32`. `auto` picks the best one for the device |
 | `--hf-overrides <HF_OVERRIDES>` |  | JSON to merge into the model's `config.json`; nested objects merge key by key |
-| `--max-model-len <MAX_MODEL_LEN>` |  | Maximum context length, in tokens |
+| `--max-model-len <MAX_MODEL_LEN>` |  | Most tokens (prompt plus output) one request may use; default: what the model and KV cache allow |
 | `--format <FORMAT>` |  | Model file format. Auto-detected from `-f` when omitted<br>`plain`: Safetensors weights<br>`gguf`: GGUF file<br>`ggml`: GGML file |
 | `-f, --quantized-file <QUANTIZED_FILE>` |  | GGUF/GGML filename(s); the suffix selects the format (semicolon-separated for multiple) |
 | `--mmproj <MMPROJ>` |  | GGUF vision or audio projector file(s), separated by semicolons. Auto-selected when there is only one |

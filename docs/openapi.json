@@ -5654,6 +5654,14 @@
           "id": {
             "type": "string"
           },
+          "max_model_len": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Most tokens (prompt plus output) one request may use; absent when the model isn't loaded.",
+            "minimum": 0
+          },
           "mcp_servers_connected": {
             "type": [
               "integer",

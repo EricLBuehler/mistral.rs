@@ -264,16 +264,12 @@ pub trait MultimodalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedMode
         normal_loading_metadata: NormalLoadingMetadata,
         attention_mechanism: AttentionImplementation,
     ) -> Result<Box<dyn MultimodalModel + Send + Sync>>;
+    /// Overridden by families that size RoPE from `max_model_len`; otherwise the engine enforces it alone.
     fn runtime_config<'a>(
         &self,
         config: &'a str,
-        max_model_len: Option<usize>,
+        _max_model_len: Option<usize>,
     ) -> Result<Cow<'a, str>> {
-        if let Some(max_model_len) = max_model_len {
-            anyhow::bail!(
-                "max_model_len={max_model_len} is not supported by this multimodal loader"
-            );
-        }
         Ok(Cow::Borrowed(config))
     }
     fn is_gptx(&self, config: &str) -> bool;

@@ -23,9 +23,9 @@ use either::Either;
 use mistralrs_core::{
     is_chat_template_request_error, AgentPermission, AgentToolApprovalHandler,
     ApproximateUserLocation, ChatCompletionChunkResponse, ChatCompletionResponse,
-    CodeExecutionPermission, Function, MistralRs, ReasoningEffort, Request, RequestMessage,
-    Response, TokenizationRequest, Tool, ToolChoice, ToolType, Usage, WebSearchOptions,
-    WebSearchUserLocation,
+    CodeExecutionPermission, ContextLengthExceeded, Function, MistralRs, ReasoningEffort, Request,
+    RequestMessage, Response, TokenizationRequest, Tool, ToolChoice, ToolType, Usage,
+    WebSearchOptions, WebSearchUserLocation,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -38,7 +38,7 @@ use utoipa::ToSchema;
 use crate::{
     chat_completion::{parse_request, ChatCompletionParseContext},
     handler_core::{
-        create_response_channel, send_request_with_model, ApiError, ApiErrorKind,
+        create_response_channel, find_error, send_request_with_model, ApiError, ApiErrorKind,
         ResponseErrorMessage, INTERNAL_ERROR_MESSAGE,
     },
     mistralrs_server_router_builder::AgenticDefaults,
@@ -1555,8 +1555,7 @@ impl futures::Stream for AnthropicStreamer {
                             self.stream.handle_error_event(ApiError::model_error());
                         }
                         Response::ValidationError(e) => {
-                            let error =
-                                ApiError::from_error(e.as_ref(), ApiErrorKind::InvalidRequest);
+                            let error = anthropic_validation_error(e.as_ref());
                             if matches!(
                                 error.kind,
                                 ApiErrorKind::Internal
@@ -1664,9 +1663,9 @@ impl IntoResponse for AnthropicMessagesResponder {
             AnthropicMessagesResponder::InternalError(e) => {
                 anthropic_error_response(ApiError::from_error(e.as_ref(), ApiErrorKind::Internal))
             }
-            AnthropicMessagesResponder::ValidationError(e) => anthropic_error_response(
-                ApiError::from_error(e.as_ref(), ApiErrorKind::InvalidRequest),
-            ),
+            AnthropicMessagesResponder::ValidationError(e) => {
+                anthropic_error_response(anthropic_validation_error(e.as_ref()))
+            }
             AnthropicMessagesResponder::ModelError(_) => {
                 anthropic_error_response(ApiError::model_error())
             }
@@ -1716,6 +1715,17 @@ fn anthropic_error_type(kind: ApiErrorKind) -> &'static str {
         ApiErrorKind::RateLimited => "rate_limit_error",
         ApiErrorKind::Unavailable | ApiErrorKind::Internal => "api_error",
         ApiErrorKind::Overloaded => "overloaded_error",
+    }
+}
+
+// Anthropic's overflow wording; Claude Code matches it and reads both counts to plan compaction.
+fn anthropic_validation_error(error: &(dyn Error + 'static)) -> ApiError {
+    match find_error::<ContextLengthExceeded>(error) {
+        Some(exceeded) => ApiError::invalid_request(format!(
+            "prompt is too long: {} tokens > {} maximum",
+            exceeded.prompt_tokens, exceeded.max_model_len
+        )),
+        None => ApiError::from_error(error, ApiErrorKind::InvalidRequest),
     }
 }
 
@@ -2041,6 +2051,23 @@ mod tests {
     async fn error_body(response: axum::response::Response) -> Value {
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         serde_json::from_slice(&body).unwrap()
+    }
+
+    #[tokio::test]
+    async fn context_overflow_uses_anthropic_wording() {
+        let response =
+            AnthropicMessagesResponder::ValidationError(Box::new(ContextLengthExceeded {
+                prompt_tokens: 205_000,
+                max_model_len: 200_000,
+            }))
+            .into_response();
+        assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
+        let body = error_body(response).await;
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+        assert_eq!(
+            body["error"]["message"],
+            "prompt is too long: 205000 tokens > 200000 maximum"
+        );
     }
 
     fn basic_request() -> AnthropicMessagesRequest {

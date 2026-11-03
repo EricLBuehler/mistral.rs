@@ -339,7 +339,8 @@ pub struct MistralRsConfig {
     pub device: Device,
     pub category: ModelCategory,
     pub modalities: Modalities,
-    pub max_seq_len: Option<usize>,
+    /// Prompt-plus-output token limit per request; `None` for diffusion and speech models.
+    pub max_model_len: Option<usize>,
     pub generation_defaults: Option<ModelGenerationDefaults>,
 }
 
@@ -1205,9 +1206,9 @@ impl MistralRs {
         let kind = metadata.kind.clone();
         let device = pipeline_guard.device();
         let modalities = metadata.modalities.clone();
-        let max_seq_len = match &category {
+        let max_model_len = match &category {
             ModelCategory::Diffusion | ModelCategory::Speech => None,
-            _ => Some(metadata.max_seq_len),
+            _ => Some(metadata.max_model_len),
         };
         let generation_defaults = pipeline_guard.generation_defaults();
         let encoder_cache_counters = pipeline_guard.encoder_cache_counters();
@@ -1232,7 +1233,7 @@ impl MistralRs {
             device,
             category: category.clone(),
             modalities,
-            max_seq_len,
+            max_model_len,
             generation_defaults,
         };
 
@@ -2232,7 +2233,7 @@ impl MistralRs {
         }
     }
 
-    /// Get the maximum supported sequence length for a model, if applicable.
+    /// Most tokens (prompt plus output) one request may use, if applicable.
     pub fn max_sequence_length(
         &self,
         model_id: Option<&str>,
@@ -2244,7 +2245,7 @@ impl MistralRs {
             .read()
             .map_err(|_| MistralRsError::EnginePoisoned)?;
         if let Some(engine_instance) = engines.get(&resolved_model_id) {
-            Ok(engine_instance.config.max_seq_len)
+            Ok(engine_instance.config.max_model_len)
         } else {
             Err(MistralRsError::EnginePoisoned)
         }

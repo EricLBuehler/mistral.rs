@@ -265,7 +265,7 @@ impl Loader for SpeechLoader {
             model_id: self.model_id.clone(),
             model,
             metadata: Arc::new(GeneralMetadata {
-                max_seq_len: 1024,
+                max_model_len: 1024,
                 llg_factory: None,
                 is_xlora: false,
                 no_prefix_cache: false,

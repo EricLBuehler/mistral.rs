@@ -157,14 +157,12 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
+    /// Overridden by families that size RoPE from `max_model_len`; otherwise the engine enforces it alone.
     fn runtime_config<'a>(
         &self,
         config: &'a str,
-        max_model_len: Option<usize>,
+        _max_model_len: Option<usize>,
     ) -> Result<Cow<'a, str>> {
-        if let Some(max_model_len) = max_model_len {
-            anyhow::bail!("max_model_len={max_model_len} is not supported by this model loader");
-        }
         Ok(Cow::Borrowed(config))
     }
     fn is_gptx(&self, config: &str) -> Result<bool>;

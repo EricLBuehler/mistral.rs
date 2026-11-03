@@ -165,7 +165,7 @@ impl Loader for DiffusionLoader {
             model,
             model_id: self.model_id.clone(),
             metadata: Arc::new(GeneralMetadata {
-                max_seq_len,
+                max_model_len: max_seq_len,
                 llg_factory: None,
                 is_xlora: false,
                 no_prefix_cache: false,

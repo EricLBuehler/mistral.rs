@@ -489,6 +489,25 @@ pub enum ResponseOk {
     File(crate::files::File),
 }
 
+/// A prompt that leaves no room in the per-request context; servers map it to each API's overflow error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ContextLengthExceeded {
+    pub prompt_tokens: usize,
+    pub max_model_len: usize,
+}
+
+impl Display for ContextLengthExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "This model's maximum context length is {} tokens. However, your messages resulted in {} tokens. Please reduce the length of the messages.",
+            self.max_model_len, self.prompt_tokens
+        )
+    }
+}
+
+impl Error for ContextLengthExceeded {}
+
 pub enum ResponseErr {
     InternalError(Box<dyn Error + Send + Sync>),
     ValidationError(Box<dyn Error + Send + Sync>),

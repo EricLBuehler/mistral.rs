@@ -717,7 +717,26 @@ fn parse_which(
     no_kv_cache: bool,
     chat_template: Option<String>,
     jinja_explicit: Option<String>,
+    max_model_len: Option<usize>,
 ) -> PyApiResult<Box<dyn Loader>> {
+    if max_model_len == Some(0) {
+        return Err(PyApiErr::from("max_model_len must be greater than zero"));
+    }
+    let supports_max_model_len = matches!(
+        which,
+        Which::Plain { .. }
+            | Which::Lora { .. }
+            | Which::XLora { .. }
+            | Which::GGUF { .. }
+            | Which::LoraGGUF { .. }
+            | Which::XLoraGGUF { .. }
+            | Which::MultimodalPlain { .. }
+    );
+    if max_model_len.is_some() && !supports_max_model_len {
+        return Err(PyApiErr::from(
+            "max_model_len is not supported by this model format",
+        ));
+    }
     Ok(match which {
         Which::Plain {
             model_id,
@@ -748,7 +767,7 @@ fn parse_which(
                 calibration_file,
                 hf_cache_path,
                 hf_config_overrides: None,
-                max_model_len: None,
+                max_model_len,
                 matformer_config_path,
                 matformer_slice_name,
             },
@@ -815,7 +834,7 @@ fn parse_which(
                 calibration_file: None,
                 hf_cache_path,
                 hf_config_overrides: None,
-                max_model_len: None,
+                max_model_len,
                 matformer_config_path: None,
                 matformer_slice_name: None,
             },
@@ -863,7 +882,7 @@ fn parse_which(
                 calibration_file: None,
                 hf_cache_path,
                 hf_config_overrides: None,
-                max_model_len: None,
+                max_model_len,
                 matformer_config_path: None,
                 matformer_slice_name: None,
             },
@@ -932,7 +951,7 @@ fn parse_which(
                     imatrix,
                     calibration_file,
                     max_edge,
-                    max_model_len: None,
+                    max_model_len,
                     hf_cache_path,
                     matformer_config_path,
                     matformer_slice_name,
@@ -982,6 +1001,7 @@ fn parse_which(
             quantized_filename.map_left(|f| vec![f]).into_inner(),
             GGUFSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
+                max_model_len,
                 ..Default::default()
             },
             no_kv_cache,
@@ -1012,6 +1032,7 @@ fn parse_which(
             quantized_filename.map_left(|f| vec![f]).into_inner(),
             GGUFSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
+                max_model_len,
                 ..Default::default()
             },
             no_kv_cache,
@@ -1139,7 +1160,7 @@ fn parse_which(
                         .collect::<Vec<_>>()
                 }),
                 max_edge,
-                max_model_len: None,
+                max_model_len,
                 hf_config_overrides: None,
                 calibration_file,
                 imatrix,
@@ -1226,6 +1247,7 @@ impl Runner {
         in_situ_quant = None,
         anymoe_config = None,
         memory_goal = None,
+        max_model_len = None,
         pa_blk_size = None,
         pa_cache_type = None,
         no_paged_attn = false,
@@ -1253,6 +1275,7 @@ impl Runner {
         in_situ_quant: Option<String>,
         anymoe_config: Option<AnyMoeConfig>,
         memory_goal: Option<Bound<'_, PyAny>>,
+        max_model_len: Option<usize>,
         pa_blk_size: Option<usize>,
         pa_cache_type: Option<PagedCacheType>,
         no_paged_attn: bool,
@@ -1333,6 +1356,7 @@ impl Runner {
             no_kv_cache,
             chat_template.clone(),
             jinja_explicit.clone(),
+            max_model_len,
         )?;
         let loader = if let Some(amoe_conf) = anymoe_config {
             Box::new(AnyMoeLoader {
@@ -2282,7 +2306,7 @@ impl Runner {
         self.runner.find_file(&file_id).map(|f| (*f).clone())
     }
 
-    /// Return the maximum supported sequence length for the requested model, if available.
+    /// Most tokens (prompt plus output) one request may use, if available.
     #[pyo3(signature = (model_id = None))]
     fn max_sequence_length(&self, model_id: Option<String>) -> PyApiResult<Option<usize>> {
         self.runner

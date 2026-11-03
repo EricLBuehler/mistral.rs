@@ -309,7 +309,7 @@ pub(crate) fn submit_forward_lookahead<P: Pipeline + ?Sized>(
         return Ok(Err(result));
     };
     if launch.real_batch() != seqs.len()
-        || !sampling::can_launch_one_token_lookahead(seqs, pipeline.get_metadata().max_seq_len)
+        || !sampling::can_launch_one_token_lookahead(seqs, pipeline.get_metadata().max_model_len)
     {
         return Ok(Err(result));
     }
@@ -354,7 +354,7 @@ pub(crate) fn submit_decode_tail<P: Pipeline + ?Sized>(
     }
 
     let launch_next = lookahead.is_enabled()
-        && sampling::can_launch_one_token_lookahead(seqs, pipeline.get_metadata().max_seq_len)
+        && sampling::can_launch_one_token_lookahead(seqs, pipeline.get_metadata().max_model_len)
         && tail.launch().is_some();
     let current = if launch_next {
         let launch = tail

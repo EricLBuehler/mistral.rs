@@ -1769,7 +1769,7 @@ impl Sequence {
         {
             // add_token will be called after this check
             Some(StopReason::Length(self.max_len.unwrap()))
-        } else if self.tokens.len() >= max_model_len {
+        } else if self.tokens.len() + 1 >= max_model_len {
             Some(StopReason::ModelLength(max_model_len))
         } else {
             None

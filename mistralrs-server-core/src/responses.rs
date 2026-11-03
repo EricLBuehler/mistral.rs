@@ -44,6 +44,7 @@ use crate::{
     handler_core::{
         create_response_channel, openai_error_from_error, openai_error_response,
         send_request_with_model, ApiError, ApiErrorKind, ModelErrorMessage,
+        CONTEXT_LENGTH_EXCEEDED_CODE,
     },
     lora_adapters::resolve_lora_adapter_model,
     openai::{
@@ -1256,8 +1257,21 @@ impl futures::Stream for OpenResponsesStreamer {
                             e.as_ref(),
                             ApiErrorKind::InvalidRequest,
                         );
-                        let event = stream_error_from_api_error(seq, error);
                         self.done_state = DoneState::SendingDone;
+                        // Codex only treats a failed response, not a stream `error`, as context overflow.
+                        if error.code.as_deref() == Some(CONTEXT_LENGTH_EXCEEDED_CODE) {
+                            let mut response = self.build_current_response(ResponseStatus::Failed);
+                            response.error = Some(response_error_from_api_error(error));
+                            let event = OpenResponsesStreamEvent::ResponseFailed {
+                                sequence_number: seq,
+                                response,
+                            };
+                            self.events.push(event.clone());
+                            return Poll::Ready(Some(
+                                Event::default().event("response.failed").json_data(event),
+                            ));
+                        }
+                        let event = stream_error_from_api_error(seq, error);
                         self.events.push(event.clone());
                         Poll::Ready(Some(Event::default().event("error").json_data(event)))
                     }

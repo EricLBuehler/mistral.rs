@@ -155,7 +155,7 @@ async fn detokenize(&self, tokens: Vec<u32>, skip_special_tokens: bool) -> Resul
 ## Introspection and management
 
 - `config() -> Result<MistralRsConfig>`: modalities and device info for the loaded model.
-- `max_sequence_length() -> Result<Option<usize>>`.
+- `max_sequence_length() -> Result<Option<usize>>`: the most tokens (prompt plus output) one request may use. See [context length](/guides/perf/context-length/).
 - Multi-model: `list_models`, `add_model`, `remove_model`, `unload_model`, `reload_model`, `get_default_model_id`, `set_default_model_id`, `list_models_with_status`. Example: [multi-model](/examples/rust/advanced/multi-model/).
 - Sessions: `export_session`, `import_session`, `delete_session`, `fork_session`, `list_session_ids`. Guide: [sessions](/guides/agents/persist-sessions/).
 - `list_mcp_tools(model_id)`: [MCP (Model Context Protocol)](/guides/agents/connect-mcp-server/)-provided tools registered for a model, as `(name, description)` pairs.

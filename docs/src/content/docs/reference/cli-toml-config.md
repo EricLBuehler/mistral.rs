@@ -120,7 +120,7 @@ To give the model a fixed cache budget, add this to the minimal example:
 kv_cache = "4GiB"
 ```
 
-The budget is shared by all requests, and it's the total across the model's GPUs. Use `max_model_len` in `[[models]]` to limit each request's context. See [memory budgets](/guides/perf/paged-attention/#memory-budget) for help choosing a setting.
+The budget is shared by all requests, and it's the total across the model's GPUs. Use `max_model_len` in `[[models]]` to limit each request's context. See [memory budgets](/guides/perf/paged-attention/#memory-budget) and [context length](/guides/perf/context-length/) for help choosing settings.
 
 ## `[sandbox]` section
 
@@ -147,7 +147,7 @@ Each entry defines one loaded model.
 | `arch` | enum | no | Architecture override (text models). |
 | `dtype` | enum | no | `auto`, `f16`, `bf16`, `f32`. |
 | `hf_overrides` | JSON object | no | Recursively merged Hugging Face config overrides. |
-| `max_model_len` | integer | no | Runtime prompt-plus-output context limit. |
+| `max_model_len` | integer | no | Most tokens (prompt plus output) one request may use. Defaults to the smaller of the model's context and what the KV cache holds. |
 | `chat_template` | path | no | Chat template override for this model. |
 | `jinja_explicit` | path | no | Jinja override for this model. |
 | `matformer_config_path` | path | no | MatFormer slice config (CSV/JSON). |

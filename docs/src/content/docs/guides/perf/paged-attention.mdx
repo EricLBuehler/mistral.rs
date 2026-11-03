@@ -71,10 +71,7 @@ Use `--kv-cache` or `--gpu-memory-utilization`, not both.
 
 The default headroom is 5% of GPU memory (at least 1 GiB) on discrete GPUs, and 25% (at most 16 GiB) on unified-memory devices like Apple Silicon. On a 64 GiB Mac, for example, mistral.rs plans to use at most 48 GiB. Other apps using memory at startup shrink that further.
 
-The cache is shared by every request in flight. With `--kv-cache 65536tokens` and 8 similar-length requests running, each has room for about 8,192 tokens, not 65,536. Two flags control how the pool is divided:
-
-- `--max-model-len` limits each request's prompt plus output.
-- `--max-seqs` limits how many requests run at once. The default is 32 for `serve` and 1 for `run`.
+The cache is shared by every request in flight. With `--kv-cache 65536tokens` and 8 similar-length requests running, each has room for about 8,192 tokens, not 65,536. `--max-seqs` limits how many requests run at once (the default is 32 for `serve` and 1 for `run`), and `--max-model-len` limits how long any one of them can get; see [context length](/guides/perf/context-length/).
 
 When the cache runs out, mistral.rs pauses a running request and recomputes it later, which wastes work. If the `mistralrs_paged_preemptions_total` [metric](/reference/metrics/) keeps climbing, lower `--max-seqs` or give the cache more memory. See [throughput tuning](/guides/perf/throughput-tuning/) for more.
 
@@ -85,6 +82,10 @@ When the cache runs out, mistral.rs pauses a running request and recomputes it l
 ### Multiple models
 
 When [serving several models](/guides/serve/multiple-models/), mistral.rs splits the memory budget between them in proportion to each model's `--max-seqs`. A model's `--kv-cache` must fit inside its share, or loading fails. Only one `--gpu-memory-utilization` value can apply to the whole server. A model with paging off still counts toward the split, but its cache isn't capped by it.
+
+## Context length
+
+The KV cache also limits how long one request can be. See [context length](/guides/perf/context-length/) to check, raise, or cap it.
 
 ## FlashAttention and FlashInfer
 

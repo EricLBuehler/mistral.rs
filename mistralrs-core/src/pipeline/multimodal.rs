@@ -535,6 +535,8 @@ impl Loader for MultimodalLoader {
     ) -> Result<Arc<Mutex<dyn Pipeline + Send + Sync>>> {
         let _progress_guard = ProgressScopeGuard::new(silent);
         self.validate_dynamic_lora()?;
+        paged_attn_config =
+            paged_attn_config.map(|paged| paged.with_max_model_len(self.config.max_model_len));
         let config = match self.prepared_source.as_ref() {
             Some(source) => source.config.clone(),
             None => super::loaders::load_model_config(
@@ -1628,7 +1630,16 @@ impl Loader for MultimodalLoader {
             (None, None)
         };
 
-        let max_seq_len = model.max_seq_len();
+        let max_model_len = super::resolve_max_model_len(
+            model.max_seq_len(),
+            self.config.max_model_len,
+            cache_config.as_ref().zip(
+                paged_attn_config
+                    .as_ref()
+                    .map(PagedAttentionConfig::memory_goal),
+            ),
+            silent,
+        )?;
         let num_hidden_layers = match model.cache() {
             EitherCache::Full(full) => full.lock().len(),
             EitherCache::Normal(normal) => normal.lock().unwrap().0.len(),
@@ -1668,7 +1679,7 @@ impl Loader for MultimodalLoader {
             chat_template: Arc::new(chat_template),
             model_id: self.model_id.clone(),
             metadata: Arc::new(GeneralMetadata {
-                max_seq_len,
+                max_model_len,
                 llg_factory: Some(llg_factory),
                 is_xlora: false,
                 num_hidden_layers,
@@ -3292,7 +3303,7 @@ impl Pipeline for MultimodalPipeline {
                     return_logprobs,
                     eos.as_deref(),
                     metadata.llg_factory.clone(),
-                    metadata.max_seq_len,
+                    metadata.max_model_len,
                     rng.clone(),
                     false,
                     false,

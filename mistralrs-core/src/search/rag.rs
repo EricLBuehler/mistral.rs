@@ -93,7 +93,7 @@ impl SearchPipeline {
             .with_context(|| "Embedding model did not expose a tokenizer")?
             .clone();
         let device = guard.device();
-        let max_seq_len = guard.get_metadata().max_seq_len;
+        let max_seq_len = guard.get_metadata().max_model_len;
         drop(guard);
 
         Ok(Self {

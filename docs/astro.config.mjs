@@ -100,6 +100,10 @@ export default defineConfig({
           slug: 'quickstart',
         },
         {
+          label: 'Use with coding agents',
+          slug: 'guides/serve/coding-agents',
+        },
+        {
           label: 'Models',
           collapsed: true,
           items: [
@@ -129,7 +133,6 @@ export default defineConfig({
                 'guides/serve/structured-output',
                 'guides/serve/with-web-ui',
                 'guides/serve/multiple-models',
-                'guides/serve/coding-agents',
               ],
             },
             {
@@ -193,6 +196,7 @@ export default defineConfig({
               label: 'Performance & scaling',
               collapsed: true,
               items: [
+                'guides/perf/context-length',
                 'guides/perf/paged-attention',
                 'guides/perf/speculative-decoding',
                 'guides/perf/distributed-inference',

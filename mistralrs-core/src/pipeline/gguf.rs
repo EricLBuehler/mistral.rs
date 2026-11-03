@@ -712,6 +712,7 @@ impl GGUFLoader {
                 hf_cache_path: self.config.hf_cache_path.clone(),
                 matformer_config_path: self.config.matformer_config_path.clone(),
                 matformer_slice_name: self.config.matformer_slice_name.clone(),
+                max_model_len: self.config.max_model_len,
                 ..Default::default()
             },
             None,
@@ -1386,10 +1387,15 @@ impl Loader for GGUFLoader {
             gguf_chat_template,
         );
 
-        let max_seq_len = match model {
-            Model::XLoraLlama(ref xl) => xl.max_seq_len,
-            Model::XLoraPhi3(ref p) => p.max_seq_len,
-        };
+        let max_model_len = super::resolve_max_model_len(
+            match model {
+                Model::XLoraLlama(ref xl) => xl.max_seq_len,
+                Model::XLoraPhi3(ref p) => p.max_seq_len,
+            },
+            self.config.max_model_len,
+            None,
+            silent,
+        )?;
         let llg_factory = build_llg_factory(tokenizer.clone())?;
         let num_hidden_layers = match model {
             Model::XLoraLlama(ref model) => model.cache.full().lock().len(),
@@ -1439,7 +1445,7 @@ impl Loader for GGUFLoader {
                 }
             }),
             metadata: Arc::new(GeneralMetadata {
-                max_seq_len,
+                max_model_len,
                 llg_factory: Some(llg_factory),
                 no_kv_cache: self.no_kv_cache,
                 no_prefix_cache: false,

@@ -1315,6 +1315,9 @@ pub struct ModelObject {
     /// Model status: "loaded", "unloaded", or "reloading"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
+    /// Most tokens (prompt plus output) one request may use; absent when the model isn't loaded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_model_len: Option<usize>,
     /// Whether tools are available through MCP or tool callbacks
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools_available: Option<bool>,

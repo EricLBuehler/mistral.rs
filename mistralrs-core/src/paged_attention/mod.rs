@@ -97,9 +97,26 @@ mod tests {
 
     use super::{
         block_aligned_sliding_window_start, cache_prefix_capacity, kv_layer_buffer_bytes_per_block,
-        max_cache_blocks, requested_cache_blocks, HybridPagedKvCacheConfig, KvCacheLayout,
-        MemoryGoal, ModelConfigMetadata, PagedAttentionConfig, PagedCacheType, PrefixCacheCapacity,
+        max_cache_blocks, minimum_cache_blocks, requested_cache_blocks, HybridPagedKvCacheConfig,
+        KvCacheLayout, MemoryGoal, ModelConfigMetadata, PagedAttentionConfig, PagedCacheType,
+        PrefixCacheCapacity,
     };
+
+    #[test]
+    fn explicit_max_model_len_raises_cache_floor_to_one_full_request() -> anyhow::Result<()> {
+        let config = PagedAttentionConfig::new(Some(32), MemoryGoal::Auto, PagedCacheType::Auto)?;
+        let workload = minimum_cache_blocks(&config, 262_144, 32)?;
+        assert!(workload < 131_072 / 32);
+        let capped = config.with_max_model_len(Some(131_072));
+        assert_eq!(
+            minimum_cache_blocks(&capped, 262_144, 32)?,
+            131_072 / 32 + 1
+        );
+        let tiny = PagedAttentionConfig::new(Some(32), MemoryGoal::Auto, PagedCacheType::Auto)?
+            .with_max_model_len(Some(64));
+        assert_eq!(minimum_cache_blocks(&tiny, 262_144, 32)?, workload);
+        Ok(())
+    }
 
     #[test]
     fn sliding_window_retains_prior_window_and_whole_query() {
@@ -399,6 +416,7 @@ pub struct PagedAttentionConfig {
     pub(crate) memory_goal: MemoryGoal,
     pub(crate) cache_type: PagedCacheType,
     pub(crate) serving_capacity: Option<usize>,
+    pub(crate) max_model_len: Option<usize>,
     pub(crate) base_device_memory_reservation_bytes: usize,
     pub(crate) primary_activation_memory_reservation_bytes: usize,
     pub(crate) mapped_activation_memory_reservation_bytes: usize,
@@ -445,6 +463,7 @@ impl PagedAttentionConfig {
             memory_goal,
             cache_type,
             serving_capacity: None,
+            max_model_len: None,
             base_device_memory_reservation_bytes: 0,
             primary_activation_memory_reservation_bytes: 0,
             mapped_activation_memory_reservation_bytes: 0,
@@ -618,6 +637,12 @@ impl PagedAttentionConfig {
         self.serving_capacity = Some(serving_capacity);
         self.execution_limits.max_num_seqs = serving_capacity;
         Ok(self)
+    }
+
+    /// Makes the cache floor hold one request of this many tokens.
+    pub fn with_max_model_len(mut self, max_model_len: Option<usize>) -> Self {
+        self.max_model_len = max_model_len;
+        self
     }
 
     /// Reserves primary-device memory for components loaded after the paged cache is sized.
@@ -901,6 +926,19 @@ pub(crate) fn automatic_runtime_allowance(
     }
 }
 
+// KV floor that runtime allowances and optional weights can't take: one step, or one full request when capped.
+fn minimum_cache_blocks(
+    paged_config: &PagedAttentionConfig,
+    max_context: usize,
+    block_size: usize,
+) -> anyhow::Result<usize> {
+    let workload = workload_cache_blocks(paged_config.execution_limits, max_context, block_size)?;
+    let request = paged_config
+        .max_model_len
+        .map_or(0, |tokens| tokens.div_ceil(block_size) + 1);
+    Ok(workload.max(request))
+}
+
 fn workload_cache_blocks(
     limits: ExecutionMemoryLimits,
     max_context: usize,
@@ -982,11 +1020,7 @@ pub(crate) fn optional_weight_reservation(
         bytes_per_block,
     )? {
         Some(blocks) => blocks,
-        None => workload_cache_blocks(
-            paged_config.execution_limits,
-            request.model.max_seq_len(),
-            block_size,
-        )?,
+        None => minimum_cache_blocks(paged_config, request.model.max_seq_len(), block_size)?,
     };
     let cache_bytes = devices
         .iter()
@@ -1093,11 +1127,7 @@ pub fn calculate_cache_config(
         requested_device_cache_blocks(goal, block_size, &devices, total_bytes_per_block)?;
     let workload_blocks = match requested_blocks {
         Some(blocks) => blocks,
-        None => workload_cache_blocks(
-            paged_config.execution_limits,
-            config.max_seq_len(),
-            block_size,
-        )?,
+        None => minimum_cache_blocks(paged_config, config.max_seq_len(), block_size)?,
     };
     let activation_for_blocks = |blocks: usize| {
         let tokens = cache_prefix_capacity(blocks, block_size, config.max_seq_len());
