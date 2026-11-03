@@ -120,7 +120,7 @@ To give the model a fixed cache budget, add this to the minimal example:
 kv_cache = "4GiB"
 ```
 
-The budget is shared by all requests, and it's the total across the model's GPUs. Use `max_model_len` in `[[models]]` to limit each request's context. See [memory budgets](/guides/perf/paged-attention/#memory-budget) and [context length](/guides/perf/paged-attention/#context-length) for help choosing settings.
+The budget is shared by all requests, and it's the total across the model's GPUs. Use `max_model_len` in `[[models]]` to limit each request's context. See [memory budgets](/guides/perf/paged-attention/#memory-budget) and [context length](/guides/perf/context-length/) for help choosing settings.
 
 ## `[sandbox]` section
 

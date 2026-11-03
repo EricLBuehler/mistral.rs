@@ -71,7 +71,7 @@ Use `--kv-cache` or `--gpu-memory-utilization`, not both.
 
 The default headroom is 5% of GPU memory (at least 1 GiB) on discrete GPUs, and 25% (at most 16 GiB) on unified-memory devices like Apple Silicon. On a 64 GiB Mac, for example, mistral.rs plans to use at most 48 GiB. Other apps using memory at startup shrink that further.
 
-The cache is shared by every request in flight. With `--kv-cache 65536tokens` and 8 similar-length requests running, each has room for about 8,192 tokens, not 65,536. `--max-seqs` limits how many requests run at once (the default is 32 for `serve` and 1 for `run`), and `--max-model-len` limits how long any one of them can get; see [context length](#context-length).
+The cache is shared by every request in flight. With `--kv-cache 65536tokens` and 8 similar-length requests running, each has room for about 8,192 tokens, not 65,536. `--max-seqs` limits how many requests run at once (the default is 32 for `serve` and 1 for `run`), and `--max-model-len` limits how long any one of them can get; see [context length](/guides/perf/context-length/).
 
 When the cache runs out, mistral.rs pauses a running request and recomputes it later, which wastes work. If the `mistralrs_paged_preemptions_total` [metric](/reference/metrics/) keeps climbing, lower `--max-seqs` or give the cache more memory. See [throughput tuning](/guides/perf/throughput-tuning/) for more.
 
@@ -85,17 +85,7 @@ When [serving several models](/guides/serve/multiple-models/), mistral.rs splits
 
 ## Context length
 
-Each request's prompt plus output has to fit in one limit, the smallest of the model's own context window, what the KV cache can hold, and `--max-model-len` if you set it. Because the cache is part of that limit, a single request can never outgrow it. mistral.rs prints the result at startup:
-
-```text
-Context: up to 131072 tokens per request (max_model_len). KV cache: 524288 tokens, room for 4 full-length requests at once.
-```
-
-The same number appears as `max_model_len` on each model in `GET /v1/models`.
-
-A prompt over the limit is rejected with the error each API normally uses for this: `context_length_exceeded` on the OpenAI routes and `prompt is too long` on `/v1/messages`. Coding agents recognize these and compact the conversation instead of retrying. A prompt that fits, but leaves less room than `max_tokens` asks for, still runs; generation stops at the limit with finish reason `length`.
-
-Set `--max-model-len` on a shared server so one long request can't fill the whole cache. Around 8k to 32k tokens suits chat; leave coding agents as much as the model and memory allow. If the value is more than the cache can hold, loading fails and names the fix, such as a smaller `--quant`, `--pa-cache-type f8e4m3`, or a larger `--kv-cache`, rather than starting and failing on the first long request. Going past the model's native window needs RoPE scaling turned on as well; [Qwen3.5](/guides/models/model-family-notes/#qwen35-and-qwen36) shows how.
+The KV cache also limits how long one request can be. See [context length](/guides/perf/context-length/) to check, raise, or cap it.
 
 ## FlashAttention and FlashInfer
 

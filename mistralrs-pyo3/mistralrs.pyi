@@ -1006,6 +1006,7 @@ class Runner:
         in_situ_quant: str | None = None,
         anymoe_config: AnyMoeConfig | None = None,
         memory_goal: str | float | None = None,
+        max_model_len: int | None = None,
         pa_blk_size: int | None = None,
         pa_cache_type: PagedCacheType | None = None,
         no_paged_attn: bool = False,
@@ -1050,6 +1051,8 @@ class Runner:
             - `None` (default): size the KV cache from the memory left after loading.
             - A fraction such as `0.9`: keep weights, working memory, and cache under that share of GPU memory.
             - A size such as `"8GiB"` or `"65536tokens"`: give the KV cache exactly that much.
+        - `max_model_len`: most tokens (prompt plus output) one request may use. Defaults to what the model
+          and KV cache allow. See [context length](/guides/perf/context-length/).
         - `pa_blk_size`: tokens per paged attention block: 8, 16, or 32. Defaults to 32.
         - `pa_cache_type`: KV cache storage type. See `PagedCacheType`.
         - `no_paged_attn`: turn paged attention off. It's on by default on CUDA and Metal.

@@ -193,6 +193,7 @@ export default defineConfig({
               label: 'Performance & scaling',
               collapsed: true,
               items: [
+                'guides/perf/context-length',
                 'guides/perf/paged-attention',
                 'guides/perf/speculative-decoding',
                 'guides/perf/distributed-inference',
