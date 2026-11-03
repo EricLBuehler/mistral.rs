@@ -73,6 +73,41 @@ mod tests {
     #[cfg(not(feature = "metal"))]
     use super::QuantizationResult;
 
+    /// A (b, s, k) input with b > 1 must match the same tokens folded into (1, b * s, k).
+    #[test]
+    #[cfg(feature = "cuda")]
+    fn test_fp8_linear_forward_batched_input() -> Result<()> {
+        let dev = Device::new_cuda(0)?;
+        let w = Tensor::randn(0f32, 1., (256, 128), &dev)?.to_dtype(DType::BF16)?;
+        let x = Tensor::randn(0f32, 1., (2, 3, 128), &dev)?.to_dtype(DType::BF16)?;
+        let lin = FP8Linear::new(QuantMethodConfig::FP8 {
+            lin: candle_nn::Linear::new(w.clone(), None),
+            dtype: DType::F8E4M3,
+        })?;
+
+        let batched = lin.forward_raw(&x)?;
+        assert_eq!(batched.dims(), &[2, 3, 256]);
+        let folded = lin
+            .forward_raw(&x.reshape((1, 6, 128))?)?
+            .reshape((2, 3, 256))?;
+        let max_diff = (batched.to_dtype(DType::F32)? - folded.to_dtype(DType::F32)?)?
+            .abs()?
+            .max_all()?
+            .to_scalar::<f32>()?;
+        assert_eq!(max_diff, 0.0);
+
+        // Sanity against the BF16 matmul: FP8 error stays well below the output scale (~11)
+        let expected = x
+            .to_dtype(DType::F32)?
+            .broadcast_matmul(&w.to_dtype(DType::F32)?.t()?)?;
+        let mean_err = (batched.to_dtype(DType::F32)? - expected)?
+            .abs()?
+            .mean_all()?
+            .to_scalar::<f32>()?;
+        assert!(mean_err < 1.0, "mean abs error {mean_err}");
+        Ok(())
+    }
+
     #[test]
     #[cfg(not(feature = "metal"))]
     fn test_roundtrip_f8e4m3() -> Result<()> {

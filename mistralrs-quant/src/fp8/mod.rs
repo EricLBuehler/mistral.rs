@@ -197,8 +197,8 @@ impl QuantMethod for FP8Linear {
                 let mut tgt_shape = x.dims().to_vec();
                 *tgt_shape.last_mut().unwrap() = self.lin.weight().dim(0)?;
 
-                // Flatten for correct dims
-                let mut x = x.flatten_to(D::Minus(3))?;
+                // The weight goes in as batch 1, so fold leading dims into tokens: (b, s, k) -> (1, b * s, k)
+                let mut x = x.flatten_to(D::Minus(2))?.unsqueeze(0)?;
 
                 // Prepare the b tensor. If it is not quantized, quantize it
                 let mut dequant_x_scale = self.dequant_x_scale.clone();
