@@ -100,6 +100,10 @@ export default defineConfig({
           slug: 'quickstart',
         },
         {
+          label: 'Use with coding agents',
+          slug: 'guides/serve/coding-agents',
+        },
+        {
           label: 'Models',
           collapsed: true,
           items: [
@@ -129,7 +133,6 @@ export default defineConfig({
                 'guides/serve/structured-output',
                 'guides/serve/with-web-ui',
                 'guides/serve/multiple-models',
-                'guides/serve/coding-agents',
               ],
             },
             {
