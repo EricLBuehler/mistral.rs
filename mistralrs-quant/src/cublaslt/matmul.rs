@@ -11,22 +11,26 @@ use core::mem;
 use float8::F8E4M3;
 use half::{bf16, f16};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex};
 
 const CUBLASLT_SMALL_WORKSPACE_BYTES: usize = 4_194_304;
 const CUBLASLT_LARGE_WORKSPACE_BYTES: usize = 33_554_432;
-/// Upper bound on cached heuristic results; the cache is cleared when it fills.
 const MAX_CACHED_HEURISTICS: usize = 4096;
+// cuBLASLt's default minimum buffer alignment is 256 bytes
+const MAX_BIAS_ALIGN_LOG2: u32 = 8;
 
-/// Everything `cublasLtMatmulAlgoGetHeuristic` sees for one matmul, except buffer addresses
-/// (the heuristic assumes the default 256-byte alignment for A/B/C/D whatever the pointers are).
-/// The bias pointer is set on the matmul descriptor, so its alignment is part of the key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct MatmulTypes {
+    ab: sys::cudaDataType,
+    cd: sys::cudaDataType,
+    compute: sys::cublasComputeType_t,
+    fp8_scales: bool,
+}
+
+/// What the heuristic sees minus buffer addresses; bias is set in the matmul desc, so its alignment is part of the key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct HeuristicKey {
-    ab_type: sys::cudaDataType,
-    cd_type: sys::cudaDataType,
-    compute_type: sys::cublasComputeType_t,
-    fp8_scales: bool,
+    types: MatmulTypes,
     transa: bool,
     transb: bool,
     m: u64,
@@ -46,22 +50,15 @@ struct HeuristicKey {
 }
 
 impl HeuristicKey {
-    #[allow(clippy::too_many_arguments)]
     fn new(
-        ab_type: sys::cudaDataType,
-        cd_type: sys::cudaDataType,
-        compute_type: sys::cublasComputeType_t,
-        fp8_scales: bool,
+        types: MatmulTypes,
         cfg: &MatmulConfig,
         act: Option<&Activation>,
         bias_ptr: Option<&CUdeviceptr>,
         workspace_size: usize,
     ) -> Self {
         Self {
-            ab_type,
-            cd_type,
-            compute_type,
-            fp8_scales,
+            types,
             transa: cfg.transa,
             transb: cfg.transb,
             m: cfg.m,
@@ -80,23 +77,15 @@ impl HeuristicKey {
                 Some(Activation::Relu) => 1,
                 Some(Activation::Gelu) => 2,
             },
-            // 0 = no bias; otherwise the largest power of two (capped at 256) dividing the address
-            bias_align: bias_ptr.map_or(0, |ptr| 1u32 << ptr.trailing_zeros().min(8)),
+            bias_align: bias_ptr.map_or(0, |ptr| {
+                1u32 << ptr.trailing_zeros().min(MAX_BIAS_ALIGN_LOG2)
+            }),
             workspace_size,
         }
     }
 }
 
-/// Heuristic results cached per [HeuristicKey].
-///
-/// `cublasLtMatmulAlgoGetHeuristic` takes no stream. cuBLASLt 13.x answers it by asking the
-/// driver about the legacy default stream (`cuStreamGetGreenCtx(NULL)`), which fails with
-/// `CUDA_ERROR_STREAM_CAPTURE_IMPLICIT` and invalidates the capture while a blocking stream is
-/// being captured, such as candle's per-thread default stream; cuBLASLt then reports
-/// "Could not obtain green context information" / `CUBLAS_STATUS_INTERNAL_ERROR`.
-/// `cublasLtMatmul` itself takes the stream and is capture-safe, so reusing the algo picked
-/// during the eager warmup keeps CUDA graph capture free of heuristic queries
-/// (and saves the query on every eager call).
+/// Per-shape heuristic picks: the stream-less query invalidates CUDA graph capture on a blocking stream (cuBLASLt 13.x).
 pub struct HeuristicCache(Mutex<HashMap<HeuristicKey, sys::cublasLtMatmulHeuristicResult_t>>);
 
 impl HeuristicCache {
@@ -105,37 +94,21 @@ impl HeuristicCache {
     }
 
     fn get(&self, key: &HeuristicKey) -> Option<sys::cublasLtMatmulHeuristicResult_t> {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(key)
-            .copied()
+        self.0.lock().unwrap().get(key).copied()
     }
 
     fn insert(&self, key: HeuristicKey, value: sys::cublasLtMatmulHeuristicResult_t) {
-        let mut map = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut map = self.0.lock().unwrap();
         if map.len() >= MAX_CACHED_HEURISTICS {
             map.clear();
         }
         map.insert(key, value);
     }
-
-    /// Number of cached heuristic results.
-    pub fn len(&self) -> usize {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner).len()
-    }
-
-    /// Whether no heuristic result is cached.
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
 }
 
 impl std::fmt::Debug for HeuristicCache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("HeuristicCache")
-            .field("entries", &self.len())
-            .finish()
+        f.debug_struct("HeuristicCache").finish_non_exhaustive()
     }
 }
 
@@ -604,17 +577,14 @@ pub trait Matmul<T: CublasLTDType>: MatmulShared {
         // Set workspace size
         matmul_pref.set_workspace_size(self.workspace().size)?;
 
-        // Get heuristic given Config, bias, act and workspace size (cached, see [HeuristicCache])
-        let key = HeuristicKey::new(
-            Self::matrix_type(),
-            out_ty,
-            sys::cublasComputeType_t::CUBLAS_COMPUTE_32F,
-            true,
-            &cfg,
-            act,
-            bias_ptr.as_ref(),
-            self.workspace().size,
-        );
+        // Get heuristic given Config, bias, act and workspace size
+        let types = MatmulTypes {
+            ab: Self::matrix_type(),
+            cd: out_ty,
+            compute: sys::cublasComputeType_t::CUBLAS_COMPUTE_32F,
+            fp8_scales: true,
+        };
+        let key = HeuristicKey::new(types, &cfg, act, bias_ptr.as_ref(), self.workspace().size);
         let heuristic = match self.heuristics().get(&key) {
             Some(heuristic) => heuristic,
             None => {
@@ -720,17 +690,14 @@ pub trait Matmul<T: CublasLTDType>: MatmulShared {
         // Set workspace size
         matmul_pref.set_workspace_size(self.workspace().size)?;
 
-        // Get heuristic given Config, bias, act and workspace size (cached, see [HeuristicCache])
-        let key = HeuristicKey::new(
-            Self::matrix_type(),
-            Self::matrix_type(),
-            Self::compute_type(),
-            false,
-            &cfg,
-            act,
-            bias_ptr.as_ref(),
-            self.workspace().size,
-        );
+        // Get heuristic given Config, bias, act and workspace size
+        let types = MatmulTypes {
+            ab: Self::matrix_type(),
+            cd: Self::matrix_type(),
+            compute: Self::compute_type(),
+            fp8_scales: false,
+        };
+        let key = HeuristicKey::new(types, &cfg, act, bias_ptr.as_ref(), self.workspace().size);
         let heuristic = match self.heuristics().get(&key) {
             Some(heuristic) => heuristic,
             None => {

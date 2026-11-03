@@ -120,14 +120,25 @@ fn test_fused_batch_matmul_f8e4m3_out_bf16() -> Result<()> {
     Ok(())
 }
 
-/// An FP8 matmul must be capturable into a CUDA graph on candle's default stream (the
-/// per-thread default stream, which is a blocking stream) once the same shape ran eagerly,
-/// as in the decode-graph warmup. Without the heuristic cache, cuBLASLt 13.x fails the
-/// stream-less heuristic query under capture with `CUBLAS_STATUS_INTERNAL_ERROR`
-/// ("Could not obtain green context information") and the capture is invalidated.
+const CAPTURE_TEST_NAME: &str =
+    "cublaslt::tests::test_fused_batch_matmul_f8e4m3_cuda_graph_capture";
+const CAPTURE_TEST_CHILD_ENV: &str = "MISTRALRS_QUANT_CAPTURE_TEST_CHILD";
+
+/// An FP8 matmul must be capturable on candle's default (per-thread, blocking) stream once its shape ran eagerly.
 #[test]
 fn test_fused_batch_matmul_f8e4m3_cuda_graph_capture() -> Result<()> {
     use candle_core::cuda::cudarc::driver::sys;
+
+    // Heuristic queries from other test threads hit the legacy stream and invalidate the capture, so run alone
+    if std::env::var_os(CAPTURE_TEST_CHILD_ENV).is_none() {
+        let out = std::process::Command::new(std::env::current_exe()?)
+            .args(["--exact", CAPTURE_TEST_NAME])
+            .env(CAPTURE_TEST_CHILD_ENV, "1")
+            .output()?;
+        let log = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success() && log.contains("1 passed"), "{log}");
+        return Ok(());
+    }
 
     let device = Device::new_cuda(0)?;
     let a = Tensor::randn(0., 1., (1, 128, 128), &device)?

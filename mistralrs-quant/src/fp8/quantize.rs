@@ -73,8 +73,7 @@ mod tests {
     #[cfg(not(feature = "metal"))]
     use super::QuantizationResult;
 
-    /// A (b, s, k) input with b > 1, e.g. a decode step of several sequences, must give the same
-    /// result as the same tokens folded into one (1, b * s, k) row block.
+    /// A (b, s, k) input with b > 1 must match the same tokens folded into (1, b * s, k).
     #[test]
     #[cfg(feature = "cuda")]
     fn test_fp8_linear_forward_batched_input() -> Result<()> {

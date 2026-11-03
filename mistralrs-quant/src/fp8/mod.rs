@@ -197,10 +197,7 @@ impl QuantMethod for FP8Linear {
                 let mut tgt_shape = x.dims().to_vec();
                 *tgt_shape.last_mut().unwrap() = self.lin.weight().dim(0)?;
 
-                // The weight goes in as batch 1 (`a` below) and the cuBLASLt op needs `b` to have the
-                // same batch, so fold every leading dim into the token dim: (b, s, k) -> (1, b * s, k).
-                // Decode batches with several sequences arrive as (b, 1, k). The result is reshaped
-                // back to `tgt_shape`.
+                // The weight goes in as batch 1, so fold leading dims into tokens: (b, s, k) -> (1, b * s, k)
                 let mut x = x.flatten_to(D::Minus(2))?.unsqueeze(0)?;
 
                 // Prepare the b tensor. If it is not quantized, quantize it
