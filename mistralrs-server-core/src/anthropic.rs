@@ -2043,6 +2043,15 @@ mod tests {
         extract::FromRequest,
         http::Request as HttpRequest,
     };
+    use mistralrs_core::{
+        CalledFunction, Choice, ChunkChoice, Delta, MistralRsError, PromptTokensDetails,
+        ResponseMessage, ToolCallResponse, ToolCallType,
+    };
+
+    async fn error_body(response: axum::response::Response) -> Value {
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        serde_json::from_slice(&body).unwrap()
+    }
 
     #[tokio::test]
     async fn context_overflow_uses_anthropic_wording() {
@@ -2053,23 +2062,12 @@ mod tests {
             }))
             .into_response();
         assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
-        let body: Value =
-            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
-                .unwrap();
+        let body = error_body(response).await;
         assert_eq!(body["error"]["type"], "invalid_request_error");
         assert_eq!(
             body["error"]["message"],
             "prompt is too long: 205000 tokens > 200000 maximum"
         );
-    }
-    use mistralrs_core::{
-        CalledFunction, Choice, ChunkChoice, Delta, MistralRsError, PromptTokensDetails,
-        ResponseMessage, ToolCallResponse, ToolCallType,
-    };
-
-    async fn error_body(response: axum::response::Response) -> Value {
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        serde_json::from_slice(&body).unwrap()
     }
 
     fn basic_request() -> AnthropicMessagesRequest {
