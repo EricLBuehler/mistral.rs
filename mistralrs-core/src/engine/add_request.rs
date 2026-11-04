@@ -1314,6 +1314,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             rendered_tools,
         )
         .unwrap();
