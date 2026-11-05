@@ -16,7 +16,7 @@ use crate::pipeline::{
 };
 
 const CUDA_GRAPH_INSTANTIATE_FLAGS: u64 =
-    sys::CUgraphInstantiate_flags_enum::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH as u64;
+    sys::CUgraphInstantiate_flags_enum::CUDA_GRAPH_INSTANTIATE_FLAG_AUTO_FREE_ON_LAUNCH.0 as u64;
 pub(crate) const CUDA_DECODE_GRAPH_CACHE_CAPACITY: usize = 32;
 
 pub(crate) struct CudaGraphHandle {
