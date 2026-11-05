@@ -23,6 +23,69 @@ pub trait DeviceMapper: Debug {
     fn get_comm_for(&self, layer_idx: usize) -> Result<Arc<mistralrs_quant::Comm>>;
 
     fn get_min_dtype(&self, dtype: &dyn TryIntoDType) -> Result<DType>;
+
+    fn uses_host_memory_for_resource(&self, _name: &str) -> bool {
+        false
+    }
+}
+
+#[derive(Debug)]
+pub(super) struct OptionalHostDeviceMapper {
+    inner: Box<dyn DeviceMapper + Send + Sync>,
+    resources: Vec<String>,
+}
+
+impl OptionalHostDeviceMapper {
+    pub(super) fn new(inner: Box<dyn DeviceMapper + Send + Sync>, resources: Vec<String>) -> Self {
+        Self { inner, resources }
+    }
+}
+
+impl DeviceMapper for OptionalHostDeviceMapper {
+    fn map(&self, input: Tensor, layer: usize) -> Result<Tensor> {
+        self.inner.map(input, layer)
+    }
+
+    fn set_device(
+        &self,
+        layer: usize,
+        varbuilder: ShardedVarBuilder,
+        loading_isq: bool,
+    ) -> ShardedVarBuilder {
+        self.inner.set_device(layer, varbuilder, loading_isq)
+    }
+
+    fn device_for(&self, layer: usize, loading_isq: bool) -> Option<&Device> {
+        self.inner.device_for(layer, loading_isq)
+    }
+
+    fn get_unique_devices(&self) -> Vec<Device> {
+        self.inner.get_unique_devices()
+    }
+
+    fn cast_nm_device(&self, x: &Tensor, loading_isq: bool) -> Result<Tensor> {
+        self.inner.cast_nm_device(x, loading_isq)
+    }
+
+    fn set_nm_device(&self, varbuilder: ShardedVarBuilder, loading_isq: bool) -> ShardedVarBuilder {
+        self.inner.set_nm_device(varbuilder, loading_isq)
+    }
+
+    fn num_device_mapping_layers(&self) -> usize {
+        self.inner.num_device_mapping_layers()
+    }
+
+    fn get_comm_for(&self, layer_idx: usize) -> Result<Arc<mistralrs_quant::Comm>> {
+        self.inner.get_comm_for(layer_idx)
+    }
+
+    fn get_min_dtype(&self, dtype: &dyn TryIntoDType) -> Result<DType> {
+        self.inner.get_min_dtype(dtype)
+    }
+
+    fn uses_host_memory_for_resource(&self, name: &str) -> bool {
+        self.resources.iter().any(|resource| resource == name)
+    }
 }
 
 #[derive(Debug)]

@@ -292,6 +292,10 @@ impl CudaGraphCaptureMemory<'_> {
         let Some(plan) = self.plan else {
             return Ok(true);
         };
+        let revision = self
+            .reservation
+            .filter(|_| usage != CudaGraphMemoryUse::Eager)
+            .map(|reservation| (reservation, reservation.revision()));
         for device in self.devices.iter().filter(|device| device.is_cuda()) {
             let workspace = if usage == CudaGraphMemoryUse::Retain {
                 0
@@ -303,8 +307,19 @@ impl CudaGraphCaptureMemory<'_> {
                 )
                 .map_err(candle_core::Error::wrap)?
             };
-            let pending =
+            let mut pending =
                 mistralrs_quant::gguf_affine_reserved_bytes(device, self.activation_dtype);
+            if usage != CudaGraphMemoryUse::Eager {
+                let prefix = self
+                    .reservation
+                    .map(|reservation| reservation.pending_prefix_bytes(device.location()))
+                    .transpose()
+                    .map_err(candle_core::Error::wrap)?
+                    .unwrap_or_default();
+                pending = pending.checked_add(prefix).ok_or_else(|| {
+                    candle_core::Error::msg("CUDA graph pending prefix reservation overflow")
+                })?;
+            }
             let other_workspace = self
                 .reservation
                 .filter(|_| protect_other_models)
@@ -324,7 +339,7 @@ impl CudaGraphCaptureMemory<'_> {
                 return Ok(false);
             }
         }
-        Ok(true)
+        Ok(revision.is_none_or(|(reservation, before)| reservation.revision() == before))
     }
 }
 

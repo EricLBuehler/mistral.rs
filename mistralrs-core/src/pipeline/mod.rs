@@ -64,6 +64,8 @@ pub use isq::{
 };
 pub(crate) use isq::{sanitize_quantized_weight_source_config, IsqModelLoader};
 use llguidance::toktrie::TokEnv;
+#[cfg(feature = "cuda")]
+pub(crate) use loaders::HostBacking;
 pub(crate) use loaders::{apply_model_activation_memory, checkpoint_runtime_size};
 pub use loaders::{
     ActivationMemoryContext, ActivationMemoryEstimate, ActivationModelConfig, AdapterKind,
@@ -75,9 +77,10 @@ pub use loaders::{
     FluxLoader, GLM4Loader, GLM4MoeLiteLoader, GLM4MoeLoader, Gemma2Loader, Gemma3Loader,
     Gemma3nLoader, Gemma4Loader, GemmaLoader, GptOssLoader, GraniteMoeHybridLoader,
     HunYuanDenseV1Loader, HunYuanMoEV1Loader, Idefics2Loader, Idefics3Loader, LLaVALoader,
-    LLaVANextLoader, Lfm2Loader, Lfm2VlLoader, Lfm3Loader, Lfm3VlLoader, LlamaLoader, Loader,
-    LocalModelPaths, MiniCpmOLoader, Mistral3Loader, MistralLoader, MixtralLoader, ModelKind,
-    ModelPaths, MultimodalLoaderType, MultimodalModel, MultimodalModelLoader, MuseGlimmerLoader,
+    LLaVANextLoader, Lfm2Loader, Lfm2VlLoader, Lfm3AudioLoader, Lfm3D1Loader, Lfm3Loader,
+    Lfm3OmniLoader, Lfm3VlLoader, LlamaLoader, Loader, LocalModelPaths, MiniCpmOLoader,
+    Mistral3Loader, MistralLoader, MixtralLoader, ModelDownload, ModelKind, ModelPaths,
+    MultimodalLoaderType, MultimodalModel, MultimodalModelLoader, MuseGlimmerLoader,
     NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader,
     Phi3Loader, Phi3VLoader, Phi3_5MoELoader, Phi4MMLoader, PrettyName, QuantizationKind,
     Qwen2Loader, Qwen2VLLoader, Qwen2_5VLLoader, Qwen3EmbeddingLoader, Qwen3Loader, Qwen3MoELoader,
@@ -85,20 +88,27 @@ pub use loaders::{
     Qwen3_5TextLoader, Qwen4ExpLoader, SmolLm3Loader, Starcoder2Loader, TokenSource, VLlama4Loader,
     VLlamaLoader, VoxtralLoader,
 };
+pub use loaders::{LayerResource, ResourceSource};
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn get_device_layers_for_loader(
     loader: &dyn loaders::DeviceMappedModelLoader,
     config: &str,
     num_layers: usize,
-    layer_sizes_in_bytes: Vec<usize>,
+    mut layer_sizes_in_bytes: Vec<usize>,
     non_mapped_size_in_bytes: usize,
     total_model_size_in_bytes: usize,
     devices: &[Device],
     dtype: DType,
     params: &loaders::AutoDeviceMapParams,
     paged_attn_config: Option<&mut PagedAttentionConfig>,
-) -> Result<crate::device_map::DeviceMapMetadata> {
-    loaders::auto_device_map::get_device_layers(
+) -> Result<(crate::device_map::DeviceMapMetadata, usize)> {
+    let resources = loader.layer_resources(config, loaders::ResourceSource::default())?;
+    let total_model_size_in_bytes = loaders::add_resource_bytes(
+        &mut layer_sizes_in_bytes,
+        total_model_size_in_bytes,
+        &resources,
+    )?;
+    let mapping = loaders::auto_device_map::get_device_layers(
         loader,
         config,
         num_layers,
@@ -109,7 +119,9 @@ pub(crate) fn get_device_layers_for_loader(
         dtype,
         params,
         paged_attn_config,
-    )
+        &resources,
+    )?;
+    Ok((mapping, total_model_size_in_bytes))
 }
 
 fn finish_dynamic_lora_runtime(
@@ -154,6 +166,7 @@ pub(crate) use paths::{
     get_adapter_paths, get_chat_template, get_model_paths, AdapterPathOptions, XLoraPreload,
 };
 pub use paths::{AdapterPaths, ResolvedLoraAdapter};
+pub use processing::DecisionForwardContext;
 pub(crate) use processing::{
     apply_chat_template, BasicProcessor, MessagesAction, Processor, ProcessorCreator,
 };
@@ -222,7 +235,10 @@ pub(crate) fn prepare_cuda_runtime(primary: &Device, mapper: &dyn DeviceMapper) 
         }
     }
     #[cfg(feature = "cutile")]
-    if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(primary) {
+    if let Err(err) = mistralrs_quant::cutile::warmup_moe_kernels(
+        primary,
+        crate::utils::progress::progress_suppressed(),
+    ) {
         tracing::warn!("Failed to warm up cuTile MoE kernels: {err}");
     }
     synchronize_cuda_contexts(primary, mapper)
@@ -349,6 +365,7 @@ pub use crate::kv_cache::{
 
 pub(crate) const RECURRENT_GRAPH_PAD_SLOTS: usize = 1;
 const AUTO_RECURRENT_KV_FLOOR_FRACTION: f64 = 0.05;
+const AUTO_RECURRENT_PREFIX_BUDGET_DIVISOR: usize = 2;
 const BYTES_PER_MIB: usize = 1024 * 1024;
 
 #[derive(Clone, Copy)]
@@ -577,6 +594,104 @@ fn uses_recurrent_transition_log(cache: &EitherCache) -> bool {
     cache.is_hybrid() && cache.hybrid().uses_recurrent_transition_log()
 }
 
+#[derive(Clone, Copy)]
+struct RecurrentPrefixBudget {
+    snapshot_bytes: usize,
+    persistent_bytes: usize,
+    execution_bytes: usize,
+}
+
+impl RecurrentPrefixBudget {
+    fn reserve_runtime(mut self, enabled: bool, baseline_activation: usize) -> Self {
+        let allowance = crate::paged_attention::automatic_runtime_allowance(
+            enabled,
+            baseline_activation,
+            self.persistent_bytes.min(self.execution_bytes),
+        );
+        self.persistent_bytes = self.persistent_bytes.saturating_sub(allowance);
+        self.execution_bytes = self.execution_bytes.saturating_sub(allowance);
+        self
+    }
+}
+
+fn automatic_recurrent_prefix_capacity(
+    requested: usize,
+    budgets: &[RecurrentPrefixBudget],
+) -> usize {
+    budgets.iter().fold(requested, |capacity, budget| {
+        if budget.snapshot_bytes == 0 {
+            return capacity;
+        }
+        let persistent = budget.persistent_bytes / AUTO_RECURRENT_PREFIX_BUDGET_DIVISOR;
+        let retained = persistent.min(budget.execution_bytes.saturating_sub(budget.snapshot_bytes));
+        capacity.min(retained / budget.snapshot_bytes)
+    })
+}
+
+fn configure_automatic_recurrent_prefix_capacity(
+    cache: &EitherCache,
+    config: &mut PagedAttentionConfig,
+    mut request: crate::paged_attention::CacheConfigRequest<'_>,
+) -> Result<()> {
+    if !config.recurrent_prefix_capacity_auto
+        || config.recurrent_prefix_capacity == 0
+        || !cache.is_hybrid()
+    {
+        return Ok(());
+    }
+    let hybrid = cache.hybrid();
+    let snapshot_bytes = hybrid.recurrent_snapshot_bytes_by_device()?;
+    let devices = hybrid.recurrent_devices();
+    drop(hybrid);
+    request.memory_reservations = config
+        .memory_reservations()
+        .map_err(candle_core::Error::msg)?;
+    let mut budgets = Vec::with_capacity(devices.len());
+    for device in devices {
+        device.synchronize()?;
+        #[cfg(feature = "cuda")]
+        if device.is_cuda() {
+            crate::MemoryUsage.synchronize_cuda_context(&device)?;
+            crate::MemoryUsage.trim_cuda_memory_pool(&device, 0)?;
+        }
+        let (persistent, transient) =
+            crate::paged_attention::optional_weight_reservation(config, request, &device)
+                .map_err(candle_core::Error::msg)?;
+        let memory = crate::MemoryUsage.query(&device)?;
+        let budget = RecurrentPrefixBudget {
+            snapshot_bytes: snapshot_bytes[&device.location()],
+            persistent_bytes: config
+                .allocation_budget(&device, memory)
+                .map_err(candle_core::Error::msg)?
+                .saturating_sub(persistent),
+            execution_bytes: config
+                .execution_budget(&device, memory)
+                .map_err(candle_core::Error::msg)?
+                .saturating_sub(persistent)
+                .saturating_sub(transient),
+        };
+        let baseline_activation = if device.same_device(request.device) {
+            config.primary_activation_memory_reservation_bytes
+        } else {
+            config.mapped_activation_memory_reservation_bytes
+        };
+        budgets.push(budget.reserve_runtime(
+            request.reserve_decode_graphs && device.is_cuda(),
+            baseline_activation,
+        ));
+    }
+    let requested = config.recurrent_prefix_capacity;
+    config.recurrent_prefix_capacity = automatic_recurrent_prefix_capacity(requested, &budgets);
+    if !request.silent && requested != config.recurrent_prefix_capacity {
+        tracing::info!(
+            requested,
+            capacity = config.recurrent_prefix_capacity,
+            "Adjusted automatic recurrent prefix capacity for the serving memory budget"
+        );
+    }
+    Ok(())
+}
+
 fn add_recurrent_prefix_memory_reservations(
     mut reservations: CacheMemoryReservations,
     bytes_by_device: HashMap<DeviceLocation, usize>,
@@ -590,6 +705,7 @@ fn add_recurrent_prefix_memory_reservations(
         .checked_add(1)
         .ok_or_else(|| candle_core::Error::msg("recurrent prefix capacity overflow"))?;
     let mut secondary_prefix_bytes = 0usize;
+    let mut secondary_staging_bytes = 0usize;
     for (device, bytes_per_snapshot) in bytes_by_device {
         let bytes = bytes_per_snapshot
             .checked_mul(peak_snapshots)
@@ -599,15 +715,45 @@ fn add_recurrent_prefix_memory_reservations(
                 .primary_device_bytes
                 .checked_add(bytes)
                 .ok_or_else(|| candle_core::Error::msg("recurrent prefix reservation overflow"))?;
+            reservations.primary_staging_bytes = reservations
+                .primary_staging_bytes
+                .checked_add(bytes_per_snapshot)
+                .ok_or_else(|| candle_core::Error::msg("recurrent prefix staging overflow"))?;
         } else {
             secondary_prefix_bytes = secondary_prefix_bytes.max(bytes);
+            secondary_staging_bytes = secondary_staging_bytes.max(bytes_per_snapshot);
         }
     }
     reservations.secondary_device_bytes = reservations
         .secondary_device_bytes
         .checked_add(secondary_prefix_bytes)
         .ok_or_else(|| candle_core::Error::msg("recurrent prefix reservation overflow"))?;
+    reservations.secondary_staging_bytes = reservations
+        .secondary_staging_bytes
+        .checked_add(secondary_staging_bytes)
+        .ok_or_else(|| candle_core::Error::msg("recurrent prefix staging overflow"))?;
     Ok(reservations)
+}
+
+#[cfg(feature = "cuda")]
+fn paged_attention_runtime_memory_reservation(
+    cache: &EitherCache,
+    config: Option<&PagedAttentionConfig>,
+    primary: &Device,
+    devices: &[Device],
+) -> Result<Option<Arc<crate::resource_plan::RuntimeMemoryReservation>>> {
+    let Some(config) = config else {
+        return Ok(None);
+    };
+    let prefix = if config.recurrent_prefix_capacity > 0 && cache.is_hybrid() {
+        Some(crate::resource_plan::RecurrentPrefixReservation::new(
+            cache.hybrid().recurrent_snapshot_bytes_by_device()?,
+            config.recurrent_prefix_capacity,
+        ))
+    } else {
+        None
+    };
+    Ok(config.runtime_memory_reservation(primary, devices, prefix))
 }
 
 fn paged_attention_memory_reservations(
@@ -1274,6 +1420,7 @@ impl LogitsSelection {
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum SupportedModality {
+    Decision,
     Text,
     Audio,
     Vision,
@@ -1284,6 +1431,7 @@ pub enum SupportedModality {
 impl Debug for SupportedModality {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Decision => write!(f, "Decision"),
             Self::Text => write!(f, "📝 Text"),
             Self::Audio => write!(f, "🔊 Audio"),
             Self::Vision => write!(f, "🖼️ Vision"),
@@ -1300,7 +1448,8 @@ pub struct Modalities {
 }
 
 pub struct GeneralMetadata {
-    pub max_seq_len: usize,
+    /// Prompt-plus-output token limit per request, from `resolve_max_model_len`.
+    pub max_model_len: usize,
     /// Only None if it doesn't make sense for the model
     pub llg_factory: Option<Arc<llguidance::ParserFactory>>,
     pub no_kv_cache: bool,
@@ -1335,6 +1484,57 @@ impl GeneralMetadata {
     pub fn tok_env(&self) -> Option<TokEnv> {
         self.llg_factory.as_ref().map(|f| f.tok_env().clone())
     }
+}
+
+/// Caps each request at the model's context, the paged KV capacity, and the requested `max_model_len`.
+pub(crate) fn resolve_max_model_len(
+    model_max: usize,
+    requested: Option<usize>,
+    paged: Option<(&CacheConfig, MemoryGoal)>,
+    silent: bool,
+) -> anyhow::Result<usize> {
+    if let Some(requested) = requested.filter(|&len| len > model_max) {
+        anyhow::bail!(
+            "max_model_len {requested} exceeds the model's context length of {model_max} tokens"
+        );
+    }
+    let kv = paged.map(|(cache, goal)| (cache.usable_tokens(), goal));
+    if let (Some(requested), Some((kv_tokens, goal))) = (requested, kv) {
+        if requested > kv_tokens {
+            let remedy = match goal {
+                MemoryGoal::KvBytes(_) | MemoryGoal::KvTokens(_) => "raise --kv-cache",
+                MemoryGoal::Utilization(_) => {
+                    "raise --gpu-memory-utilization, use a smaller --quant, or use --pa-cache-type f8e4m3"
+                }
+                MemoryGoal::Auto => "use a smaller --quant or --pa-cache-type f8e4m3",
+            };
+            anyhow::bail!(
+                "max_model_len {requested} does not fit in the KV cache, which holds {kv_tokens} tokens. Lower max_model_len or {remedy}."
+            );
+        }
+    }
+    let kv_tokens = kv.map(|(tokens, _)| tokens);
+    let limit = requested
+        .unwrap_or(model_max)
+        .min(kv_tokens.unwrap_or(usize::MAX));
+    if silent {
+        return Ok(limit);
+    }
+    let kv_summary = kv_tokens.map_or(String::new(), |kv| {
+        let requests = kv / limit;
+        let plural = if requests == 1 { "" } else { "s" };
+        format!(" KV cache: {kv} tokens, room for {requests} full-length request{plural} at once.")
+    });
+    if requested.is_some() {
+        tracing::info!("Context: up to {limit} tokens per request (max_model_len).{kv_summary}");
+    } else if limit < model_max {
+        tracing::warn!(
+            "Context: up to {limit} tokens per request (model supports {model_max}; limited by KV cache memory).{kv_summary}"
+        );
+    } else {
+        tracing::info!("Context: up to {limit} tokens per request.{kv_summary}");
+    }
+    Ok(limit)
 }
 
 #[derive(Clone, Copy)]
@@ -1496,6 +1696,9 @@ pub trait AnyMoePipelineMixin {
 /// such as the multimodal model prompt prefixer.
 #[derive(Clone)]
 pub enum ModelCategory {
+    Decision {
+        video_sampling: crate::VideoFrameSampling,
+    },
     Text,
     Multimodal {
         prefixer: Arc<dyn MultimodalPromptPrefixer>,
@@ -1510,6 +1713,7 @@ pub enum ModelCategory {
 impl std::fmt::Debug for ModelCategory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            ModelCategory::Decision { .. } => write!(f, "ModelCategory::Decision"),
             ModelCategory::Text => write!(f, "ModelCategory::Text"),
             ModelCategory::Multimodal { .. } => {
                 write!(f, "ModelCategory::Multimodal {{ prefixer: .. }}")
@@ -1525,6 +1729,7 @@ impl std::fmt::Debug for ModelCategory {
 impl PartialEq for ModelCategory {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
+            (Self::Decision { .. }, Self::Decision { .. }) => true,
             (Self::Text, Self::Text) => true,
             (Self::Multimodal { .. }, Self::Multimodal { .. }) => true,
             (Self::Audio, Self::Audio) => true,
@@ -1533,6 +1738,7 @@ impl PartialEq for ModelCategory {
             (Self::Embedding, Self::Embedding) => true,
             (
                 Self::Text
+                | Self::Decision { .. }
                 | Self::Multimodal { .. }
                 | Self::Diffusion
                 | Self::Audio
@@ -1778,6 +1984,20 @@ pub trait Pipeline:
     + MetadataMixin
     + AnyMoePipelineMixin
 {
+    fn finalize_response(&self, _seq: &mut crate::sequence::Sequence) -> candle_core::Result<()> {
+        Ok(())
+    }
+    fn prepare_streaming_response(
+        &self,
+        _seq: &mut crate::sequence::Sequence,
+    ) -> candle_core::Result<()> {
+        Ok(())
+    }
+    fn release_generation_sequences(&self, _sequence_ids: &[usize]) {}
+    fn response_token_is_hidden(&self, _token: u32) -> bool {
+        false
+    }
+
     fn requires_uniform_prompt_batch(&self) -> bool {
         true
     }
@@ -1807,6 +2027,13 @@ pub trait Pipeline:
         inputs: Box<dyn Any>,
         return_raw_logits: bool,
     ) -> Result<ForwardInputsResult, candle_core::Error>;
+
+    fn forward_decision(
+        &self,
+        _sequence: &mut Sequence,
+    ) -> Result<crate::decision::DecisionResponse> {
+        anyhow::bail!("This pipeline does not support decision requests")
+    }
 
     #[doc(hidden)]
     fn forward_step(
@@ -2030,6 +2257,44 @@ pub trait Pipeline:
         logger: &IntervalLogger,
         lookahead: StepLookahead,
     ) -> Result<StepSubmission, candle_core::Error> {
+        if matches!(self.category(), ModelCategory::Decision { .. }) {
+            let mut duration = Duration::ZERO;
+            for seq in input_seqs {
+                if seq.responder().is_closed() {
+                    seq.set_state(crate::sequence::SequenceState::Done(
+                        crate::sequence::StopReason::Canceled,
+                    ));
+                    continue;
+                }
+                let start = Instant::now();
+                let result = self.forward_decision(seq);
+                duration += start.elapsed();
+                if seq.responder().is_closed() {
+                    seq.set_state(crate::sequence::SequenceState::Done(
+                        crate::sequence::StopReason::Canceled,
+                    ));
+                    continue;
+                }
+                let response = match result {
+                    Ok(result) => {
+                        seq.set_state(crate::sequence::SequenceState::Done(
+                            crate::sequence::StopReason::Length(0),
+                        ));
+                        crate::Response::Decision { result }
+                    }
+                    Err(error) => {
+                        seq.set_state(crate::sequence::SequenceState::Error);
+                        if is_inputs_processor_validation_error(&error) {
+                            crate::Response::ValidationError(error.into())
+                        } else {
+                            crate::Response::InternalError(error.into())
+                        }
+                    }
+                };
+                let _ = seq.responder().send(response).await;
+            }
+            return Ok(StepSubmission::ready(duration));
+        }
         match backend_metadata {
             CacheBackendMetadata::DefaultInstructions { pre_op, post_op } => {
                 if !is_prompt && !return_raw_logits {
@@ -2395,7 +2660,7 @@ pub trait Pipeline:
                     && sampling::can_submit_cuda_token_batch_seqs(input_seqs)
                     && sampling::can_launch_one_token_lookahead(
                         input_seqs,
-                        self.get_metadata().max_seq_len,
+                        self.get_metadata().max_model_len,
                     );
                 #[cfg(feature = "cuda")]
                 let mut batched_cuda_decode = None;
@@ -3031,12 +3296,13 @@ mod tests {
 
     use super::{
         add_recurrent_prefix_memory_reservations, automatic_recurrent_checkpoint_lane_budget,
-        decode_positions_tensor, effective_recurrent_checkpoint_lanes,
-        next_pipeline_prompt_chunk_group, paged_attention_memory_reservations,
-        prompt_chunk_is_final, recurrent_batch_kind_for_input, recurrent_kv_floor_bytes,
-        reserve_recurrent_serving_capacity, resolve_lora_execution, should_sample_step,
-        should_try_speculative_sampling, CacheMemoryReservations, ForwardCache, LogitsSelection,
-        ModelForwardContext, RecurrentBatchKind, RecurrentCheckpointBudget,
+        automatic_recurrent_prefix_capacity, decode_positions_tensor,
+        effective_recurrent_checkpoint_lanes, next_pipeline_prompt_chunk_group,
+        paged_attention_memory_reservations, prompt_chunk_is_final, recurrent_batch_kind_for_input,
+        recurrent_kv_floor_bytes, reserve_recurrent_serving_capacity, resolve_lora_execution,
+        should_sample_step, should_try_speculative_sampling, CacheMemoryReservations, ForwardCache,
+        LogitsSelection, ModelForwardContext, RecurrentBatchKind, RecurrentCheckpointBudget,
+        RecurrentPrefixBudget,
     };
     use crate::{
         kv_cache::{
@@ -3051,6 +3317,56 @@ mod tests {
     use candle_core::{Device, DeviceLocation, Tensor};
     use either::Either;
     use indexmap::IndexMap;
+
+    fn cache_with_blocks(num_gpu_blocks: usize) -> crate::paged_attention::CacheConfig {
+        crate::paged_attention::CacheConfig {
+            block_size: 32,
+            num_gpu_blocks,
+            cache_type: crate::paged_attention::PagedCacheType::Auto,
+            kv_cache_group_ids: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn max_model_len_is_the_tightest_limit() -> anyhow::Result<()> {
+        use super::{resolve_max_model_len, MemoryGoal};
+        let small_cache = cache_with_blocks(33);
+        let auto = Some((&small_cache, MemoryGoal::Auto));
+        assert_eq!(resolve_max_model_len(4096, None, None, true)?, 4096);
+        assert_eq!(resolve_max_model_len(4096, Some(1000), None, true)?, 1000);
+        assert_eq!(resolve_max_model_len(4096, None, auto, true)?, 1024);
+        assert_eq!(resolve_max_model_len(512, None, auto, true)?, 512);
+        assert_eq!(resolve_max_model_len(4096, Some(1024), auto, true)?, 1024);
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_max_model_len_must_fit_model_and_cache() {
+        use super::{resolve_max_model_len, MemoryGoal};
+        let small_cache = cache_with_blocks(33);
+        assert!(resolve_max_model_len(4096, Some(8192), None, true)
+            .unwrap_err()
+            .to_string()
+            .contains("context length of 4096"));
+        let auto = resolve_max_model_len(
+            4096,
+            Some(2048),
+            Some((&small_cache, MemoryGoal::Auto)),
+            true,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(auto.contains("holds 1024 tokens") && auto.contains("--pa-cache-type"));
+        let explicit = resolve_max_model_len(
+            4096,
+            Some(2048),
+            Some((&small_cache, MemoryGoal::KvTokens(1024))),
+            true,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(explicit.contains("raise --kv-cache"));
+    }
 
     fn prompt_chunk(start: usize, end: usize) -> PromptChunkPlan {
         PromptChunkPlan {
@@ -3369,11 +3685,32 @@ mod tests {
     }
 
     #[test]
+    fn automatic_prefix_capacity_uses_the_limiting_recurrent_device() {
+        let roomy = RecurrentPrefixBudget {
+            snapshot_bytes: 10,
+            persistent_bytes: 1000,
+            execution_bytes: 1000,
+        };
+        let limited = RecurrentPrefixBudget {
+            snapshot_bytes: 20,
+            persistent_bytes: 240,
+            execution_bytes: 100,
+        };
+        assert_eq!(automatic_recurrent_prefix_capacity(16, &[roomy]), 16);
+        assert_eq!(
+            automatic_recurrent_prefix_capacity(16, &[roomy, limited]),
+            4
+        );
+        assert_eq!(automatic_recurrent_prefix_capacity(2, &[roomy, limited]), 2);
+    }
+
+    #[test]
     fn recurrent_prefix_reservation_includes_staging_and_device_baselines() {
         let reservations = add_recurrent_prefix_memory_reservations(
             CacheMemoryReservations {
                 primary_device_bytes: 100,
                 secondary_device_bytes: 50,
+                ..Default::default()
             },
             HashMap::from([
                 (DeviceLocation::Cpu, 10),
@@ -3387,6 +3724,8 @@ mod tests {
 
         assert_eq!(reservations.primary_device_bytes, 130);
         assert_eq!(reservations.secondary_device_bytes, 140);
+        assert_eq!(reservations.primary_staging_bytes, 10);
+        assert_eq!(reservations.secondary_staging_bytes, 30);
     }
 
     #[test]
@@ -3416,13 +3755,15 @@ mod tests {
                 .unwrap()
                 .with_base_device_memory_reservation(100)
                 .unwrap()
-                .with_recurrent_prefix_capacity(2);
+                .with_recurrent_prefix_capacity(crate::PrefixCacheCapacity::Fixed(2));
 
         let reservations =
             paged_attention_memory_reservations(&cache, &config, &Device::Cpu).unwrap();
 
         assert_eq!(reservations.primary_device_bytes, 676);
         assert_eq!(reservations.secondary_device_bytes, 0);
+        assert_eq!(reservations.primary_staging_bytes, 192);
+        assert_eq!(reservations.secondary_staging_bytes, 0);
     }
     use serde_json::Value;
 

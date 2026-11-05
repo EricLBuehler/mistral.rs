@@ -13,7 +13,6 @@ pub(crate) const ATTN_HEAD_DIM: usize = 256;
 const ATTN_TARGET_CTAS: usize = 256;
 const ATTN_MIN_ITEMS_PER_SPLIT: usize = 64;
 const ATTN_MAX_SPLITS: usize = 32;
-
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub(crate) struct Q4Tokens {
@@ -52,41 +51,6 @@ mod ffi {
     use core::ffi::c_void;
 
     extern "C" {
-        pub(super) fn qwen4_hc_norm(
-            x: *const c_void,
-            weight: *const f32,
-            out: *mut c_void,
-            rows: i32,
-            hc: i32,
-            hidden: i32,
-            eps: f32,
-            dtype: i32,
-            stream: i64,
-        );
-        pub(super) fn qwen4_hc_mix(
-            xn: *const c_void,
-            gate: *const c_void,
-            out: *mut c_void,
-            tokens: i32,
-            hc: i32,
-            hidden: i32,
-            dtype: i32,
-            stream: i64,
-        );
-        pub(super) fn qwen4_hc_combine(
-            res: *const c_void,
-            block_out: *const c_void,
-            inject: *const c_void,
-            res_out: *mut c_void,
-            next_weight: *const f32,
-            xn_out: *mut c_void,
-            rows: i32,
-            hc: i32,
-            hidden: i32,
-            eps: f32,
-            dtype: i32,
-            stream: i64,
-        );
         pub(super) fn qwen4_ple_hash(
             tokens: *const u32,
             layout: Q4Tokens,
@@ -103,26 +67,6 @@ mod ffi {
             hist_pool: *mut f32,
             slots: *const u32,
             hist_len: i32,
-            stream: i64,
-        );
-        pub(super) fn qwen4_ple_gather(
-            rows: *const i64,
-            n_lookups: i32,
-            shard_ptrs: *const u64,
-            shard_starts: *const i64,
-            n_shards: i32,
-            head_dim: i32,
-            out: *mut c_void,
-            stream: i64,
-        );
-        pub(super) fn qwen4_ple_gather_quant(
-            rows: *const i64,
-            n_lookups: i32,
-            data: *const u8,
-            scales: *const c_void,
-            head_dim: i32,
-            format: i32,
-            out: *mut c_void,
             stream: i64,
         );
         #[cfg(feature = "cutile")]
@@ -437,91 +381,6 @@ impl PagedView<'_> {
     }
 }
 
-/// Grouped RMSNorm over each of the `hc` streams of `x: [tokens, hc * hidden]`.
-pub(crate) fn hc_norm(x: &Tensor, weight: &Tensor, hc: usize, eps: f64) -> Result<Tensor> {
-    let x = x.contiguous()?;
-    let width = x.dim(candle_core::D::Minus1)?;
-    let rows = x.elem_count() / (width / hc);
-    let out = empty(x.dims(), x.dtype(), x.device())?;
-    unsafe {
-        ffi::qwen4_hc_norm(
-            dev_ptr(&x)? as *const _,
-            dev_ptr(weight)? as *const f32,
-            dev_ptr(&out)? as *mut _,
-            rows as i32,
-            hc as i32,
-            (width / hc) as i32,
-            eps as f32,
-            dtype_code(x.dtype())?,
-            stream(x.device())?,
-        );
-    }
-    Ok(out)
-}
-
-/// Mean over streams of `xn * sigmoid(gate)`: `[.., hc * hidden] -> [.., hidden]`.
-pub(crate) fn hc_mix(xn: &Tensor, gate: &Tensor, hc: usize) -> Result<Tensor> {
-    let xn = xn.contiguous()?;
-    let gate = gate.contiguous()?;
-    let width = xn.dim(candle_core::D::Minus1)?;
-    let hidden = width / hc;
-    let tokens = xn.elem_count() / width;
-    let mut shape = xn.dims().to_vec();
-    *shape.last_mut().expect("rank >= 1") = hidden;
-    let out = empty(&shape, xn.dtype(), xn.device())?;
-    unsafe {
-        ffi::qwen4_hc_mix(
-            dev_ptr(&xn)? as *const _,
-            dev_ptr(&gate)? as *const _,
-            dev_ptr(&out)? as *mut _,
-            tokens as i32,
-            hc as i32,
-            hidden as i32,
-            dtype_code(xn.dtype())?,
-            stream(xn.device())?,
-        );
-    }
-    Ok(out)
-}
-
-/// `res + block_out * 2 * sigmoid(inject / hc)` per stream, plus the next mixer's grouped norm.
-pub(crate) fn hc_combine(
-    res: &Tensor,
-    block_out: &Tensor,
-    inject: &Tensor,
-    next_norm: Option<&Tensor>,
-    hc: usize,
-    eps: f64,
-) -> Result<(Tensor, Option<Tensor>)> {
-    let res = res.contiguous()?;
-    let block_out = block_out.contiguous()?;
-    let inject = inject.contiguous()?;
-    let width = res.dim(candle_core::D::Minus1)?;
-    let hidden = width / hc;
-    let rows = res.elem_count() / hidden;
-    let out = empty(res.dims(), res.dtype(), res.device())?;
-    let xn = next_norm
-        .map(|_| empty(res.dims(), res.dtype(), res.device()))
-        .transpose()?;
-    unsafe {
-        ffi::qwen4_hc_combine(
-            dev_ptr(&res)? as *const _,
-            dev_ptr(&block_out)? as *const _,
-            dev_ptr(&inject)? as *const _,
-            dev_ptr(&out)? as *mut _,
-            opt_ptr(next_norm)? as *const f32,
-            opt_ptr(xn.as_ref())? as *mut _,
-            rows as i32,
-            hc as i32,
-            hidden as i32,
-            eps as f32,
-            dtype_code(res.dtype())?,
-            stream(res.device())?,
-        );
-    }
-    Ok((out, xn))
-}
-
 /// `[tokens, heads]` table rows from each token's n-gram context; also advances `hist_pool`.
 pub(crate) fn ple_hash(
     tokens: &Tensor,
@@ -560,64 +419,6 @@ pub(crate) fn ple_hash(
         );
     }
     Ok(rows)
-}
-
-/// Gather 16-bit rows from shard base addresses the device can dereference (ATS/HMM).
-pub(crate) fn ple_gather(
-    rows: &Tensor,
-    shard_ptrs: &Tensor,
-    shard_starts: &Tensor,
-    head_dim: usize,
-    dtype: DType,
-) -> Result<Tensor> {
-    let (tokens, heads) = rows.dims2()?;
-    let out = empty(&[tokens, heads * head_dim], dtype, rows.device())?;
-    unsafe {
-        ffi::qwen4_ple_gather(
-            dev_ptr(rows)? as *const i64,
-            (tokens * heads) as i32,
-            dev_ptr(shard_ptrs)? as *const u64,
-            dev_ptr(shard_starts)? as *const i64,
-            shard_ptrs.dim(0)? as i32,
-            head_dim as i32,
-            dev_ptr(&out)? as *mut _,
-            stream(rows.device())?,
-        );
-    }
-    Ok(out)
-}
-
-/// Row encodings of the device-resident n-gram table; values match `Q4_PLE_FMT_*`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PleTableFormat {
-    Q8 = 0,
-    Q4 = 1,
-    Iq4Nl = 2,
-}
-
-/// Gather and dequantize rows from the device-resident table into `[tokens, heads * head_dim]` bf16.
-pub(crate) fn ple_gather_quant(
-    rows: &Tensor,
-    data: &Tensor,
-    scales: Option<&Tensor>,
-    head_dim: usize,
-    format: PleTableFormat,
-) -> Result<Tensor> {
-    let (tokens, heads) = rows.dims2()?;
-    let out = empty(&[tokens, heads * head_dim], DType::BF16, rows.device())?;
-    unsafe {
-        ffi::qwen4_ple_gather_quant(
-            dev_ptr(rows)? as *const i64,
-            (tokens * heads) as i32,
-            dev_ptr(data)? as *const u8,
-            dev_ptr(scales.unwrap_or(data))? as *const _,
-            head_dim as i32,
-            format as i32,
-            dev_ptr(&out)? as *mut _,
-            stream(rows.device())?,
-        );
-    }
-    Ok(out)
 }
 
 pub(crate) struct PleGateWeights<'a> {
@@ -898,10 +699,40 @@ pub(crate) fn qsa_select_cutile(
     }
 }
 
-/// cuTile sparse attention for prefill layouts on devices with the tile JIT.
+/// cuTile attention for supported prefill and rectangular decode layouts.
 pub(crate) fn qsa_attention_cutile(args: &QsaAttentionArgs<'_>) -> Result<Option<Tensor>> {
     #[cfg(feature = "cutile")]
     {
+        if args.layout.tok_seq.is_none() {
+            let Device::Cuda(dev) = args.q.device() else {
+                return Ok(None);
+            };
+            let block_tables = args.paged.block_tables.contiguous()?;
+            let paged = mistralrs_quant::cutile::QsaPaged {
+                block_tables: &block_tables,
+                max_blocks_per_seq: block_tables.dim(1)?,
+                block_size: args.paged.block_size,
+            };
+            return mistralrs_quant::cutile::try_cutile_qsa_decode(
+                &mistralrs_quant::cutile::QsaDecodeArgs {
+                    q: args.q,
+                    key_cache: args.key_cache,
+                    value_cache: args.value_cache,
+                    paged: &paged,
+                    kv_lens: args.paged.kv_lens,
+                    selection: args.selection,
+                    q_len: args.layout.q_len,
+                    n_kv_heads: args.n_kv_heads,
+                    ratio: args.shape.ratio,
+                    topk: args.shape.topk,
+                    scale: args.scale,
+                },
+                dev,
+            );
+        }
+        let Some((selected, n_selected)) = args.selection else {
+            return Ok(None);
+        };
         let (Some(meta), Device::Cuda(dev)) = (args.layout.cutile.as_ref(), args.q.device()) else {
             return Ok(None);
         };
@@ -926,8 +757,8 @@ pub(crate) fn qsa_attention_cutile(args: &QsaAttentionArgs<'_>) -> Result<Option
                 key_cache: args.key_cache,
                 value_cache: args.value_cache,
                 paged: &tile_paged,
-                selected: args.selected,
-                n_selected: args.n_selected,
+                selected,
+                n_selected,
                 tokens: &meta.tokens,
                 n_kv_heads: args.n_kv_heads,
                 ratio: args.shape.ratio,
@@ -950,8 +781,8 @@ pub(crate) struct QsaAttentionArgs<'a> {
     pub value_cache: &'a Tensor,
     pub layout: &'a TokenLayout,
     pub paged: &'a PagedView<'a>,
-    pub selected: &'a Tensor,
-    pub n_selected: &'a Tensor,
+    // None attends the full live context without materializing identity block indices.
+    pub selection: Option<(&'a Tensor, &'a Tensor)>,
     pub shape: &'a QsaShape,
     pub n_kv_heads: usize,
     pub scale: f32,
@@ -966,7 +797,11 @@ pub(crate) fn qsa_attention(args: QsaAttentionArgs<'_>) -> Result<Tensor> {
     }
     let device = q.device();
     let flashinfer_layout = args.key_cache.rank() == 4;
-    let max_items = args.shape.topk * args.shape.ratio + args.shape.ratio - 1;
+    let max_items = if args.selection.is_some() {
+        args.shape.topk * args.shape.ratio + args.shape.ratio - 1
+    } else {
+        args.paged.block_tables.dim(1)? * args.paged.block_size
+    };
     let ctas = n_tokens * args.n_kv_heads;
     let splits = ATTN_TARGET_CTAS
         .div_ceil(ctas.max(1))
@@ -990,8 +825,8 @@ pub(crate) fn qsa_attention(args: QsaAttentionArgs<'_>) -> Result<Tensor> {
             dev_ptr(args.value_cache)? as *const _,
             args.layout.ffi()?,
             args.paged.ffi()?,
-            dev_ptr(args.selected)? as *const i32,
-            dev_ptr(args.n_selected)? as *const i32,
+            opt_ptr(args.selection.map(|(selected, _)| selected))? as *const i32,
+            opt_ptr(args.selection.map(|(_, n_selected)| n_selected))? as *const i32,
             args.shape.topk as i32,
             args.shape.ratio as i32,
             n_q_heads as i32,
@@ -1011,92 +846,5 @@ pub(crate) fn qsa_attention(args: QsaAttentionArgs<'_>) -> Result<Tensor> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    const BLOCK_SIZE: usize = 4;
-    const RATIO: usize = 4;
-    const HALF_ROT: usize = 32;
-    const TOKENS: usize = 8;
-    const SLOTS: usize = 12;
-    const REPLACED_TOKENS: usize = 2;
-
-    #[test]
-    #[ignore = "requires a CUDA device"]
-    fn qsa_reopened_block_matches_fresh_prefill() -> Result<()> {
-        let device = Device::new_cuda(0)?;
-        let dtype = DType::BF16;
-        let aux_dim = QSA_HEAD_DIM + 2 * HALF_ROT;
-        let head_dim = u32::try_from(QSA_HEAD_DIM).unwrap();
-        let half_rot = u32::try_from(HALF_ROT).unwrap();
-        let raw = (Tensor::arange(0u32, u32::try_from(TOKENS).unwrap() * head_dim, &device)?
-            .to_dtype(DType::F32)?
-            .reshape((TOKENS, QSA_HEAD_DIM))?
-            / f64::from(head_dim))?
-        .sin()?
-        .to_dtype(dtype)?;
-        let angles = (Tensor::arange(0u32, u32::try_from(TOKENS).unwrap() * half_rot, &device)?
-            .to_dtype(DType::F32)?
-            .reshape((TOKENS, HALF_ROT))?
-            / f64::from(half_rot))?;
-        let cos = angles.cos()?.to_dtype(dtype)?;
-        let sin = angles.sin()?.to_dtype(dtype)?;
-        let slots = Tensor::new(&[8i64, 9, 10, 11, 0, 1, 2, 3], &device)?;
-        let tables = Tensor::new(&[[2u32, 0]], &device)?;
-        let kv_lens = Tensor::new(&[TOKENS as u32], &device)?;
-        let paged = PagedView {
-            block_tables: &tables,
-            kv_lens: &kv_lens,
-            block_size: BLOCK_SIZE,
-        };
-        let shape = QsaShape {
-            ratio: RATIO,
-            topk: 1,
-            half_rot: HALF_ROT,
-            n_index_heads: 1,
-        };
-        let weight = Tensor::ones(QSA_HEAD_DIM, DType::F32, &device)?;
-        let full_layout = TokenLayout::from_host(&[(0, TOKENS)], &[TOKENS], TOKENS, &device)?;
-        let suffix_layout =
-            TokenLayout::from_host(&[(0, REPLACED_TOKENS)], &[TOKENS], REPLACED_TOKENS, &device)?;
-        let aux = Tensor::zeros((SLOTS, aux_dim), dtype, &device)?;
-        let keys = Tensor::zeros((SLOTS / RATIO, QSA_HEAD_DIM), dtype, &device)?;
-        let finalize = |aux: &Tensor, keys: &Tensor, layout: &TokenLayout| {
-            qsa_finalize(QsaFinalizeArgs {
-                aux,
-                block_keys: keys,
-                layout,
-                paged: &paged,
-                norm_weight: &weight,
-                shape: &shape,
-                eps: 1e-6,
-            })
-        };
-        qsa_aux_write(&raw, &cos, &sin, &slots, &aux)?;
-        let initial_aux = aux.to_dtype(DType::F32)?.to_vec2::<f32>()?;
-        finalize(&aux, &keys, &full_layout)?;
-        assert_eq!(aux.to_dtype(DType::F32)?.to_vec2::<f32>()?, initial_aux);
-
-        let suffix_start = TOKENS - REPLACED_TOKENS;
-        let replacement = raw.narrow(0, suffix_start, REPLACED_TOKENS)?.neg()?;
-        qsa_aux_write(
-            &replacement,
-            &cos.narrow(0, suffix_start, REPLACED_TOKENS)?,
-            &sin.narrow(0, suffix_start, REPLACED_TOKENS)?,
-            &slots.narrow(0, suffix_start, REPLACED_TOKENS)?,
-            &aux,
-        )?;
-        finalize(&aux, &keys, &suffix_layout)?;
-
-        let fresh_aux = Tensor::zeros((SLOTS, aux_dim), dtype, &device)?;
-        let fresh_keys = Tensor::zeros((SLOTS / RATIO, QSA_HEAD_DIM), dtype, &device)?;
-        let accepted = Tensor::cat(&[raw.narrow(0, 0, suffix_start)?, replacement], 0)?;
-        qsa_aux_write(&accepted, &cos, &sin, &slots, &fresh_aux)?;
-        finalize(&fresh_aux, &fresh_keys, &full_layout)?;
-        assert_eq!(
-            keys.to_dtype(DType::F32)?.to_vec2::<f32>()?,
-            fresh_keys.to_dtype(DType::F32)?.to_vec2::<f32>()?
-        );
-        Ok(())
-    }
-}
+#[path = "qwen4_exp_tests.rs"]
+mod tests;

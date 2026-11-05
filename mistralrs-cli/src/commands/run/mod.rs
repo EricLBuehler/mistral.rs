@@ -51,7 +51,7 @@ pub async fn run_interactive(
 
     // Convert our clean args to ModelSelected
     let matformer = runtime.matformer_selection();
-    apply_quant_resolution(&mut model_type, &global.token_source, &matformer).await?;
+    apply_quant_resolution(&mut model_type, &global.token_source, &matformer, None).await?;
     let model_selected = convert_to_model_selected(&model_type, &matformer)?;
     let (max_model_len, hf_config_overrides) = extract_hf_config_settings(&model_type);
 

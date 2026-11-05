@@ -1,73 +1,60 @@
 ---
 title: Send images, audio, and video
-description: Multimodal input on every surface - content-part messages, URL forms, and per-modality notes.
+description: Attach media through CLI flags, chat content parts, or native SDKs.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Multimodal models accept the OpenAI content-part message format: `content` is a list of typed parts instead of a string. The heavily tested families are Qwen3-VL (image, video) and Gemma 4 (image, audio, video); per-model modality support is in the [supported models reference](/reference/supported-models/).
+Vision, audio, and omni models take media alongside your text. The [supported models](/reference/supported-models/) list shows which inputs each model accepts. To attach media to a chat message, make its `content` a list of parts, text and media mixed, instead of a single string.
 
 <Tabs>
 <TabItem label="CLI">
 
 ```bash
-mistralrs run -m Qwen/Qwen3-VL-4B-Instruct --image photo.jpg -i "What is this?"
+mistralrs run -m Qwen/Qwen3-VL-4B-Instruct \
+  --image photo.jpg -i "What is this?"
 ```
 
-`--image`, `--audio`, and `--video` each accept multiple values and require `-i`. Interactive mode also auto-detects file paths in prompts:
-
-```text
-> Describe this: /path/to/photo.jpg
-```
+`--image`, `--audio`, and `--video` take a file path or URL and need a prompt with `-i`. Repeat a flag to attach several files. In interactive chat, you can also type a file path into your message and mistral.rs attaches the file.
 
 </TabItem>
 <TabItem label="HTTP">
 
+Replace the example URL with a publicly reachable image:
+
 ```bash
 curl http://localhost:1234/v1/chat/completions \
-  -H "Content-Type: application/json" \
+  -H 'Content-Type: application/json' \
   -d '{
     "model": "default",
-    "messages": [{
-      "role": "user",
-      "content": [
-        {"type": "image_url", "image_url": {"url": "file:///path/to/photo.jpg"}},
-        {"type": "text", "text": "Describe this image."}
-      ]
-    }]
+    "messages": [{"role": "user", "content": [
+      {"type": "image_url", "image_url": {"url": "https://example.com/photo.jpg"}},
+      {"type": "text", "text": "Describe this image."}
+    ]}]
   }'
 ```
 
-[Full example](/examples/server/qwen3-vl/).
+To send a file from the client's disk, inline it as a base64 data URL as shown [below](#in-memory-images-from-python).
 
 </TabItem>
 <TabItem label="Python">
 
 ```python
-from mistralrs import Runner, Which, ChatCompletionRequest
+from mistralrs import ChatCompletionRequest, Runner, Which
 
-runner = Runner(
-    which=Which.MultimodalPlain(model_id="Qwen/Qwen3-VL-4B-Instruct"),
-    in_situ_quant="4",
-)
-
-response = runner.send_chat_completion_request(
-    ChatCompletionRequest(
-        model="default",
-        messages=[{
-            "role": "user",
-            "content": [
-                {"type": "image_url", "image_url": {"url": "file:///path/to/photo.jpg"}},
-                {"type": "text", "text": "What do you see in this image?"},
-            ],
-        }],
-        max_tokens=256,
-    )
-)
+runner = Runner(which=Which.MultimodalPlain(model_id="Qwen/Qwen3-VL-4B-Instruct"))
+response = runner.send_chat_completion_request(ChatCompletionRequest(
+    model="default",
+    messages=[{"role": "user", "content": [
+        {"type": "image_url", "image_url": {"url": "file:///absolute/path/photo.jpg"}},
+        {"type": "text", "text": "Describe this image."},
+    ]}],
+    max_tokens=256,
+))
 print(response.choices[0].message.content)
 ```
 
-[Full example](/examples/python/qwen3-vl/).
+In the Python SDK, `url` can be a plain file path, a `file://` URL, an `http(s)` URL, or a data URL.
 
 </TabItem>
 <TabItem label="Rust">
@@ -76,122 +63,101 @@ print(response.choices[0].message.content)
 use mistralrs::{ModelBuilder, MultimodalMessages, TextMessageRole};
 
 let model = ModelBuilder::new("Qwen/Qwen3-VL-4B-Instruct").build().await?;
-
-let image = image::open("photo.jpg")?;
-let messages = MultimodalMessages::new()
-    .add_image_message(TextMessageRole::User, "What is this?", vec![image]);
-
+let messages = MultimodalMessages::new().add_image_message(
+    TextMessageRole::User, "Describe this image.", vec![image::open("photo.jpg")?],
+);
 let response = model.send_chat_request(messages).await?;
 ```
 
-`add_audio_message` and `add_video_message` follow the same shape; `add_multimodal_message` mixes all three. [Full example](/examples/rust/models/multimodal-models/).
+Use `add_audio_message`, `add_video_message`, or `add_multimodal_message` for other inputs. [Complete example](/examples/rust/models/multimodal-models/).
 
 </TabItem>
 </Tabs>
 
 ## Content parts and URL forms
 
-Three part types carry media: `image_url`, `audio_url`, and `video_url`, each wrapping a `{"url": ...}` object. URLs accept three forms:
+| Part | Payload |
+| --- | --- |
+| `text` | `{"text":"Your question"}` |
+| `image_url` | `{"image_url":{"url":"..."}}` |
+| `video_url` | `{"video_url":{"url":"..."}}` |
+| `audio_url` | `{"audio_url":{"url":"..."}}` |
+| `input_audio` | `{"input_audio":{"data":"BASE64","format":"wav"}}` |
 
-- `file:///absolute/path`: local files the server process can read.
-- `http(s)://...`: fetched over the network at request time.
-- `data:<mime>;base64,...`: inline base64.
+Each part also has a `type` field, as in the examples above.
 
-A message can contain any number of parts in any combination the model supports; the model sees them in order:
+Over HTTP, a `url` can be:
 
-```json
-{
-  "role": "user",
-  "content": [
-    {"type": "image_url", "image_url": {"url": "file:///before.jpg"}},
-    {"type": "image_url", "image_url": {"url": "file:///after.jpg"}},
-    {"type": "text", "text": "What changed between these images?"}
-  ]
-}
-```
+- An `http://` or `https://` URL on the public internet. The server refuses URLs that point at localhost or a private network address.
+- An inline `data:<mime>;base64,...` URL.
+
+Local paths and `file://` URLs don't work over HTTP, because the server won't read its own disk on a client's behalf. Read the file on the client and send it inline instead. The CLI and the Python and Rust SDKs read local files directly.
+
+Each media file can be up to 64 MiB. The whole request body is capped at 50 MiB, and base64 makes a file about a third larger, so send large files by URL.
 
 ## Video
 
-Send video with `--video` on the CLI or a `video_url` part over HTTP/SDKs:
+Attach a video with `--video clip.mp4` on the CLI, or with a content part:
 
 ```json
-{
-  "role": "user",
-  "content": [
-    {"type": "video_url", "video_url": {"url": "file:///absolute/path/clip.mp4"}},
-    {"type": "text", "text": "What happens in this video?"}
-  ]
-}
+{"type":"video_url","video_url":{"url":"https://example.com/clip.mp4"}}
 ```
 
-Non-GIF formats require FFmpeg on the server; install steps and troubleshooting are in [Set up video input](/guides/models/video-setup/).
+Formats other than GIF need FFmpeg on the server; see [video setup](/guides/models/video-setup/). mistral.rs samples frames from the clip using the model's own frame rate and frame-count limits. LFM3-VL, for example, takes 2 frames per second, between 4 and 768 frames in total.
 
-The engine decodes the file into sampled frames and feeds them through the model's vision path. Per-request frame-sampling controls are not currently exposed.
-
-Qwen3-VL, Gemma 4, and the native Muse Glimmer safetensors checkpoint accept video; see the [supported models reference](/reference/supported-models/) for per-model modality support. [Full example](/examples/server/gemma4-video/).
+The soundtrack isn't used. If the model accepts audio and you want it to hear the clip too, extract the track (for example, `ffmpeg -i clip.mp4 -vn clip.wav`) and attach it as a separate audio part.
 
 ## Audio
 
-Audio support is model-specific: Gemma 4, Gemma 3n, Phi 4 Multimodal, MiniCPM-O, and Voxtral accept `audio_url` parts (Voxtral is the dedicated audio-understanding model; see [speech models](/guides/models/use-speech-models/)).
+For WAV or MP3, base64-encode the file and send it in an `input_audio` part. Don't add a `data:` prefix:
 
 ```json
-{
-  "role": "user",
-  "content": [
-    {"type": "audio_url", "audio_url": {"url": "file:///clip.wav"}},
-    {"type": "text", "text": "Transcribe this."}
-  ]
-}
+{"type":"input_audio","input_audio":{"data":"BASE64_FILE_BYTES","format":"wav"}}
 ```
 
-WAV, MP3, FLAC, and OGG decode natively. Convert other formats with FFmpeg first. [Full example](/examples/python/phi4mm-audio/).
+For FLAC or OGG, or to point at a URL, use an `audio_url` part with an `https://` or `data:` URL. mistral.rs decodes WAV, MP3, FLAC, and OGG. Convert anything else first, for example with `ffmpeg -i clip.m4a clip.wav`. In Rust, build an `AudioInput` with `AudioInput::from_bytes` and pass it to `add_audio_message`. See [HTTP audio requests](/reference/http-api/#audio-requests-and-history) for request limits.
+
+This covers sending audio in. To get spoken replies, see [Speech models](/guides/models/use-speech-models/).
 
 ## In-memory images from Python
 
-For bytes or PIL images, encode as base64 and pass a data URL; the engine handles decoding and preprocessing:
+A data URL works with both the OpenAI client and the native SDK:
 
 ```python
 import base64
-from io import BytesIO
-from PIL import Image
+from pathlib import Path
 
-img = Image.open("photo.jpg")
-buf = BytesIO()
-img.save(buf, format="PNG")
-b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-
-messages = [{
-    "role": "user",
-    "content": [
-        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
-        {"type": "text", "text": "Describe this image."},
-    ],
-}]
+payload = base64.b64encode(Path("photo.jpg").read_bytes()).decode("ascii")
+messages = [{"role": "user", "content": [
+    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{payload}"}},
+    {"type": "text", "text": "Describe this image."},
+]}]
 ```
+
+For a PIL image, save it into an `io.BytesIO` buffer first, then encode the buffer's bytes and use the matching MIME type, such as `image/png`.
 
 ## Mixing modalities in one request
 
-Any combination the model supports works in a single message; order matters:
+A message can hold any number of parts, and the model reads them in the order you send them. To compare two images:
 
-```python
-messages = [{
-    "role": "user",
-    "content": [
-        {"type": "image_url", "image_url": {"url": "file:///chart.png"}},
-        {"type": "audio_url", "audio_url": {"url": "file:///commentary.wav"}},
-        {"type": "text", "text": "Does the commentary match what the chart shows?"},
-    ],
-}]
+```json
+{"role": "user", "content": [
+  {"type": "image_url", "image_url": {"url": "https://example.com/before.jpg"}},
+  {"type": "image_url", "image_url": {"url": "https://example.com/after.jpg"}},
+  {"type": "text", "text": "What changed between these images?"}
+]}
 ```
 
-Which modalities a given model accepts is listed in the [supported models reference](/reference/supported-models/).
+You can also mix kinds, such as a chart, a spoken question about it, and a text instruction, as long as the model accepts all of them. LFM3-Omni and Gemma 4 take images, audio, and video together. See the [Omni example](/examples/server/lfm3-omni/).
 
-## Preprocessing
+## Image size and memory
 
-Vision encoders have fixed input resolutions, so each modality is normalized before reaching the model:
+Each model resizes images, samples video frames, and resamples audio into the shape it expects, so you don't need to prepare media yourself. Three load-time flags on `run` and `serve` change how much image work mistral.rs plans for:
 
-- Images are resized to the model's input resolution, preserving aspect ratio (large images are downsized).
-- Video uses the decoded frames.
-- Audio is resampled to the model's expected rate.
+| Flag | Default | What it does |
+| --- | --- | --- |
+| `--max-edge <pixels>` | Off | Resizes each image so its longest side is this many pixels, keeping the aspect ratio. Smaller values mean fewer image tokens and less memory per image. The Qwen-VL, LFM3, Idefics, MiniCPM-O, and Muse Glimmer models use it; others, such as Gemma and Mistral 3, always use their own image size. |
+| `--max-num-images <n>` | 1 | How many images per request mistral.rs sets memory aside for when it loads the model. |
+| `--max-image-length <pixels>` | 1024 | The image side length that memory reservation assumes. |
 
-Per-request preprocessing overrides are not exposed. Load-time image bounds are set at launch with `--max-num-images` (default 1), `--max-edge`, and `--max-image-length` (default 1024).
+`--max-num-images` and `--max-image-length` don't reject requests. They decide how much working memory is reserved at load time, which changes how much is left for the KV cache and how layers are split across GPUs. If you regularly send several large images per request and run out of memory, raise them to match what you send, for example `--max-num-images 4 --max-image-length 2048`.

@@ -36,6 +36,7 @@ macro_rules! common_builder_methods {
                             strict: None,
                         },
                     },
+                    source: mistralrs_core::AgentToolSource::User,
                 },
             );
             self
@@ -55,6 +56,7 @@ macro_rules! common_builder_methods {
                 ToolCallbackWithTool {
                     callback: ToolCallbackKind::Text(callback),
                     tool,
+                    source: mistralrs_core::AgentToolSource::User,
                 },
             );
             self
@@ -216,9 +218,10 @@ macro_rules! common_builder_methods {
             self
         }
 
-        /// Set the number of sequences to hold in the prefix cache. Set to `None` to disable the prefix cacher.
-        pub fn with_prefix_cache_n(mut self, n_seqs: Option<usize>) -> Self {
-            self.prefix_cache_n = n_seqs;
+        /// Set prefix cache retention: `Auto` (default) fits up to 16 sequences in the memory budget,
+        /// `Fixed(n)` retains exactly `n`, and `PrefixCacheCapacity::DISABLED` turns the prefix cacher off.
+        pub fn with_prefix_cache_n(mut self, capacity: PrefixCacheCapacity) -> Self {
+            self.prefix_cache_n = capacity;
             self
         }
 

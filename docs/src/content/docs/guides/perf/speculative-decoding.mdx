@@ -1,26 +1,21 @@
 ---
 title: Speculative decoding (MTP)
-description: Use MTP assistant models to draft multiple tokens per target verification pass.
+description: Generate several tokens per step with a draft model or a built-in prediction head.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Speculative decoding drafts several tokens per step using a separate assistant or the model's built-in prediction head. The target model verifies the drafts in parallel before emitting accepted tokens. Configure it through the MTP (Multi-Token Prediction) API.
-
-:::caution
-Speculative decoding requires [paged attention](/guides/perf/paged-attention/), which is enabled by default on CUDA.
-:::
+Speculative decoding makes generation faster by guessing several tokens ahead. A small drafter proposes the next few tokens, and the main (target) model checks all of them in a single pass. The target keeps the tokens it agrees with and throws away the rest, so one step can produce several tokens instead of one. The drafter is either a separate checkpoint (`--mtp-model`) or a prediction head built into the model (`--mtp`). mistral.rs calls both MTP, for multi-token prediction.
 
 <Tabs>
 <TabItem label="CLI">
 
 ```bash
 mistralrs run -m google/gemma-4-E4B-it --quant 8 \
-  --mtp-model google/gemma-4-E4B-it-assistant \
-  --mtp-n-predict 6
+  --mtp-model google/gemma-4-E4B-it-assistant
 ```
 
-`--mtp-model` accepts a Hugging Face id or a local path. The same flags work with `mistralrs serve`. See [run](/reference/cli/run/) and [serve](/reference/cli/serve/) flag references.
+`--mtp-model` takes a Hugging Face ID or a local path. The same flags work with `mistralrs serve`.
 
 </TabItem>
 <TabItem label="Python">
@@ -32,112 +27,115 @@ runner = Runner(
     which=Which.MultimodalPlain(model_id="google/gemma-4-E4B-it"),
     in_situ_quant="8",
     mtp_model="google/gemma-4-E4B-it-assistant",
-    mtp_n_predict=6,
 )
 ```
 
-Gemma 4 loads via `Which.MultimodalPlain` and uses a separate assistant checkpoint.
+Python takes a separate drafter only. To use the built-in Qwen head (`--mtp`), use the CLI or Rust.
 
 </TabItem>
 <TabItem label="Rust">
 
 ```rust
 let model = mistralrs::ModelBuilder::new("google/gemma-4-E4B-it")
-    .with_mtp_model("google/gemma-4-E4B-it-assistant", Some(6))
+    .with_mtp_model("google/gemma-4-E4B-it-assistant", None)
     .build()
     .await?;
 ```
 
-You can also pass `MtpConfig::new("google/gemma-4-E4B-it-assistant", Some(6))` to `with_mtp_config`. Use `MtpConfig::builtin(None)` for a built-in head with automatic draft depth. These methods are available on the text, multimodal, and auto-detecting model builders.
+For a built-in head, pass `.with_mtp_config(mistralrs::MtpConfig::builtin(None))` instead. The second argument in both is the [draft depth](#draft-depth); `None` picks it automatically. These methods work on the text, multimodal, and auto-detecting model builders.
 
 </TabItem>
 </Tabs>
 
-`--mtp-n-predict N` fixes the number of draft tokens per step. Without it, the engine tunes depth using draft acceptance, step time, and batch size, periodically trying other depths as the workload changes. Built-in Qwen heads choose among 2, 3, 4, and 6 drafts. Gemma 4 uses the same candidates, capped by `num_assistant_tokens` in the assistant's `generation_config.json` (6 if absent). DFlash uses the policy described below.
+Speculative decoding is set when the model loads, and then every request uses it. There's no per-request switch. It works with batched requests and constrained decoding, but it needs [paged attention](/guides/perf/paged-attention/), so it doesn't run on CPU or with `--paged-attn off`, and it can't be combined with dynamic LoRA.
+
+## How much it helps
+
+It helps most when only a few requests run at once. As concurrency rises, the GPU is already busy, and the extra drafting and checking work starts to cost more than it saves.
+
+The [v0.9.3 benchmark](https://github.com/EricLBuehler/mistral.rs/blob/master/releases/v0.9.3/report.md) ran Qwen3.8-27B (FP8) on one GH200 with 512-token outputs, using the DFlash 2 drafter at a fixed depth of 7 drafts. Compared with the same model and no drafter, output throughput was:
+
+| Concurrent requests | Throughput vs. no drafter |
+|---:|---:|
+| 1 | 2.2x |
+| 8 | 1.8x |
+| 16 | 1.6x |
+| 32 | 1.3x |
+| 64 | 0.8x |
+| 128 | 0.6x |
+
+The default [automatic depth](#draft-depth) drafts fewer tokens under heavy load than this fixed-depth run did.
+
+How many drafts the target accepts also depends heavily on the text. That same drafter accepts about 7 of 7 drafts on math and code, and far fewer on thinking-mode reasoning traces. To see the acceptance rate on your own traffic, use the speculative decoding queries in [observability](/guides/deploy/observability/#useful-promql).
 
 ## Supported models
 
-| Mode | Target models | Assistant model | Status |
-|---|---|---|---|
-| MTP | Gemma 4 | Gemma 4 assistant checkpoints (`--mtp-model`) | Supported with paged attention |
-| MTP | Qwen3.5, Qwen3.8 | Built into the checkpoint (`--mtp`) | Supported with paged attention |
-| MTP | Qwen3.8-Flash-Next | Built into the checkpoint (`--mtp`) | Safetensors/UQFF with paged attention |
-| DFlash / DFlash 2 | Qwen3.5, Qwen3.8 | DFlash draft checkpoints (`--mtp-model`) | Supported with paged attention |
+| Target model | Drafter | Flag |
+|---|---|---|
+| Gemma 4 | Gemma 4 assistant checkpoint, such as `google/gemma-4-E4B-it-assistant` | `--mtp-model` |
+| Qwen3.5, Qwen3.8 | Head built into the checkpoint | `--mtp` |
+| Qwen3.5, Qwen3.8 | DFlash or DFlash 2 checkpoint, such as `incoai/Qwen3.8-27B-DFlash2` | `--mtp-model` |
+| Qwen3.8-Flash-Next | Head built into the checkpoint (the only option) | `--mtp` |
 
-## Qwen3.5 / Qwen3.8
+## Draft depth
 
-Qwen3.5 and Qwen3.8 checkpoints ship a multi-token prediction head (`mtp.*` weights) sharing the target's embeddings and `lm_head`. Pass `--mtp` to load it; no separate assistant model is needed:
+`--mtp-n-predict N` sets how many tokens are drafted per step. In Python, pass `mtp_n_predict=N` to `Runner`; in Rust, pass `Some(N)`. A higher depth gains more per step when drafts are accepted and wastes more work when they aren't, so lower depths suit text where acceptance is low.
+
+If you don't set it, mistral.rs picks the depth as it runs, based on how many drafts are being accepted, how long each step takes, and how many requests are running:
+
+| Drafter | Automatic depth |
+|---|---|
+| Built-in Qwen head | 2, 3, 4, or 6 |
+| Gemma 4 assistant | 2, 3, 4, or 6, capped by `num_assistant_tokens` in the assistant's `generation_config.json` (6 if it isn't set) |
+| DFlash, DFlash 2 | Up to 7, or the drafter's block size minus 1 if that's smaller. On CUDA, it drafts the full depth while up to 8 requests are running and at most 3 beyond that. |
+
+## Qwen3.5 and Qwen3.8
+
+Qwen3.5 and Qwen3.8 checkpoints include a prediction head (the `mtp.*` weights). Add `--mtp` to use it; there's nothing extra to download:
 
 ```bash
 mistralrs serve -m Qwen/Qwen3.8-27B --quant 4 --mtp
 ```
 
-The head adds one attention layer's paged KV cache. Safetensors and UQFF checkpoints must contain the `mtp.*` weights; GGUF loading does not support built-in MTP.
+- The head adds the KV cache of one attention layer.
+- Safetensors and UQFF checkpoints work if they include the `mtp.*` weights. GGUF files don't support the built-in head.
+- With the built-in head, cached prompt prefixes are recomputed, so repeated prompts can take longer to reach the first token. DFlash drafters don't have this cost.
+- Outputs and log probabilities can differ slightly from a run without `--mtp`, even with greedy sampling.
 
-Multi-token verification can use different quantized matrix and recurrent kernels from ordinary decoding. Log probabilities and greedy token choices can differ, so token-for-token equivalence is not guaranteed.
-
-Built-in Qwen MTP recomputes cached prompt prefixes, which can increase time to first token for repeated prompts. This restriction does not apply to DFlash.
-
-Qwen3.8-Flash-Next uses the same built-in-head flags:
+Qwen3.8-Flash-Next takes the same flag:
 
 ```bash
-mistralrs serve -m Qwen/Qwen3.8-Flash-Next --isq q4k --mtp
+mistralrs serve -m Qwen/Qwen3.8-Flash-Next --quant 4 --mtp
 ```
 
-Flash-Next supports only its built-in head. External assistants and DFlash are unsupported. See [model-family notes](/guides/models/model-family-notes/#qwen38-flash-next) for memory requirements.
+Flash-Next supports only its built-in head, not DFlash or separate assistants. Its paged attention is CUDA-only, so speculative decoding is too. See [model-family notes](/guides/models/model-family-notes/#qwen38-flash-next) for loading it.
 
-## DFlash and DFlash 2 (Qwen3.5 / Qwen3.8)
+## DFlash and DFlash 2
 
-[DFlash](https://arxiv.org/abs/2602.06036) drafters are small block-diffusion models that propose a
-whole block of tokens in one pass, conditioned on hidden states tapped from the target's
-intermediate layers. They reach much higher acceptance than the built-in single-token MTP head.
-Pass a DFlash checkpoint (a HF id or local path) as `--mtp-model`; mistral.rs detects DFlash vs
-DFlash 2 from the checkpoint's `architectures` and loads the path selector and dynamic convolutions
-when present:
+[DFlash](https://arxiv.org/abs/2602.06036) drafters are small models that propose a whole block of tokens in one pass. The target accepts their drafts much more often than the built-in head's. Pass one to `--mtp-model`; mistral.rs tells DFlash and DFlash 2 apart from the checkpoint:
 
 ```bash
 mistralrs serve -m Qwen/Qwen3.8-27B --quant 4 \
   --mtp-model incoai/Qwen3.8-27B-DFlash2
 ```
 
-`--mtp-draft-sampling` defaults to `auto`. A DFlash 2 checkpoint uses probabilistic drafting when
-its CUDA candidate selector is supported, while DFlash 1 and unsupported devices use greedy
-drafting. Pass `--mtp-draft-sampling greedy` to force greedy drafting. Passing `probabilistic`
-requires a supported DFlash 2 selector and fails during loading when that path is unavailable.
+The drafter is quantized to the same type as the target, so `--quant` applies to both.
 
-The maximum automatic draft depth is `min(block_size - 1, 7)`. During serving, mistral.rs may use a
-shallower depth so the recurrent checkpoint layout fits the configured sequence capacity while
-preserving memory for the requested paged KV cache. Pass `--mtp-n-predict` to request a fixed depth
-instead. Automatic CUDA serving also adapts the active depth to live load: up to 8 live DFlash
-contexts use the full reserved depth, while larger loads use up to 3 drafts. Set
-`MISTRALRS_DFLASH_ADAPTIVE=0` (or `false`) to tune depth from measured throughput instead.
-That tuner also runs when adaptation by live context count is unavailable. It chooses among
-3, 5, and 7 drafts, capped by the reserved depth. The drafter's projection
-weights are requantized to the target's in-situ quantization type at load (override with the
-`MISTRALRS_DFLASH_ISQ` environment variable, e.g. `q6k` or `none` for bf16).
+`--mtp-draft-sampling` picks how the drafter chooses its tokens:
 
-Acceptance is strongly content-dependent: [incoai/Qwen3.8-27B-DFlash2](https://huggingface.co/incoai/Qwen3.8-27B-DFlash2)
-accepts ~7 of 7 drafts on math/code and much less on thinking-mode reasoning traces, which are out
-of its training distribution.
+| Value | What happens |
+|---|---|
+| `auto` (default) | DFlash 2 samples its drafts on CUDA devices that support it. DFlash 1, and other devices, draft greedily. |
+| `greedy` | The drafter always proposes its most likely tokens. |
+| `probabilistic` | The drafter always samples its drafts. This needs DFlash 2 on a supported CUDA device; otherwise loading fails. |
 
 ## Gemma 4
 
-Gemma 4 assistant checkpoints are MTP drafters for Gemma 4 target models. See the [`google/gemma-4-E4B-it-assistant`](https://huggingface.co/google/gemma-4-E4B-it-assistant) model card for the upstream checkpoint. A downloaded checkout works too:
+Use the assistant checkpoint made for your target, such as `google/gemma-4-E4B-it-assistant` for `google/gemma-4-E4B-it`. A downloaded copy works too:
 
 ```bash
 mistralrs run -m google/gemma-4-E4B-it --quant 8 \
-  --mtp-model ./gemma-4-E4B-it-assistant \
-  --mtp-n-predict 6
+  --mtp-model ./gemma-4-E4B-it-assistant
 ```
 
-Non-paged KV-cache MTP is intentionally disabled for now, which is why paged attention is required (see the note at the top).
-
-The target and assistant configs must match where the implementation requires it, including vocabulary size and target hidden size. Mismatches fail at load, before generation starts.
-
-## Notes
-
-Throughput gain depends on how many proposed tokens the target accepts and on the cost of the target verification pass.
-
-MTP supports batched generation and constrained decoding.
-
-MTP is configured at launch time only (CLI flags, `Runner(...)`, or the model builder). There is no per-request HTTP field to toggle it; load the server with the assistant attached and every request uses it.
+If the assistant doesn't match the target, for example a different vocabulary or hidden size, loading fails before any generation starts.

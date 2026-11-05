@@ -57,6 +57,8 @@ GROUPS = [
             "ChatCompletionRequest",
             "CompletionRequest",
             "EmbeddingRequest",
+            "DecisionQuestion",
+            "DecisionRequest",
         ],
     ),
     (
@@ -64,6 +66,9 @@ GROUPS = [
         "responses",
         "Response and streaming types returned by the engine.",
         [
+            "DecisionResponse",
+            "DecisionAnswer",
+            "DecisionUsage",
             "ChatCompletionResponse",
             "ChatCompletionChunkResponse",
             "AgenticToolCallRecord",
@@ -71,6 +76,7 @@ GROUPS = [
             "ChunkChoice",
             "Delta",
             "ResponseMessage",
+            "ChatAudioResponse",
             "CompletionResponse",
             "CompletionChoice",
             "Usage",
@@ -388,50 +394,57 @@ def _render_function(
     return "\n".join(lines)
 
 
-def _render_fields_table(owner: str, fields: list[tuple[str, str, str]]) -> str:
-    has_default = any(v for _, _, v in fields)
+def _md_table(header: list[str], rows: list[list[str]]) -> str:
+    lines = [
+        "| " + " | ".join(header) + " |",
+        "| " + " | ".join("---" for _ in header) + " |",
+    ]
+    lines.extend("| " + " | ".join(row) + " |" for row in rows)
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _render_fields_table(fields: list[tuple[str, str, str, str]]) -> str:
+    has_default = any(v for _, _, v, _ in fields)
+    has_doc = any(d for _, _, _, d in fields)
+    header = ["Field", "Type"]
     if has_default:
-        lines = [
-            "| Field | Type | Default |",
-            "| --- | --- | --- |",
-        ]
-        for name, ftype, value in fields:
-            t = _md_code_cell(ftype)
-            d = _md_code_cell(value) if value else "required"
-            lines.append(f"| `{name}` | {t} | {d} |")
-    else:
-        lines = [
-            "| Field | Type |",
-            "| --- | --- |",
-        ]
-        for name, ftype, _ in fields:
-            t = _md_code_cell(ftype)
-            lines.append(f"| `{name}` | {t} |")
-    lines.append("")
-    return "\n".join(lines)
+        header.append("Default")
+    if has_doc:
+        header.append("Description")
+    rows = []
+    for name, ftype, value, doc in fields:
+        row = [f"`{name}`", _md_code_cell(ftype)]
+        if has_default:
+            row.append(_md_code_cell(value) if value else "required")
+        if has_doc:
+            row.append(_md_escape_cell(doc))
+        rows.append(row)
+    return _md_table(header, rows)
 
 
-def _render_enum_table(owner: str, values: list[tuple[str, str]]) -> str:
-    has_value = any(v for _, v in values)
-    if has_value:
-        lines = [
-            "Members and their wire/config names where relevant. The members are fieldless PyO3 enum variants and do not expose `.value`.",
-            "",
-            "| Member | Wire/config name |",
-            "| --- | --- |",
-        ]
-        for name, value in values:
-            v = _md_code_cell(value)
-            lines.append(f"| `{owner}.{name}` | {v} |")
-    else:
-        lines = [
-            "| Member |",
-            "| --- |",
-        ]
-        for name, _ in values:
-            lines.append(f"| `{owner}.{name}` |")
-    lines.append("")
-    return "\n".join(lines)
+def _render_enum_table(owner: str, members: list[tuple[str, str]]) -> str:
+    # Stub values are not exposed by the fieldless PyO3 enums, so only names and docs are rendered.
+    if any(doc for _, doc in members):
+        return _md_table(
+            ["Member", "Description"],
+            [[f"`{owner}.{name}`", _md_escape_cell(doc)] for name, doc in members],
+        )
+    return _md_table(["Member"], [[f"`{owner}.{name}`"] for name, _ in members])
+
+
+def _attribute_doc(body: list[ast.stmt], index: int) -> str:
+    """Return the PEP 257 attribute docstring that directly follows `body[index]`, if any."""
+    if index + 1 >= len(body):
+        return ""
+    nxt = body[index + 1]
+    if (
+        isinstance(nxt, ast.Expr)
+        and isinstance(nxt.value, ast.Constant)
+        and isinstance(nxt.value.value, str)
+    ):
+        return " ".join(dedent(nxt.value.value).split())
+    return ""
 
 
 def _render_class(
@@ -445,36 +458,36 @@ def _render_class(
         lines.append(doc)
         lines.append("")
 
-    fields: list[tuple[str, str, str]] = []
-    enum_values: list[tuple[str, str]] = []
+    fields: list[tuple[str, str, str, str]] = []
+    enum_members: list[tuple[str, str]] = []
     methods: list[ast.FunctionDef] = []
     nested: list[ast.ClassDef] = []
 
-    for item in cls.body:
+    for index, item in enumerate(cls.body):
         if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
             name = item.target.id
             ftype = _unparse(item.annotation)
             value = _field_default(item.value)
-            fields.append((name, ftype, value))
+            fields.append((name, ftype, value, _attribute_doc(cls.body, index)))
         elif isinstance(item, ast.Assign):
             for t in item.targets:
                 if isinstance(t, ast.Name):
-                    enum_values.append((t.id, _unparse(item.value)))
+                    enum_members.append((t.id, _attribute_doc(cls.body, index)))
         elif isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
             methods.append(item)
         elif isinstance(item, ast.ClassDef):
             nested.append(item)
 
     if is_enum:
-        values = enum_values + [(n, v) for n, _, v in fields if v]
-        if values:
-            lines.append(_render_enum_table(cls.name, values))
+        members = enum_members + [(n, d) for n, _, v, d in fields if v]
+        if members:
+            lines.append(_render_enum_table(cls.name, members))
         for nc in nested:
             sub_heading = "#" * (len(heading) + 1)
             lines.append(_render_class(nc, sub_heading, parent=cls.name))
     else:
         if fields:
-            lines.append(_render_fields_table(full_name, fields))
+            lines.append(_render_fields_table(fields))
         for nc in nested:
             sub_heading = "#" * (len(heading) + 1)
             lines.append(_render_class(nc, sub_heading, parent=full_name))

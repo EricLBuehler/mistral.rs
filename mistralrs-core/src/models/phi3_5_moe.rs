@@ -363,7 +363,7 @@ impl MoeMlp {
         let (bs, seq, hidden) = xs.dims3()?;
         let xs_flat = xs.reshape(((), hidden))?;
 
-        let router_logits = self.gate.forward(&xs_flat)?;
+        let router_logits = crate::layers::router_linear(&self.gate, &xs_flat)?;
         let router_logits = match &self.gate_lora {
             Some(site) => mistralrs_quant::apply_dynamic_lora_delta(site, &xs_flat, router_logits)?,
             None => router_logits,
@@ -605,7 +605,9 @@ impl Model {
     }
 
     pub fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
-        let mut xs = self.embed_tokens.embedding_forward(input_ids, self.dtype)?;
+        let mut xs = self
+            .embed_tokens
+            .embedding_forward(input_ids, self.dtype.into())?;
         let cache = &mut self.cache.normal().0;
         let mask_cache = ctx.mask_cache(cache);
         let attention_mask = CausalMasker.make_causal_mask(

@@ -3654,7 +3654,7 @@ impl DFlashDraftModel {
         lm_head: &Arc<dyn QuantMethod>,
     ) -> Result<DFlashCudaGraphOutput> {
         let mut noise = token_embedding
-            .embedding_forward(&buffers.token_ids.as_detached_tensor(), self.dtype)?;
+            .embedding_forward(&buffers.token_ids.as_detached_tensor(), self.dtype.into())?;
         if (self.input_embedding_scale - 1.0).abs() > f64::EPSILON {
             noise = (noise * self.input_embedding_scale)?;
         }

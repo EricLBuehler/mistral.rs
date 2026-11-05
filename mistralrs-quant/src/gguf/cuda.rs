@@ -6,7 +6,8 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-use super::ffi;
+use super::{ffi, q8_1};
+use crate::cuda_device::cuda_device_info;
 use crate::utils::{slice_ptr, slice_ptr_mut_on_stream, slice_ptr_on_stream};
 use candle_core::cuda::cudarc::driver::DeviceRepr;
 use candle_core::cuda_backend::CudaDType;
@@ -19,12 +20,21 @@ use half::{bf16, f16};
 
 // Constants matching candle's quantized CUDA implementation
 pub const CUDA_QUANTIZE_BLOCK_SIZE: usize = 256;
-pub const MATRIX_ROW_PADDING: usize = 512;
 const CUDA_GRID_YZ_LIMIT: usize = 65_535;
 const MOE_REDUCE_THREADS: usize = 256;
 const MOE_OUTPUT_F32: i32 = 0;
 const MOE_OUTPUT_F16: i32 = 1;
 const MOE_OUTPUT_BF16: i32 = 2;
+const MOE_PREFETCH_MAX_TOKENS: usize = 2;
+const MOE_STAGING_TOKENS: usize = 1;
+
+fn moe_staging_bank_eligible(prefetch: bool, tokens: usize, bytes: usize, l2: usize) -> bool {
+    prefetch && tokens == MOE_STAGING_TOKENS && bytes > l2
+}
+
+fn quantized_weight_bytes(weight: &QTensor) -> usize {
+    weight.shape().elem_count() / weight.dtype().block_size() * weight.dtype().type_size()
+}
 
 // Captured CUDA graphs keep the pointers they saw, so a superseded workspace is retired, never freed
 struct DispatchWorkspaceSlot {
@@ -217,7 +227,7 @@ fn quantize_q8_1(
     ky: usize,
     dev: &CudaDevice,
 ) -> Result<()> {
-    let kx_padded = pad(k, MATRIX_ROW_PADDING);
+    let kx_padded = pad(k, q8_1::ROW_PADDING);
     let num_blocks = ceil_div(kx_padded, CUDA_QUANTIZE_BLOCK_SIZE);
 
     let total_rows = ky;
@@ -942,7 +952,7 @@ pub fn quantize_input_q8_1(xs: &Tensor, dev: &CudaDevice) -> Result<(CudaSlice<u
     let xs_contig = xs.contiguous()?;
     let num_rows = xs_contig.dim(0)?;
     let k = xs_contig.dim(1)?;
-    let k_padded = pad(k, MATRIX_ROW_PADDING);
+    let k_padded = pad(k, q8_1::ROW_PADDING);
     let y_size_in_bytes = q8_1_bytes(num_rows, k_padded);
 
     // SAFETY: quantize kernel writes all elements up to k_padded per row
@@ -959,7 +969,7 @@ fn quantize_input_q8_1_into(
 ) -> Result<(usize, usize)> {
     let num_rows = xs_contig.dim(0)?;
     let k = xs_contig.dim(1)?;
-    let k_padded = pad(k, MATRIX_ROW_PADDING);
+    let k_padded = pad(k, q8_1::ROW_PADDING);
     let y_size_in_bytes = q8_1_bytes(num_rows, k_padded);
     if input_quant.len() < y_size_in_bytes {
         candle_core::bail!(
@@ -1201,8 +1211,8 @@ impl<'a> IndexedMoeLoraDecode<'a> {
         ] {
             i32::try_from(dim)?;
         }
-        i32::try_from(pad(hidden, MATRIX_ROW_PADDING))?;
-        i32::try_from(pad(intermediate, MATRIX_ROW_PADDING))?;
+        i32::try_from(pad(hidden, q8_1::ROW_PADDING))?;
+        i32::try_from(pad(intermediate, q8_1::ROW_PADDING))?;
         intermediate
             .checked_mul(2)
             .ok_or_else(|| candle_core::Error::msg("indexed MoE LoRA output size overflow"))?;
@@ -1232,7 +1242,7 @@ impl<'a> IndexedMoeLoraDecode<'a> {
 
     fn gate_up_t<T: MoeLoraOutput>(&self, input: &Tensor, output_type: i32) -> Result<Tensor> {
         let input = self.validate_input(input, self.routing.batch, self.hidden)?;
-        let k_padded = pad(self.hidden, MATRIX_ROW_PADDING);
+        let k_padded = pad(self.hidden, q8_1::ROW_PADDING);
         let q8_bytes = q8_1_bytes_checked(self.routing.batch, k_padded)?;
         let mut q8 = u8_workspace_ensure(&MOE_DECODE_Q8_WORKSPACE, self.routing.dev, q8_bytes)?;
         quantize_input_q8_1_into(&input, &mut q8.slice, self.routing.dev)?;
@@ -1298,7 +1308,7 @@ impl<'a> IndexedMoeLoraDecode<'a> {
     fn down_t<T: MoeLoraOutput>(&self, input: &Tensor, output_type: i32) -> Result<Tensor> {
         let routes = self.routing.batch * self.routing.topk;
         let input = self.validate_input(input, routes, self.intermediate)?;
-        let k_padded = pad(self.intermediate, MATRIX_ROW_PADDING);
+        let k_padded = pad(self.intermediate, q8_1::ROW_PADDING);
         let q8_bytes = q8_1_bytes_checked(routes, k_padded)?;
         let mut q8 = u8_workspace_ensure(&MOE_DECODE_Q8_WORKSPACE, self.routing.dev, q8_bytes)?;
         quantize_input_q8_1_into(&input, &mut q8.slice, self.routing.dev)?;
@@ -1483,10 +1493,27 @@ pub unsafe fn indexed_moe_fused_decode(
     let xs_contig = xs_flat.contiguous()?;
     let input_rows = xs_contig.dim(0)?;
     let k = xs_contig.dim(1)?;
-    let k_padded = pad(k, MATRIX_ROW_PADDING);
+    let prefetch = batch <= MOE_PREFETCH_MAX_TOKENS
+        && input_rows == batch
+        && super::fast_mmvq::prefers_weight_prefetch(dev);
+    let l2 = if prefetch && batch == MOE_STAGING_TOKENS {
+        cuda_device_info(dev).l2_bytes
+    } else {
+        0
+    };
+    // Large expert banks stream across decode steps; cache-fitting banks favor direct loads.
+    let stage_gate = moe_staging_bank_eligible(
+        prefetch,
+        batch,
+        quantized_weight_bytes(gate_qt) + quantized_weight_bytes(up_qt),
+        l2,
+    );
+    let stage_down =
+        moe_staging_bank_eligible(prefetch, batch, quantized_weight_bytes(down_qt), l2);
+    let k_padded = pad(k, q8_1::ROW_PADDING);
     let input_q8_bytes = q8_1_bytes(input_rows, k_padded);
     let intermediate_rows = batch * topk;
-    let k_down_padded = pad(intermediate_size, MATRIX_ROW_PADDING);
+    let k_down_padded = pad(intermediate_size, q8_1::ROW_PADDING);
     let intermediate_q8_bytes = q8_1_bytes(intermediate_rows, k_down_padded);
 
     let mut q8_workspace = u8_workspace_ensure(
@@ -1528,35 +1555,69 @@ pub unsafe fn indexed_moe_fused_decode(
         );
 
         let launch_fn: FusedGateUpFn = match gate_up_dtype {
+            GgmlDType::Q8_0 if prefetch => ffi::launch_moe_gemv_fused_gate_up_q8_0_prefetch,
             GgmlDType::Q8_0 => ffi::launch_moe_gemv_fused_gate_up_q8_0_q8_1,
+            GgmlDType::Q4_0 if prefetch => ffi::launch_moe_gemv_fused_gate_up_q4_0_prefetch,
             GgmlDType::Q4_0 => ffi::launch_moe_gemv_fused_gate_up_q4_0_q8_1,
+            GgmlDType::Q4_1 if prefetch => ffi::launch_moe_gemv_fused_gate_up_q4_1_prefetch,
             GgmlDType::Q4_1 => ffi::launch_moe_gemv_fused_gate_up_q4_1_q8_1,
+            GgmlDType::Q5_0 if prefetch => ffi::launch_moe_gemv_fused_gate_up_q5_0_prefetch,
             GgmlDType::Q5_0 => ffi::launch_moe_gemv_fused_gate_up_q5_0_q8_1,
+            GgmlDType::Q5_1 if prefetch => ffi::launch_moe_gemv_fused_gate_up_q5_1_prefetch,
             GgmlDType::Q5_1 => ffi::launch_moe_gemv_fused_gate_up_q5_1_q8_1,
+            GgmlDType::Q8_1 if prefetch => ffi::launch_moe_gemv_fused_gate_up_q8_1_prefetch,
             GgmlDType::Q8_1 => ffi::launch_moe_gemv_fused_gate_up_q8_1_q8_1,
+            GgmlDType::Q2K if prefetch => ffi::launch_moe_gemv_fused_gate_up_q2k_prefetch,
             GgmlDType::Q2K => ffi::launch_moe_gemv_fused_gate_up_q2k_q8_1,
+            GgmlDType::Q3K if prefetch => ffi::launch_moe_gemv_fused_gate_up_q3k_prefetch,
             GgmlDType::Q3K => ffi::launch_moe_gemv_fused_gate_up_q3k_q8_1,
+            GgmlDType::Q4K if prefetch => ffi::launch_moe_gemv_fused_gate_up_q4k_prefetch,
             GgmlDType::Q4K => ffi::launch_moe_gemv_fused_gate_up_q4k_q8_1,
+            GgmlDType::Q5K if prefetch => ffi::launch_moe_gemv_fused_gate_up_q5k_prefetch,
             GgmlDType::Q5K => ffi::launch_moe_gemv_fused_gate_up_q5k_q8_1,
+            GgmlDType::Q6K if prefetch => ffi::launch_moe_gemv_fused_gate_up_q6k_prefetch,
             GgmlDType::Q6K => ffi::launch_moe_gemv_fused_gate_up_q6k_q8_1,
             _ => candle_core::bail!("unsupported dtype for fused MoE decode: {gate_up_dtype:?}"),
         };
 
-        unsafe {
-            launch_fn(
-                gate_ptr,
-                up_ptr,
-                inp_ptr as *const std::ffi::c_void,
-                ids_ptr as *const u32,
-                out_ptr as *mut f32,
-                intermediate_size as i32,
-                k as i32,
-                batch as i32,
-                topk as i32,
-                k_padded as i32,
-                act_type,
-                stream,
-            );
+        let staged = stage_gate
+            && unsafe {
+                ffi::launch_gguf_moe_staged(
+                    &ffi::MoeDecodeArgs {
+                        weights: gate_ptr,
+                        up: up_ptr,
+                        input: inp_ptr as *const std::ffi::c_void,
+                        indices: ids_ptr as *const u32,
+                        routing: std::ptr::null(),
+                        output: out_ptr as *mut f32,
+                        rows: intermediate_size as i32,
+                        columns: k as i32,
+                        topk: topk as i32,
+                        input_stride: k_padded as i32,
+                        activation: act_type,
+                    },
+                    super::ggml_dtype_to_uqff_code(gate_up_dtype) as i32,
+                    true,
+                    stream,
+                )
+            };
+        if !staged {
+            unsafe {
+                launch_fn(
+                    gate_ptr,
+                    up_ptr,
+                    inp_ptr as *const std::ffi::c_void,
+                    ids_ptr as *const u32,
+                    out_ptr as *mut f32,
+                    intermediate_size as i32,
+                    k as i32,
+                    batch as i32,
+                    topk as i32,
+                    k_padded as i32,
+                    act_type,
+                    stream,
+                );
+            }
         }
     }
 
@@ -1596,34 +1657,68 @@ pub unsafe fn indexed_moe_fused_decode(
         );
 
         let launch_fn: DownAggregateFn = match down_dtype {
+            GgmlDType::Q8_0 if prefetch => ffi::launch_moe_gemv_down_aggregate_q8_0_prefetch,
             GgmlDType::Q8_0 => ffi::launch_moe_gemv_down_aggregate_q8_0_q8_1,
+            GgmlDType::Q4_0 if prefetch => ffi::launch_moe_gemv_down_aggregate_q4_0_prefetch,
             GgmlDType::Q4_0 => ffi::launch_moe_gemv_down_aggregate_q4_0_q8_1,
+            GgmlDType::Q4_1 if prefetch => ffi::launch_moe_gemv_down_aggregate_q4_1_prefetch,
             GgmlDType::Q4_1 => ffi::launch_moe_gemv_down_aggregate_q4_1_q8_1,
+            GgmlDType::Q5_0 if prefetch => ffi::launch_moe_gemv_down_aggregate_q5_0_prefetch,
             GgmlDType::Q5_0 => ffi::launch_moe_gemv_down_aggregate_q5_0_q8_1,
+            GgmlDType::Q5_1 if prefetch => ffi::launch_moe_gemv_down_aggregate_q5_1_prefetch,
             GgmlDType::Q5_1 => ffi::launch_moe_gemv_down_aggregate_q5_1_q8_1,
+            GgmlDType::Q8_1 if prefetch => ffi::launch_moe_gemv_down_aggregate_q8_1_prefetch,
             GgmlDType::Q8_1 => ffi::launch_moe_gemv_down_aggregate_q8_1_q8_1,
+            GgmlDType::Q2K if prefetch => ffi::launch_moe_gemv_down_aggregate_q2k_prefetch,
             GgmlDType::Q2K => ffi::launch_moe_gemv_down_aggregate_q2k_q8_1,
+            GgmlDType::Q3K if prefetch => ffi::launch_moe_gemv_down_aggregate_q3k_prefetch,
             GgmlDType::Q3K => ffi::launch_moe_gemv_down_aggregate_q3k_q8_1,
+            GgmlDType::Q4K if prefetch => ffi::launch_moe_gemv_down_aggregate_q4k_prefetch,
             GgmlDType::Q4K => ffi::launch_moe_gemv_down_aggregate_q4k_q8_1,
+            GgmlDType::Q5K if prefetch => ffi::launch_moe_gemv_down_aggregate_q5k_prefetch,
             GgmlDType::Q5K => ffi::launch_moe_gemv_down_aggregate_q5k_q8_1,
+            GgmlDType::Q6K if prefetch => ffi::launch_moe_gemv_down_aggregate_q6k_prefetch,
             GgmlDType::Q6K => ffi::launch_moe_gemv_down_aggregate_q6k_q8_1,
             _ => candle_core::bail!("unsupported dtype for fused MoE decode: {down_dtype:?}"),
         };
 
-        unsafe {
-            launch_fn(
-                down_ptr,
-                inp_ptr as *const std::ffi::c_void,
-                ids_ptr as *const u32,
-                topk_weights_ptr,
-                out_ptr as *mut f32,
-                hidden_size as i32,
-                intermediate_size as i32,
-                batch as i32,
-                topk as i32,
-                k_down_padded as i32,
-                stream,
-            );
+        let staged = stage_down
+            && unsafe {
+                ffi::launch_gguf_moe_staged(
+                    &ffi::MoeDecodeArgs {
+                        weights: down_ptr,
+                        up: down_ptr,
+                        input: inp_ptr as *const std::ffi::c_void,
+                        indices: ids_ptr as *const u32,
+                        routing: topk_weights_ptr,
+                        output: out_ptr as *mut f32,
+                        rows: hidden_size as i32,
+                        columns: intermediate_size as i32,
+                        topk: topk as i32,
+                        input_stride: k_down_padded as i32,
+                        activation: act_type,
+                    },
+                    super::ggml_dtype_to_uqff_code(down_dtype) as i32,
+                    false,
+                    stream,
+                )
+            };
+        if !staged {
+            unsafe {
+                launch_fn(
+                    down_ptr,
+                    inp_ptr as *const std::ffi::c_void,
+                    ids_ptr as *const u32,
+                    topk_weights_ptr,
+                    out_ptr as *mut f32,
+                    hidden_size as i32,
+                    intermediate_size as i32,
+                    batch as i32,
+                    topk as i32,
+                    k_down_padded as i32,
+                    stream,
+                );
+            }
         }
     }
 

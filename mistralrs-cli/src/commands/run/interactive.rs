@@ -283,6 +283,7 @@ async fn oneshot_text(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, text: String) 
     let (tx, mut rx) = channel(10_000);
     let session_id = (do_code_exec || do_shell).then(|| uuid::Uuid::new_v4().to_string());
     let req = Request::Normal(Box::new(NormalRequest {
+        audio_output: None,
         id: mistralrs.next_request_id(),
         queued_at: None,
         messages: request_messages,
@@ -467,6 +468,7 @@ async fn oneshot_multimodal(mistralrs: Arc<MistralRs>, ctx: OneshotCtx, input: O
     let (tx, mut rx) = channel(10_000);
     let session_id = (do_code_exec || do_shell).then(|| uuid::Uuid::new_v4().to_string());
     let req = Request::Normal(Box::new(NormalRequest {
+        audio_output: None,
         id: mistralrs.next_request_id(),
         queued_at: None,
         messages: request_messages,
@@ -630,6 +632,9 @@ pub async fn interactive_mode(mistralrs: Arc<MistralRs>, config: InteractiveConf
         }
         Ok(ModelCategory::Embedding) => error!(
             "Embedding models do not support interactive mode. Use the server or Python/Rust APIs."
+        ),
+        Ok(ModelCategory::Decision { .. }) => error!(
+            "Decision models use named questions. Use /v1/systemone or the Python/Rust decision APIs."
         ),
         Err(e) => eprintln!("Error getting model category: {e}"),
     }
@@ -968,6 +973,7 @@ async fn text_interactive_mode(
 
         let (tx, mut rx) = channel(10_000);
         let req = Request::Normal(Box::new(NormalRequest {
+            audio_output: None,
             id: mistralrs.next_request_id(),
             queued_at: None,
             messages: request_messages,
@@ -1507,6 +1513,7 @@ async fn stream_assistant_response(
             Response::Speech { .. } => unreachable!(),
             Response::Raw { .. } => unreachable!(),
             Response::Embeddings { .. } => unreachable!(),
+            Response::Decision { .. } => unreachable!(),
         }
     }
     denoising_progress.clear();
@@ -1755,6 +1762,7 @@ async fn multimodal_interactive_mode(
 
         let (tx, mut rx) = channel(10_000);
         let req = Request::Normal(Box::new(NormalRequest {
+            audio_output: None,
             id: mistralrs.next_request_id(),
             queued_at: None,
             messages: request_messages,
@@ -1917,6 +1925,7 @@ async fn diffusion_interactive_mode(
 
         let (tx, mut rx) = channel(10_000);
         let req = Request::Normal(Box::new(NormalRequest {
+            audio_output: None,
             id: 0,
             queued_at: None,
             messages: RequestMessage::ImageGeneration {
@@ -2043,6 +2052,7 @@ async fn speech_interactive_mode(
 
         let (tx, mut rx) = channel(10_000);
         let req = Request::Normal(Box::new(NormalRequest {
+            audio_output: None,
             id: 0,
             queued_at: None,
             messages: RequestMessage::SpeechGeneration {

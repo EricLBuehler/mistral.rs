@@ -50,7 +50,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y curl build-essential clang libclang-dev libssl-dev protobuf-compiler pkg-config
+          sudo apt-get install -y curl build-essential clang libclang-dev libssl-dev protobuf-compiler pkg-config python3-dev
 
       - name: Install Rust Stable
         uses: dtolnay/rust-toolchain@stable
@@ -86,4 +86,5 @@ jobs:
         run: cargo clippy ${{ matrix.test_args }} --features ${{ matrix.features }} --tests --examples -- -D warnings
 
       - name: Test
-        run: cargo test ${{ matrix.test_args }} --features ${{ matrix.features }}
+        # Tests share the primary CUDA context; context synchronization invalidates concurrent graph captures.
+        run: cargo test ${{ matrix.test_args }} --features ${{ matrix.features }} -- --test-threads=1

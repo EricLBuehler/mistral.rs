@@ -577,6 +577,21 @@ pub fn estimate_output_bytes(shape: &[usize], source_dtype: DType, ty: IsqType) 
     }
 }
 
+/// Estimate resident weight bytes, including shape-dependent GGML quantization fallbacks.
+pub fn estimate_isq_weight_bytes(shape: &[usize], source_dtype: DType, ty: IsqType) -> usize {
+    use crate::utils::isq::{get_quantization_behaviour_for_shape, QuantizationBehavior};
+
+    let Some(dtype) = ggml_dtype_for_estimate(ty) else {
+        return estimate_output_bytes(shape, source_dtype, ty);
+    };
+    match get_quantization_behaviour_for_shape(shape, dtype) {
+        QuantizationBehavior::Quantize(dtype) => elem_count(shape)
+            .div_ceil(dtype.block_size())
+            .saturating_mul(dtype.type_size()),
+        QuantizationBehavior::Skip => tensor_bytes(shape, DType::F32),
+    }
+}
+
 fn kernel_for(request: &IsqRequest, rank: usize) -> IsqKernelKind {
     match request.ty {
         None => IsqKernelKind::Copy,

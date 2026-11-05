@@ -36,6 +36,7 @@ use super::{
     marlin_ffi::HAVE_MARLIN_KERNELS,
 };
 
+const MARLIN_BITS: usize = 4;
 const MAX_Q_GEMM_ROWS_8BIT: i32 = 24;
 const MAX_Q_GEMM_ROWS: i32 = 50;
 const MAX_ALT_GEMM_ROWS: i32 = 8;
@@ -473,11 +474,18 @@ pub fn gptq_linear(
         return make_dummy_or_error("gptq_awq_linear", &vb, &required);
     }
 
-    let marlin_compatible = *bits == 4 || *bits == 8;
+    // Only 4-bit Marlin matmul kernels are built; 8-bit GPTQ uses the exllama/alt kernels instead.
+    let marlin_compatible = *bits == MARLIN_BITS && HAVE_MARLIN_KERNELS;
     let marlin_format = checkpoint_format
         .as_ref()
         .is_some_and(|fmt| fmt == "marlin")
         && HAVE_MARLIN_KERNELS;
+    if (marlin_format || is_awq) && !marlin_compatible {
+        candle_core::bail!(
+            "{} {bits}-bit checkpoints are not supported on CUDA: only 4-bit Marlin kernels are available",
+            if is_awq { "AWQ" } else { "Marlin-format GPTQ" }
+        );
+    }
 
     let qw_shape = if !is_awq {
         //quantized gptq (k/pack_factor, n) format
@@ -590,13 +598,7 @@ pub fn gptq_linear(
         };
 
         let scales = if marlin_compatible {
-            marlin_permute_scales(
-                &scales,
-                in_dim / pack_factor!(bits),
-                out_dim,
-                *group_size as i32,
-                *bits as u32,
-            )?
+            marlin_permute_scales(&scales, in_dim, out_dim, *group_size as i32, *bits as u32)?
         } else {
             scales
         };
@@ -620,4 +622,146 @@ pub fn gptq_linear(
         }
     };
     Ok(Arc::new(GptqLayer::new(config)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use candle_core::{DType, Device, Result, Tensor};
+
+    use super::gptq_linear;
+    use crate::{QuantizedConfig, ShardedSafeTensors};
+
+    const IN_DIM: usize = 256;
+    const OUT_DIM: usize = 256;
+    const GROUP_SIZE: usize = 128;
+    const ROWS: usize = 16;
+
+    struct GptqFixture {
+        tensors: HashMap<String, Tensor>,
+        dense: Tensor,
+    }
+
+    fn gptq_fixture(bits: usize) -> Result<GptqFixture> {
+        let pack = 32 / bits;
+        let levels = 1u32 << bits;
+        let groups = IN_DIM / GROUP_SIZE;
+        let zero = levels / 2;
+        let q = |k: usize, n: usize| ((k * 7 + n * 13 + k * n) as u32) % levels;
+        let scale = |g: usize, n: usize| 0.002 + 0.0005 * ((g * 3 + n) % 11) as f32;
+
+        let mut qweight = vec![0u32; IN_DIM / pack * OUT_DIM];
+        let mut dense = vec![0f32; IN_DIM * OUT_DIM];
+        for k in 0..IN_DIM {
+            for n in 0..OUT_DIM {
+                qweight[(k / pack) * OUT_DIM + n] |= q(k, n) << ((k % pack) * bits);
+                dense[n * IN_DIM + k] = (q(k, n) as f32 - zero as f32) * scale(k / GROUP_SIZE, n);
+            }
+        }
+        let mut qzeros = vec![0u32; groups * OUT_DIM / pack];
+        for g in 0..groups {
+            for n in 0..OUT_DIM {
+                qzeros[g * OUT_DIM / pack + n / pack] |= (zero - 1) << ((n % pack) * bits);
+            }
+        }
+        let scales = (0..groups * OUT_DIM)
+            .map(|i| scale(i / OUT_DIM, i % OUT_DIM))
+            .collect::<Vec<_>>();
+        let g_idx = (0..IN_DIM)
+            .map(|k| (k / GROUP_SIZE) as u32)
+            .collect::<Vec<_>>();
+        let as_i32 = |t: Tensor| -> Result<Tensor> {
+            Tensor::from_vec(
+                t.flatten_all()?
+                    .to_vec1::<u32>()?
+                    .into_iter()
+                    .map(|v| v as i32)
+                    .collect::<Vec<_>>(),
+                t.dims(),
+                &Device::Cpu,
+            )
+        };
+        let cpu = Device::Cpu;
+        let tensors = HashMap::from([
+            (
+                "qweight".to_string(),
+                as_i32(Tensor::from_vec(qweight, (IN_DIM / pack, OUT_DIM), &cpu)?)?,
+            ),
+            (
+                "qzeros".to_string(),
+                as_i32(Tensor::from_vec(qzeros, (groups, OUT_DIM / pack), &cpu)?)?,
+            ),
+            (
+                "scales".to_string(),
+                Tensor::from_vec(scales, (groups, OUT_DIM), &cpu)?.to_dtype(DType::F16)?,
+            ),
+            (
+                "g_idx".to_string(),
+                as_i32(Tensor::from_vec(g_idx, IN_DIM, &cpu)?)?,
+            ),
+        ]);
+        Ok(GptqFixture {
+            tensors,
+            dense: Tensor::from_vec(dense, (OUT_DIM, IN_DIM), &cpu)?,
+        })
+    }
+
+    fn check_gptq_bits(bits: usize) -> Result<()> {
+        let device = Device::new_cuda(0)?;
+        let fixture = gptq_fixture(bits)?;
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("gptq.safetensors");
+        candle_core::safetensors::save(&fixture.tensors, &path)?;
+        let vb = unsafe {
+            ShardedSafeTensors::sharded(
+                &[&path],
+                DType::F16,
+                &device,
+                None,
+                std::sync::Arc::new(|_| true),
+            )?
+        };
+        let config = QuantizedConfig::GptqAwq {
+            bits,
+            group_size: GROUP_SIZE,
+            checkpoint_format: None,
+            is_awq: false,
+        };
+        let layer = gptq_linear(IN_DIM, OUT_DIM, &config, vb)?;
+
+        let x = Tensor::from_vec(
+            (0..ROWS * IN_DIM)
+                .map(|i| ((i as f32) * 0.07).sin())
+                .collect::<Vec<_>>(),
+            (ROWS, IN_DIM),
+            &Device::Cpu,
+        )?;
+        let expected = x.matmul(&fixture.dense.t()?)?;
+        for rows in [1, ROWS] {
+            let xs = x.narrow(0, 0, rows)?;
+            let got = layer
+                .forward(&xs.to_dtype(DType::F16)?.to_device(&device)?)?
+                .to_device(&Device::Cpu)?
+                .to_dtype(DType::F32)?;
+            let expected = expected.narrow(0, 0, rows)?;
+            let err = (got - &expected)?.abs()?.max_all()?.to_scalar::<f32>()?;
+            let scale = expected.abs()?.max_all()?.to_scalar::<f32>()?;
+            assert!(
+                err <= 0.02 * scale,
+                "{bits}-bit rows={rows}: max abs err {err} vs max |ref| {scale}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn gptq_4bit_matches_dense_reference() -> Result<()> {
+        check_gptq_bits(4)
+    }
+
+    #[test]
+    fn gptq_8bit_matches_dense_reference() -> Result<()> {
+        check_gptq_bits(8)
+    }
 }

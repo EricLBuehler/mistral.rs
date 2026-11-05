@@ -70,10 +70,13 @@ mod cuda_decode;
 mod cuda_memory;
 #[cfg(any(feature = "cuda", feature = "metal", test))]
 mod memory;
+#[cfg(test)]
+mod prefix_capacity_tests;
 pub use agentic_loop::DEFAULT_MAX_TOOL_ROUNDS;
 pub(crate) mod agentic_session;
 mod file_tools;
 mod logger;
+pub(crate) mod speech;
 mod tool_dispatch;
 
 const PAGED_RECURRENT_PREFIX_VALIDATION_METRIC: &str =
@@ -532,6 +535,19 @@ impl Drop for Engine {
     }
 }
 
+fn effective_prefix_cache_capacity(
+    requested: usize,
+    paged: bool,
+    hybrid: bool,
+    planned: Option<usize>,
+) -> usize {
+    if paged && hybrid {
+        planned.map_or(requested, |capacity| requested.min(capacity))
+    } else {
+        requested
+    }
+}
+
 impl Engine {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -552,6 +568,19 @@ impl Engine {
         file_store: crate::files::FileStore,
     ) -> anyhow::Result<Self> {
         no_kv_cache |= get_mut_arcmutex!(pipeline).get_metadata().no_kv_cache;
+
+        let prefix_cache_n = {
+            let pipeline = get_mut_arcmutex!(pipeline);
+            let metadata = pipeline.get_metadata();
+            effective_prefix_cache_capacity(
+                prefix_cache_n,
+                !no_kv_cache && metadata.cache_config.is_some(),
+                pipeline.cache().is_hybrid(),
+                metadata
+                    .memory_plan
+                    .map(|plan| plan.recurrent_prefix_capacity),
+            )
+        };
 
         no_prefix_cache = no_prefix_cache
             || no_kv_cache
@@ -716,6 +745,14 @@ impl Engine {
 
         let mut prefix_cacher =
             PrefixCacheManagerV2::new(prefix_cache_n, no_prefix_cache, has_paged_attention);
+        #[cfg(feature = "cuda")]
+        if let Some(reservation) = get_mut_arcmutex!(pipeline)
+            .get_metadata()
+            .runtime_memory_reservation
+            .clone()
+        {
+            prefix_cacher.attach_runtime_memory_reservation(reservation);
+        }
         if let Some(retention) = paged_block_retention {
             prefix_cacher.attach_paged_block_retention(retention);
         }
@@ -747,7 +784,7 @@ impl Engine {
         })
     }
 
-    /// Returns the maximum supported sequence length for the underlying model, if applicable.
+    /// Most tokens (prompt plus output) one request may use, if applicable.
     #[allow(dead_code)]
     pub fn max_sequence_length(&self) -> Option<usize> {
         let pipeline = get_mut_arcmutex!(self.pipeline);
@@ -756,7 +793,7 @@ impl Engine {
         if matches!(category, ModelCategory::Diffusion | ModelCategory::Speech) {
             None
         } else {
-            Some(pipeline.get_metadata().max_seq_len)
+            Some(pipeline.get_metadata().max_model_len)
         }
     }
 
@@ -779,6 +816,7 @@ impl Engine {
             if let Err(err) = pipeline.release_speculative_sequences(&finished_sequence_ids) {
                 tracing::error!("Failed to release speculative sequence state: {err}");
             }
+            pipeline.release_generation_sequences(&finished_sequence_ids);
             if !recurrent_release_errors.is_empty() {
                 tracing::error!(
                     "Failed to release recurrent state for finished sequences: {}",

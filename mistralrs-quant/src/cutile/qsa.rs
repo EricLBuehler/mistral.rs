@@ -10,7 +10,7 @@ use cutile::cuda_core::sys::CUdeviceptr;
 use cutile::tile_kernel::TileKernel;
 use half::bf16;
 
-use super::warmup::CutileKernel;
+use super::warmup::{CutileKernel, WarmupProgress};
 use super::{catch_cutile_panic, context, jit_available};
 use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
 
@@ -21,6 +21,7 @@ const QSA_SCORE_BLOCKS: usize = 64;
 pub const QSA_ATTN_HEAD_DIM: usize = 256;
 const QSA_ATTN_HEAD_ROWS: usize = 16;
 const QSA_ATTN_ITEMS: usize = 64;
+const PREFILL_WARMUP_STAGES: usize = 2;
 
 // Scalars that follow the context length travel as f32: cuTile keys its JIT cache on the
 // divisibility of every i32 scalar.
@@ -813,14 +814,17 @@ pub struct QsaKernel;
 pub(super) static QSA: QsaKernel = QsaKernel;
 
 impl CutileKernel for QsaKernel {
-    fn warm(&self, dev: &CudaDevice) -> Result<()> {
+    fn warm(&self, dev: &CudaDevice, silent: bool) -> Result<()> {
         let shapes = QSA_WARM_SHAPES.lock().unwrap().clone();
         if shapes.is_empty() || !jit_available(dev) {
             return Ok(());
         }
         let device = Device::Cuda(dev.clone());
         tracing::info!("Warming cuTile QSA kernels.");
+        let steps_per_shape = super::qsa_decode::decode_warmup_steps() + PREFILL_WARMUP_STAGES;
+        let progress = WarmupProgress::new("QSA kernels", shapes.len() * steps_per_shape, silent);
         for shape in shapes {
+            super::qsa_decode::warm_decode(shape, dev, &progress)?;
             let tables = Tensor::zeros((1, 1), DType::I32, &device)?;
             let paged = QsaPaged {
                 block_tables: &tables,
@@ -828,45 +832,53 @@ impl CutileKernel for QsaKernel {
                 block_size: shape.block_size,
             };
             let scores = Tensor::zeros((1, shape.topk + 1), DType::F32, &device)?;
-            score_launch(
-                &QsaScoreArgs {
-                    q: &Tensor::zeros((1, QSA_INDEX_HEADS, QSA_INDEX_DIM), DType::BF16, &device)?,
-                    block_keys: &Tensor::zeros((1, QSA_INDEX_DIM), DType::BF16, &device)?,
-                    paged: &paged,
-                    tiles: &Tensor::zeros((1, 4), DType::I32, &device)?,
-                    scores: &scores,
-                    max_blocks: 1,
-                    ratio: shape.ratio,
-                    topk: shape.topk,
-                },
-                dev,
-                true,
-            )?;
+            progress.run("prefill index scores", || {
+                score_launch(
+                    &QsaScoreArgs {
+                        q: &Tensor::zeros(
+                            (1, QSA_INDEX_HEADS, QSA_INDEX_DIM),
+                            DType::BF16,
+                            &device,
+                        )?,
+                        block_keys: &Tensor::zeros((1, QSA_INDEX_DIM), DType::BF16, &device)?,
+                        paged: &paged,
+                        tiles: &Tensor::zeros((1, 4), DType::I32, &device)?,
+                        scores: &scores,
+                        max_blocks: 1,
+                        ratio: shape.ratio,
+                        topk: shape.topk,
+                    },
+                    dev,
+                    true,
+                )
+            })?;
             let cache = Tensor::zeros(
                 (1, shape.n_kv_heads, shape.block_size, QSA_ATTN_HEAD_DIM),
                 DType::BF16,
                 &device,
             )?;
-            attention_launch(
-                &QsaAttentionArgs {
-                    q: &Tensor::zeros(
-                        (1, shape.n_q_heads, QSA_ATTN_HEAD_DIM),
-                        DType::BF16,
-                        &device,
-                    )?,
-                    key_cache: &cache,
-                    value_cache: &cache,
-                    paged: &paged,
-                    selected: &Tensor::zeros((1, shape.topk), DType::I32, &device)?,
-                    n_selected: &Tensor::zeros(1, DType::I32, &device)?,
-                    tokens: &Tensor::zeros((1, 2), DType::I32, &device)?,
-                    n_kv_heads: shape.n_kv_heads,
-                    ratio: shape.ratio,
-                    scale: 1.0,
-                },
-                dev,
-                true,
-            )?;
+            progress.run("prefill sparse attention", || {
+                attention_launch(
+                    &QsaAttentionArgs {
+                        q: &Tensor::zeros(
+                            (1, shape.n_q_heads, QSA_ATTN_HEAD_DIM),
+                            DType::BF16,
+                            &device,
+                        )?,
+                        key_cache: &cache,
+                        value_cache: &cache,
+                        paged: &paged,
+                        selected: &Tensor::zeros((1, shape.topk), DType::I32, &device)?,
+                        n_selected: &Tensor::zeros(1, DType::I32, &device)?,
+                        tokens: &Tensor::zeros((1, 2), DType::I32, &device)?,
+                        n_kv_heads: shape.n_kv_heads,
+                        ratio: shape.ratio,
+                        scale: 1.0,
+                    },
+                    dev,
+                    true,
+                )
+            })?;
         }
         Ok(())
     }

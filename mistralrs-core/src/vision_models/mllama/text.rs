@@ -887,7 +887,9 @@ impl MLlamaTextModel {
         full_text_row_masked_out_mask: Option<&Tensor>,
         ctx: &mut ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        let mut hidden_states = self.embed_tokens.embedding_forward(input_ids, self.dtype)?;
+        let mut hidden_states = self
+            .embed_tokens
+            .embedding_forward(input_ids, self.dtype.into())?;
         let packed_query_lens = if ctx.flash_params().packed {
             let (physical_batch, physical_tokens) = input_ids.dims2()?;
             if physical_batch != 1 {

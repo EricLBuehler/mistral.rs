@@ -551,7 +551,9 @@ impl Model {
         is_scaling_pass: Option<f64>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let mut xs = self.embed_tokens.embedding_forward(input_ids, self.dtype)?;
+        let mut xs = self
+            .embed_tokens
+            .embedding_forward(input_ids, self.dtype.into())?;
 
         let mut cache = if is_full_pass {
             if no_kv_cache {

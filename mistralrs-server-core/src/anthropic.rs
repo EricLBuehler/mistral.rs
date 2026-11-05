@@ -23,9 +23,9 @@ use either::Either;
 use mistralrs_core::{
     is_chat_template_request_error, AgentPermission, AgentToolApprovalHandler,
     ApproximateUserLocation, ChatCompletionChunkResponse, ChatCompletionResponse,
-    CodeExecutionPermission, Function, MistralRs, ReasoningEffort, Request, RequestMessage,
-    Response, TokenizationRequest, Tool, ToolChoice, ToolType, Usage, WebSearchOptions,
-    WebSearchUserLocation,
+    CodeExecutionPermission, ContextLengthExceeded, Function, MistralRs, ReasoningEffort, Request,
+    RequestMessage, Response, TokenizationRequest, Tool, ToolChoice, ToolType, Usage,
+    WebSearchOptions, WebSearchUserLocation,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -38,7 +38,7 @@ use utoipa::ToSchema;
 use crate::{
     chat_completion::{parse_request, ChatCompletionParseContext},
     handler_core::{
-        create_response_channel, send_request_with_model, ApiError, ApiErrorKind,
+        create_response_channel, find_error, send_request_with_model, ApiError, ApiErrorKind,
         ResponseErrorMessage, INTERNAL_ERROR_MESSAGE,
     },
     mistralrs_server_router_builder::AgenticDefaults,
@@ -604,6 +604,8 @@ impl AnthropicMessagesRequest {
         }
 
         Ok(ChatCompletionRequest {
+            modalities: None,
+            audio: None,
             messages: Either::Left(messages),
             model: self.model,
             adapter: None,
@@ -892,6 +894,7 @@ fn append_anthropic_blocks(
             (!text_parts.is_empty()).then(|| MessageContent::from_text(text_parts.join("\n")));
         let tool_calls = (!tool_calls.is_empty()).then_some(tool_calls);
         out.push(Message {
+            audio: None,
             content,
             role,
             name: None,
@@ -973,6 +976,7 @@ fn flush_user_content(
     };
 
     out.push(Message {
+        audio: None,
         content: Some(content),
         role: role.to_string(),
         name: None,
@@ -984,6 +988,7 @@ fn flush_user_content(
 
 fn message_with_text(role: impl Into<String>, text: String) -> Message {
     Message {
+        audio: None,
         content: Some(MessageContent::from_text(text)),
         role: role.into(),
         name: None,
@@ -1035,6 +1040,7 @@ fn tool_result_message_from_block(block: AnthropicContentBlock) -> Result<Messag
         .context("Anthropic tool_result content block requires `tool_use_id`.")?;
 
     Ok(Message {
+        audio: None,
         content: Some(MessageContent::from_text(content_value_to_text(
             block.content,
         ))),
@@ -1553,8 +1559,7 @@ impl futures::Stream for AnthropicStreamer {
                             self.stream.handle_error_event(ApiError::model_error());
                         }
                         Response::ValidationError(e) => {
-                            let error =
-                                ApiError::from_error(e.as_ref(), ApiErrorKind::InvalidRequest);
+                            let error = anthropic_validation_error(e.as_ref());
                             if matches!(
                                 error.kind,
                                 ApiErrorKind::Internal
@@ -1614,7 +1619,8 @@ impl futures::Stream for AnthropicStreamer {
                         | Response::ImageGeneration(_)
                         | Response::Speech { .. }
                         | Response::Raw { .. }
-                        | Response::Embeddings { .. } => unreachable!(),
+                        | Response::Embeddings { .. }
+                        | Response::Decision { .. } => unreachable!(),
                     }
                 }
                 Poll::Ready(None) => {
@@ -1661,9 +1667,9 @@ impl IntoResponse for AnthropicMessagesResponder {
             AnthropicMessagesResponder::InternalError(e) => {
                 anthropic_error_response(ApiError::from_error(e.as_ref(), ApiErrorKind::Internal))
             }
-            AnthropicMessagesResponder::ValidationError(e) => anthropic_error_response(
-                ApiError::from_error(e.as_ref(), ApiErrorKind::InvalidRequest),
-            ),
+            AnthropicMessagesResponder::ValidationError(e) => {
+                anthropic_error_response(anthropic_validation_error(e.as_ref()))
+            }
             AnthropicMessagesResponder::ModelError(_) => {
                 anthropic_error_response(ApiError::model_error())
             }
@@ -1713,6 +1719,17 @@ fn anthropic_error_type(kind: ApiErrorKind) -> &'static str {
         ApiErrorKind::RateLimited => "rate_limit_error",
         ApiErrorKind::Unavailable | ApiErrorKind::Internal => "api_error",
         ApiErrorKind::Overloaded => "overloaded_error",
+    }
+}
+
+// Anthropic's overflow wording; Claude Code matches it and reads both counts to plan compaction.
+fn anthropic_validation_error(error: &(dyn Error + 'static)) -> ApiError {
+    match find_error::<ContextLengthExceeded>(error) {
+        Some(exceeded) => ApiError::invalid_request(format!(
+            "prompt is too long: {} tokens > {} maximum",
+            exceeded.prompt_tokens, exceeded.max_model_len
+        )),
+        None => ApiError::from_error(error, ApiErrorKind::InvalidRequest),
     }
 }
 
@@ -2040,6 +2057,23 @@ mod tests {
         serde_json::from_slice(&body).unwrap()
     }
 
+    #[tokio::test]
+    async fn context_overflow_uses_anthropic_wording() {
+        let response =
+            AnthropicMessagesResponder::ValidationError(Box::new(ContextLengthExceeded {
+                prompt_tokens: 205_000,
+                max_model_len: 200_000,
+            }))
+            .into_response();
+        assert_eq!(response.status(), http::StatusCode::BAD_REQUEST);
+        let body = error_body(response).await;
+        assert_eq!(body["error"]["type"], "invalid_request_error");
+        assert_eq!(
+            body["error"]["message"],
+            "prompt is too long: 205000 tokens > 200000 maximum"
+        );
+    }
+
     fn basic_request() -> AnthropicMessagesRequest {
         serde_json::from_value(json!({
             "model": "default",
@@ -2080,6 +2114,7 @@ mod tests {
                 stop_sequence: stop_sequence.map(str::to_string),
                 index: 0,
                 delta: Delta {
+                    audio: None,
                     content: text.map(str::to_string),
                     role: "assistant".to_string(),
                     tool_calls,
@@ -2676,6 +2711,7 @@ mod tests {
                 stop_sequence: Some("END".to_string()),
                 index: 0,
                 message: ResponseMessage {
+                    audio: None,
                     content: Some("done".to_string()),
                     role: "assistant".to_string(),
                     tool_calls: Some(vec![ToolCallResponse {

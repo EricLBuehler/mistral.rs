@@ -25,7 +25,7 @@
 
 ## Latest
 
-- **LFM3 and LFM3-VL**: native support for `LiquidAI/LFM3-1.7B` and `LiquidAI/LFM3-VL-2B`, including text, image, and video inference, GGUF loading, ISQ, paged attention, and chunked prefill. [Model notes](https://docs.mistralrs.dev/guides/models/model-family-notes/#lfm3-and-lfm3-vl)
+- **LFM3 family**: text with LFM3, image and video with LFM3-VL, speech input and output with LFM3-Audio, and combined text, image, video, and audio with LFM3-Omni. Includes ISQ, paged attention, and chunked prefill; text/VL also support GGUF. [Model notes](https://docs.mistralrs.dev/guides/models/model-family-notes/#lfm3-and-lfm3-vl)
 - **v0.9.5**: paged attention is now the default on supported Metal models, with automatic memory planning across the CLI and SDKs. Existing memory and device-mapping options have changed; see the [upgrade guide](https://docs.mistralrs.dev/guides/perf/paged-attention/#upgrading-from-094). This release also adds [Qwen3.8-Flash-Next](https://docs.mistralrs.dev/guides/models/model-family-notes/#qwen38-flash-next) and [CUDA 13.4 source builds](https://docs.mistralrs.dev/developer/from-source/).
 - **Muse Glimmer 30B**: native text, image, and video inference with ATEM tool calling, reasoning controls, LoRA, ISQ/UQFF, and companion-projector GGUF loading. [Model notes](https://docs.mistralrs.dev/guides/models/model-family-notes/#muse-glimmer)
 - **GGUF loading**: load a local file with `-f`, or select a published artifact with `--quant`. Tokenizer, configuration, and multimodal projector files are discovered when the available metadata identifies them unambiguously. [Guide](https://docs.mistralrs.dev/guides/models/run-gguf/)
@@ -95,7 +95,7 @@ Mean tokens per second across prompt lengths and decode depths from 128 to 16384
 - **Automatic model loading**: Architecture, weight format, and chat template are detected for supported Hugging Face models and GGUF files, with flags available for explicit selection.
 - **True multimodality**: Text, vision, video, and audio, speech generation, image generation, and embeddings in one engine.
 - **Quantization selection**: `--quant` selects a matching artifact from GGUF repositories. For other Hugging Face repositories, it uses a prebuilt UQFF when available and otherwise applies ISQ. [Docs](https://docs.mistralrs.dev/guides/quantization/quantize-a-model/)
-- **OpenAI + Anthropic compatible serving**: The same `mistralrs serve` process exposes OpenAI-compatible `/v1` endpoints and Anthropic-compatible Messages endpoints.
+- **Works with Claude Code and Codex**: The same `mistralrs serve` process exposes OpenAI-compatible `/v1` endpoints and Anthropic-compatible Messages endpoints, so coding agents run on your local model. [Setup](https://docs.mistralrs.dev/guides/serve/coding-agents/)
 - **Prometheus metrics**: `mistralrs serve` exposes a `/metrics` endpoint in Prometheus format, recording per-request counts and latency labeled by method, route, and status. [Docs](https://docs.mistralrs.dev/reference/http-api/)
 - **Built-in web UI**: Served at `/ui` by default. Shows reasoning, code execution, plots, and files inline. Edit any message and the new branch runs with its own Python state. Pass `--no-ui` to disable.
 - **Hardware-aware**: `mistralrs tune` recommends quantization and device mapping from the model config and your detected hardware.
@@ -139,6 +139,16 @@ When the server is ready, open [http://localhost:1234/ui](http://localhost:1234/
   <br>
   <img src="https://raw.githubusercontent.com/EricLBuehler/mistral.rs/master/res/ui.gif" alt="UI Demo" />
 </details>
+
+### Use with Claude Code or Codex
+
+Serve a coding model, then point Claude Code or Codex at it to use it in your projects:
+
+```bash
+mistralrs serve -m Qwen/Qwen3-Coder-Next --quant 4
+```
+
+[Set up Claude Code or Codex](https://docs.mistralrs.dev/guides/serve/coding-agents/)
 
 ## What Makes It Fast
 
@@ -208,6 +218,7 @@ For complete documentation, see the **[Documentation](https://docs.mistralrs.dev
 
 **Quick Links:**
 - [Quickstart](https://docs.mistralrs.dev/quickstart/) - Install, first run, first serve
+- [Coding agents](https://docs.mistralrs.dev/guides/serve/coding-agents/) - Claude Code and Codex on a local model
 - [CLI Reference](https://docs.mistralrs.dev/reference/cli/) - All commands and options
 - [Anthropic Messages API](https://docs.mistralrs.dev/guides/serve/anthropic-messages-api/) - Anthropic-compatible Messages, streaming, tool use, and token counting
 - [HTTP API](https://docs.mistralrs.dev/reference/http-api/) - OpenAI-compatible and Anthropic-compatible endpoints

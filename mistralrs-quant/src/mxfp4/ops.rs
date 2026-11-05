@@ -249,7 +249,7 @@ fn mxfp4_grouped_moe_gemm(
     let flat_input = if input_has_topk_dim {
         input.reshape((total_work, k))?
     } else {
-        input.clone()
+        input.reshape((num_tokens, k))?
     };
 
     let mut sorted_input_indices: Vec<u32> = Vec::with_capacity(total_work);
@@ -349,7 +349,17 @@ pub fn mxfp4_indexed_moe_gemm(
     let (num_tokens, topk, k, input_has_topk_dim) = if input_dims.len() == 2 {
         (input_dims[0], indices_dims[1], input_dims[1], false)
     } else if input_dims.len() == 3 {
-        (input_dims[0], input_dims[1], input_dims[2], true)
+        let topk = indices_dims[1];
+        // [tokens, 1, K] is one row shared by every routed expert.
+        let has_topk_dim = input_dims[1] != 1 || topk == 1;
+        if has_topk_dim && input_dims[1] != topk {
+            candle_core::bail!(
+                "Input {:?} does not match indices {:?}",
+                input_dims,
+                indices_dims
+            );
+        }
+        (input_dims[0], topk, input_dims[2], has_topk_dim)
     } else {
         candle_core::bail!("Expected input to be rank 2 or 3, got {:?}", input_dims);
     };
@@ -377,11 +387,11 @@ pub fn mxfp4_indexed_moe_gemm(
     };
     let needed_smem = token_list_bytes + base_smem;
     let max_smem = unsafe { ffi::mxfp4_get_max_smem_optin() } as usize;
-    let use_fused = num_tokens > 1 && needed_smem <= max_smem;
+    let use_fused = needed_smem <= max_smem;
 
     // If the fused kernel doesn't fit in shared memory, fall back to Rust-side grouped GEMM
     // which calls mxfp4_matmul per expert (still uses WMMA tensor cores, just not fused).
-    if num_tokens > 1 && !use_fused {
+    if !use_fused {
         return mxfp4_grouped_moe_gemm(
             &input,
             &weight,
@@ -456,44 +466,25 @@ pub fn mxfp4_indexed_moe_gemm(
             };
 
             unsafe {
-                if use_fused {
-                    if ffi::HAVE_MXFP4_WMMA_KERNELS {
-                        ffi::launch_mxfp4_moe_grouped_gemm_wmma_f16(
-                            input_ptr as *const f16,
-                            weight_ptr as *const u8,
-                            scale_ptr as *const u8,
-                            bias_ptr,
-                            indices_ptr as *const u32,
-                            output_ptr as *mut f16,
-                            num_tokens as i32,
-                            topk as i32,
-                            num_experts as i32,
-                            n as i32,
-                            k as i32,
-                            has_bias,
-                            input_has_topk_dim,
-                            dev.cuda_stream().cu_stream(),
-                        );
-                    } else {
-                        ffi::launch_mxfp4_moe_grouped_gemm_f16(
-                            input_ptr as *const f16,
-                            weight_ptr as *const u8,
-                            scale_ptr as *const u8,
-                            bias_ptr,
-                            indices_ptr as *const u32,
-                            output_ptr as *mut f16,
-                            num_tokens as i32,
-                            topk as i32,
-                            num_experts as i32,
-                            n as i32,
-                            k as i32,
-                            has_bias,
-                            input_has_topk_dim,
-                            dev.cuda_stream().cu_stream(),
-                        );
-                    }
+                if ffi::HAVE_MXFP4_WMMA_KERNELS {
+                    ffi::launch_mxfp4_moe_grouped_gemm_wmma_f16(
+                        input_ptr as *const f16,
+                        weight_ptr as *const u8,
+                        scale_ptr as *const u8,
+                        bias_ptr,
+                        indices_ptr as *const u32,
+                        output_ptr as *mut f16,
+                        num_tokens as i32,
+                        topk as i32,
+                        num_experts as i32,
+                        n as i32,
+                        k as i32,
+                        has_bias,
+                        input_has_topk_dim,
+                        dev.cuda_stream().cu_stream(),
+                    );
                 } else {
-                    ffi::launch_mxfp4_indexed_moe_gemm_f16(
+                    ffi::launch_mxfp4_moe_grouped_gemm_f16(
                         input_ptr as *const f16,
                         weight_ptr as *const u8,
                         scale_ptr as *const u8,
@@ -543,44 +534,25 @@ pub fn mxfp4_indexed_moe_gemm(
             };
 
             unsafe {
-                if use_fused {
-                    if ffi::HAVE_MXFP4_WMMA_KERNELS {
-                        ffi::launch_mxfp4_moe_grouped_gemm_wmma_bf16(
-                            input_ptr as *const bf16,
-                            weight_ptr as *const u8,
-                            scale_ptr as *const u8,
-                            bias_ptr,
-                            indices_ptr as *const u32,
-                            output_ptr as *mut bf16,
-                            num_tokens as i32,
-                            topk as i32,
-                            num_experts as i32,
-                            n as i32,
-                            k as i32,
-                            has_bias,
-                            input_has_topk_dim,
-                            dev.cuda_stream().cu_stream(),
-                        );
-                    } else {
-                        ffi::launch_mxfp4_moe_grouped_gemm_bf16(
-                            input_ptr as *const bf16,
-                            weight_ptr as *const u8,
-                            scale_ptr as *const u8,
-                            bias_ptr,
-                            indices_ptr as *const u32,
-                            output_ptr as *mut bf16,
-                            num_tokens as i32,
-                            topk as i32,
-                            num_experts as i32,
-                            n as i32,
-                            k as i32,
-                            has_bias,
-                            input_has_topk_dim,
-                            dev.cuda_stream().cu_stream(),
-                        );
-                    }
+                if ffi::HAVE_MXFP4_WMMA_KERNELS {
+                    ffi::launch_mxfp4_moe_grouped_gemm_wmma_bf16(
+                        input_ptr as *const bf16,
+                        weight_ptr as *const u8,
+                        scale_ptr as *const u8,
+                        bias_ptr,
+                        indices_ptr as *const u32,
+                        output_ptr as *mut bf16,
+                        num_tokens as i32,
+                        topk as i32,
+                        num_experts as i32,
+                        n as i32,
+                        k as i32,
+                        has_bias,
+                        input_has_topk_dim,
+                        dev.cuda_stream().cu_stream(),
+                    );
                 } else {
-                    ffi::launch_mxfp4_indexed_moe_gemm_bf16(
+                    ffi::launch_mxfp4_moe_grouped_gemm_bf16(
                         input_ptr as *const bf16,
                         weight_ptr as *const u8,
                         scale_ptr as *const u8,

@@ -51,7 +51,7 @@ pub struct GgufModelBuilder {
     pub(crate) max_num_seqs: usize,
     pub(crate) no_kv_cache: bool,
     pub(crate) with_logging: bool,
-    pub(crate) prefix_cache_n: Option<usize>,
+    pub(crate) prefix_cache_n: PrefixCacheCapacity,
     pub(crate) code_exec_config: Option<mistralrs_core::CodeExecutionConfig>,
     pub(crate) shell_config: Option<mistralrs_core::ShellConfig>,
     pub(crate) lora_adapters: Option<Vec<LoraAdapterSpec>>,
@@ -83,7 +83,7 @@ impl GgufModelBuilder {
             no_paged_attn: false,
             max_num_seqs: mistralrs_core::memory_plan::DEFAULT_MAX_NUM_SEQS,
             no_kv_cache: false,
-            prefix_cache_n: Some(16),
+            prefix_cache_n: PrefixCacheCapacity::Auto,
             with_logging: false,
             topology: None,
             topology_path: None,
@@ -195,6 +195,7 @@ impl GgufModelBuilder {
                         strict: None,
                     },
                 },
+                source: AgentToolSource::User,
             },
         );
         self
@@ -214,6 +215,7 @@ impl GgufModelBuilder {
             ToolCallbackWithTool {
                 callback: ToolCallbackKind::Text(callback),
                 tool,
+                source: AgentToolSource::User,
             },
         );
         self
@@ -434,9 +436,10 @@ impl GgufModelBuilder {
         self
     }
 
-    /// Set the number of sequences to hold in the prefix cache. Set to `None` to disable the prefix cacher.
-    pub fn with_prefix_cache_n(mut self, n_seqs: Option<usize>) -> Self {
-        self.prefix_cache_n = n_seqs;
+    /// Set prefix cache retention: `Auto` (default) fits up to 16 sequences in the memory budget,
+    /// `Fixed(n)` retains exactly `n`, and `PrefixCacheCapacity::DISABLED` turns the prefix cacher off.
+    pub fn with_prefix_cache_n(mut self, capacity: PrefixCacheCapacity) -> Self {
+        self.prefix_cache_n = capacity;
         self
     }
 

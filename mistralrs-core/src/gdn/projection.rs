@@ -261,9 +261,10 @@ fn shared_qkv_z(
     qkv: &Arc<dyn QuantMethod>,
     z: &Arc<dyn QuantMethod>,
 ) -> Result<(Tensor, Tensor)> {
-    if let Some(outputs) = mistralrs_quant::try_forward_with_shared_quantized_activation(
+    if let Some(outputs) = mistralrs_quant::forward_group(
         x,
         &[qkv.as_ref(), z.as_ref()],
+        mistralrs_quant::GroupKind::Dense,
     )? {
         let [qkv, z]: [Tensor; 2] = outputs.try_into().map_err(|_| {
             candle_core::Error::msg("shared GDN projection returned the wrong output count")

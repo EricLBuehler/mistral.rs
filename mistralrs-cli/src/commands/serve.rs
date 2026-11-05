@@ -30,6 +30,7 @@ use crate::args::{
 };
 use crate::ui::build_ui_router;
 
+const DEFAULT_HF_REVISION: &str = "main";
 const MEBIBYTE_BYTES: usize = 1024 * 1024;
 
 /// Run the HTTP server with the specified model
@@ -55,7 +56,7 @@ pub async fn run_server(
     // Convert our clean args to ModelSelected for the existing loader infrastructure
     let matformer = runtime.matformer_selection();
     let original_model_id = model_id_of(&model_type).to_string();
-    apply_quant_resolution(&mut model_type, &global.token_source, &matformer).await?;
+    apply_quant_resolution(&mut model_type, &global.token_source, &matformer, None).await?;
     let api_id_override =
         (model_id_of(&model_type) != original_model_id).then_some(original_model_id);
     let model_selected = convert_to_model_selected(&model_type, &matformer)?;
@@ -978,7 +979,9 @@ pub(crate) async fn apply_quant_resolution(
     model_type: &mut ModelType,
     token_source: &mistralrs_core::TokenSource,
     matformer: &MatformerSelection,
+    revision: Option<&str>,
 ) -> Result<()> {
+    let revision = revision.unwrap_or(DEFAULT_HF_REVISION);
     if let Some(path) = device_options(model_type).hf_cache.clone() {
         mistralrs_core::set_hf_cache_path(path);
     }
@@ -1000,7 +1003,7 @@ pub(crate) async fn apply_quant_resolution(
     }
     let should_inspect_files = raw.is_some() || (is_explicit_gguf && exact_file.is_some());
     let repo_files = if should_inspect_files {
-        selected_model_files(&model_id, exact_file.as_deref(), token_source)?
+        selected_model_files(&model_id, exact_file.as_deref(), token_source, revision)?
     } else {
         None
     };
@@ -1085,8 +1088,11 @@ pub(crate) async fn apply_quant_resolution(
     let resolved = crate::commands::quant::resolve_quant(
         &raw,
         &model_id,
-        token_source,
-        &model_selected,
+        crate::commands::quant::QuantContext {
+            token_source,
+            model_selected: &model_selected,
+            revision,
+        },
         force_cpu,
     )
     .await?;
@@ -1106,6 +1112,7 @@ fn selected_model_files(
     model_id: &str,
     exact_file: Option<&str>,
     token_source: &mistralrs_core::TokenSource,
+    revision: &str,
 ) -> Result<Option<Vec<String>>> {
     let path = Path::new(model_id);
     if path.exists() {
@@ -1116,7 +1123,7 @@ fn selected_model_files(
     }
     Ok(mistralrs_core::probe_hf_repo_files(
         model_id,
-        "main",
+        revision,
         token_source,
     ))
 }
@@ -1553,6 +1560,7 @@ mod tests {
             &mut model_type,
             &mistralrs_core::TokenSource::None,
             &MatformerSelection::default(),
+            None,
         )
         .await
         .unwrap();
@@ -1605,6 +1613,7 @@ mod tests {
             &mut model_type,
             &mistralrs_core::TokenSource::None,
             &MatformerSelection::default(),
+            None,
         )
         .await
         .unwrap();
@@ -1649,6 +1658,7 @@ mod tests {
             &mut model_type,
             &mistralrs_core::TokenSource::None,
             &MatformerSelection::default(),
+            None,
         )
         .await
         .unwrap();
@@ -1696,6 +1706,7 @@ mod tests {
             &mut model_type,
             &mistralrs_core::TokenSource::None,
             &MatformerSelection::default(),
+            None,
         )
         .await
         .unwrap();
@@ -1738,6 +1749,7 @@ mod tests {
             &mut model_type,
             &mistralrs_core::TokenSource::None,
             &MatformerSelection::default(),
+            None,
         )
         .await
         .unwrap();
@@ -1778,6 +1790,7 @@ mod tests {
             &mut model_type,
             &mistralrs_core::TokenSource::None,
             &MatformerSelection::default(),
+            None,
         )
         .await
         .unwrap();
@@ -1821,6 +1834,7 @@ mod tests {
             &mut model_type,
             &mistralrs_core::TokenSource::None,
             &MatformerSelection::default(),
+            None,
         )
         .await
         .unwrap();
@@ -1871,6 +1885,7 @@ mod tests {
             &mut model_type,
             &mistralrs_core::TokenSource::None,
             &MatformerSelection::default(),
+            None,
         )
         .await
         .unwrap();
@@ -1905,6 +1920,7 @@ mod tests {
             &mut model_type,
             &mistralrs_core::TokenSource::None,
             &MatformerSelection::default(),
+            None,
         )
         .await
         .unwrap_err();
@@ -1938,6 +1954,7 @@ mod tests {
             &mut model_type,
             &mistralrs_core::TokenSource::None,
             &MatformerSelection::default(),
+            None,
         )
         .await
         .unwrap_err();
@@ -1976,6 +1993,7 @@ mod tests {
             &mut model_type,
             &mistralrs_core::TokenSource::None,
             &MatformerSelection::default(),
+            None,
         )
         .await
         .unwrap_err();
@@ -2012,6 +2030,7 @@ mod tests {
             &mut model_type,
             &mistralrs_core::TokenSource::None,
             &MatformerSelection::default(),
+            None,
         )
         .await
         .unwrap_err();

@@ -566,7 +566,7 @@ fn recipient_prefix(prefix: &str, tool_name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::parsers::specialize_required_tool_call_grammar;
+    use crate::tools::parsers::specialize_tool_call_grammar;
     use mistralrs_mcp::{Function, ToolType};
     use serde_json::json;
     use std::sync::Arc;
@@ -744,7 +744,7 @@ mod tests {
         let trie = atem_token_trie();
         let env: toktrie::TokEnv = Arc::new(GreedyTokenizerEnv { trie });
         let factory = llguidance::ParserFactory::new_simple(&env).unwrap();
-        specialize_required_tool_call_grammar(&mut grammar, factory.tok_env().tok_trie());
+        specialize_tool_call_grammar(&mut grammar, factory.tok_env().tok_trie());
 
         factory.create_parser(grammar).unwrap();
     }

@@ -12,11 +12,13 @@ use tokio::task::JoinHandle;
 
 use crate::output::CodeExecResult;
 use crate::protocol::{ExecuteOutputSpec, ExecuteResponse, ExecutorRequest, ResetResponse};
+use crate::workdir::SessionDir;
 
 /// After SIGINT, wait this long for the child to return before SIGKILL.
 const SIGINT_GRACE_WAIT: Duration = Duration::from_secs(3);
 const STDERR_DRAIN_WAIT: Duration = Duration::from_millis(20);
 const STDERR_TAIL_LINES: usize = 32;
+const TEMP_WORKDIR_PREFIX: &str = "mistralrs-code-";
 
 type StderrTail = Arc<Mutex<VecDeque<String>>>;
 
@@ -32,7 +34,7 @@ pub struct PythonSession {
     child: Child,
     stdin: BufWriter<ChildStdin>,
     stdout: BufReader<ChildStdout>,
-    work_dir: PathBuf,
+    work_dir: SessionDir,
     timeout: Duration,
     alive: bool,
     python_path: PathBuf,
@@ -54,24 +56,21 @@ impl PythonSession {
         sandbox: Arc<dyn Sandbox>,
         sandbox_policy: SandboxPolicy,
     ) -> anyhow::Result<Self> {
-        let work_dir = if let Some(dir) = working_directory {
-            std::fs::create_dir_all(dir)?;
-            dir.to_path_buf()
-        } else {
-            let dir = tempfile::Builder::new()
-                .prefix("mistralrs-code-")
-                .tempdir()?;
-            #[allow(deprecated)]
-            dir.into_path()
-        };
-        tracing::debug!("code execution session workdir: {}", work_dir.display());
+        let work_dir = SessionDir::create(
+            working_directory.map(Path::to_path_buf),
+            TEMP_WORKDIR_PREFIX,
+        )?;
+        tracing::debug!(
+            "code execution session workdir: {}",
+            work_dir.path().display()
+        );
         let python_path = python_path.to_path_buf();
         let executor_script = executor_script.to_path_buf();
 
         let spawned = Self::spawn_process(
             &python_path,
             &executor_script,
-            &work_dir,
+            work_dir.path(),
             sandbox.as_ref(),
             &sandbox_policy,
         )
@@ -175,7 +174,7 @@ impl PythonSession {
         let spawned = Self::spawn_process(
             &self.python_path,
             &self.executor_script,
-            &self.work_dir,
+            self.work_dir.path(),
             self.sandbox.as_ref(),
             &self.sandbox_policy,
         )
@@ -194,7 +193,7 @@ impl PythonSession {
     }
 
     pub fn work_dir_str(&self) -> String {
-        self.work_dir.display().to_string()
+        self.work_dir.path().display().to_string()
     }
 
     pub fn mount_input_files(
@@ -209,7 +208,7 @@ impl PythonSession {
         if self.mounted_input_files_key.as_deref() == Some(key.as_str()) {
             return Ok(());
         }
-        crate::mount::mount_input_files(&self.work_dir, files)?;
+        crate::mount::mount_input_files(self.work_dir.path(), files)?;
         self.mounted_input_files_key = Some(key);
         Ok(())
     }
@@ -220,7 +219,7 @@ impl PythonSession {
         outputs: &[ExecuteOutputSpec],
     ) -> CodeExecResult {
         self.last_active = Instant::now();
-        let work_dir = self.work_dir.clone();
+        let work_dir = self.work_dir.path().to_path_buf();
         let work_dir_str = self.work_dir_str();
         if !self.alive {
             if let Err(e) = self.respawn().await {

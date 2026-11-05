@@ -2,15 +2,30 @@ pub mod archive;
 pub mod cpu;
 #[cfg(feature = "cuda")]
 pub(crate) mod cuda;
+pub mod embedding;
 #[cfg(feature = "cuda")]
 pub mod fast_mmq;
 #[cfg(feature = "cuda")]
 pub mod fast_mmvq;
 #[cfg(feature = "cuda")]
 mod ffi;
+#[cfg(feature = "cuda")]
+pub(crate) mod gated_mix;
+mod group;
 #[cfg(all(feature = "cuda", has_marlin_kernels))]
 mod packed_affine;
+pub(crate) mod quantize;
 mod weight_source;
+
+#[cfg(feature = "cuda")]
+pub(crate) mod q8_1 {
+    pub(crate) const BLOCK_ELEMENTS: usize = 32;
+    // Two f16 scale halves followed by the int8 quants.
+    pub(crate) const BLOCK_BYTES: usize = 4 + BLOCK_ELEMENTS;
+    // MMQ tiles pack four blocks' quants plus their four f32 scale slots.
+    pub(crate) const MMQ_BLOCK_BYTES: usize = 4 * BLOCK_ELEMENTS + 4 * 4;
+    pub(crate) const ROW_PADDING: usize = 512;
+}
 
 pub use weight_source::{
     GgufBindingMap, GgufBindingResolver, GgufTensorBackend, GgufTensorBinding, GgufWeightSource,
@@ -74,6 +89,25 @@ fn ggml_dtype_to_uqff_code(dtype: GgmlDType) -> u32 {
         GgmlDType::Q8K => 15,
         GgmlDType::BF16 => 30,
     }
+}
+
+/// Byte length a GGUF-serde UQFF `weight` must have for `dims` and the stored dtype code.
+pub(crate) fn uqff_gguf_weight_bytes(dtype: u32, dims: &[usize]) -> Result<usize> {
+    let dtype = ggml_dtype_from_uqff_code(dtype)?;
+    let overflow = || candle_core::Error::Msg(format!("UQFF GGUF weight shape {dims:?} overflows"));
+    let elems = dims
+        .iter()
+        .try_fold(1usize, |acc, &d| acc.checked_mul(d))
+        .ok_or_else(overflow)?;
+    let block = dtype.block_size();
+    if dims.last().is_none_or(|d| !d.is_multiple_of(block)) {
+        candle_core::bail!(
+            "UQFF GGUF weight shape {dims:?} is not a whole number of {dtype:?} blocks of {block}"
+        );
+    }
+    (elems / block)
+        .checked_mul(dtype.type_size())
+        .ok_or_else(overflow)
 }
 
 fn ggml_dtype_from_uqff_code(dtype: u32) -> Result<GgmlDType> {
@@ -188,6 +222,16 @@ impl GgufMatMul {
         b: Option<Tensor>,
         device: &Device,
     ) -> Result<Self> {
+        // `weight` and `weight.shape` are independent UQFF tensors. `qtensor_from_ggml`
+        // reinterprets `tensor_data` using the byte size implied by `dims` without
+        // checking the slice length, so a short `weight` would be read out of bounds.
+        let expected = uqff_gguf_weight_bytes(dtype, &dims)?;
+        if tensor_data.len() != expected {
+            candle_core::bail!(
+                "UQFF GGUF weight has {} bytes, but shape {dims:?} needs {expected}",
+                tensor_data.len()
+            );
+        }
         let dtype = ggml_dtype_from_uqff_code(dtype)?;
         let w = qtensor_from_ggml(dtype, &tensor_data, dims, device)?;
         // from_arc densifies float fallback entries, matching what ISQ produces at load
@@ -243,10 +287,10 @@ impl GgufMatMul {
             }
         }
 
-        let mut bytes = Vec::new();
+        let mut bytes =
+            Vec::with_capacity(stack.elem_count() / dtype.block_size() * dtype.type_size());
         for e in 0..num_experts {
-            // expert views share storage with an offset; quantize reads raw storage
-            let slab = stack.get(e)?.force_contiguous()?;
+            let slab = stack.get(e)?;
             let vector = imatrix.and_then(|v| {
                 if v.len() == in_dim {
                     Some(v)
@@ -258,9 +302,9 @@ impl GgufMatMul {
             });
             let qt = match vector {
                 Some(v) if imatrix_capable && v.iter().any(|x| *x != 0.0) => {
-                    candle_core::quantized::QTensor::quantize_imatrix(&slab, v, dtype)?
+                    quantize::quantize_cpu(&slab, dtype, Some(v))?
                 }
-                _ => candle_core::quantized::QTensor::quantize(&slab, dtype)?,
+                _ => quantize::quantize_cpu(&slab, dtype, None)?,
             };
             bytes.extend_from_slice(&qt.data()?);
         }
@@ -451,8 +495,21 @@ impl QuantMethod for GgufMatMul {
         }
     }
 
-    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
-        self.w.embedding(ids)
+    fn embedding_table(&self) -> Option<crate::EmbeddingTable<'_>> {
+        match &self.w {
+            QMatMul::QTensor(q) => crate::EmbeddingTable::quantized(q).ok(),
+            QMatMul::Tensor(w) | QMatMul::TensorF16(w) => {
+                let (rows, columns) = w.dims2().ok()?;
+                w.is_contiguous().then(|| {
+                    crate::EmbeddingTable::new(
+                        crate::embedding::RowCodec::Dense(w.dtype()),
+                        rows,
+                        columns,
+                        w,
+                    )
+                })
+            }
+        }
     }
 
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
@@ -480,10 +537,10 @@ impl QuantMethod for GgufMatMul {
             }
         }
 
-        // Fallback: Candle QMatMul requires F32
+        // Fallback: Candle QMatMul requires a contiguous F32 input
         let original_dtype = a.dtype();
         let a_f32 = if original_dtype == DType::F32 {
-            a.clone()
+            a.contiguous()?
         } else {
             a.to_dtype(DType::F32)?
         };
@@ -540,22 +597,12 @@ impl QuantMethod for GgufMatMul {
         }
     }
 
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
-    fn prepare_gguf_affine_raw(
+    fn group_member(
         &self,
-        flat_batch: usize,
-        dtype: DType,
-        device: &Device,
-    ) -> Result<bool> {
-        Ok(self.packed_affine_for(flat_batch, dtype, device)?.is_some())
-    }
-
-    #[cfg(all(feature = "cuda", has_marlin_kernels))]
-    fn try_gguf_affine_forward_raw(&self, a: &Tensor) -> Result<Option<Tensor>> {
-        let Some(out) = self.packed_affine_forward(a)? else {
-            return Ok(None);
-        };
-        Ok(Some(self.add_bias(out)?))
+        xs: &Tensor,
+        kind: crate::GroupKind<'_>,
+    ) -> Result<Option<crate::GroupMember>> {
+        self.gguf_group_member(xs, kind)
     }
 
     fn quantized_act_type(&self) -> Option<DType> {
@@ -643,7 +690,7 @@ impl QuantMethod for GgufMatMul {
         };
         if shape.len() == 3 && request.ty.is_some_and(|ty| !ty.supports_stacked_gather()) {
             candle_core::bail!(
-                "Cannot quantize stacked GGUF expert weights to {}: that target does not support stacked expert gather. Use a Q*K/Q*_0/Q*_1 target, AFQ, or omit ISQ.",
+                "Cannot quantize stacked GGUF expert weights to {}: that target does not support stacked expert gather.",
                 request.ty.expect("rank-3 rejection requires an ISQ target")
             );
         }
@@ -833,6 +880,36 @@ impl QuantizedSerde for GgufMatMul {
 mod tests {
     use super::*;
 
+    #[test]
+    fn from_raw_uqff_rejects_weight_shorter_than_shape() {
+        // 4x64 F32 needs 1024 bytes, so a 16-byte weight must be rejected.
+        let err = GgufMatMul::from_raw_uqff(0, vec![0u8; 16], vec![4, 64], None, &Device::Cpu)
+            .expect_err("short UQFF GGUF weight must be rejected")
+            .to_string();
+        assert!(
+            err.contains("has 16 bytes") && err.contains("needs 1024"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn from_raw_uqff_rejects_overflowing_shape() {
+        let err =
+            GgufMatMul::from_raw_uqff(0, vec![0u8; 16], vec![1 << 32, 1 << 32], None, &Device::Cpu)
+                .expect_err("overflowing shape must be rejected")
+                .to_string();
+        assert!(err.contains("overflows"), "{err}");
+    }
+
+    #[test]
+    fn from_raw_uqff_accepts_exact_weight() -> Result<()> {
+        let bytes: Vec<u8> = (0..256).flat_map(|_| 1.0f32.to_le_bytes()).collect();
+        let layer = GgufMatMul::from_raw_uqff(0, bytes, vec![4, 64], None, &Device::Cpu)?;
+        let w = layer.dequantize_w()?.flatten_all()?.to_vec1::<f32>()?;
+        assert!(w.len() == 256 && w.iter().all(|x| *x == 1.0));
+        Ok(())
+    }
+
     const TEST_EMBEDDING_DIM: usize = 256;
     const TEST_VOCAB_SIZE: usize = 8;
 
@@ -855,6 +932,25 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn forward_accepts_non_contiguous_f32_input() -> Result<()> {
+        let device = Device::Cpu;
+        let weight = Tensor::ones((2, TEST_EMBEDDING_DIM), DType::F32, &device)?;
+        let layer = GgufMatMul::from_qtensor(QTensor::quantize(&weight, GgmlDType::Q8_0)?, None);
+        // The last position of a two-sequence batch, as the logits selection
+        // narrows it before the LM head.
+        let hidden = Tensor::ones((2, 3, TEST_EMBEDDING_DIM), DType::F32, &device)?;
+        let last = hidden.narrow(1, 2, 1)?;
+        assert!(!last.is_contiguous());
+        let output = layer.forward_raw(&last)?;
+        assert_eq!(output.dims(), &[2, 1, 2]);
+        assert_eq!(
+            output.to_vec3::<f32>()?,
+            layer.forward_raw(&last.contiguous()?)?.to_vec3::<f32>()?
+        );
+        Ok(())
+    }
+
     fn assert_embedding_matches_dequantized_gather(
         device: &Device,
         dtype: GgmlDType,
@@ -870,7 +966,7 @@ mod tests {
             .index_select(&ids.flatten_all()?, 0)?
             .reshape((2, 3, TEST_EMBEDDING_DIM))?;
         let layer = GgufMatMul::from_qtensor(weight, None);
-        let actual = layer.embedding_forward_raw(&ids)?;
+        let actual = layer.embedding_forward(&ids, candle_core::DType::F32.into())?;
 
         assert_eq!(actual.dims(), &[2, 3, TEST_EMBEDDING_DIM]);
         assert_eq!(actual.dtype(), DType::F32);
@@ -1084,43 +1180,42 @@ mod tests {
 
     #[test]
     fn packed_expert_stack_rejects_targets_without_gather() -> Result<()> {
-        for ty in [IsqType::F8Q8, IsqType::HQQ4, IsqType::MXFP4] {
-            let weight = Tensor::ones((2, 4, 32), DType::F32, &Device::Cpu)?;
-            let layer = Arc::new(GgufMatMul::from_qtensor(
-                QTensor::quantize(&weight, GgmlDType::Q8_0)?,
+        let ty = IsqType::F8Q8;
+        let weight = Tensor::ones((2, 4, 32), DType::F32, &Device::Cpu)?;
+        let layer = Arc::new(GgufMatMul::from_qtensor(
+            QTensor::quantize(&weight, GgmlDType::Q8_0)?,
+            None,
+        ));
+        let request = crate::IsqRequest {
+            ty: Some(ty),
+            device: Device::Cpu,
+            has_imatrix: false,
+            capture: crate::IsqCaptureMode::Immediate,
+            consumer: crate::IsqConsumer::UqffWrite,
+            module_key: "experts".to_string(),
+        };
+        let plan_error = layer.plan_isq(&request).unwrap_err();
+        assert!(
+            plan_error
+                .to_string()
+                .contains("does not support stacked expert gather"),
+            "{ty}: {plan_error}"
+        );
+        let error = layer
+            .apply_isq(
+                Some(ty),
+                Device::Cpu,
+                &AtomicUsize::new(0),
                 None,
-            ));
-            let request = crate::IsqRequest {
-                ty: Some(ty),
-                device: Device::Cpu,
-                has_imatrix: false,
-                capture: crate::IsqCaptureMode::Immediate,
-                consumer: crate::IsqConsumer::UqffWrite,
-                module_key: "experts".to_string(),
-            };
-            let plan_error = layer.plan_isq(&request).unwrap_err();
-            assert!(
-                plan_error
-                    .to_string()
-                    .contains("does not support stacked expert gather"),
-                "{ty}: {plan_error}"
-            );
-            let error = layer
-                .apply_isq(
-                    Some(ty),
-                    Device::Cpu,
-                    &AtomicUsize::new(0),
-                    None,
-                    QuantizeOntoGuard::new(),
-                )
-                .unwrap_err();
-            assert!(
-                error
-                    .to_string()
-                    .contains("does not support stacked expert gather"),
-                "{ty}: {error}"
-            );
-        }
+                QuantizeOntoGuard::new(),
+            )
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("does not support stacked expert gather"),
+            "{ty}: {error}"
+        );
         Ok(())
     }
 

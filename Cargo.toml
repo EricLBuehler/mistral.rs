@@ -17,10 +17,27 @@ members = [
     "mistralrs-code-exec",
     "mistralrs-sandbox",
 ]
+# Root builds skip mistralrs-pyo3; unifying its pyo3 features would link libpython into the CLI
+default-members = [
+    "mistralrs-server-core",
+    "mistralrs-cli",
+    "mistralrs-core",
+    "mistralrs",
+    "mistralrs-vision",
+    "mistralrs-quant",
+    "mistralrs-paged-attn",
+    "mistralrs-metal-compile",
+    "mistralrs-flash-attn",
+    "mistralrs-audio",
+    "mistralrs-mcp",
+    "mistralrs-macros",
+    "mistralrs-code-exec",
+    "mistralrs-sandbox",
+]
 resolver = "2"
 
 [workspace.package]
-version = "0.9.5"
+version = "0.10.0"
 edition = "2021"
 description = "Fast, flexible LLM inference."
 homepage = "https://github.com/EricLBuehler/mistral.rs"
@@ -28,28 +45,28 @@ repository = "https://github.com/EricLBuehler/mistral.rs"
 keywords = ["llm", "inference", "machine-learning", "ai", "transformers"]
 categories = ["science", "api-bindings", "text-processing"]
 license = "MIT"
-rust-version = "1.94"
+rust-version = "1.95"
 
 [workspace.dependencies]
-# candle-core = { version = "0.11.0" }
-# candle-nn = { version = "0.11.0" }
-# candle-flash-attn-v3 = { version = "0.11.0" }
-# candle-metal-kernels = { version = "0.11.0" }
+candle-core = { version = "0.11.1" }
+candle-nn = { version = "0.11.1" }
+candle-flash-attn-v3 = { version = "0.11.1" }
+candle-metal-kernels = { version = "0.11.1" }
 # candle-core = { path = "../candle/candle-core", version = "0.11.0" }
 # candle-nn = { path = "../candle/candle-nn", version = "0.11.0" }
 # candle-flash-attn-v3 = { path = "../candle/candle-flash-attn-v3", version = "0.11.0" }
 # candle-metal-kernels = { path = "../candle/candle-metal-kernels", version = "0.11.0" }
-candle-core = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "66a8cf184a5a519671454066b1b9efd446ec9f5c" }
-candle-nn = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "66a8cf184a5a519671454066b1b9efd446ec9f5c" }
-candle-flash-attn-v3 = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "66a8cf184a5a519671454066b1b9efd446ec9f5c" }
-candle-metal-kernels = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "66a8cf184a5a519671454066b1b9efd446ec9f5c" }
+# candle-core = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "9515d410e3af803fd45efebfef8137f47d85a63d" }
+# candle-nn = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "9515d410e3af803fd45efebfef8137f47d85a63d" }
+# candle-flash-attn-v3 = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "9515d410e3af803fd45efebfef8137f47d85a63d" }
+# candle-metal-kernels = { git = "https://github.com/huggingface/candle.git", version = "0.11.0", rev = "9515d410e3af803fd45efebfef8137f47d85a63d" }
 
-axum = "0.8.8"
-http-body-util = "0.1.3"
+axum = "0.8.9"
+http-body-util = "0.1.5"
 mimalloc = "0.1"
 anyhow = "1.0.100"
-serde = "1.0.228"
-serde_json = "1.0.149"
+serde = "1.0.229"
+serde_json = "1.0.154"
 sha2 = "0.10.9"
 indexmap = { version = "2.13.0", features = ["serde"] }
 either = { version = "1.15.0", features = ["serde"] }
@@ -59,12 +76,12 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 metrics = "0.24.6"
 metrics-exporter-prometheus = "0.18.3"
-futures = "0.3"
-clap = { version = "4.5.54", features = ["derive", "wrap_help"] }
-pyo3 = { version = "0.25.1", features = ["full", "extension-module", "either", "abi3-py310"] }
-tokio = { version = "1.49.0", features = ["full", "rt-multi-thread"] }
+futures = "0.3.34"
+clap = { version = "4.6.7", features = ["derive", "wrap_help"] }
+pyo3 = { version = "0.25.1", features = ["full", "either", "abi3-py310"] }
+tokio = { version = "1.54.1", features = ["full", "rt-multi-thread"] }
 # All features but avif, avif increases the msrv dramatically
-image = { version = "0.25.9", default-features = false, features = [
+image = { version = "0.25.10", default-features = false, features = [
     'bmp',
     'dds',
     'exr',
@@ -80,7 +97,7 @@ image = { version = "0.25.9", default-features = false, features = [
     'tiff',
     'webp',
 ] }
-reqwest = { version = "0.13.1", default-features = false, features = [
+reqwest = { version = "0.13.5", default-features = false, features = [
     "blocking",
     "rustls",
     "charset",
@@ -91,20 +108,19 @@ tempfile = "3"
 half = "2.7.1"
 rayon = "1.11.0"
 url = "2.5.8"
-utoipa = "5.4.0"
+utoipa = { version = "6.0.0", features = ["indexmap"] }
 walkdir = "2.5.0"
 data-url = "0.3.2"
 float8 = "0.7.0"
-regex = "1.12.2"
+regex = "1.12.4"
 fancy-regex = "0.14.0"
 objc2-metal = "0.3.2"
 objc2-foundation = "0.3.2"
 dispatch2 = { version = "0.3.0", default-features = false, features = ["block2"] }
 safetensors = "0.8.0"
 toml = "0.9.11"
-hf-hub = { version = "0.4.3", default-features = false, features = [
-    "ureq",
-    "tokio",
+hf-hub = { git = "https://github.com/huggingface/hf-hub.git", rev = "473de9430b0fbc544fb1d91102180eb713f8dc87", default-features = false, features = [
+    "blocking",
     "rustls-tls",
 ] }
 itertools = "0.14.0"
@@ -113,12 +129,12 @@ rand_distr = "0.5.1"
 dirs = "6.0.0"
 thiserror = "2.0.18"
 tokenizers = { version = "0.21.4", default-features = false }
-tokio-tungstenite = "0.28.0"
+tokio-tungstenite = "0.29.0"
 tqdm = "0.8.0"
 chrono = "0.4.43"
 minijinja = { version = "2.14.0", features = ["builtins", "json", "preserve_order"] }
 minijinja-contrib = { version = "2.14.0", features = ["pycompat"] }
-regex-automata = { version = "0.4.13", features = ["meta"] }
+regex-automata = { version = "0.4.18", features = ["meta"] }
 rustc-hash = "2.1.1"
 vob = "3.0.6"
 cfgrammar = "0.14.1"
@@ -151,7 +167,7 @@ interprocess = "2.2.3"
 urlencoding = "2.1.3"
 scraper = "0.25.0"
 html2text = "0.16.6"
-zip = { version = "2.4.2", default-features = false, features = ["deflate"] }
+zip = { version = "9.1.3", default-features = false, features = ["deflate"] }
 ordered-float = "5.1.0"
 hashbrown = "0.16.1"
 parking_lot = "0.12.5"
@@ -164,21 +180,21 @@ lazy_static = "1.5"
 paste = "1.0.15"
 byteorder = "1.5.0"
 yoke = { version = "0.8.1", features = ["derive"] }
-memmap2 = "0.9.9"
+memmap2 = "0.9.12"
 pyo3-build-config = "0.25.1"
 ctrlc = "3.5.1"
 directories = "6.0.0"
 # Need to keep rustyline at 15.0.0 as 16.0.0 has a breaking change that conficts with `ctrlc`'s handling
 rustyline = { version = "15.0.0", default-features = false, features = ["with-file-history"] }
-tower-http = "0.6.8"
-utoipa-swagger-ui = { version = "9.0.2", features = ["axum", "vendored"] }
-futures-util = "0.3.31"
+tower-http = "0.6.11"
+utoipa-swagger-ui = { version = "10.0.2", features = ["axum", "vendored"] }
+futures-util = "0.3.34"
 axum_static = "1.8.6"
 mime_guess = "2.0.5"
 include_dir = "0.7.4"
-http = "1.4.0"
-http-body = "1.0.1"
-hyper = "1.8.1"
+http = "1.5.0"
+http-body = "1.1.0"
+hyper = "1.12.0"
 rust-mcp-schema = { version = "0.9.5", default-features = false, features = ["schema_utils", "latest"] }
 cudaforge = "=0.1.6"
 rubato = "0.16.2"
@@ -192,19 +208,19 @@ nix = { version = "0.31.3", default-features = false }
 itoa = "1.0.18"
 cutile = "=0.3.1"
 
-mistralrs-core = { path = "mistralrs-core", version = "0.9.5" }
-mistralrs-paged-attn = { path = "mistralrs-paged-attn", version = "0.9.5" }
-mistralrs-metal-compile = { path = "mistralrs-metal-compile", version = "0.9.5" }
-mistralrs-flash-attn = { path = "mistralrs-flash-attn", version = "0.9.5" }
-mistralrs-quant = { path = "mistralrs-quant", version = "0.9.5" }
-mistralrs-vision = { path = "mistralrs-vision", version = "0.9.5" }
-mistralrs-server-core = { path = "mistralrs-server-core", version = "0.9.5" }
-mistralrs = { path = "mistralrs", version = "0.9.5" }
-mistralrs-audio = { path = "mistralrs-audio", version = "0.9.5" }
-mistralrs-mcp = { path = "mistralrs-mcp", version = "0.9.5" }
-mistralrs-macros = { path = "mistralrs-macros", version = "0.9.5" }
-mistralrs-code-exec = { path = "mistralrs-code-exec", version = "0.9.5" }
-mistralrs-sandbox = { path = "mistralrs-sandbox", version = "0.9.5" }
+mistralrs-core = { path = "mistralrs-core", version = "0.10.0" }
+mistralrs-paged-attn = { path = "mistralrs-paged-attn", version = "0.10.0" }
+mistralrs-metal-compile = { path = "mistralrs-metal-compile", version = "0.10.0" }
+mistralrs-flash-attn = { path = "mistralrs-flash-attn", version = "0.10.0" }
+mistralrs-quant = { path = "mistralrs-quant", version = "0.10.0" }
+mistralrs-vision = { path = "mistralrs-vision", version = "0.10.0" }
+mistralrs-server-core = { path = "mistralrs-server-core", version = "0.10.0" }
+mistralrs = { path = "mistralrs", version = "0.10.0" }
+mistralrs-audio = { path = "mistralrs-audio", version = "0.10.0" }
+mistralrs-mcp = { path = "mistralrs-mcp", version = "0.10.0" }
+mistralrs-macros = { path = "mistralrs-macros", version = "0.10.0" }
+mistralrs-code-exec = { path = "mistralrs-code-exec", version = "0.10.0" }
+mistralrs-sandbox = { path = "mistralrs-sandbox", version = "0.10.0" }
 
 [profile.release-with-debug]
 inherits = "release"

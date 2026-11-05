@@ -159,6 +159,29 @@ impl GgufTensorBinding {
         }
     }
 
+    fn mark_uploaded(&self, archive: &GgufArchive) {
+        match self {
+            Self::Tensor(name) | Self::Mxfp4Blocks(name) | Self::Mxfp4Scales(name) => {
+                archive.mark_tensor_uploaded(name);
+            }
+            Self::Slice { input, .. }
+            | Self::Transpose { input, .. }
+            | Self::Permute { input, .. }
+            | Self::Reshape { input, .. }
+            | Self::Affine { input, .. }
+            | Self::Log { input }
+            | Self::InverseSoftplus { input }
+            | Self::Cast { input, .. } => input.mark_uploaded(archive),
+            Self::Concat { inputs, .. }
+            | Self::Stack { inputs, .. }
+            | Self::Interleave { inputs, .. } => {
+                for input in inputs {
+                    input.mark_uploaded(archive);
+                }
+            }
+        }
+    }
+
     fn text_layer_index(&self) -> Option<usize> {
         fn source_layer(name: &str) -> Option<usize> {
             name.strip_prefix("blk.")?.split_once('.')?.0.parse().ok()
@@ -365,9 +388,14 @@ impl GgufWeightSource {
         device: &Device,
     ) -> Result<Tensor> {
         let binding = self.binding(native_name)?;
-        self.materialize_binding(binding, device)?
+        let tensor = self
+            .materialize_binding(binding, device)?
             .to_dtype(dtype)?
-            .contiguous()
+            .contiguous()?;
+        if device.is_cuda() {
+            binding.mark_uploaded(&self.archive);
+        }
+        Ok(tensor)
     }
 
     pub fn sharded_var_builder(self: &Arc<Self>, device: Device) -> ShardedVarBuilder {
@@ -410,7 +438,8 @@ impl GgufWeightSource {
                 len,
             } => self
                 .materialize_binding(input, device)?
-                .narrow(*dim, *start, *len),
+                .narrow(*dim, *start, *len)?
+                .force_contiguous(),
             GgufTensorBinding::Concat { inputs, dim } => {
                 let tensors = inputs
                     .iter()
@@ -651,6 +680,31 @@ impl GgufWeightSource {
         }
     }
 
+    fn binding_is_dense(&self, binding: &GgufTensorBinding) -> Result<bool> {
+        match binding {
+            GgufTensorBinding::Tensor(name) => Ok(matches!(
+                self.archive.tensor_info(name)?.dtype().raw(),
+                0 | 1 | 30
+            )),
+            GgufTensorBinding::Slice { input, .. }
+            | GgufTensorBinding::Transpose { input, .. }
+            | GgufTensorBinding::Permute { input, .. }
+            | GgufTensorBinding::Reshape { input, .. }
+            | GgufTensorBinding::Affine { input, .. }
+            | GgufTensorBinding::Log { input }
+            | GgufTensorBinding::InverseSoftplus { input }
+            | GgufTensorBinding::Cast { input, .. } => self.binding_is_dense(input),
+            GgufTensorBinding::Concat { inputs, .. }
+            | GgufTensorBinding::Stack { inputs, .. }
+            | GgufTensorBinding::Interleave { inputs, .. } => {
+                inputs.iter().try_fold(true, |dense, input| {
+                    Ok(dense && self.binding_is_dense(input)?)
+                })
+            }
+            GgufTensorBinding::Mxfp4Blocks(_) | GgufTensorBinding::Mxfp4Scales(_) => Ok(false),
+        }
+    }
+
     fn structural_quant_dtype(&self, binding: &GgufTensorBinding) -> Result<Option<GgmlDType>> {
         match binding {
             GgufTensorBinding::Tensor(name) => {
@@ -764,6 +818,10 @@ impl GgufWeightSource {
 }
 
 impl QuantizedWeightSource for GgufWeightSource {
+    fn release_source_cache(&self) -> Result<()> {
+        self.archive.release_source_cache()
+    }
+
     fn contains(&self, name: &str) -> bool {
         self.bindings.contains_key(name)
     }
@@ -779,7 +837,7 @@ impl QuantizedWeightSource for GgufWeightSource {
         let Some(binding) = self.bindings.get(&weight_name) else {
             return Ok(None);
         };
-        match binding.direct_tensor() {
+        let layer = match binding.direct_tensor() {
             Some(source_name)
                 if matches!(
                     self.archive.tensor_info(source_name)?.dtype().raw(),
@@ -798,7 +856,22 @@ impl QuantizedWeightSource for GgufWeightSource {
                     .load_dense_linear(key, binding, device, shard)
                     .map(Some),
             },
+        }?;
+        if device.is_cuda() && layer.is_some() {
+            binding.mark_uploaded(&self.archive);
         }
+        Ok(layer)
+    }
+
+    fn supports_dense_packing(&self, key: &str) -> Result<bool> {
+        let key = self.layer_key(key);
+        let Some(binding) = self.bindings.get(&self.weight_name(key)) else {
+            return Ok(false);
+        };
+        if self.bindings.contains_key(&format!("{key}.bias")) {
+            return Ok(false);
+        }
+        self.binding_is_dense(binding)
     }
 
     fn load_optional_tensor(&self, name: &str, device: &Device) -> Result<Option<Tensor>> {
@@ -1816,6 +1889,110 @@ mod tests {
         let multimodal =
             GgufWeightSource::new(source.archive().clone(), &multimodal_bindings, DType::F32)?;
         assert_eq!(multimodal.pack_factor(DType::F32)?, 7);
+        Ok(())
+    }
+
+    #[cfg(all(feature = "cuda", target_os = "linux"))]
+    #[test]
+    #[ignore = "requires a CUDA device"]
+    fn shared_binding_cache_release_preserves_uploaded_aliases_and_raw_neighbors() -> Result<()> {
+        const ROWS: usize = 128;
+        const COLUMNS: usize = 256;
+        const ALIAS_ROWS: usize = ROWS / 4;
+        const LAST_ALIAS: usize = ROWS - ALIAS_ROWS;
+        const NEIGHBOR_ROWS: usize = 64;
+        let device = Device::new_cuda_with_stream(0)?;
+        let weight = QTensor::quantize(&patterned(ROWS, COLUMNS, 5)?, GgmlDType::Q4_0)?;
+        let neighbor = QTensor::quantize(&patterned(NEIGHBOR_ROWS, COLUMNS, 17)?, GgmlDType::F32)?;
+        let expected = weight.dequantize(&Device::Cpu)?;
+        let expected_dense = expected
+            .narrow(0, ALIAS_ROWS, ALIAS_ROWS)?
+            .affine(0.5, 0.25)?;
+        let expected_packed = expected.narrow(0, LAST_ALIAS, ALIAS_ROWS)?;
+        let row_bytes = COLUMNS / weight.dtype().block_size() * weight.dtype().type_size();
+        let weight_bytes = weight.data()?.into_owned();
+        let neighbor_bytes = neighbor.data()?.into_owned();
+        let mut file = NamedTempFile::new().map_err(Error::wrap)?;
+        gguf_file::write(
+            file.as_file_mut(),
+            &[],
+            &[("shared.weight", &weight), ("raw.neighbor", &neighbor)],
+        )?;
+        file.as_file_mut().flush().map_err(Error::wrap)?;
+        file.as_file().sync_all().map_err(Error::wrap)?;
+        let archive = Arc::new(GgufArchive::open_file(file.path())?);
+        let shared = GgufTensorBinding::tensor("shared.weight");
+        let bindings = GgufBindingMap::new()
+            .with_binding(
+                "dense.weight",
+                shared
+                    .clone()
+                    .slice(0, ALIAS_ROWS, 2 * ALIAS_ROWS)
+                    .affine(0.5, 0.25),
+            )
+            .with_binding(
+                "packed.weight",
+                GgufTensorBinding::concat(
+                    vec![
+                        shared.clone().slice(0, 0, ALIAS_ROWS),
+                        shared.slice(0, LAST_ALIAS, ALIAS_ROWS),
+                    ],
+                    0,
+                ),
+            );
+        let source = GgufWeightSource::new(archive.clone(), &bindings, DType::F32)?;
+        let raw = super::super::embedding::GgufEmbedding::new(archive.clone(), "raw.neighbor")?;
+        let mut file = Some(file);
+        for _ in 0..2 {
+            let dense = source
+                .load_linear(
+                    "dense",
+                    &device,
+                    Shard::Simple {
+                        dim: 0,
+                        rank: 0,
+                        world_size: 2,
+                    },
+                )?
+                .unwrap();
+            let packed = source
+                .load_linear(
+                    "packed",
+                    &device,
+                    Shard::Simple {
+                        dim: 0,
+                        rank: 1,
+                        world_size: 2,
+                    },
+                )?
+                .unwrap();
+            device
+                .as_cuda_device()?
+                .cuda_stream()
+                .context()
+                .synchronize()
+                .map_err(Error::wrap)?;
+            source.release_source_cache()?;
+            source.release_source_cache()?;
+            assert!(dense.get_qtensor().is_none());
+            assert_close(
+                &dense.dequantize_w()?.to_device(&Device::Cpu)?,
+                &expected_dense,
+            )?;
+            assert_close(
+                &packed.dequantize_w()?.to_device(&Device::Cpu)?,
+                &expected_packed,
+            )?;
+            assert_eq!(
+                &*packed.get_qtensor().unwrap().data()?,
+                &weight_bytes[LAST_ALIAS * row_bytes..ROWS * row_bytes],
+            );
+            assert_eq!(raw.bytes()?, neighbor_bytes);
+            assert_eq!(archive.tensor_data("shared.weight")?.bytes(), weight_bytes);
+            if let Some(file) = file.take() {
+                file.close().map_err(Error::wrap)?;
+            }
+        }
         Ok(())
     }
 

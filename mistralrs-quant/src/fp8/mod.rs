@@ -92,13 +92,10 @@ impl FP8Linear {
         ))
     }
 
+    #[cfg(feature = "metal")]
     fn gather_quantized_rows(&self, ids: &Tensor) -> Result<Tensor> {
         let weight = self.lin.weight();
         let ids = ids.flatten_all()?;
-        if !weight.device().is_metal() {
-            return weight.index_select(&ids.to_device(weight.device())?, 0);
-        }
-
         let ids = ids
             .to_device(&Device::Cpu)?
             .to_dtype(DType::U32)?
@@ -155,19 +152,33 @@ impl QuantMethod for FP8Linear {
         Ok(self.dequantize(DType::F32)?.weight().clone())
     }
 
-    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
+    fn embedding_table(&self) -> Option<crate::EmbeddingTable<'_>> {
+        let weight = self.lin.weight();
+        let (rows, columns) = weight.dims2().ok()?;
+        (weight.dtype() == DType::F8E4M3 && self.dequant_w_scale.elem_count() == 1).then(|| {
+            crate::EmbeddingTable::new(crate::embedding::RowCodec::Fp8(None), rows, columns, weight)
+                .with_row_scale(crate::embedding::RowScale::Scalar(&self.dequant_w_scale))
+        })
+    }
+
+    #[cfg(feature = "metal")]
+    fn embedding_forward(&self, ids: &Tensor, out: crate::EmbeddingOutput) -> Result<Tensor> {
+        if !self.lin.weight().device().is_metal() {
+            return crate::embedding::forward(self, ids, out);
+        }
         let mut output_shape = ids.dims().to_vec();
         output_shape.push(self.lin.weight().dim(D::Minus1)?);
-        if ids.elem_count() == 0 && self.lin.weight().device().is_metal() {
+        let rows = if ids.elem_count() == 0 {
             let row = self.lin.weight().narrow(0, 0, 1)?.force_contiguous()?;
-            let row = crate::scalar_fp8::ops::fp8_to_dtype(&row, DType::F32)?
-                .broadcast_mul(&self.dequant_w_scale)?;
-            return row.narrow(0, 0, 0)?.reshape(output_shape);
-        }
-        self.gather_quantized_rows(ids)?
-            .to_dtype(DType::F32)?
-            .broadcast_mul(&self.dequant_w_scale)?
-            .reshape(output_shape)
+            crate::scalar_fp8::ops::fp8_to_dtype(&row, DType::F32)?
+                .broadcast_mul(&self.dequant_w_scale)?
+                .narrow(0, 0, 0)?
+        } else {
+            self.gather_quantized_rows(ids)?
+                .to_dtype(DType::F32)?
+                .broadcast_mul(&self.dequant_w_scale)?
+        };
+        crate::embedding::finish_rows(rows, out)?.reshape(output_shape)
     }
 
     fn forward_raw(&self, x: &Tensor) -> Result<Tensor> {
@@ -237,6 +248,34 @@ impl QuantMethod for FP8Linear {
 
     fn quantized_act_type(&self) -> Option<DType> {
         None
+    }
+
+    fn routed_weights(&self) -> Option<crate::RoutedWeights> {
+        let weight = self.lin.weight();
+        let (experts, n, k) = weight.dims3().ok()?;
+        (weight.dtype() == DType::F8E4M3).then(|| {
+            crate::RoutedWeights::new(
+                crate::RoutedCodec::Fp8 {
+                    block_rows: n,
+                    block_cols: k,
+                },
+                weight.clone(),
+                self.dequant_w_scale.clone(),
+                None,
+                self.lin.bias().cloned(),
+                [experts, n, k],
+            )
+        })
+    }
+
+    fn gather_forward_raw(&self, x: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        if let Some(routed) = self.routed_weights() {
+            if let Some(output) = crate::try_routed_gather(x, indices, &routed)? {
+                return Ok(output);
+            }
+        }
+        let lin = self.dequantize(x.dtype())?;
+        crate::routed_gemv::dense_gather(lin.weight(), lin.bias(), x, indices)
     }
 
     fn add_delta_w(&self, delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {

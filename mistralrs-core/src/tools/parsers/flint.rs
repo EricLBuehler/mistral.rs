@@ -381,7 +381,7 @@ fn lark_string(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::{parsers::specialize_required_tool_call_grammar, ToolCallingMatcher};
+    use crate::tools::{parsers::specialize_tool_call_grammar, ToolCallingMatcher};
     use crate::{Function, ToolChoice, ToolType};
     use std::sync::Arc;
 
@@ -478,7 +478,7 @@ mod tests {
         let env: toktrie::TokEnv = Arc::new(TokenizerEnv(trie.clone()));
         let factory = llguidance::ParserFactory::new_simple(&env).unwrap();
         let mut grammar = tool_grammar(&[tool], required);
-        specialize_required_tool_call_grammar(&mut grammar, &trie);
+        specialize_tool_call_grammar(&mut grammar, &trie);
         let parser = factory.create_parser(grammar).unwrap();
         (llguidance::Matcher::new(Ok(parser)), trie)
     }

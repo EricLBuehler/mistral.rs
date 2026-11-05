@@ -549,7 +549,8 @@ impl Model {
     }
 
     pub fn get_input_embeddings(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.embedding_forward(input_ids, self.dtype)
+        self.embed_tokens
+            .embedding_forward(input_ids, self.dtype.into())
     }
 
     pub fn forward(
@@ -557,7 +558,9 @@ impl Model {
         input_ids: &Tensor,
         ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        let xs = self.embed_tokens.embedding_forward(input_ids, self.dtype)?;
+        let xs = self
+            .embed_tokens
+            .embedding_forward(input_ids, self.dtype.into())?;
         self.forward_embed(input_ids, xs, ctx)
     }
 

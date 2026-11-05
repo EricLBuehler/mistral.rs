@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Extension, Multipart},
+    extract::{Extension, Multipart, Query},
     http::StatusCode,
     response::IntoResponse,
     Json,
@@ -16,14 +16,18 @@ use uuid::Uuid;
 
 use mistralrs::speech_utils;
 
-use crate::ui::chat::append_chat_message;
+use crate::ui::chat::{
+    append_chat_message, refresh_chat_index, search_entry, search_terms, set_chat_tail,
+    update_chat, write_chat,
+};
 use crate::ui::types::{
-    AppState, ChatFile, DeleteChatRequest, LoadChatRequest, NewChatRequest, RenameChatRequest,
-    SelectRequest,
+    AppState, ChatFile, ChatMessage, DeleteChatRequest, LoadChatRequest, NewChatRequest,
+    RenameChatRequest, SelectRequest,
 };
 use crate::ui::utils::get_cache_dir;
 
 const INVALID_CHAT_ID: &str = "Invalid chat id";
+const MAX_SEARCH_RESULTS: usize = 50;
 
 fn validate_image_upload(
     filename: Option<&str>,
@@ -393,31 +397,42 @@ pub async fn select_model(
 }
 
 pub async fn list_chats(Extension(app): Extension<Arc<AppState>>) -> impl IntoResponse {
-    let dir = &app.chats_dir;
-    let mut chats = Vec::new();
-
-    if let Ok(mut entries) = fs::read_dir(dir).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let filename = entry.file_name().to_string_lossy().to_string();
-            let id = filename
-                .strip_suffix(".json")
-                .unwrap_or(&filename)
-                .to_string();
-            if let Ok(bytes) = fs::read(entry.path()).await {
-                if let Ok(chat) = serde_json::from_slice::<ChatFile>(&bytes) {
-                    let mut value = serde_json::to_value(&chat).unwrap();
-                    value["id"] = serde_json::Value::String(id);
-                    chats.push(value);
-                }
-            }
+    let index = match refresh_chat_index(&app).await {
+        Ok(index) => index,
+        Err(e) => {
+            error!("list chats error: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "list failed").into_response();
         }
-    }
-    chats.sort_by(|a, b| {
-        let a_date = a["created_at"].as_str().unwrap_or("");
-        let b_date = b["created_at"].as_str().unwrap_or("");
-        b_date.cmp(a_date)
-    });
-    Json(json!({ "chats": chats }))
+    };
+    let mut chats: Vec<_> = index.values().map(|e| e.summary.clone()).collect();
+    chats.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    Json(json!({ "chats": chats })).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct SearchChatsQuery {
+    pub q: String,
+}
+
+pub async fn search_chats(
+    Extension(app): Extension<Arc<AppState>>,
+    Query(query): Query<SearchChatsQuery>,
+) -> impl IntoResponse {
+    let index = match refresh_chat_index(&app).await {
+        Ok(index) => index,
+        Err(e) => {
+            error!("search chats error: {}", e);
+            return (StatusCode::INTERNAL_SERVER_ERROR, "search failed").into_response();
+        }
+    };
+    let terms = search_terms(&query.q);
+    let mut hits: Vec<_> = index
+        .values()
+        .filter_map(|e| search_entry(e, &terms))
+        .collect();
+    hits.sort_by(|a, b| b.summary.updated_at.cmp(&a.summary.updated_at));
+    hits.truncate(MAX_SEARCH_RESULTS);
+    Json(json!({ "chats": hits })).into_response()
 }
 
 pub async fn new_chat(
@@ -451,7 +466,7 @@ pub async fn new_chat(
     let path = app
         .chat_path(&chat_id)
         .expect("server-generated chat ids are valid");
-    if let Err(e) = fs::write(&path, serde_json::to_vec_pretty(&chat).unwrap()).await {
+    if let Err(e) = write_chat(&path, &chat).await {
         error!("write chat error: {}", e);
         return (StatusCode::INTERNAL_SERVER_ERROR, "write failed").into_response();
     }
@@ -498,101 +513,30 @@ pub async fn rename_chat(
     Extension(app): Extension<Arc<AppState>>,
     Json(req): Json<RenameChatRequest>,
 ) -> impl IntoResponse {
-    let Some(path) = app.chat_path(&req.id) else {
-        return (StatusCode::BAD_REQUEST, INVALID_CHAT_ID).into_response();
-    };
-    if let Ok(bytes) = fs::read(&path).await {
-        if let Ok(mut chat) = serde_json::from_slice::<ChatFile>(&bytes) {
-            chat.title = Some(req.title);
-            if fs::write(&path, serde_json::to_vec_pretty(&chat).unwrap())
-                .await
-                .is_ok()
-            {
-                return (StatusCode::OK, "Renamed").into_response();
-            }
+    match update_chat(&app, &req.id, |chat| chat.title = Some(req.title)).await {
+        Ok(()) => (StatusCode::OK, "Renamed").into_response(),
+        Err(e) => {
+            error!("rename chat error: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "rename failed").into_response()
         }
     }
-    (StatusCode::INTERNAL_SERVER_ERROR, "rename failed").into_response()
 }
 
 #[derive(Deserialize)]
 pub struct AppendMessageRequest {
-    pub id: String,
-    #[serde(default)]
-    pub message_id: Option<String>,
-    #[serde(default)]
-    pub parent_id: Option<String>,
-    pub role: String,
-    pub content: String,
-    #[serde(default)]
-    pub images: Option<Vec<String>>,
-    #[serde(default)]
-    pub videos: Option<Vec<String>>,
-    #[serde(default)]
-    pub blocks: Option<serde_json::Value>,
-    #[serde(default)]
-    pub finish_reason: Option<String>,
-    #[serde(default)]
-    pub elapsed_ms: Option<f64>,
-    #[serde(default)]
-    pub ttft_ms: Option<f64>,
-    #[serde(default)]
-    pub tokens: Option<u32>,
-    #[serde(default)]
-    pub model: Option<String>,
-    #[serde(default)]
-    pub session_id: Option<String>,
+    pub chat_id: String,
+    pub message: ChatMessage,
 }
 
 pub async fn append_message(
     Extension(app): Extension<Arc<AppState>>,
     Json(req): Json<AppendMessageRequest>,
 ) -> impl IntoResponse {
-    if let Err(e) = append_chat_message(
-        &app,
-        &req.id,
-        req.message_id,
-        req.parent_id,
-        &req.role,
-        &req.content,
-        req.images,
-        req.videos,
-        req.blocks,
-        req.finish_reason,
-        crate::ui::handlers::api::MessageStats {
-            elapsed_ms: req.elapsed_ms,
-            ttft_ms: req.ttft_ms,
-            tokens: req.tokens,
-            model: req.model,
-            session_id: req.session_id,
-        },
-    )
-    .await
-    {
+    if let Err(e) = append_chat_message(&app, &req.chat_id, req.message).await {
         error!("append message error: {}", e);
-        return (StatusCode::INTERNAL_SERVER_ERROR, "append failed").into_response();
+        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
     (StatusCode::OK, "Appended").into_response()
-}
-
-#[derive(Deserialize)]
-pub struct EditMessageRequest {
-    pub id: String,
-    pub message_id: String,
-    pub content: String,
-}
-
-pub async fn edit_message(
-    Extension(app): Extension<Arc<AppState>>,
-    Json(req): Json<EditMessageRequest>,
-) -> impl IntoResponse {
-    if let Err(e) =
-        crate::ui::chat::edit_chat_message(&app, &req.id, &req.message_id, &req.content).await
-    {
-        error!("edit message error: {}", e);
-        return (StatusCode::INTERNAL_SERVER_ERROR, "edit failed").into_response();
-    }
-    (StatusCode::OK, "Edited").into_response()
 }
 
 #[derive(Deserialize)]
@@ -606,7 +550,7 @@ pub async fn set_tail(
     Extension(app): Extension<Arc<AppState>>,
     Json(req): Json<SetTailRequest>,
 ) -> impl IntoResponse {
-    if let Err(e) = crate::ui::chat::set_chat_tail(&app, &req.id, req.tail).await {
+    if let Err(e) = set_chat_tail(&app, &req.id, req.tail).await {
         error!("set tail error: {}", e);
         return (StatusCode::INTERNAL_SERVER_ERROR, "set_tail failed").into_response();
     }
@@ -637,15 +581,6 @@ pub async fn fork_session(
     (StatusCode::OK, "OK").into_response()
 }
 
-#[derive(Default)]
-pub struct MessageStats {
-    pub elapsed_ms: Option<f64>,
-    pub ttft_ms: Option<f64>,
-    pub tokens: Option<u32>,
-    pub model: Option<String>,
-    pub session_id: Option<String>,
-}
-
 #[derive(Deserialize)]
 pub struct GenerateSpeechRequest {
     pub text: String,
@@ -660,14 +595,8 @@ pub async fn get_settings(Extension(app): Extension<Arc<AppState>>) -> impl Into
         .unwrap_or_else(|| app.default_params.clone());
 
     Json(json!({
-        "defaults": {
-            "temperature": defaults.temperature,
-            "top_p": defaults.top_p,
-            "top_k": defaults.top_k,
-            "max_tokens": defaults.max_tokens,
-            "repetition_penalty": defaults.repetition_penalty,
-            "system_prompt": defaults.system_prompt,
-        },
+        // Serialized via serde so f32 fields keep their shortest form (1.1, not 1.100000023841858).
+        "defaults": defaults,
         "model": current_model,
         "search_enabled": app.search_enabled,
         "search_embedding_model": app.search_embedding_model.map(|m| m.to_string()),
@@ -766,10 +695,7 @@ pub async fn save_chat_session(
     };
 
     // Write session blob to sidecar file
-    let (Some(session_path), Some(chat_path)) = (
-        app.chat_session_path(&req.chat_id),
-        app.chat_path(&req.chat_id),
-    ) else {
+    let Some(session_path) = app.chat_session_path(&req.chat_id) else {
         return (StatusCode::BAD_REQUEST, INVALID_CHAT_ID).into_response();
     };
     let session_bytes = match serde_json::to_vec(&session) {
@@ -784,12 +710,13 @@ pub async fn save_chat_session(
         return (StatusCode::INTERNAL_SERVER_ERROR, "write sidecar failed").into_response();
     }
 
-    // Stamp session_id into the chat JSON for fast lookup
-    if let Ok(bytes) = fs::read(&chat_path).await {
-        if let Ok(mut chat) = serde_json::from_slice::<ChatFile>(&bytes) {
-            chat.session_id = Some(req.session_id);
-            let _ = fs::write(&chat_path, serde_json::to_vec_pretty(&chat).unwrap()).await;
-        }
+    if let Err(e) = update_chat(&app, &req.chat_id, |chat| {
+        chat.session_id = Some(req.session_id)
+    })
+    .await
+    {
+        error!("stamp chat session error: {}", e);
+        return (StatusCode::INTERNAL_SERVER_ERROR, "stamp session failed").into_response();
     }
 
     (StatusCode::OK, "Saved").into_response()

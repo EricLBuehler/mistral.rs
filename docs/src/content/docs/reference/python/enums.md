@@ -6,229 +6,200 @@ sidebar:
 ---
 ## `Architecture`
 
-Members and their wire/config names where relevant. The members are fieldless PyO3 enum variants and do not expose `.value`.
-
-| Member | Wire/config name |
-| --- | --- |
-| `Architecture.Mistral` | `'mistral'` |
-| `Architecture.Gemma` | `'gemma'` |
-| `Architecture.Mixtral` | `'mixtral'` |
-| `Architecture.Llama` | `'llama'` |
-| `Architecture.Phi2` | `'phi2'` |
-| `Architecture.Phi3` | `'phi3'` |
-| `Architecture.Qwen2` | `'qwen2'` |
-| `Architecture.Gemma2` | `'gemma2'` |
-| `Architecture.Starcoder2` | `'starcoder2'` |
-| `Architecture.Phi3_5MoE` | `'phi3.5moe'` |
-| `Architecture.DeepseekV2` | `'deepseekv2'` |
-| `Architecture.DeepseekV3` | `'deepseekv3'` |
-| `Architecture.Qwen3` | `'qwen3'` |
-| `Architecture.GLM4` | `'glm4'` |
-| `Architecture.GLM4Moe` | `'glm4moe'` |
-| `Architecture.GLM4MoeLite` | `'glm4moelite'` |
-| `Architecture.Qwen3Moe` | `'qwen3moe'` |
-| `Architecture.Flint` | `'flint'` |
-| `Architecture.SmolLm3` | `'smollm3'` |
-| `Architecture.GraniteMoeHybrid` | `'granitemoehybrid'` |
-| `Architecture.GptOss` | `'gptoss'` |
-| `Architecture.Qwen3Next` | `'qwen3next'` |
-| `Architecture.Lfm2` | `'lfm2'` |
-| `Architecture.Lfm3` | `'lfm3'` |
-| `Architecture.Lfm2Moe` | `'lfm2_moe'` |
+| Member |
+| --- |
+| `Architecture.Mistral` |
+| `Architecture.Gemma` |
+| `Architecture.Mixtral` |
+| `Architecture.Llama` |
+| `Architecture.Phi2` |
+| `Architecture.Phi3` |
+| `Architecture.Qwen2` |
+| `Architecture.Gemma2` |
+| `Architecture.Starcoder2` |
+| `Architecture.Phi3_5MoE` |
+| `Architecture.DeepseekV2` |
+| `Architecture.DeepseekV3` |
+| `Architecture.Qwen3` |
+| `Architecture.GLM4` |
+| `Architecture.GLM4Moe` |
+| `Architecture.GLM4MoeLite` |
+| `Architecture.Qwen3Moe` |
+| `Architecture.Flint` |
+| `Architecture.SmolLm3` |
+| `Architecture.GraniteMoeHybrid` |
+| `Architecture.GptOss` |
+| `Architecture.HunYuanDenseV1` |
+| `Architecture.HunYuanMoEV1` |
+| `Architecture.Qwen3Next` |
+| `Architecture.Lfm2` |
+| `Architecture.Lfm3` |
+| `Architecture.Lfm2Moe` |
 
 
 ## `EmbeddingArchitecture`
 
-Members and their wire/config names where relevant. The members are fieldless PyO3 enum variants and do not expose `.value`.
-
-| Member | Wire/config name |
-| --- | --- |
-| `EmbeddingArchitecture.EmbeddingGemma` | `'embeddinggemma'` |
-| `EmbeddingArchitecture.Qwen3Embedding` | `'qwen3embedding'` |
+| Member |
+| --- |
+| `EmbeddingArchitecture.EmbeddingGemma` |
+| `EmbeddingArchitecture.Qwen3Embedding` |
 
 
 ## `MultimodalArchitecture`
 
-Members and their wire/config names where relevant. The members are fieldless PyO3 enum variants and do not expose `.value`.
-
-| Member | Wire/config name |
-| --- | --- |
-| `MultimodalArchitecture.Phi3V` | `'phi3v'` |
-| `MultimodalArchitecture.Idefics2` | `'idefics2'` |
-| `MultimodalArchitecture.LLaVANext` | `'llava-next'` |
-| `MultimodalArchitecture.LLaVA` | `'llava'` |
-| `MultimodalArchitecture.Lfm2Vl` | `'lfm2vl'` |
-| `MultimodalArchitecture.Lfm3Vl` | `'lfm3vl'` |
-| `MultimodalArchitecture.VLlama` | `'vllama'` |
-| `MultimodalArchitecture.Qwen2VL` | `'qwen2vl'` |
-| `MultimodalArchitecture.Idefics3` | `'idefics3'` |
-| `MultimodalArchitecture.MiniCpmO` | `'minicpmo'` |
-| `MultimodalArchitecture.Phi4MM` | `'phi4mm'` |
-| `MultimodalArchitecture.Qwen2_5VL` | `'qwen2_5vl'` |
-| `MultimodalArchitecture.Gemma3` | `'gemma3'` |
-| `MultimodalArchitecture.Mistral3` | `'mistral3'` |
-| `MultimodalArchitecture.Llama4` | `'llama4'` |
-| `MultimodalArchitecture.Gemma3n` | `'Gemma3n'` |
-| `MultimodalArchitecture.Qwen3VL` | `'Qwen3VL'` |
-| `MultimodalArchitecture.Qwen3VLMoE` | `'Qwen3VLMoE'` |
-| `MultimodalArchitecture.Qwen3_5` | `'Qwen3_5'` |
-| `MultimodalArchitecture.Qwen3_5Moe` | `'Qwen3_5Moe'` |
-| `MultimodalArchitecture.Qwen4Exp` | `'Qwen4Exp'` |
-| `MultimodalArchitecture.Voxtral` | `'Voxtral'` |
-| `MultimodalArchitecture.Gemma4` | `'Gemma4'` |
-| `MultimodalArchitecture.MuseGlimmer` | `'MuseGlimmer'` |
-| `MultimodalArchitecture.DiffusionGemma` | `'DiffusionGemma'` |
+| Member |
+| --- |
+| `MultimodalArchitecture.Phi3V` |
+| `MultimodalArchitecture.Idefics2` |
+| `MultimodalArchitecture.LLaVANext` |
+| `MultimodalArchitecture.LLaVA` |
+| `MultimodalArchitecture.Lfm2Vl` |
+| `MultimodalArchitecture.Lfm3Vl` |
+| `MultimodalArchitecture.Lfm3Audio` |
+| `MultimodalArchitecture.Lfm3Omni` |
+| `MultimodalArchitecture.Lfm3D1` |
+| `MultimodalArchitecture.VLlama` |
+| `MultimodalArchitecture.Qwen2VL` |
+| `MultimodalArchitecture.Idefics3` |
+| `MultimodalArchitecture.MiniCpmO` |
+| `MultimodalArchitecture.Phi4MM` |
+| `MultimodalArchitecture.Qwen2_5VL` |
+| `MultimodalArchitecture.Gemma3` |
+| `MultimodalArchitecture.Mistral3` |
+| `MultimodalArchitecture.Llama4` |
+| `MultimodalArchitecture.Gemma3n` |
+| `MultimodalArchitecture.Qwen3VL` |
+| `MultimodalArchitecture.Qwen3VLMoE` |
+| `MultimodalArchitecture.Qwen3_5` |
+| `MultimodalArchitecture.Qwen3_5Moe` |
+| `MultimodalArchitecture.Qwen4Exp` |
+| `MultimodalArchitecture.Voxtral` |
+| `MultimodalArchitecture.Gemma4` |
+| `MultimodalArchitecture.MuseGlimmer` |
+| `MultimodalArchitecture.DiffusionGemma` |
 
 
 ## `DiffusionArchitecture`
 
-Members and their wire/config names where relevant. The members are fieldless PyO3 enum variants and do not expose `.value`.
-
-| Member | Wire/config name |
-| --- | --- |
-| `DiffusionArchitecture.Flux` | `'flux'` |
-| `DiffusionArchitecture.FluxOffloaded` | `'flux-offloaded'` |
+| Member |
+| --- |
+| `DiffusionArchitecture.Flux` |
+| `DiffusionArchitecture.FluxOffloaded` |
 
 
 ## `SpeechLoaderType`
 
-Members and their wire/config names where relevant. The members are fieldless PyO3 enum variants and do not expose `.value`.
-
-| Member | Wire/config name |
-| --- | --- |
-| `SpeechLoaderType.Dia` | `'Dia'` |
+| Member |
+| --- |
+| `SpeechLoaderType.Dia` |
 
 
 ## `ModelDType`
 
-Members and their wire/config names where relevant. The members are fieldless PyO3 enum variants and do not expose `.value`.
-
-| Member | Wire/config name |
+| Member | Description |
 | --- | --- |
-| `ModelDType.Auto` | `'auto'` |
-| `ModelDType.BF16` | `'bf16'` |
-| `ModelDType.F16` | `'f16'` |
-| `ModelDType.F32` | `'f32'` |
+| `ModelDType.Auto` | Pick a type the device supports. |
+| `ModelDType.BF16` |  |
+| `ModelDType.F16` |  |
+| `ModelDType.F32` |  |
 
 
 ## `IsqOrganization`
 
-Members and their wire/config names where relevant. The members are fieldless PyO3 enum variants and do not expose `.value`.
-
-| Member | Wire/config name |
+| Member | Description |
 | --- | --- |
-| `IsqOrganization.Default` | `'default'` |
-| `IsqOrganization.MoQE` | `'moqe'` |
+| `IsqOrganization.Default` | Quantize every layer that in-situ quantization can quantize. |
+| `IsqOrganization.MoQE` | Quantize only the MoE expert weights and leave the other layers as they are. |
 
 
 ## `ImageGenerationResponseFormat`
 
-Members and their wire/config names where relevant. The members are fieldless PyO3 enum variants and do not expose `.value`.
-
-| Member | Wire/config name |
-| --- | --- |
-| `ImageGenerationResponseFormat.Url` | `'Url'` |
-| `ImageGenerationResponseFormat.B64Json` | `'B64Json'` |
+| Member |
+| --- |
+| `ImageGenerationResponseFormat.Url` |
+| `ImageGenerationResponseFormat.B64Json` |
 
 
 ## `ToolChoice`
 
-Members and their wire/config names where relevant. The members are fieldless PyO3 enum variants and do not expose `.value`.
-
-| Member | Wire/config name |
+| Member | Description |
 | --- | --- |
-| `ToolChoice.NoTools` | `'None'` |
-| `ToolChoice.Auto` | `'Auto'` |
+| `ToolChoice.NoTools` | The model can't call tools. |
+| `ToolChoice.Auto` | The model decides whether to call a tool. |
 
 
 ## `SearchContextSize`
 
-Members and their wire/config names where relevant. The members are fieldless PyO3 enum variants and do not expose `.value`.
-
-| Member | Wire/config name |
-| --- | --- |
-| `SearchContextSize.Low` | `'low'` |
-| `SearchContextSize.Medium` | `'medium'` |
-| `SearchContextSize.High` | `'high'` |
+| Member |
+| --- |
+| `SearchContextSize.Low` |
+| `SearchContextSize.Medium` |
+| `SearchContextSize.High` |
 
 
 ## `AgentPermission`
 
-Members and their wire/config names where relevant. The members are fieldless PyO3 enum variants and do not expose `.value`.
-
-| Member | Wire/config name |
-| --- | --- |
-| `AgentPermission.Auto` | `'auto'` |
-| `AgentPermission.Ask` | `'ask'` |
-| `AgentPermission.Deny` | `'deny'` |
+| Member |
+| --- |
+| `AgentPermission.Auto` |
+| `AgentPermission.Ask` |
+| `AgentPermission.Deny` |
 
 
 ## `CodeExecutionPermission`
 
-Members and their wire/config names where relevant. The members are fieldless PyO3 enum variants and do not expose `.value`.
-
-| Member | Wire/config name |
-| --- | --- |
-| `CodeExecutionPermission.Auto` | `'auto'` |
-| `CodeExecutionPermission.Ask` | `'ask'` |
-| `CodeExecutionPermission.Deny` | `'deny'` |
+| Member |
+| --- |
+| `CodeExecutionPermission.Auto` |
+| `CodeExecutionPermission.Ask` |
+| `CodeExecutionPermission.Deny` |
 
 
 ## `NetworkMode`
 
-Members and their wire/config names where relevant. The members are fieldless PyO3 enum variants and do not expose `.value`.
-
-| Member | Wire/config name |
+| Member | Description |
 | --- | --- |
-| `NetworkMode.NoNetwork` | `'none'` |
-| `NetworkMode.Loopback` | `'loopback'` |
-| `NetworkMode.Full` | `'full'` |
+| `NetworkMode.NoNetwork` | No network access. On Linux, opening a socket fails. |
+| `NetworkMode.Loopback` | Only `localhost` is reachable. |
+| `NetworkMode.Full` | No network restrictions. |
 
 
 ## `AgentToolSource`
 
-Members and their wire/config names where relevant. The members are fieldless PyO3 enum variants and do not expose `.value`.
-
-| Member | Wire/config name |
-| --- | --- |
-| `AgentToolSource.BuiltIn` | `'built_in'` |
-| `AgentToolSource.User` | `'user'` |
-| `AgentToolSource.Mcp` | `'mcp'` |
-| `AgentToolSource.External` | `'external'` |
+| Member |
+| --- |
+| `AgentToolSource.BuiltIn` |
+| `AgentToolSource.User` |
+| `AgentToolSource.Mcp` |
+| `AgentToolSource.External` |
 
 
 ## `AgentToolKind`
 
-Members and their wire/config names where relevant. The members are fieldless PyO3 enum variants and do not expose `.value`.
-
-| Member | Wire/config name |
-| --- | --- |
-| `AgentToolKind.CodeExecution` | `'code_execution'` |
-| `AgentToolKind.WebSearch` | `'web_search'` |
-| `AgentToolKind.Shell` | `'shell'` |
-| `AgentToolKind.File` | `'file'` |
-| `AgentToolKind.Custom` | `'custom'` |
-| `AgentToolKind.External` | `'external'` |
+| Member |
+| --- |
+| `AgentToolKind.CodeExecution` |
+| `AgentToolKind.WebSearch` |
+| `AgentToolKind.Shell` |
+| `AgentToolKind.File` |
+| `AgentToolKind.Custom` |
+| `AgentToolKind.External` |
 
 
 ## `AgentToolApprovalDecisionKind`
 
-Members and their wire/config names where relevant. The members are fieldless PyO3 enum variants and do not expose `.value`.
-
-| Member | Wire/config name |
-| --- | --- |
-| `AgentToolApprovalDecisionKind.Approve` | `'approve'` |
-| `AgentToolApprovalDecisionKind.Deny` | `'deny'` |
+| Member |
+| --- |
+| `AgentToolApprovalDecisionKind.Approve` |
+| `AgentToolApprovalDecisionKind.Deny` |
 
 
 ## `PagedCacheType`
 
-Members and their wire/config names where relevant. The members are fieldless PyO3 enum variants and do not expose `.value`.
-
-| Member | Wire/config name |
+| Member | Description |
 | --- | --- |
-| `PagedCacheType.Auto` | `0` |
-| `PagedCacheType.F8E4M3` | `1` |
+| `PagedCacheType.Auto` | Store the KV cache in the model's activation type. |
+| `PagedCacheType.F8E4M3` | Store the KV cache in FP8 (E4M3), half the memory of BF16. Needs F16, BF16, or F32 activations. |
 
 ---
 

@@ -271,7 +271,7 @@ mod tests {
     #[test]
     fn generated_archive_resolves_native_muse_glimmer() -> Result<()> {
         let (_file, archive) = generated_archive()?;
-        let resolved = resolve_native_multimodal_gguf(&archive)?.unwrap();
+        let resolved = resolve_native_multimodal_gguf(&archive, DType::F32)?.unwrap();
 
         assert_eq!(resolved.loader_type, MultimodalLoaderType::MuseGlimmer);
         assert_eq!(resolved.rope_pairing, RopePairing::Adjacent);

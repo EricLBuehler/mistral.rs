@@ -32,8 +32,8 @@ use crate::{
     },
 };
 
+pub(crate) mod checkpoint;
 pub(crate) mod config;
-mod hyper;
 mod mtp;
 mod ple;
 mod qsa;
@@ -41,9 +41,8 @@ mod speculative;
 mod text;
 
 pub(crate) use crate::vision_models::qwen3_vl::Qwen3VLProcessor as Qwen4ExpProcessor;
+pub(crate) use checkpoint::layer_resources;
 pub(crate) use config::Config;
-#[cfg(feature = "cuda")]
-pub(crate) use ple::planned_resident_table_bytes;
 
 /// Hybrid paged config that also budgets for the per-token QSA aux cache beside the KV cache.
 pub(crate) struct Qwen4ExpPagedConfig {
@@ -177,6 +176,9 @@ impl Qwen4ExpModel {
             .map(|vision_cfg| {
                 Qwen3VLVisionModel::new(
                     vision_cfg,
+                    &cfg.quantization_config
+                        .clone()
+                        .or_else(|| cfg.text_config.quantization_config.clone()),
                     vision_vb.set_device(normal_loading_metadata.real_device.clone()),
                 )
             })
@@ -408,6 +410,19 @@ impl Qwen4ExpModel {
 impl crate::block_diffusion::BlockDiffusionMixin for Qwen4ExpModel {}
 
 impl MultimodalModel for Qwen4ExpModel {
+    #[cfg(feature = "cuda")]
+    fn prepare_optional_weights(
+        &mut self,
+        budget: &dyn Fn(&Device) -> Result<crate::memory_plan::WeightAllocationBudget>,
+    ) -> Result<()> {
+        self.text.prepare_optional_weights(budget)
+    }
+
+    #[cfg(feature = "cuda")]
+    fn reclaimable_weight_cache_bytes(&self) -> Vec<(Device, usize)> {
+        self.text.reclaimable_weight_cache_bytes()
+    }
+
     fn supports_packed_prefill(&self) -> bool {
         true
     }

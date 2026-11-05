@@ -244,6 +244,7 @@ pub use messages::{
     EmbeddingRequest, EmbeddingRequestBuilder, EmbeddingRequestInput, InputFile,
     MultimodalMessages, RequestBuilder, RequestLike, TextMessageRole, TextMessages,
 };
+pub use mistralrs_core::PrefixCacheCapacity;
 pub use mistralrs_core::{
     AdapterGenerationId, AdapterSelection, LoraAdapterError, LoraAdapterInfo,
     LoraAdapterLoadPolicy, LoraAdapterRoute, LoraAdapterSpec, LoraResidentGenerationInfo,
@@ -262,6 +263,10 @@ pub use mistralrs_core::{
     WIRE_EMBED_LIMIT_BYTES,
 };
 pub use mistralrs_core::{CalibrationAction, CalibrationStatus};
+pub use mistralrs_core::{
+    DecisionAnswer, DecisionBox, DecisionFoundBox, DecisionInstructions, DecisionMedia,
+    DecisionQuestion, DecisionRequest, DecisionResponse, DecisionUsage,
+};
 pub use mistralrs_core::{
     McpClient, McpClientConfig, McpServerConfig, McpServerSource, McpToolInfo,
 };
@@ -295,7 +300,8 @@ pub use mistralrs_core::{
 
 // ========== Request Types ==========
 pub use mistralrs_core::{
-    Constraint, LlguidanceGrammar, MessageContent, NormalRequest, ReasoningEffort, Request,
+    ChatAudioFormat, ChatAudioMode, ChatAudioRequest, ChatAudioResponse, Constraint,
+    LlguidanceGrammar, MessageContent, NormalRequest, ReasoningEffort, Request,
 };
 
 // ========== Sampling ==========

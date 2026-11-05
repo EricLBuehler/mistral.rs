@@ -30,33 +30,36 @@ Flash attention requires compute capability 8.0+ (see [hardware support](/refere
 - `cuda nccl cudnn` on Linux with NCCL installed.
 - `cuda cudnn` otherwise.
 
-### `mistralrs login` rejects the token
-
-The token must start with `hf_`. The validation happens in `mistralrs login` before saving.
-
 ## Model loading
 
 ### Gated repository (Gemma, LLaMA, FLUX.1-dev, etc.)
 
-Accept the license on the model's Hugging Face page, create a [read-only token](https://huggingface.co/settings/tokens), and save it with `mistralrs login`. The token is stored at `~/.cache/huggingface/token` (or `$HF_HOME/token`).
+Accept the license on the model's Hugging Face page, then run `hf auth login` or set `HF_TOKEN` to a [read-only token](https://huggingface.co/settings/tokens) with access to that repository. mistral.rs reads the shared Hugging Face credentials. Check that you haven't passed `--token-source none`, which ignores saved and environment tokens. See [Hugging Face authentication](/guides/models/run-any-model/#hugging-face-authentication).
 
 ### `Out of memory` on load
 
-Add `--quant 4`. If still too large, try `--quant 2` or split across GPUs with `-n "0:N1;1:N2;..."`. See [quantize a model](/guides/quantization/quantize-a-model/).
+Quantize the weights. `--quant 4` needs about a quarter of the memory of BF16, and `--quant auto` picks the highest bit width that fits your hardware. See [quantize a model](/guides/quantization/quantize-a-model/).
+
+If you have several GPUs, you can also spread the model across them. See [distributed inference](/guides/perf/distributed-inference/).
 
 ## Runtime
 
 ### Generation slower than expected
 
-Verify accelerator features are compiled in with `mistralrs doctor`. If `cuda` is missing, the binary was built without GPU support.
+Run `mistralrs doctor` and check the `Build features:` line. If `cuda` (or `metal` on a Mac) is missing, the binary was built without GPU support. Reinstall with the [installer](/reference/installer/) or rebuild with the right [Cargo features](/reference/cargo-features/).
 
-For CUDA decode throughput, also check whether [paged attention](/guides/perf/paged-attention/) is active. FlashInfer (a CUDA attention backend) paged decode and CUDA graphs are enabled by default for compatible CUDA paged decode paths.
+On CUDA, also check that you haven't turned off [paged attention](/guides/perf/paged-attention/) with `--paged-attn off`. The fastest CUDA decode path, with FlashInfer kernels and CUDA graphs, uses paged attention.
 
-### CUDA graphs do not appear to help
+### CUDA graphs don't seem to help
 
-CUDA graphs apply to supported single-token decode steps only. They do not speed up prompt prefill. The first time a graph shape is seen, mistral.rs pays warmup and capture overhead; steady-state decode is the part that can improve.
+Turning graphs off with `MISTRALRS_CUDA_GRAPHS=0` makes little or no difference. Likely causes:
 
-If graph capture or replay fails, mistral.rs logs a warning and disables CUDA graphs for that loaded pipeline. Set `MISTRALRS_CUDA_GRAPHS=0` to compare with the normal CUDA path. See [CUDA graphs](/guides/perf/paged-attention/#cuda-graphs).
+- **You're measuring prompt time.** Graphs speed up generating tokens, not reading the prompt, so time to first token doesn't change. Compare decode tokens per second instead.
+- **The model is large.** Graphs cut the CPU cost of launching kernels, which is a big share of each token's time only on small models.
+- **You're measuring during warmup.** A new batch size is recorded the first time it appears, which costs time. Measure once traffic is steady.
+- **Graphs turned themselves off.** If recording fails, mistral.rs logs a warning and runs that model without graphs. Check the startup log.
+
+See [CUDA graphs](/guides/perf/paged-attention/#cuda-graphs).
 
 ### Response cut off
 
@@ -73,11 +76,11 @@ Check the `Server listening on http://...` line in the server output to confirm 
 
 ### CORS errors in a browser
 
-The default allows any origin. Custom CORS configuration is only available programmatically through `MistralRsServerRouterBuilder`.
+The default allows any origin, but only a fixed set of methods and headers. Check that your request uses those, listed in [CORS and request body limit](/reference/cli-toml-config/#cors-and-request-body-limit). Origins can only be changed by building the server with `MistralRsServerRouterBuilder`.
 
 ### `413 Payload Too Large`
 
-The default body limit is 50 MB and is not configurable via the CLI. Configure programmatically through `MistralRsServerRouterBuilder`.
+The default body limit is 50 MiB, and there's no CLI flag for it. To raise it, build the server with `MistralRsServerRouterBuilder::with_max_body_limit`. See [CORS and request body limit](/reference/cli-toml-config/#cors-and-request-body-limit).
 
 ### UI does not load at `/ui`
 

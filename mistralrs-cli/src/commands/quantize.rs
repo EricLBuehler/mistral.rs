@@ -8,7 +8,8 @@ use anyhow::{Context, Result};
 use tracing::{info, warn};
 
 use mistralrs_core::{
-    expand_isq_value, initialize_logging, IsqType, ModelSelected, TokenSource, UqffWriteConfig,
+    expand_isq_value, initialize_logging, IsqType, ModelSelected, PrefixCacheCapacity, TokenSource,
+    UqffWriteConfig,
 };
 use mistralrs_server_core::mistralrs_for_server_builder::{defaults, MistralRsForServerBuilder};
 
@@ -307,7 +308,7 @@ pub async fn run_quantize(mut model_type: QuantizeModelType, global: GlobalOptio
         .with_no_kv_cache(defaults::NO_KV_CACHE)
         .with_token_source(global.token_source.clone())
         .with_interactive_mode(defaults::INTERACTIVE_MODE)
-        .with_prefix_cache_n(0)
+        .with_prefix_cache_n(PrefixCacheCapacity::DISABLED)
         .set_paged_attn(Some(false))
         .with_cpu(cpu)
         .with_num_device_layers_optional(device_layers)

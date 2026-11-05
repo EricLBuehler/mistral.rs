@@ -161,10 +161,16 @@ pub(crate) const NORMAL_CONFIG_BUILDERS: &[NormalConfigBuilder; GGUF_NORMAL_LOAD
 ];
 
 pub(crate) fn validate_lfm3_metadata(metadata: &HashMap<String, GgufValue>) -> SynthesisResult<()> {
+    if super::lfm3_d1_config::decision_model_type(metadata)
+        .map_err(|error| NormalConfigSynthesisError::new(error.to_string()))?
+        .is_some()
+    {
+        return Ok(());
+    }
     match metadata.get("lfm3.attention.causal") {
         None | Some(GgufValue::Bool(true)) => Ok(()),
         Some(GgufValue::Bool(false)) => Err(NormalConfigSynthesisError::new(
-            "Native LFM3 GGUF loading does not support noncausal attention (d1 models)",
+            "Native LFM3 GGUF with noncausal attention requires supported d1 decision metadata",
         )),
         Some(_) => Err(NormalConfigSynthesisError::new(
             "GGUF metadata `lfm3.attention.causal` must be a boolean",

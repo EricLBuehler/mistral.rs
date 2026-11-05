@@ -1,11 +1,28 @@
 <script lang="ts">
   import { modelStore } from "../stores/models.svelte";
   import { settingsStore } from "../stores/settings.svelte";
+  import { chatStore } from "../stores/chat.svelte";
   import * as api from "../services/api";
   import type { UiModelInfo } from "../types";
   import ParamPopover from "./ParamPopover.svelte";
+  import Brand from "./Brand.svelte";
+  import { ICON_BUTTON } from "../ui";
+  import PanelLeft from "@lucide/svelte/icons/panel-left";
+  import ChevronDown from "@lucide/svelte/icons/chevron-down";
+  import Check from "@lucide/svelte/icons/check";
+  import Globe from "@lucide/svelte/icons/globe";
+  import Code from "@lucide/svelte/icons/code";
+  import Terminal from "@lucide/svelte/icons/terminal";
+  import Sun from "@lucide/svelte/icons/sun";
+  import Moon from "@lucide/svelte/icons/moon";
+  import Monitor from "@lucide/svelte/icons/monitor";
+  import Wrench from "@lucide/svelte/icons/wrench";
+  import Settings from "@lucide/svelte/icons/settings";
 
   type ParamKey = "temp" | "top_p" | "top_k" | "rep" | "max";
+
+  const CHIP =
+    "inline-flex items-center gap-1 rounded-full border border-line-strong px-2 py-0.5 text-xs text-muted-strong";
 
   let dropdownOpen = $state(false);
   let dropdownEl = $state<HTMLDivElement | null>(null);
@@ -22,12 +39,12 @@
     const inp = model.input_modalities ?? [];
     const out = model.output_modalities ?? [];
     if (inp.length === 0 && out.length === 0) return null;
-    return `${inp.join("+") || "—"} → ${out.join("+") || "—"}`;
+    return `${inp.join(" + ") || "none"} -> ${out.join(" + ") || "none"}`;
   }
 
   async function pickModel(name: string) {
     dropdownOpen = false;
-    if (name === modelStore.selectedModel) return;
+    if (name === modelStore.selectedModel || chatStore.isStreaming) return;
     modelStore.selectModel(name);
     try {
       await api.selectModel(name);
@@ -50,67 +67,59 @@
   });
 </script>
 
-<header class="flex h-12 shrink-0 items-center gap-3 border-b border-gray-200 bg-white px-4 dark:border-gray-800 dark:bg-gray-950">
+<header class="flex h-12 shrink-0 items-center gap-2 border-b border-line bg-background px-3">
   <button
-    class="rounded-md p-1.5 text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+    class={ICON_BUTTON}
     onclick={() => (settingsStore.sidebarOpen = !settingsStore.sidebarOpen)}
     aria-label="Toggle sidebar"
+    title="Toggle sidebar"
   >
-    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16" />
-    </svg>
+    <PanelLeft class="h-4 w-4" />
   </button>
 
-  <!-- Model dropdown chip -->
-  <div class="relative" bind:this={dropdownEl}>
+  <Brand class="mr-2 hidden text-[15px] sm:inline" />
+
+  <div class="relative min-w-0" bind:this={dropdownEl}>
     <button
-      class="flex items-center gap-2 rounded-lg border border-gray-200 bg-gray-50 px-2.5 py-1 text-sm hover:border-gray-300 dark:border-gray-800 dark:bg-gray-900 dark:hover:border-gray-700"
+      class="flex min-w-0 items-center gap-2 rounded-md border border-line-strong bg-surface px-2.5 py-1 text-sm hover:border-muted disabled:cursor-not-allowed disabled:opacity-60"
       onclick={() => (dropdownOpen = !dropdownOpen)}
+      disabled={chatStore.isStreaming}
+      title={chatStore.isStreaming ? "Can't switch models while a reply is streaming" : "Choose model"}
       aria-haspopup="listbox"
       aria-expanded={dropdownOpen}
     >
       {#if modelStore.selectedModel}
-        <span class="rounded bg-blue-100 px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">
-          {modelStore.selectedModelKind}
-        </span>
-        <span class="font-mono text-xs text-gray-800 dark:text-gray-200">{modelStore.selectedModel}</span>
+        <span class="truncate font-mono text-xs text-foreground">{modelStore.selectedModel}</span>
+        <span class="hidden text-[11px] uppercase tracking-wide text-muted sm:inline">{modelStore.selectedModelKind}</span>
       {:else}
-        <span class="text-xs text-gray-400">No model selected</span>
+        <span class="text-xs text-muted">No model selected</span>
       {/if}
-      <svg class="h-3 w-3 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 9l6 6 6-6" />
-      </svg>
+      <ChevronDown class="h-3.5 w-3.5 shrink-0 text-muted" />
     </button>
 
     {#if dropdownOpen}
       <div
-        class="absolute left-0 top-full z-50 mt-1 max-h-96 min-w-full overflow-y-auto rounded-lg border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-gray-900"
+        class="absolute left-0 top-full z-50 mt-1 max-h-96 min-w-full overflow-y-auto rounded-md border border-line-strong bg-surface p-1 shadow-lg shadow-black/10"
         role="listbox"
       >
         {#if modelStore.models.length === 0}
-          <div class="whitespace-nowrap px-3 py-2 text-sm text-gray-400">No models loaded</div>
+          <div class="whitespace-nowrap px-3 py-2 text-sm text-muted">No models loaded</div>
         {:else}
           {#each modelStore.models as model (model.name)}
             {@const detail = modalityRow(model)}
+            {@const selected = model.name === modelStore.selectedModel}
             <button
-              class="flex w-full items-start gap-2 whitespace-nowrap px-3 py-2 text-left text-sm hover:bg-gray-50 dark:hover:bg-gray-800 {model.name === modelStore.selectedModel ? 'bg-blue-50 dark:bg-blue-900/20' : ''}"
+              class="flex w-full items-start gap-3 whitespace-nowrap rounded px-2.5 py-2 text-left hover:bg-surface-raised {selected ? 'bg-surface-raised' : ''}"
               onclick={() => pickModel(model.name)}
               role="option"
-              aria-selected={model.name === modelStore.selectedModel}
+              aria-selected={selected}
             >
-              <span class="mt-0.5 rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[10px] font-medium uppercase text-gray-600 dark:bg-gray-800 dark:text-gray-400">
-                {model.kind}
-              </span>
-              <div class="flex flex-1 flex-col">
-                <span class="font-mono text-xs">{model.name}</span>
-                {#if detail}
-                  <span class="font-mono text-[10.5px] text-gray-400 dark:text-gray-500">{detail}</span>
-                {/if}
+              <div class="flex flex-1 flex-col gap-0.5">
+                <span class="font-mono text-xs text-foreground">{model.name}</span>
+                <span class="text-[11px] text-muted">{model.kind}{detail ? ` . ${detail}` : ""}</span>
               </div>
-              {#if model.name === modelStore.selectedModel}
-                <svg class="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-                </svg>
+              {#if selected}
+                <Check class="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" />
               {/if}
             </button>
           {/each}
@@ -119,16 +128,15 @@
     {/if}
   </div>
 
-  <!-- Inline sampling params (click to edit) -->
-  <div class="hidden items-center gap-1 font-mono text-[11px] text-gray-500 md:flex dark:text-gray-400">
+  <div class="hidden items-center font-mono text-xs text-muted lg:flex">
     {#snippet param(key: ParamKey, label: string, value: number | null | undefined)}
       <div class="relative">
         <button
-          class="rounded px-1.5 py-0.5 hover:bg-gray-100 dark:hover:bg-gray-800"
+          class="rounded px-1.5 py-1 hover:bg-surface-raised {openParam === key ? 'bg-surface-raised' : ''}"
           onclick={() => (openParam = openParam === key ? null : key)}
+          title="Edit {label}"
         >
-          <span class="text-gray-400 dark:text-gray-500">{label}</span>
-          <span class="text-gray-700 dark:text-gray-200">{value ?? "—"}</span>
+          {label} <span class="text-foreground">{value ?? "-"}</span>
         </button>
         {#if openParam === key}
           {#if key === "temp"}
@@ -188,65 +196,60 @@
     {@render param("max", "max", settingsStore.maxTokens)}
 
     <button
-      class="rounded px-1.5 py-0.5 hover:bg-gray-100 dark:hover:bg-gray-800 {settingsStore.reasoningEffort === 'off' ? 'text-gray-400 dark:text-gray-600' : 'text-amber-600 dark:text-amber-400'}"
+      class="rounded px-1.5 py-1 hover:bg-surface-raised"
       onclick={() => (settingsStore.settingsOpen = true)}
       title="Set reasoning effort"
     >
-      reasoning:{settingsStore.reasoningEffort || "default"}
+      reasoning <span class={settingsStore.reasoningEffort === "off" ? "text-muted" : "text-accent"}>{settingsStore.reasoningEffort || "default"}</span>
     </button>
   </div>
 
-  <!-- Active tool indicators -->
   <div class="ml-auto flex items-center gap-1.5">
     {#if settingsStore.enableSearch && modelStore.capabilities.search_enabled}
-      <span class="flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/40 dark:text-green-300" title="Web search active">
-        <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-        </svg>
-        Search
-      </span>
+      <span class={CHIP} title="Web search is on"><Globe class="h-3 w-3" />Search</span>
     {/if}
     {#if settingsStore.enableCodeExecution && modelStore.capabilities.code_execution_enabled}
-      <span class="flex items-center gap-1 rounded-full bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-700 dark:bg-purple-900/40 dark:text-purple-300" title="Code execution active">
-        <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-        </svg>
-        Code
-      </span>
+      <span class={CHIP} title="Code execution is on"><Code class="h-3 w-3" />Code</span>
     {/if}
     {#if settingsStore.enableShell && modelStore.capabilities.shell_enabled}
-      <span class="flex items-center gap-1 rounded-full bg-teal-100 px-2 py-0.5 text-xs font-medium text-teal-700 dark:bg-teal-900/40 dark:text-teal-300" title="Shell active">
-        <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 17l6-6-6-6M12 19h8" />
-        </svg>
-        Shell
-      </span>
+      <span class={CHIP} title="Shell is on"><Terminal class="h-3 w-3" />Shell</span>
     {/if}
-    <span class="hidden items-center gap-1.5 rounded-full border border-gray-200 px-2 py-0.5 font-mono text-[11px] text-gray-500 md:inline-flex dark:border-gray-700 dark:text-gray-400" title="Server endpoint">
-      <span class="h-1.5 w-1.5 rounded-full bg-green-500"></span>
+    <span class="hidden items-center gap-1.5 px-1 font-mono text-xs text-muted md:inline-flex" title="Server endpoint">
+      <span class="h-1.5 w-1.5 rounded-full bg-success"></span>
       {connection}
     </span>
   </div>
 
   <button
-    class="rounded-md p-1.5 text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
-    onclick={() => (settingsStore.toolsOpen = !settingsStore.toolsOpen)}
-    aria-label="Tools panel"
-    title="Tools"
+    class={ICON_BUTTON}
+    onclick={() => settingsStore.cycleTheme()}
+    aria-label="Theme: {settingsStore.theme}"
+    title="Theme: {settingsStore.theme}"
   >
-    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z" />
-    </svg>
+    {#if settingsStore.theme === "light"}
+      <Sun class="h-4 w-4" />
+    {:else if settingsStore.theme === "dark"}
+      <Moon class="h-4 w-4" />
+    {:else}
+      <Monitor class="h-4 w-4" />
+    {/if}
   </button>
 
   <button
-    class="rounded-md p-1.5 text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-200"
+    class={ICON_BUTTON}
+    onclick={() => (settingsStore.toolsOpen = !settingsStore.toolsOpen)}
+    aria-label="Tools"
+    title="Tools"
+  >
+    <Wrench class="h-4 w-4" />
+  </button>
+
+  <button
+    class={ICON_BUTTON}
     onclick={() => (settingsStore.settingsOpen = !settingsStore.settingsOpen)}
     aria-label="Settings"
+    title="Settings"
   >
-    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-    </svg>
+    <Settings class="h-4 w-4" />
   </button>
 </header>

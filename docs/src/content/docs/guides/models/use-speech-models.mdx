@@ -1,183 +1,139 @@
 ---
 title: Speech models
-description: Voxtral Realtime for speech transcription, Dia for text-to-speech.
+description: Transcribe audio, synthesize speech, or hold a spoken conversation.
 ---
 
-import { Tabs, TabItem } from '@astrojs/starlight/components';
+Pick a speech model by what you need:
 
-mistral.rs supports two speech-related model families:
+| Model | What it does | HTTP endpoints |
+| --- | --- | --- |
+| LFM3-Audio (`LiquidAI/LFM3-Audio-2B`) | Listens and talks: transcription, translation into English, text-to-speech, and spoken chat | Chat Completions, `/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/audio/translations` |
+| LFM3-Omni (`LiquidAI/LFM3-Omni-2B`) | Everything LFM3-Audio does, plus images and video as input | Same as LFM3-Audio |
+| Voxtral Realtime (`mistralai/Voxtral-Mini-4B-Realtime-2602`) | Transcription only | Chat Completions, `/v1/audio/transcriptions` |
+| Dia (`nari-labs/Dia-1.6B`) | Text-to-speech, including two-speaker dialogue | `/v1/audio/speech` |
 
-- **Voxtral Realtime**: multimodal model accepting audio input for speech transcription through
-  `/v1/chat/completions`.
-- **Dia**: dedicated text-to-speech model served via `/v1/audio/speech`.
+## LFM3: speech input and output
 
-Voxtral Realtime is classified as a multimodal model because audio is an input modality. Dia is a
-dedicated speech model.
+```bash
+mistralrs serve -m LiquidAI/LFM3-Audio-2B --isq q8_0
+```
 
-## Voxtral Realtime: audio in, text out
+`--isq q8_0` quantizes the weights to 8 bits as they load, which roughly halves memory. You can drop it to run at full precision. To download a smaller file instead, load the GGUF build with `-m LiquidAI/LFM3-Audio-2B-GGUF --quant 4` (about a 1.1 GB model file) or `--quant 8` (about 1.8 GB). mistral.rs fetches the matching audio components automatically. The same works for `LiquidAI/LFM3-Omni-2B-GGUF`. See [quantize a model](/guides/quantization/quantize-a-model/) for the other options.
+
+The quickest way to use LFM3 is through the dedicated audio endpoints, which follow OpenAI's audio API.
+
+Turn text into speech:
+
+```bash
+curl http://localhost:1234/v1/audio/speech \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"default","input":"Hello from mistral.rs.","response_format":"wav"}' \
+  --output hello.wav
+```
+
+Transcribe a recording:
+
+```bash
+curl http://localhost:1234/v1/audio/transcriptions \
+  -F model=default -F file=@speech.wav
+```
+
+Send the same upload to `/v1/audio/translations` to get an English translation instead of a transcript.
+
+The speech endpoint takes these options:
+
+| Field | Values |
+| --- | --- |
+| `response_format` | `mp3` (default), `wav`, `flac`, `opus`, `aac`, or `pcm` (raw 16-bit samples with no file header; LFM3 output is mono at 24 kHz). |
+| `speed` | `0.25` to `4.0`, default `1.0`. |
+| `voice` | Omit it or use `default`. Each checkpoint has one voice, so named OpenAI voices like `alloy` return an error. |
+| `instructions` | Extra directions for how to say the text. |
+| `stream_format` | `audio` (default) returns the finished file. `sse` streams audio events, incrementally only for `pcm` at speed `1.0`. |
+
+`mp3`, `flac`, `opus`, `aac`, and any `speed` other than `1.0` need [FFmpeg](https://ffmpeg.org/) on the server's PATH. `wav` and `pcm` don't. The [endpoint example](/examples/server/lfm3-audio-endpoints/) shows all of these with the OpenAI Python SDK, and [OpenAI compatibility](/reference/openai-compatibility/#audio) lists the transcription options.
+
+### Spoken chat
+
+In a chat request, send audio as an [`input_audio` content part](/guides/models/multimodal-input/#audio). The reply is text unless you ask for speech with `modalities`:
+
+| `modalities` | Reply |
+| --- | --- |
+| omitted or `["text"]` | Text only |
+| `["text", "audio"]` | Text plus speech |
+| `["audio"]` | Speech only |
+
+When you ask for speech, also pass an `audio` object with a format: `wav`, `mp3`, `flac`, `opus`, `aac`, or `pcm16`.
+
+```json
+{
+  "modalities": ["text", "audio"],
+  "audio": {"format": "wav", "voice": "default"}
+}
+```
+
+The audio comes back base64-encoded in `choices[0].message.audio.data`, as mono 24 kHz.
+
+LFM3-Audio expects a task-specific system message. Put the matching one first in your chat messages:
+
+| Task | System message |
+| --- | --- |
+| Spoken conversation | `Respond with interleaved text and audio.` |
+| Transcription | `Perform ASR in English.` |
+| Text-to-speech | `Perform TTS in American English using a female voice.` |
+
+The `/v1/audio/*` endpoints add these for you. Complete chat examples: [LFM3-Audio](/examples/server/lfm3-audio/) and [LFM3-Omni](/examples/server/lfm3-omni/).
+
+To stream speech as it's generated, set `"stream": true` and `audio.format` to `pcm16`. Decode each `delta.audio.data` chunk from base64 and append the bytes in the order they arrive. Most chunks hold about a second of audio, and the last one holds whatever is left, so don't drop it. Chunk and event details are in the [HTTP reference](/reference/http-api/#streaming-chat-completions).
+
+To continue a spoken conversation, send the model's earlier replies back as text. Over HTTP, each completed reply includes `audio.transcript` and an `audio.id`. Put the transcript in the assistant message's `content`, or send `{"role": "assistant", "audio": {"id": "..."}}` and the server fills the transcript in for you. IDs expire after an hour and can be lost when the server restarts, so store the transcript if you need lasting history. The Python and Rust SDKs don't support audio IDs, so keep the reply text yourself. Either way, the model sees earlier turns as text, not as audio.
+
+### Reply length and speech sampling
+
+`max_tokens` counts text tokens, speech frames, and control tokens together, so speech uses it up much faster than text. If the audio stops early with `finish_reason: "length"`, raise `max_tokens`.
+
+Speech is sampled with its own fixed settings:
+
+| Setting | LFM3-Audio | LFM3-Omni |
+| --- | --- | --- |
+| Temperature | 1.0 | 0.4 |
+| Top-k | 128 | Off |
+| Repetition penalty | 1.1, over the last 4,096 frames | 1.2, over the last 64 frames |
+
+GGUF files can carry their own values. The request's `temperature`, `top_k`, and penalty fields only affect the text tokens, so `temperature: 0` won't make the speech come out the same every time.
+
+When a request asks for speech, thinking is off unless you set `enable_thinking` or `reasoning_effort` yourself. These requests can't use tools, JSON schemas or other constrained output, custom logits processors, or logprobs. Adding any of them returns a validation error.
+
+### Python and Rust
+
+Load LFM3 with `Which.MultimodalPlain(model_id="LiquidAI/LFM3-Audio-2B")` in Python or `ModelBuilder::new("LiquidAI/LFM3-Audio-2B")` in Rust. For plain text-to-speech, call `runner.generate_audio(text)` or `model.generate_speech(text)`. You get back the raw samples, the sample rate, and the channel count. The [Rust example](/examples/rust/models/lfm3-audio/) saves them as a WAV file.
+
+For spoken chat or streaming, set `modalities` and `audio` on a Python `ChatCompletionRequest`, or use Rust's [chat speech output](/reference/rust-sdk/#chat-speech-output) builder.
+
+## Voxtral Realtime: transcription
 
 ```bash
 mistralrs serve -m mistralai/Voxtral-Mini-4B-Realtime-2602
 ```
 
-The auto-loader recognizes the Voxtral Realtime layout from `params.json`,
-`consolidated.safetensors`, and `tekken.json`. The earlier `VoxtralForConditionalGeneration`
-architecture is not supported.
+Send audio to `/v1/audio/transcriptions` as shown above, or as an audio part in a chat request. Voxtral returns what was said. It's built for transcription, so don't expect it to summarize the audio or answer questions about it.
 
-Voxtral Realtime uses the multimodal chat request shape: audio is an input content part and the
-response is its transcription. The supported checkpoint is intended for transcription; the text
-part in these examples does not imply support for summarization, speaker analysis, or other audio
-tasks.
+Only this Realtime checkpoint loads. The earlier Voxtral checkpoints (`VoxtralForConditionalGeneration`) don't. mistral.rs doesn't implement OpenAI's Realtime API, so you can't stream live microphone audio to it; send a recorded file instead.
 
-<Tabs>
-<TabItem label="HTTP">
-
-```bash
-curl http://localhost:1234/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "default",
-    "messages": [{
-      "role": "user",
-      "content": [
-        {"type": "audio_url", "audio_url": {"url": "https://raw.githubusercontent.com/google-gemma/cookbook/refs/heads/main/apps/sample-data/journal1.wav"}},
-        {"type": "text", "text": "Transcribe this."}
-      ]
-    }]
-  }'
-```
-
-</TabItem>
-<TabItem label="Python">
-
-```python
-from mistralrs import ChatCompletionRequest, MultimodalArchitecture, Runner, Which
-
-runner = Runner(
-    which=Which.MultimodalPlain(
-        model_id="mistralai/Voxtral-Mini-4B-Realtime-2602",
-        arch=MultimodalArchitecture.Voxtral,
-    )
-)
-
-response = runner.send_chat_completion_request(
-    ChatCompletionRequest(
-        model="default",
-        messages=[
-            {
-                "role": "user",
-                "content": [
-                    {"type": "audio_url", "audio_url": {"url": "file:///absolute/path/clip.wav"}},
-                    {"type": "text", "text": "Transcribe this audio."},
-                ],
-            }
-        ],
-        max_tokens=256,
-        temperature=0,
-    )
-)
-print(response.choices[0].message.content)
-```
-
-</TabItem>
-<TabItem label="Rust">
-
-```rust
-use mistralrs::{AudioInput, MultimodalMessages, MultimodalModelBuilder, TextMessageRole};
-
-let model = MultimodalModelBuilder::new("mistralai/Voxtral-Mini-4B-Realtime-2602")
-    .build()
-    .await?;
-
-let audio_bytes = std::fs::read("clip.wav")?;
-let audio = AudioInput::from_bytes(&audio_bytes)?;
-
-let messages = MultimodalMessages::new().add_audio_message(
-    TextMessageRole::User,
-    "Transcribe this audio.",
-    vec![audio],
-);
-
-let response = model.send_chat_request(messages).await?;
-println!("{}", response.choices[0].message.content.as_ref().unwrap());
-```
-
-</TabItem>
-</Tabs>
+In Python and Rust, load Voxtral like any other [multimodal model](/guides/models/multimodal-input/) and send audio in a chat message.
 
 ## Dia: text-to-speech
-
-`/v1/audio/speech` matches OpenAI:
 
 ```bash
 mistralrs serve -m nari-labs/Dia-1.6B
 ```
 
-Dia understands dialogue speaker tags such as `[S1]` and `[S2]`, and nonverbal parentheticals such as `(laughs)` or `(coughs)`. Use them in the `input` string when you want dialogue or expressive speech.
-
-<Tabs>
-<TabItem label="HTTP">
-
 ```bash
 curl http://localhost:1234/v1/audio/speech \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "default",
-    "input": "[S1] Hello. This is a test of the text-to-speech system.",
-    "response_format": "wav"
-  }' \
-  --output out.wav
+  -H 'Content-Type: application/json' \
+  -d '{"model":"default","input":"[S1] Did you hear that? [S2] I did. (laughs)","response_format":"wav"}' \
+  --output dialogue.wav
 ```
 
-- Output: raw audio bytes.
-- `response_format`: only `wav` and `pcm` are read; `mp3`/`opus`/`aac`/`flac` return a validation error.
-- Extra OpenAI fields such as `voice`, `speed`, and `instructions` are silently ignored (the request reads only `model`, `input`, and `response_format`).
+Mark each speaker with `[S1]` or `[S2]`, and write sounds like `(laughs)` or `(coughs)` inline where you want them. `response_format`, `speed`, and `voice` take the same values as in the [LFM3 table](#lfm3-speech-input-and-output) above. Dia doesn't accept `instructions` and doesn't stream: `stream_format: "sse"` returns an error, and the response is always the finished file.
 
-</TabItem>
-<TabItem label="Python">
-
-```python
-import struct
-import wave
-from pathlib import Path
-
-from mistralrs import Runner, SpeechLoaderType, Which
-
-runner = Runner(
-    which=Which.Speech(
-        model_id="nari-labs/Dia-1.6B",
-        arch=SpeechLoaderType.Dia,
-    )
-)
-
-response = runner.generate_audio("[S1] mistral r s can generate speech locally.")
-
-output_path = Path("out.wav")
-pcm_ints = [int(max(-32768, min(32767, sample * 32767))) for sample in response.pcm]
-with wave.open(output_path, "wb") as wav:
-    wav.setnchannels(response.channels)
-    wav.setsampwidth(2)
-    wav.setframerate(response.rate)
-    wav.writeframes(b"".join(struct.pack("<h", sample) for sample in pcm_ints))
-```
-
-</TabItem>
-<TabItem label="Rust">
-
-```rust
-use mistralrs::{speech_utils, SpeechLoaderType, SpeechModelBuilder};
-
-let model = SpeechModelBuilder::new("nari-labs/Dia-1.6B", SpeechLoaderType::Dia)
-    .build()
-    .await?;
-
-let (pcm, rate, channels) = model
-    .generate_speech("[S1] mistral r s can generate speech locally.")
-    .await?;
-
-let mut output = std::fs::File::create("out.wav")?;
-speech_utils::write_pcm_as_wav(&mut output, &pcm, rate as u32, channels as u16)?;
-```
-
-</TabItem>
-</Tabs>
+In Python, load Dia with `Which.Speech`. In Rust, use `SpeechModelBuilder`. Then call `generate_audio` or `generate_speech` as with LFM3. Complete examples: [Python](/examples/python/dia/) and [Rust](/examples/rust/models/speech/).

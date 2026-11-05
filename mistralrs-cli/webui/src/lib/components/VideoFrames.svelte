@@ -1,5 +1,12 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
+  import { FIELD } from "../ui";
+  import Video from "@lucide/svelte/icons/video";
+  import Play from "@lucide/svelte/icons/play";
+  import Pause from "@lucide/svelte/icons/pause";
+  import Download from "@lucide/svelte/icons/download";
+
+  const CONTROL = "inline-flex items-center rounded-md border border-line-strong px-2 py-1 text-muted-strong hover:bg-surface-raised hover:text-foreground";
 
   let { frames }: { frames: string[] } = $props();
 
@@ -66,45 +73,37 @@
   }
 </script>
 
-<div class="border-t border-gray-200 dark:border-gray-700">
-  <div class="flex items-center gap-1.5 bg-gray-100 px-3 py-1 dark:bg-gray-800/80">
-    <svg class="h-3.5 w-3.5 text-gray-500 dark:text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
-    </svg>
-    <span class="text-xs font-medium text-gray-500 dark:text-gray-400">
+<div class="border-t border-line">
+  <div class="flex items-center gap-1.5 px-3 py-1 font-mono text-[11px] text-muted">
+    <Video class="h-3.5 w-3.5" />
+    <span>
       Animation ({frames.length} frame{frames.length !== 1 ? "s" : ""})
     </span>
-    <span class="ml-auto text-xs text-gray-400 dark:text-gray-500">
+    <span class="ml-auto tabular-nums">
       {currentFrame + 1} / {frames.length}
     </span>
   </div>
-  <div class="bg-gray-50 p-3 dark:bg-gray-900/50">
+  <div class="bg-background p-3">
     <div class="flex flex-col items-center gap-2">
       <div class="relative">
         <img
           src="data:image/png;base64,{frames[currentFrame]}"
           alt="Frame {currentFrame + 1}"
-          class="max-h-80 max-w-full rounded-lg border border-gray-200 bg-white dark:border-gray-700"
+          class="max-h-80 max-w-full rounded-md border border-line bg-white"
         />
       </div>
 
-      <!-- Controls -->
-      <div class="flex items-center gap-3 text-xs text-gray-600 dark:text-gray-400">
+      <div class="flex flex-wrap items-center justify-center gap-3 text-xs text-muted">
         <button
-          class="rounded-md bg-gray-200 px-2 py-1 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600"
+          class={CONTROL}
           onclick={togglePlayPause}
           title={playing ? "Pause" : "Play"}
           aria-label={playing ? "Pause" : "Play"}
         >
           {#if playing}
-            <svg class="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24">
-              <rect x="6" y="5" width="4" height="14" rx="1" />
-              <rect x="14" y="5" width="4" height="14" rx="1" />
-            </svg>
+            <Pause class="h-3.5 w-3.5" />
           {:else}
-            <svg class="h-3.5 w-3.5" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M8 5v14l11-7z" />
-            </svg>
+            <Play class="h-3.5 w-3.5" />
           {/if}
         </button>
 
@@ -114,33 +113,31 @@
           max={frames.length - 1}
           bind:value={currentFrame}
           oninput={() => (playing = false)}
-          class="w-32 accent-blue-600"
+          class="w-32 accent-[var(--accent)]"
           aria-label="Frame slider"
         />
 
         <label class="flex items-center gap-1">
-          <span>FPS</span>
+          <span class="font-mono text-[11px]">FPS</span>
           <input
             type="number"
             min="1"
             max="60"
             bind:value={fps}
             onchange={() => playing && startPlaying()}
-            class="w-12 rounded border border-gray-300 bg-white px-1 py-0.5 text-right text-xs dark:border-gray-600 dark:bg-gray-800"
+            class="{FIELD} w-12 px-1 py-0.5 text-right font-mono text-xs"
           />
         </label>
 
         <button
-          class="rounded-md bg-gray-200 px-2 py-1 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600"
+          class={CONTROL}
           onclick={downloadCurrentFrame}
           title="Download current frame"
         >
-          <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-          </svg>
+          <Download class="h-3.5 w-3.5" />
         </button>
         <button
-          class="rounded-md bg-gray-200 px-2 py-1 text-[10px] hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600"
+          class="{CONTROL} text-[11px]"
           onclick={downloadAsGif}
           title="Download all frames as PNG sequence"
         >

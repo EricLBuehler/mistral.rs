@@ -20,9 +20,11 @@ use llguidance::api::TopLevelGrammar;
 
 use crate::Tool;
 
-const REQUIRED_TOOL_CALL_CONTROL_TOKENS: &[&str] = &[
+const TOOL_CALL_CONTROL_TOKENS: &[&str] = &[
     "<tool_call>",
     "</tool_call>",
+    "</function>",
+    "</parameter>",
     "<arg_key>",
     "</arg_key>",
     "<arg_value>",
@@ -172,10 +174,7 @@ pub fn build_required_tool_call_grammar(
     qwen::QwenParser.required_tool_call_grammar(tools)
 }
 
-pub fn specialize_required_tool_call_grammar(
-    grammar: &mut TopLevelGrammar,
-    tok_trie: &toktrie::TokTrie,
-) {
+pub fn specialize_tool_call_grammar(grammar: &mut TopLevelGrammar, tok_trie: &toktrie::TokTrie) {
     let Some(lark) = grammar
         .grammars
         .first_mut()
@@ -184,7 +183,7 @@ pub fn specialize_required_tool_call_grammar(
         return;
     };
 
-    for token in REQUIRED_TOOL_CALL_CONTROL_TOKENS {
+    for token in TOOL_CALL_CONTROL_TOKENS {
         if tok_trie.get_special_token(token).is_some() {
             *lark = lark.replace(&format!(r#""{token}""#), token);
         }
@@ -222,9 +221,7 @@ fn strip_tool_call_segments(message: &str, format: ToolCallFormat) -> String {
             strip_delimited_segments(message, "<｜tool▁call▁begin｜>", "<｜tool▁call▁end｜>")
         }
         ToolCallFormat::MistralNemo => strip_from_first(message, "[TOOL_CALLS]"),
-        ToolCallFormat::Hunyuan => {
-            strip_delimited_segments(message, "<tool_calls>", "</tool_calls>")
-        }
+        ToolCallFormat::Hunyuan => strip_hunyuan_segments(message),
         ToolCallFormat::Llama => strip_from_first(message, "<|python_tag|>"),
         ToolCallFormat::Liquid => {
             strip_delimited_segments(message, "<|tool_call_start|>", "<|tool_call_end|>")
@@ -240,6 +237,23 @@ fn strip_from_first(message: &str, start: &str) -> String {
     message
         .find(start)
         .map_or_else(|| message.to_string(), |pos| message[..pos].to_string())
+}
+
+/// Like `strip_delimited_segments`, but locates the closing tag with `hunyuan::locate_call` so a
+/// tag inside a string argument doesn't end the segment early.
+fn strip_hunyuan_segments(message: &str) -> String {
+    let mut rest = message;
+    let mut out = String::new();
+    while let Some(start_pos) = rest.find(hunyuan::START) {
+        out.push_str(&rest[..start_pos]);
+        let after_start = &rest[start_pos + hunyuan::START.len()..];
+        match hunyuan::locate_call(after_start) {
+            Some((_, end_of_tag)) => rest = &after_start[end_of_tag..],
+            None => return out,
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 fn strip_delimited_segments(message: &str, start: &str, end: &str) -> String {

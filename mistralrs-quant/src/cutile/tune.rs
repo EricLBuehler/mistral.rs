@@ -19,16 +19,24 @@ use cutile::tune::{
 use std::collections::{BTreeMap, HashMap};
 use std::hash::Hash;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock, RwLock};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::time::{Duration, Instant};
 
-/// `off` uses the static policies, `auto` (default) tunes when no valid record exists, `force` retunes.
+/// `off` uses the static policies, `cached` (default) reuses records without measuring, `auto` tunes when no valid
+/// record exists, `force` retunes.
 pub const TUNE_MODE_ENV: &str = "MISTRALRS_CUTILE_TUNE";
 /// Overrides the directory holding the tuning records.
 pub const TUNE_CACHE_ENV: &str = "MISTRALRS_CUTILE_TUNE_CACHE";
+/// Seconds of measurement the whole process may spend tuning; exhausted buckets keep their policy.
+pub const TUNE_BUDGET_ENV: &str = "MISTRALRS_CUTILE_TUNE_BUDGET_SECS";
+const DEFAULT_TOTAL_BUDGET: Duration = Duration::from_secs(300);
 const RECORD_DIR: &str = "cutile_tune";
 /// A candidate replaces the incumbent only when it is at least this much faster.
 const MIN_GAIN: f64 = 0.03;
+const ACTIVATION_RANGE: f32 = 2.0;
+/// Paired A/B budget a winner must clear against the policy before it is recorded.
+const CONFIRM_REP: Duration = Duration::from_millis(400);
+const CONFIRM_MIN_REPS: usize = 20;
 /// A candidate's output must stay within this relative distance of the policy config's output.
 const GATE_TOLERANCE: f32 = 2e-2;
 /// Wall-clock cap per bucket; the descent keeps its incumbent when the budget runs out, so a
@@ -76,6 +84,7 @@ impl TuneRouting {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TuneMode {
     Off,
+    Cached,
     Auto,
     Force,
 }
@@ -85,17 +94,44 @@ impl TuneMode {
         std::env::var(TUNE_MODE_ENV)
             .ok()
             .and_then(|value| Self::parse(&value))
-            .unwrap_or(Self::Auto)
+            .unwrap_or(Self::Cached)
     }
 
     fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
             "off" | "0" | "false" | "no" => Some(Self::Off),
+            "cached" => Some(Self::Cached),
             "auto" | "on" | "1" | "true" | "yes" => Some(Self::Auto),
             "force" => Some(Self::Force),
             _ => None,
         }
     }
+}
+
+fn total_budget() -> Duration {
+    std::env::var(TUNE_BUDGET_ENV)
+        .ok()
+        .and_then(|value| value.trim().parse::<f64>().ok())
+        .filter(|secs| secs.is_finite() && *secs >= 0.0)
+        .map_or(DEFAULT_TOTAL_BUDGET, Duration::from_secs_f64)
+}
+
+/// Measurement time spent by every kernel in this process, so a model with many shapes loads in
+/// bounded time even on a cold record cache.
+static SPENT: Mutex<Duration> = Mutex::new(Duration::ZERO);
+
+fn remaining_budget(total: Duration) -> Duration {
+    total.saturating_sub(*SPENT.lock().unwrap())
+}
+
+fn charge(elapsed: Duration) {
+    *SPENT.lock().unwrap() += elapsed;
+}
+
+/// The search budget for one bucket, or `None` once the process-wide budget is gone.
+fn bucket_budget(total: Duration) -> Option<Duration> {
+    let remaining = remaining_budget(total);
+    (!remaining.is_zero()).then(|| remaining.min(BUCKET_BUDGET))
 }
 
 /// One token-count interval the launch policy keeps a single config for; `upper` is inclusive and
@@ -131,6 +167,52 @@ pub fn buckets_from_breakpoints(
     buckets
 }
 
+/// Inclusive uppers in `lo..hi` where `policy(m) != policy(m + 1)`, so buckets built from them
+/// never mix two policy configs; derived from the policy itself rather than kept in sync by hand.
+pub fn policy_breakpoints<C: PartialEq>(
+    lo: usize,
+    hi: usize,
+    policy: impl Fn(usize) -> C,
+) -> Vec<usize> {
+    let mut breakpoints = Vec::new();
+    let mut current = policy(lo);
+    for m in lo..hi {
+        let next = policy(m + 1);
+        if next != current {
+            breakpoints.push(m);
+            current = next;
+        }
+    }
+    breakpoints
+}
+
+/// cuTile specializes a dynamic dimension by its power-of-two divisor, capped at this value.
+const MAX_DIVISOR: usize = 16;
+
+/// The smallest row count in each bucket for every divisor class the JIT keys on, so warming
+/// these compiles every variant a tuned bucket can launch; the first bucket starts at `lower`.
+pub fn bucket_warm_rows(buckets: &[Bucket], lower: usize) -> Vec<usize> {
+    let divisor = |m: usize| (1usize << m.trailing_zeros()).min(MAX_DIVISOR);
+    let mut rows = Vec::new();
+    let mut lower = lower.max(1);
+    for bucket in buckets {
+        let mut wanted = MAX_DIVISOR.trailing_zeros() as usize + 1;
+        let mut m = lower;
+        let mut seen = 0usize;
+        while wanted > 0 && m <= bucket.upper {
+            let class = divisor(m);
+            if seen & class == 0 {
+                seen |= class;
+                rows.push(m);
+                wanted -= 1;
+            }
+            m += 1;
+        }
+        lower = bucket.upper.saturating_add(1);
+    }
+    rows
+}
+
 /// Human-readable interval labels, `<=96`, `<=512`, `>512`, one per bucket in order.
 fn bucket_labels(buckets: &[Bucket]) -> Vec<String> {
     let mut lower = 1usize;
@@ -160,6 +242,69 @@ pub fn config(params: impl IntoIterator<Item = (&'static str, i64)>) -> Config {
             .map(|(key, value)| (key, ParamValue::Int(value))),
     )
 }
+
+/// A config field stored as one integer cuTile parameter.
+pub trait TuneParam: Sized {
+    fn to_param(self) -> i64;
+    fn from_param(value: i64) -> Option<Self>;
+}
+
+impl TuneParam for usize {
+    fn to_param(self) -> i64 {
+        self as i64
+    }
+
+    fn from_param(value: i64) -> Option<Self> {
+        usize::try_from(value).ok()
+    }
+}
+
+impl TuneParam for i32 {
+    fn to_param(self) -> i64 {
+        i64::from(self)
+    }
+
+    fn from_param(value: i64) -> Option<Self> {
+        i32::try_from(value).ok()
+    }
+}
+
+impl TuneParam for bool {
+    fn to_param(self) -> i64 {
+        i64::from(self)
+    }
+
+    fn from_param(value: i64) -> Option<Self> {
+        usize::try_from(value).ok().map(|v| v != 0)
+    }
+}
+
+/// A kernel's launch config, encoded as a cuTile config for the tuner and its records.
+pub trait Tunable: Copy {
+    fn to_config(self) -> Config;
+    fn from_config(config: &Config) -> Option<Self>;
+}
+
+/// Implements [`Tunable`] with one parameter per listed field, named after the field.
+macro_rules! tunable {
+    ($ty:ty { $($field:ident),+ $(,)? }) => {
+        impl $crate::cutile::tune::Tunable for $ty {
+            fn to_config(self) -> ::cutile::tune::Config {
+                $crate::cutile::tune::config([$((
+                    stringify!($field),
+                    $crate::cutile::tune::TuneParam::to_param(self.$field),
+                )),+])
+            }
+
+            fn from_config(config: &::cutile::tune::Config) -> Option<Self> {
+                Some(Self {
+                    $($field: $crate::cutile::tune::TuneParam::from_param(config.int(stringify!($field))?)?),+
+                })
+            }
+        }
+    };
+}
+pub(super) use tunable;
 
 /// The search space for one bucket, declared by the kernel.
 ///
@@ -234,7 +379,7 @@ impl Space {
     }
 
     /// The grid phase: the policy first, then every joint row with the axes at their defaults.
-    fn tiles(&self) -> Vec<Config> {
+    pub(super) fn tiles(&self) -> Vec<Config> {
         let defaults = self.axis_defaults();
         let mut rows: Vec<BTreeMap<&'static str, i64>> = vec![BTreeMap::new()];
         for (names, group) in &self.joints {
@@ -274,7 +419,7 @@ impl Space {
     }
 
     /// Every config the descent can reach, for cuTile's declared candidate list.
-    fn configs(&self) -> Vec<Config> {
+    pub(super) fn configs(&self) -> Vec<Config> {
         let mut configs = self.tiles();
         for axis in 0..self.axes.len() {
             let mut grown = configs.clone();
@@ -299,6 +444,37 @@ pub type LaunchSet = Box<dyn FnMut(&Arc<Stream>) -> std::result::Result<(), Cuti
 pub struct Prepared {
     pub run: LaunchSet,
     pub sample: Tensor,
+}
+
+impl Prepared {
+    /// Runs `launch` once for the gate sample; later runs are the timed launch set.
+    pub fn from_launch(mut launch: impl FnMut() -> Result<Tensor> + 'static) -> Result<Self> {
+        let sample = launch()?;
+        let run = Box::new(move |_: &Arc<Stream>| launch().map(|_| ()).map_err(cutile_error));
+        Ok(Self { run, sample })
+    }
+}
+
+/// Synthetic activation for timing; tile choice depends on shape and dtype, not values.
+pub(super) fn random_activation(
+    rows: usize,
+    k: usize,
+    dtype: DType,
+    device: &candle_core::Device,
+) -> Result<Tensor> {
+    Tensor::rand(-ACTIVATION_RANGE, ACTIVATION_RANGE, (rows, k), device)?.to_dtype(dtype)
+}
+
+/// Builds a probe's input once, so every candidate at that probe times the same operands.
+pub(super) fn probe_input<I>(
+    inputs: &mut HashMap<usize, I>,
+    rows: usize,
+    make: impl FnOnce() -> Result<I>,
+) -> Result<&I> {
+    Ok(match inputs.entry(rows) {
+        std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+        std::collections::hash_map::Entry::Vacant(entry) => entry.insert(make()?),
+    })
 }
 
 /// What a kernel asks the tuner to decide for one registered shape.
@@ -373,7 +549,7 @@ pub fn tune(
         space_hash: Some(space_hash(&all)),
     };
     let path = record_path(dev, request);
-    let mut record = if mode == TuneMode::Auto && path.exists() {
+    let mut record = if mode != TuneMode::Force && path.exists() {
         match Record::load_verified(&path, &workspace, |_| Ok(None)) {
             Ok((record, warnings)) => {
                 for warning in warnings {
@@ -391,6 +567,7 @@ pub fn tune(
     };
 
     let stream = super::context::stream(dev);
+    let total = total_budget();
     let mut results = Vec::with_capacity(request.buckets.len());
     let mut measured_any = false;
     for ((&bucket, label), space) in request.buckets.iter().zip(&labels).zip(&spaces) {
@@ -410,12 +587,27 @@ pub fn tune(
             });
             continue;
         }
+        if mode == TuneMode::Cached {
+            hint_untuned();
+            results.push(fallback(bucket, space));
+            continue;
+        }
         if record.get(label).is_some() {
             tracing::info!(
                 "cuTile autotune {} {label}: cached config is outside the current search space",
                 workspace.kernel
             );
         }
+        let Some(budget) = bucket_budget(total) else {
+            tracing::info!(
+                "cuTile autotune {} {label}: process tuning budget ({}s, {TUNE_BUDGET_ENV}) spent, keeping the policy",
+                workspace.kernel,
+                total.as_secs()
+            );
+            results.push(fallback(bucket, space));
+            continue;
+        };
+        let started = Instant::now();
         let reference = match prepare(bucket.probe, &policy) {
             Ok(prepared) => prepared.sample,
             Err(err) => {
@@ -430,7 +622,7 @@ pub fn tune(
         let output = Autotuner::new(&workspace.kernel)
             .configs(candidates)
             .bench(bench_options())
-            .budget(BUCKET_BUDGET)
+            .budget(budget)
             .run_with(Descent { space }, &stream, |_, candidate| {
                 let prepared = prepare(bucket.probe, candidate).map_err(cutile_error)?;
                 if candidate.id != policy.id && !within_tolerance(&prepared.sample, &reference)? {
@@ -440,6 +632,7 @@ pub fn tune(
                 }
                 Ok(burst(prepared.run))
             });
+        charge(started.elapsed());
         let output = match output {
             Ok(output) => output,
             Err(err) => {
@@ -467,7 +660,19 @@ pub fn tune(
                 );
                 (policy.clone(), policy_ms)
             }
-            Some((best, ms)) => (best, ms),
+            Some((best, ms)) => {
+                match confirm(&stream, bucket.probe, &policy, &best, &mut prepare) {
+                    Some(gain) if gain >= MIN_GAIN => (best, ms),
+                    gain => {
+                        tracing::debug!(
+                        "cuTile autotune {} {label}: {} lost the paired A/B against the policy ({gain:?}), keeping the policy",
+                        workspace.kernel,
+                        best.id
+                    );
+                        (policy.clone(), policy_ms)
+                    }
+                }
+            }
             None => (policy.clone(), policy_ms),
         };
         record.insert(RecordEntry {
@@ -577,6 +782,35 @@ fn samples(trials: &[Trial], id: &str) -> usize {
 }
 
 /// Weights rotate through distinct layers, so cuTile's L2 flush and its buffer are not needed.
+fn hint_untuned() {
+    static HINT: std::sync::Once = std::sync::Once::new();
+    HINT.call_once(|| {
+        tracing::info!(
+            "cuTile kernels without a tuning record use their default configs; set {TUNE_MODE_ENV}=auto once to tune them"
+        );
+    });
+}
+
+/// Relative gain of `best` over `policy` from strictly alternating timed reps, or `None` if either fails to run.
+fn confirm(
+    stream: &Arc<Stream>,
+    probe: usize,
+    policy: &Config,
+    best: &Config,
+    prepare: &mut impl FnMut(usize, &Config) -> Result<Prepared>,
+) -> Option<f64> {
+    let mut a = burst(prepare(probe, policy).ok()?.run);
+    let mut b = burst(prepare(probe, best).ok()?.run);
+    let opts = BenchOptions {
+        rep: CONFIRM_REP,
+        min_reps: CONFIRM_MIN_REPS,
+        ..bench_options()
+    };
+    let (ma, mb) = cutile::bench::do_bench_paired(stream, &opts, |s| a(s), |s| b(s)).ok()?;
+    let policy_ms = f64::from(ma.median_ms());
+    (policy_ms > 0.0).then(|| 1.0 - f64::from(mb.median_ms()) / policy_ms)
+}
+
 fn bench_options() -> BenchOptions {
     BenchOptions {
         clear_l2: false,
@@ -682,6 +916,13 @@ impl<K: Hash + Eq + Copy, C: Copy> TunedTable<K, C> {
             .insert(key, configs);
     }
 
+    /// Whether `key` was decided this process, tuned or not, so a kernel tunes each shape once.
+    pub fn contains(&self, key: K) -> bool {
+        self.inner
+            .get()
+            .is_some_and(|table| table.read().unwrap().contains_key(&key))
+    }
+
     pub fn get(&self, key: K, m: usize) -> Option<C> {
         let table = self.inner.get()?.read().unwrap();
         let configs = table.get(&key)?;
@@ -692,6 +933,38 @@ impl<K: Hash + Eq + Copy, C: Copy> TunedTable<K, C> {
     }
 }
 
+impl<K: Hash + Eq + Copy, C: Tunable> TunedTable<K, C> {
+    /// Tunes `key` and stores the result; `prepare` receives each candidate as the launch type.
+    pub fn tune(
+        &self,
+        key: K,
+        dev: &CudaDevice,
+        mode: TuneMode,
+        request: &TuneRequest,
+        mut prepare: impl FnMut(usize, C) -> Result<Prepared>,
+    ) -> Vec<Tuned> {
+        let tuned = tune(dev, mode, request, |rows, candidate| {
+            let cfg = C::from_config(candidate)
+                .ok_or_else(|| candle_core::Error::Msg("config outside the space".into()))?;
+            prepare(rows, cfg)
+        });
+        self.set(key, &tuned, C::from_config);
+        tuned
+    }
+
+    /// Runs `tune` with the env mode unless `key` was already decided this process.
+    pub fn tune_once(
+        &self,
+        key: K,
+        tune: impl FnOnce(TuneMode) -> Result<Vec<Tuned>>,
+    ) -> Result<()> {
+        if !self.contains(key) {
+            tune(TuneMode::from_env())?;
+        }
+        Ok(())
+    }
+}
+
 impl<K: Hash + Eq + Copy, C: Copy> Default for TunedTable<K, C> {
     fn default() -> Self {
         Self::new()
@@ -699,16 +972,20 @@ impl<K: Hash + Eq + Copy, C: Copy> Default for TunedTable<K, C> {
 }
 
 fn arch(dev: &CudaDevice) -> String {
-    let (major, minor) = super::device_compute_capability(dev);
-    format!("sm_{major}{minor}")
+    let info = crate::cuda_device::cuda_device_info(dev);
+    format!("sm_{}{}", info.major, info.minor)
 }
 
-/// GPU name and SM count as a file-name-safe slug; records are per device model, not just per arch.
 fn device_slug(dev: &CudaDevice) -> String {
     use candle_core::cuda::cudarc::driver::result;
     let cu_device = dev.cuda_stream().context().cu_device();
     let name = result::device::get_name(cu_device).unwrap_or_else(|_| "unknown-gpu".to_string());
-    let sms = super::device_multiprocessor_count(dev);
+    device_key(&name, &crate::cuda_device::cuda_device_info(dev))
+}
+
+/// File-name-safe key from the GPU name and the properties tile choices depend on, so a record
+/// never crosses devices that differ in SM count, L2, or shared memory (MIG slices, clocks-down SKUs).
+fn device_key(name: &str, info: &crate::cuda_device::CudaDeviceInfo) -> String {
     let mut slug: String = name
         .to_ascii_lowercase()
         .chars()
@@ -717,7 +994,15 @@ fn device_slug(dev: &CudaDevice) -> String {
     while slug.contains("--") {
         slug = slug.replace("--", "-");
     }
-    format!("{}-{sms}sm", slug.trim_matches('-'))
+    format!(
+        "{}-sm{}{}-{}sm-l2{}k-smem{}k",
+        slug.trim_matches('-'),
+        info.major,
+        info.minor,
+        info.sms,
+        info.l2_bytes / 1024,
+        info.smem_optin / 1024
+    )
 }
 
 fn record_dir() -> PathBuf {
@@ -817,6 +1102,7 @@ mod tests {
     fn mode_parses_documented_values() {
         assert_eq!(TuneMode::parse("off"), Some(TuneMode::Off));
         assert_eq!(TuneMode::parse(" Auto "), Some(TuneMode::Auto));
+        assert_eq!(TuneMode::parse("cached"), Some(TuneMode::Cached));
         assert_eq!(TuneMode::parse("FORCE"), Some(TuneMode::Force));
         assert_eq!(TuneMode::parse("sometimes"), None);
     }

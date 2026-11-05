@@ -21,12 +21,22 @@ test("builds the focused landing page", async () => {
 
   assert.match(html, /mistral<span>\.rs<\/span>/);
   assert.ok(html.includes("Fast, flexible LLM inference"));
-  assert.ok(html.includes("Once installed, start a chat."));
-  assert.ok(html.includes("mistralrs serve -m Qwen/Qwen3-4B --quant 4"));
+  assert.ok(html.includes('<span class="step-num">1</span>Install') && html.includes('<span class="step-num">2</span>Run'));
+  assert.ok(html.includes('class="release-pill" href="/blog/v0-9-5-qwen-flash-next.html"'));
+  assert.ok(html.includes('id="vllm-throughput"') && html.includes("4,914.05") && html.includes("4,300.76"));
+  assert.ok(html.includes('href="/blog/v0-9-3-throughput.html"'));
+  assert.doesNotMatch(html, /llamacpp-prefill|vllm-dflash2|scoreboard/);
+  assert.ok(html.includes('rel="icon" href="/favicon.svg"') && html.includes('rel="apple-touch-icon"'));
+  assert.ok(html.includes("mistralrs serve -m Qwen/Qwen3-Coder-Next --quant 4"));
+  assert.doesNotMatch(html, /ANTHROPIC_BASE_URL/);
+  assert.ok(html.includes('data-copy="pip install mistralrs"') && html.includes('data-copy="cargo add mistralrs"'));
+  assert.doesNotMatch(html, /send_chat_completion_request|ModelBuilder::new/);
+  assert.ok(scripts.includes("chart-tooltip"));
+  assert.ok(html.includes('data-copy="mistralrs serve -m Qwen/Qwen3-4B --quant 4"'));
   assert.doesNotMatch(html, /mistralrs run|example-label|command-pair/);
-  assert.ok(html.includes("50+ model architectures"));
+  assert.ok(html.includes("60+ model architectures"));
   assert.ok(html.includes('href="https://docs.mistralrs.dev/"'));
-  assert.ok(html.includes("Follow the installer, then open a new terminal."));
+  assert.ok(html.includes("Then open a new terminal."));
   assert.ok(html.includes("http://localhost:1234/ui"));
   assert.doesNotMatch(html, /MIT licensed|not affiliated with Mistral AI/);
   assert.ok(scripts.includes("curl -fsSL https://mistralrs.dev/install.sh | sh"));
@@ -65,9 +75,10 @@ test("builds the blog from release posts", async () => {
   assert.ok(landingHtml.includes('href="/blog/"'));
   assert.ok(indexHtml.includes("up to 19.5% higher serving throughput than vLLM"));
   assert.ok(indexHtml.includes("By Eric Buehler"));
+  assert.ok(indexHtml.includes("We recently released mistral.rs v0.9.3"));
 
-  const slugMatch = indexHtml.match(/href="([^"]+\.html)"/);
-  assert.ok(slugMatch, "blog index should link at least one post");
+  const slugMatch = indexHtml.match(/href="(v0-9-3-throughput\.html)"/);
+  assert.ok(slugMatch, "blog index should link the v0.9.3 release post");
   const slug = slugMatch[1].replace(/\.html$/, "");
   const postHtml = await readFile(path.join(distBlogDir, slugMatch[1]), "utf8");
   const figure = await readFile(

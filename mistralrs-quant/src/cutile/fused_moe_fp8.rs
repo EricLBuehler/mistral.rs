@@ -25,7 +25,7 @@ use super::tune::{
     cutile_error, tune, Bucket, Prepared, Space, TuneMode, TuneRequest, TuneRouting, TunedTable,
     TUNE_WEIGHT_SETS,
 };
-use super::warmup::CutileKernel;
+use super::warmup::{CutileKernel, WarmupProgress};
 use super::{catch_cutile_panic, context, MoeShapeKey, MoeTileConfig};
 
 /// Scale group along K and N; the kernel steps K one group at a time so every partial product is
@@ -709,7 +709,7 @@ impl Fp8Tuner {
         let (experts, top_k) = (sets[0].num_experts, sets[0].top_k);
         let ops = self.operands(m)?;
         if !ops.align.contains_key(&cfg.bm) {
-            let align = MoeAlign::build(&dev, &ops.topk_ids, m, experts, top_k, cfg.bm)?;
+            let align = MoeAlign::build(&dev, ops.topk_ids.as_ref(), m, experts, top_k, cfg.bm)?;
             ops.align.insert(cfg.bm, Arc::new(align));
         }
         let align = ops.align[&cfg.bm].clone();
@@ -773,7 +773,7 @@ fn routing_slice<T: candle_core::cuda::cudarc::driver::DeviceRepr + candle_core:
     if offset == 0 {
         Ok(tensor)
     } else {
-        tensor.copy()
+        tensor.force_contiguous()
     }
 }
 
@@ -797,13 +797,15 @@ pub fn cutile_fused_moe_fp8(
         candle_core::bail!("cuTile FP8 MoE routing shapes do not match the input")
     }
     let cfg = fp8_config(num_tokens, weights.shape_key());
-    let topk_ids = routing_slice::<u32>(topk_ids)?;
-    let (ids_storage, _) = topk_ids.storage_and_layout();
+    let topk_ids = topk_ids.to_dtype(DType::U32)?.flatten_all()?.contiguous()?;
+    let (ids_storage, ids_layout) = topk_ids.storage_and_layout();
     let Storage::Cuda(ids_cuda) = &*ids_storage else {
         candle_core::bail!("cuTile FP8 MoE routing tensors must be CUDA tensors")
     };
     let (sids, eids, ntpp, em) = moe_align(
-        ids_cuda.as_cuda_slice::<u32>()?,
+        &ids_cuda
+            .as_cuda_slice::<u32>()?
+            .slice(ids_layout.start_offset()..ids_layout.start_offset() + num_valid),
         num_tokens,
         weights.num_experts,
         top_k,
@@ -1116,7 +1118,7 @@ pub struct FusedMoeFp8Kernel;
 pub static FUSED_MOE_FP8: FusedMoeFp8Kernel = FusedMoeFp8Kernel;
 
 impl CutileKernel for FusedMoeFp8Kernel {
-    fn warm(&self, dev: &CudaDevice) -> Result<()> {
+    fn warm(&self, dev: &CudaDevice, silent: bool) -> Result<()> {
         let shapes: Vec<Vec<CutileFp8MoeWeights>> = FP8_MOE_SHAPES
             .get_or_init(|| Mutex::new(Vec::new()))
             .lock()
@@ -1154,10 +1156,18 @@ impl CutileKernel for FusedMoeFp8Kernel {
             })
             .collect();
         let total: usize = plan.iter().map(|(_, ms)| ms.len()).sum();
-        tracing::info!("Warming {total} cuTile FP8 MoE kernels.");
+        tracing::info!("Warming {total} cuTile FP8 MoE variants.");
+        let progress = WarmupProgress::new("FP8 MoE variants", total, silent);
         for (weights, ms) in &plan {
             for &m in ms {
-                if let Err(err) = warmup_shape(dev, weights, m) {
+                if let Err(err) = progress.run(
+                    format!(
+                        "hidden={} inter={} rows={m}",
+                        weights.hidden(),
+                        weights.inter()
+                    ),
+                    || warmup_shape(dev, weights, m),
+                ) {
                     tracing::warn!(
                         "cuTile FP8 MoE warmup failed (hidden={} inter={} m={m}): {err}",
                         weights.hidden(),
@@ -1189,6 +1199,14 @@ mod tests {
 
     fn silu(x: f32) -> f32 {
         x / (1.0 + (-x).exp())
+    }
+
+    fn offset_view(tensor: Tensor) -> Result<Tensor> {
+        let shape = tensor.shape().clone();
+        let flat = tensor.flatten_all()?;
+        Tensor::cat(&[&flat.narrow(0, flat.elem_count() - 1, 1)?, &flat], 0)?
+            .narrow(0, 1, flat.elem_count())?
+            .reshape(shape)
     }
 
     // Times the two grouped GEMMs on real expert shapes per tile config; set CUTILE_MOE_TUNE to
@@ -1351,8 +1369,8 @@ mod tests {
         let w_host: Vec<f32> = (0..T * TOP_K)
             .map(|i| 0.25 + (i % 3) as f32 * 0.3)
             .collect();
-        let topk_ids = Tensor::from_vec(ids_host.clone(), (T, TOP_K), &dev)?;
-        let topk_weights = Tensor::from_vec(w_host.clone(), (T, TOP_K), &dev)?;
+        let topk_ids = offset_view(Tensor::from_vec(ids_host.clone(), (T, TOP_K), &dev)?)?;
+        let topk_weights = offset_view(Tensor::from_vec(w_host.clone(), (T, TOP_K), &dev)?)?;
         let run = || -> Result<Vec<Vec<f32>>> {
             cutile_fused_moe_fp8(
                 &x,

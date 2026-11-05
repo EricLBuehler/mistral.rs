@@ -402,7 +402,7 @@ impl XLoraLlama {
         is_scaling_pass: Option<f64>,
         flash_params: &FlashParams,
     ) -> Result<Tensor> {
-        let mut x = self.wte.embedding_forward(input_ids, self.dtype)?;
+        let mut x = self.wte.embedding_forward(input_ids, self.dtype.into())?;
         let mut cache = if is_full_pass {
             if no_kv_cache {
                 let mut new_cache = Vec::new();

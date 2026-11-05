@@ -450,12 +450,12 @@ fn resolve_paged_attn(
 fn paged_attn_with_serving_capacity(
     config: Option<PagedAttentionConfig>,
     max_num_seqs: usize,
-    recurrent_prefix_capacity: usize,
+    prefix_cache_n: mistralrs_core::PrefixCacheCapacity,
 ) -> anyhow::Result<Option<PagedAttentionConfig>> {
     Ok(config
         .map(|config| config.with_serving_capacity(max_num_seqs))
         .transpose()?
-        .map(|config| config.with_recurrent_prefix_capacity(recurrent_prefix_capacity)))
+        .map(|config| config.with_recurrent_prefix_capacity(prefix_cache_n)))
 }
 
 pub(crate) async fn scheduler_config_from_pipeline<P>(
@@ -500,7 +500,7 @@ pub(crate) fn build_engine_config(
     search_callback: Option<Arc<SearchCallback>>,
     tool_callbacks: &HashMap<String, ToolCallbackWithTool>,
     no_kv_cache: bool,
-    prefix_cache_n: Option<usize>,
+    prefix_cache_n: mistralrs_core::PrefixCacheCapacity,
 ) -> EngineConfig {
     EngineConfig {
         throughput_logging_enabled,
@@ -508,8 +508,8 @@ pub(crate) fn build_engine_config(
         search_callback,
         tool_callbacks: tool_callbacks.clone(),
         no_kv_cache,
-        no_prefix_cache: prefix_cache_n.is_none(),
-        prefix_cache_n: prefix_cache_n.unwrap_or(16),
+        no_prefix_cache: prefix_cache_n.is_disabled(),
+        prefix_cache_n: prefix_cache_n.requested(),
         disable_eos_stop: false,
     }
 }
@@ -530,7 +530,7 @@ pub(crate) async fn build_pipeline_from_text_loader(
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use mistralrs_core::*;
 
-    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
+    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.requested());
 
     let engine_config = build_engine_config(
         builder.throughput_logging,
@@ -550,7 +550,7 @@ pub(crate) async fn build_pipeline_from_text_loader(
     builder.paged_attn_cfg = paged_attn_with_serving_capacity(
         builder.paged_attn_cfg.clone(),
         builder.max_num_seqs,
-        builder.prefix_cache_n.unwrap_or(0),
+        builder.prefix_cache_n,
     )?;
 
     builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
@@ -608,7 +608,7 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use mistralrs_core::*;
 
-    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
+    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.requested());
 
     let engine_config = build_engine_config(
         builder.throughput_logging,
@@ -627,7 +627,7 @@ pub(crate) async fn build_pipeline_from_gguf_loader(
     builder.paged_attn_cfg = paged_attn_with_serving_capacity(
         builder.paged_attn_cfg.clone(),
         builder.max_num_seqs,
-        builder.prefix_cache_n.unwrap_or(0),
+        builder.prefix_cache_n,
     )?;
 
     builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
@@ -734,7 +734,7 @@ pub async fn build_text_pipeline(
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use mistralrs_core::*;
 
-    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
+    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.requested());
 
     let config = NormalSpecificConfig {
         topology: builder.topology.clone(),
@@ -777,7 +777,7 @@ pub async fn build_text_pipeline(
     builder.paged_attn_cfg = paged_attn_with_serving_capacity(
         builder.paged_attn_cfg.clone(),
         builder.max_num_seqs,
-        builder.prefix_cache_n.unwrap_or(0),
+        builder.prefix_cache_n,
     )?;
 
     builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
@@ -886,7 +886,7 @@ pub async fn build_multimodal_pipeline(
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use mistralrs_core::*;
 
-    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
+    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.requested());
 
     let config = MultimodalSpecificConfig {
         topology: builder.topology.clone(),
@@ -930,7 +930,7 @@ pub async fn build_multimodal_pipeline(
     builder.paged_attn_cfg = paged_attn_with_serving_capacity(
         builder.paged_attn_cfg.clone(),
         builder.max_num_seqs,
-        builder.prefix_cache_n.unwrap_or(0),
+        builder.prefix_cache_n,
     )?;
 
     builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
@@ -1053,7 +1053,7 @@ pub async fn build_gguf_pipeline(
     {
         anyhow::bail!("Built-in MTP is not supported for GGUF models. Use a safetensors checkpoint with ISQ, or omit the built-in MTP configuration.");
     }
-    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
+    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.requested());
 
     let config = GGUFSpecificConfig {
         topology: builder.topology.clone(),
@@ -1100,7 +1100,7 @@ pub async fn build_gguf_pipeline(
     builder.paged_attn_cfg = paged_attn_with_serving_capacity(
         builder.paged_attn_cfg.clone(),
         builder.max_num_seqs,
-        builder.prefix_cache_n.unwrap_or(0),
+        builder.prefix_cache_n,
     )?;
 
     builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
@@ -1478,7 +1478,7 @@ pub async fn build_auto_pipeline(
 ) -> anyhow::Result<(Arc<Mutex<dyn Pipeline>>, SchedulerConfig, AddModelConfig)> {
     use mistralrs_core::*;
 
-    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.unwrap_or(0));
+    let mtp_runtime = MtpRuntimeConfig::new(builder.prefix_cache_n.requested());
 
     let normal_config = NormalSpecificConfig {
         topology: builder.topology.clone(),
@@ -1554,7 +1554,7 @@ pub async fn build_auto_pipeline(
     builder.paged_attn_cfg = paged_attn_with_serving_capacity(
         builder.paged_attn_cfg.clone(),
         builder.max_num_seqs,
-        builder.prefix_cache_n.unwrap_or(0),
+        builder.prefix_cache_n,
     )?;
 
     builder.paged_attn_cfg = reserve_external_mtp_memory_with_runtime(
@@ -1695,6 +1695,7 @@ mod paged_attention_policy_tests {
             metal_prefill_mask_is_structured: false,
             planned_query_tokens: TEST_CONTEXT,
             logits_bytes_per_query_token: 0,
+            recurrent_prefix_capacity: 0,
         };
         let limits = scheduler_execution_limits(TEST_MAX_SEQUENCES, Some(plan));
         assert_eq!(limits.max_num_seqs, TEST_MAX_SEQUENCES);

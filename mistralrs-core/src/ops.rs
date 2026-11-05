@@ -6877,7 +6877,7 @@ pub fn apply_triangular(xs: &Tensor, diagonal: isize, upper: bool) -> Result<Ten
 /// - CUDA: Custom CUDA kernel with vec4 optimization
 /// - Metal: Native Metal kernel
 /// - CPU: Rayon-parallelized implementation
-fn glu_activation_type(act: Activation) -> Option<mistralrs_quant::GluActivationType> {
+pub(crate) fn glu_activation_type(act: Activation) -> Option<mistralrs_quant::GluActivationType> {
     match act {
         Activation::Silu | Activation::Swish => Some(mistralrs_quant::GluActivationType::Silu),
         Activation::NewGelu | Activation::GeluPytorchTanh => {
@@ -6933,7 +6933,11 @@ pub(crate) fn try_fused_gated_projection(
     let Some(activation) = glu_activation_type(act) else {
         return Ok(None);
     };
-    mistralrs_quant::try_forward_fused_quantized_glu(gate, value, projection, activation)
+    mistralrs_quant::forward_fused_glu(
+        projection,
+        mistralrs_quant::GluInput::Split { gate, value },
+        activation,
+    )
 }
 
 pub fn mul_and_candle_act(a: &Tensor, b: &Tensor, act: candle_nn::Activation) -> Result<Tensor> {
@@ -6957,19 +6961,17 @@ pub(crate) fn try_fused_split_glu_quantized_forward(
     act: Activation,
     projection: &dyn mistralrs_quant::QuantMethod,
 ) -> Result<Option<Tensor>> {
-    #[cfg(feature = "cuda")]
-    {
-        let Some(activation) = glu_activation_type(act) else {
-            return Ok(None);
-        };
-        projection.try_forward_fused_split_glu(xs, split_size, activation)
-    }
-
-    #[cfg(not(feature = "cuda"))]
-    {
-        let _ = (xs, split_size, act, projection);
-        Ok(None)
-    }
+    let Some(activation) = glu_activation_type(act) else {
+        return Ok(None);
+    };
+    mistralrs_quant::forward_fused_glu(
+        projection,
+        mistralrs_quant::GluInput::Packed {
+            input: xs,
+            split_size,
+        },
+        activation,
+    )
 }
 
 pub fn split_mul_and_act_order(
@@ -7021,6 +7023,12 @@ impl MergedDenseProjection {
         }
     }
 
+    fn originals_require_forward(&self) -> bool {
+        self.originals.iter().any(|projection| {
+            projection.is_dynamic_lora_active() || projection.stats_snapshot().is_some()
+        })
+    }
+
     pub(crate) fn forward(&self, xs: &Tensor) -> Result<Vec<Tensor>> {
         let Some(ys) = self.forward_packed(xs)? else {
             return self.originals.iter().map(|proj| proj.forward(xs)).collect();
@@ -7035,11 +7043,7 @@ impl MergedDenseProjection {
     }
 
     pub(crate) fn forward_packed(&self, xs: &Tensor) -> Result<Option<Tensor>> {
-        if self
-            .originals
-            .iter()
-            .any(|proj| proj.is_dynamic_lora_active())
-        {
+        if self.originals_require_forward() {
             Ok(None)
         } else {
             self.proj.forward(xs).map(Some)
@@ -7050,11 +7054,7 @@ impl MergedDenseProjection {
         &self,
         xs: &Tensor,
     ) -> Option<mistralrs_quant::ActivationQuantizationScheme> {
-        if self
-            .originals
-            .iter()
-            .any(|proj| proj.is_dynamic_lora_active())
-        {
+        if self.originals_require_forward() {
             None
         } else {
             self.proj.activation_quantization_scheme_for(xs)
@@ -7065,11 +7065,7 @@ impl MergedDenseProjection {
         &self,
         xs: &Tensor,
     ) -> Option<mistralrs_quant::ActivationScaleLayout> {
-        if self
-            .originals
-            .iter()
-            .any(|proj| proj.is_dynamic_lora_active())
-        {
+        if self.originals_require_forward() {
             None
         } else {
             self.proj.preferred_activation_scale_layout_for(xs)
@@ -7080,13 +7076,9 @@ impl MergedDenseProjection {
         &self,
         activation: &mistralrs_quant::QuantizedActivation,
     ) -> Result<Tensor> {
-        if self
-            .originals
-            .iter()
-            .any(|proj| proj.is_dynamic_lora_active())
-        {
+        if self.originals_require_forward() {
             candle_core::bail!(
-                "packed projection cannot use a prequantized activation with active dynamic LoRA"
+                "packed projection cannot use prequantized activation with active adapters or stats collection"
             )
         }
         self.proj.forward_quantized(activation)
@@ -7125,7 +7117,9 @@ pub(crate) fn quantized_ffn(
     }
 
     if xs.device().is_cpu() {
-        if let Some(mut out) = mistralrs_quant::try_fused_gemv_shared_lhs_cpu(xs, &[gate, up])? {
+        if let Some(mut out) =
+            mistralrs_quant::forward_group(xs, &[gate, up], mistralrs_quant::GroupKind::Dense)?
+        {
             let rhs = out.pop().unwrap();
             let lhs = out.pop().unwrap();
             let inter = mul_and_act(&lhs, &rhs, act)?;
@@ -7152,17 +7146,6 @@ pub(crate) fn qkv_projections(
         return Ok(qkv);
     }
 
-    if xs.device().is_cpu() {
-        if let Some(mut out) =
-            mistralrs_quant::try_fused_gemv_shared_lhs_cpu(xs, &[q_proj, k_proj, v_proj])?
-        {
-            let v = out.pop().unwrap();
-            let k = out.pop().unwrap();
-            let q = out.pop().unwrap();
-            return Ok((q, k, v));
-        }
-    }
-
     Ok((
         q_proj.forward(xs)?,
         k_proj.forward(xs)?,
@@ -7186,6 +7169,7 @@ mod tests {
 
     use super::MergedDenseProjection;
 
+    const MERGED_PADDED_OUTPUT_ROWS: usize = 16;
     #[cfg(feature = "cuda")]
     const CUDA_F32_REL_TOLERANCE: f32 = 1e-5;
     #[cfg(feature = "cuda")]
@@ -7790,6 +7774,17 @@ mod tests {
                 .with_lora_registry(registry.clone());
         let packed_weight =
             Tensor::new(&[[1f32, 0.], [0., 1.], [1., 1.], [1., -1.]], &Device::Cpu)?;
+        let packed_weight = Tensor::cat(
+            &[
+                &packed_weight,
+                &Tensor::zeros(
+                    (MERGED_PADDED_OUTPUT_ROWS - packed_weight.dim(0)?, 2),
+                    DType::F32,
+                    &Device::Cpu,
+                )?,
+            ],
+            0,
+        )?;
         let packed = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
             Linear::new(packed_weight.clone(), None),
         ))?) as Arc<dyn QuantMethod>;
@@ -7810,6 +7805,7 @@ mod tests {
         });
         let input = Tensor::new(&[[2f32, 3.]], &Device::Cpu)?;
         let base = merged.forward(&input)?;
+        assert_eq!(base[0].stride(), &[MERGED_PADDED_OUTPUT_ROWS, 1]);
         assert_eq!(base[0].to_vec2::<f32>()?, vec![vec![2., 3.]]);
         assert_eq!(base[1].to_vec2::<f32>()?, vec![vec![5., -1.]]);
 

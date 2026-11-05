@@ -817,7 +817,7 @@ impl VoxtralModel {
     ) -> Result<Tensor> {
         let text_embeds = self
             .tok_embeddings
-            .embedding_forward(input_ids, self.dtype)?;
+            .embedding_forward(input_ids, self.dtype.into())?;
         let query_lens = if ctx.flash_params().packed {
             Some(
                 ctx.paged_input_metadata()

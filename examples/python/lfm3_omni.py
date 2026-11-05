@@ -1,0 +1,95 @@
+"""
+LiquidAI LFM3-Omni text and speech answers from audio, images, and video with the Python SDK.
+
+Run `python examples/python/lfm3_omni.py --audio question.wav --image photo.jpg`.
+Each media flag is optional; use --prompt for a text-only request.
+WAV/MP3 audio uses standard input_audio parts; other formats use the audio_url extension.
+Video needs FFmpeg unless it is a GIF. Supply its soundtrack with --audio.
+Add --speech-out answer.wav for text and speech, or --audio-only for speech alone.
+--max-tokens counts both text tokens and speech frames (default: 1024).
+Increase it for longer speech.
+"""
+
+import argparse
+import base64
+import sys
+from pathlib import Path
+
+from mistralrs import ChatCompletionRequest, Runner, Which
+
+DEFAULT_MAX_TOKENS = 1024
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument(
+    "--max-tokens",
+    type=int,
+    default=DEFAULT_MAX_TOKENS,
+    help="Positive budget for text tokens and speech frames; increase for longer speech",
+)
+parser.add_argument("--audio", type=Path, help="Path to an audio clip")
+parser.add_argument("--image", type=Path, help="Path to an image")
+parser.add_argument("--video", type=Path, help="Path to a video or animated GIF")
+parser.add_argument("--speech-out", type=Path, help="Save the generated speech as WAV")
+parser.add_argument(
+    "--audio-only", action="store_true", help="Generate speech without text"
+)
+parser.add_argument(
+    "--prompt", default="Describe the supplied media and answer any spoken question."
+)
+args = parser.parse_args()
+if args.max_tokens <= 0:
+    parser.error("--max-tokens must be positive")
+if args.audio_only and args.speech_out is None:
+    parser.error("--audio-only requires --speech-out")
+output = {}
+if args.speech_out is not None:
+    output = {
+        "modalities": ["audio"] if args.audio_only else ["text", "audio"],
+        "audio": {"format": "wav", "voice": "default"},
+    }
+
+content = []
+for kind, path in [("image", args.image), ("video", args.video), ("audio", args.audio)]:
+    if path is not None:
+        key = f"{kind}_url"
+        audio_format = path.suffix.lower().removeprefix(".")
+        if kind == "audio" and audio_format in {"wav", "mp3"}:
+            content.append(
+                {
+                    "type": "input_audio",
+                    "input_audio": {
+                        "data": base64.b64encode(path.read_bytes()).decode("ascii"),
+                        "format": audio_format,
+                    },
+                }
+            )
+        else:
+            content.append({"type": key, key: {"url": path.resolve().as_uri()}})
+content.append({"type": "text", "text": args.prompt})
+
+runner = Runner(
+    which=Which.MultimodalPlain(model_id="LiquidAI/LFM3-Omni-2B"),
+    in_situ_quant="q8_0",
+)
+response = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[{"role": "user", "content": content}],
+        max_tokens=args.max_tokens,
+        temperature=0.1,
+        **output,
+    )
+)
+choice = response.choices[0]
+if choice.finish_reason == "length":
+    print(
+        "Generation reached --max-tokens; output may be incomplete. Increase --max-tokens for longer output.",
+        file=sys.stderr,
+    )
+message = choice.message
+if message.content:
+    print(message.content)
+if args.speech_out is not None and message.audio is not None:
+    args.speech_out.write_bytes(base64.b64decode(message.audio.data))
+    print(f"Saved speech to {args.speech_out}")
+print(response.usage)

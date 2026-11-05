@@ -111,6 +111,42 @@ impl futures::Stream for Stream<'_> {
 }
 
 impl Model {
+    /// Evaluate named typed questions about a state and optional media.
+    pub async fn send_decision_request(
+        &self,
+        request: DecisionRequest,
+    ) -> crate::error::Result<DecisionResponse> {
+        self.send_decision_request_with_model(request, None).await
+    }
+
+    /// Evaluate decision questions using the selected model, or the default model when omitted.
+    pub async fn send_decision_request_with_model(
+        &self,
+        request: DecisionRequest,
+        model_id: Option<&str>,
+    ) -> crate::error::Result<DecisionResponse> {
+        request
+            .validate()
+            .map_err(|error| SdkError::RequestValidation(error.to_string()))?;
+        let (tx, mut rx) = channel(1);
+        let request = NormalRequest::decision(request, tx, 0, model_id.map(str::to_owned));
+        self.runner
+            .get_sender(model_id)?
+            .send(Request::Normal(Box::new(request)))
+            .await?;
+        let ResponseOk::Decision { result } = rx
+            .recv()
+            .await
+            .ok_or(SdkError::Channel("channel closed unexpectedly".into()))?
+            .as_result()?
+        else {
+            return Err(SdkError::UnexpectedResponse {
+                expected: "Decision",
+            });
+        };
+        Ok(result)
+    }
+
     /// Wrap an existing [`MistralRs`] engine instance.
     /// Prefer using a builder (e.g., [`ModelBuilder`](crate::ModelBuilder)) instead.
     pub fn new(runner: Arc<MistralRs>) -> Self {
@@ -290,6 +326,7 @@ impl Model {
         let messages = request.take_messages();
         validate_reasoning_controls(&messages)?;
         let request = Request::Normal(Box::new(NormalRequest {
+            audio_output: request.audio_output(),
             messages,
             sampling_params: request.take_sampling_params(),
             seed: None,
@@ -360,6 +397,7 @@ impl Model {
         let messages = request.take_messages();
         validate_reasoning_controls(&messages)?;
         let request = Request::Normal(Box::new(NormalRequest {
+            audio_output: request.audio_output(),
             messages,
             sampling_params: request.take_sampling_params(),
             seed: None,
@@ -448,6 +486,7 @@ impl Model {
         let messages = request.take_messages();
         validate_reasoning_controls(&messages)?;
         let request = Request::Normal(Box::new(NormalRequest {
+            audio_output: request.audio_output(),
             messages,
             sampling_params: request.take_sampling_params(),
             seed: None,
@@ -621,6 +660,7 @@ impl Model {
         let (tx, mut rx) = channel(1);
 
         let request = Request::Normal(Box::new(NormalRequest {
+            audio_output: None,
             id: 0,
             queued_at: None,
             messages: RequestMessage::ImageGeneration {
@@ -702,6 +742,7 @@ impl Model {
         let (tx, mut rx) = channel(1);
 
         let request = Request::Normal(Box::new(NormalRequest {
+            audio_output: None,
             id: 0,
             queued_at: None,
             messages: RequestMessage::SpeechGeneration {
@@ -795,6 +836,7 @@ impl Model {
                 let (tx, mut rx) = channel(1);
 
                 let request = Request::Normal(Box::new(NormalRequest {
+                    audio_output: None,
                     id: 0,
                     queued_at: None,
                     messages: message,
@@ -1138,13 +1180,12 @@ impl Model {
             .map_err(|e| SdkError::Inference(e.into()))
     }
 
-    /// Returns the maximum supported sequence length for this model, if applicable.
+    /// Most tokens (prompt plus output) one request may use, if applicable.
     pub fn max_sequence_length(&self) -> crate::error::Result<Option<usize>> {
         self.max_sequence_length_with_model(None)
     }
 
-    /// Returns the maximum supported sequence length for a specific model, if applicable.
-    /// If `model_id` is `None`, returns for the default model.
+    /// Like [`Self::max_sequence_length`] for a specific model; `None` means the default model.
     pub fn max_sequence_length_with_model(
         &self,
         model_id: Option<&str>,

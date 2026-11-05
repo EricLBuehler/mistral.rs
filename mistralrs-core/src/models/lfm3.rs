@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     amoe::AnyMoeBaseModelMixin,
-    attention::{AttentionMask, SdpaParams},
+    attention::{AttentionMask, SdpaParams, ATTENTION_CHUNK_SIZE},
     device_map::{DeviceMappedMask, DeviceMapper},
     kv_cache::{
         HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig,
@@ -44,6 +44,7 @@ const DEFAULT_CONV_WIDTH: usize = 7;
 const DEFAULT_SLIDING_WINDOW: usize = 256;
 const DEFAULT_FULL_ROPE_THETA: f64 = 1_000_000.0;
 const DEFAULT_SLIDING_ROPE_THETA: f64 = 10_000.0;
+pub(crate) const DECISION_PROJECTION_CHUNK_SIZE: usize = 16;
 
 serde_default_fn!(bool, default_true, true);
 serde_default_fn!(usize, default_vocab_size, DEFAULT_VOCAB_SIZE);
@@ -483,36 +484,10 @@ impl Attention {
         layer_idx: usize,
     ) -> Result<Tensor> {
         let (b_sz, seq_len, _) = x.dims3()?;
-        let (mut q, mut k, mut v) =
-            crate::ops::qkv_projections(x, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
-        (q, k, v) = if seq_len != 1 {
-            let q = q
-                .reshape((b_sz, seq_len, self.num_heads, self.head_dim))?
-                .transpose(1, 2)?;
-            let k = k
-                .reshape((b_sz, seq_len, self.num_kv_heads, self.head_dim))?
-                .transpose(1, 2)?;
-            let v = v
-                .reshape((b_sz, seq_len, self.num_kv_heads, self.head_dim))?
-                .transpose(1, 2)?;
-            (q, k, v)
-        } else {
-            let q = q.reshape((b_sz, self.num_heads, seq_len, self.head_dim))?;
-            let k = k.reshape((b_sz, self.num_kv_heads, seq_len, self.head_dim))?;
-            let v = v.reshape((b_sz, self.num_kv_heads, seq_len, self.head_dim))?;
-            (q, k, v)
-        };
-
         let rope_positions = ctx
-            .text_positions(q.device(), q.dim(2)?)?
+            .text_positions(x.device(), seq_len)?
             .ok_or_else(|| candle_core::Error::msg("missing RoPE positions"))?;
-        (q, k) = self.rotary_emb.forward_qk_norm(
-            &q,
-            &k,
-            &self.q_layernorm,
-            &self.k_layernorm,
-            rope_positions,
-        )?;
+        let (q, k, v) = self.qkv(x, rope_positions)?;
 
         let metadata = ctx.paged_layer(layer_idx);
         let y = match &self.paged_attn {
@@ -561,6 +536,43 @@ impl Attention {
         } else {
             y.reshape((b_sz, seq_len, ()))?
         };
+        self.project_output(x, &y)
+    }
+
+    fn qkv(&self, x: &Tensor, positions: &Tensor) -> Result<(Tensor, Tensor, Tensor)> {
+        let (b_sz, seq_len, _) = x.dims3()?;
+        let (mut q, mut k, mut v) =
+            crate::ops::qkv_projections(x, &*self.q_proj, &*self.k_proj, &*self.v_proj)?;
+        (q, k, v) = if seq_len != 1 {
+            let q = q
+                .reshape((b_sz, seq_len, self.num_heads, self.head_dim))?
+                .transpose(1, 2)?;
+            let k = k
+                .reshape((b_sz, seq_len, self.num_kv_heads, self.head_dim))?
+                .transpose(1, 2)?;
+            let v = v
+                .reshape((b_sz, seq_len, self.num_kv_heads, self.head_dim))?
+                .transpose(1, 2)?;
+            (q, k, v)
+        } else {
+            let q = q.reshape((b_sz, self.num_heads, seq_len, self.head_dim))?;
+            let k = k.reshape((b_sz, self.num_kv_heads, seq_len, self.head_dim))?;
+            let v = v.reshape((b_sz, self.num_kv_heads, seq_len, self.head_dim))?;
+            (q, k, v)
+        };
+
+        (q, k) = self.rotary_emb.forward_qk_norm(
+            &q,
+            &k,
+            &self.q_layernorm,
+            &self.k_layernorm,
+            positions,
+        )?;
+        Ok((q, k, v))
+    }
+
+    fn project_output(&self, x: &Tensor, y: &Tensor) -> Result<Tensor> {
+        let (b_sz, seq_len, _) = x.dims3()?;
         let gate = candle_nn::ops::sigmoid(&self.gate_proj.forward(x)?)?.unsqueeze(D::Minus1)?;
         let y = mistralrs_quant::elementwise::broadcast_mul(
             &y.reshape((b_sz, seq_len, self.num_heads, self.head_dim))?,
@@ -568,6 +580,65 @@ impl Attention {
         )?
         .reshape((b_sz, seq_len, ()))?;
         self.out_proj.forward(&y)
+    }
+
+    fn forward_decision(
+        &self,
+        x: &Tensor,
+        positions: &Tensor,
+        full_mask: &impl Fn(usize, usize, DType, &Device) -> Result<Tensor>,
+    ) -> Result<Tensor> {
+        let (batch, seq_len, _) = x.dims3()?;
+        let (q, k, v) = self.qkv(x, positions)?;
+        let mut chunks = Vec::with_capacity(seq_len.div_ceil(ATTENTION_CHUNK_SIZE));
+        let params = SdpaParams {
+            n_kv_groups: self.sdpa_params.n_kv_groups,
+            softcap: self.sdpa_params.softcap,
+            softmax_scale: self.sdpa_params.softmax_scale,
+            sliding_window: None,
+            sinks: self.sdpa_params.sinks.clone(),
+        };
+        for start in (0..seq_len).step_by(ATTENTION_CHUNK_SIZE) {
+            let width = ATTENTION_CHUNK_SIZE.min(seq_len - start);
+            let (keys, values, mask) = if let Some(window) = self.sdpa_params.sliding_window {
+                let first = start.saturating_sub(window - 1);
+                let count = start + width - first;
+                let mask = (start..start + width)
+                    .flat_map(|query| {
+                        (first..first + count).map(move |key| {
+                            if key <= query && query - key < window {
+                                0f32
+                            } else {
+                                f32::NEG_INFINITY
+                            }
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                (
+                    k.narrow(2, first, count)?,
+                    v.narrow(2, first, count)?,
+                    Tensor::from_vec(mask, (width, count), x.device())?.to_dtype(x.dtype())?,
+                )
+            } else {
+                (
+                    k.clone(),
+                    v.clone(),
+                    full_mask(start, width, x.dtype(), x.device())?,
+                )
+            };
+            chunks.push(Sdpa.run_attention(
+                &q.narrow(2, start, width)?,
+                &keys,
+                &values,
+                &AttentionMask::Custom(mask),
+                None,
+                &params,
+            )?);
+        }
+        let output = Tensor::cat(&chunks, 2)?
+            .transpose(1, 2)?
+            .reshape((batch, seq_len, ()))?;
+        self.project_output(x, &output)
     }
 }
 
@@ -1013,7 +1084,8 @@ impl Model {
     }
 
     pub fn embed(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.embedding_forward(input_ids, self.dtype)
+        self.embed_tokens
+            .embedding_forward(input_ids, self.dtype.into())
     }
 
     pub fn forward(&self, input_ids: &Tensor, ctx: &mut ModelForwardContext<'_>) -> Result<Tensor> {
@@ -1021,6 +1093,81 @@ impl Model {
     }
 
     pub fn forward_embeds(
+        &self,
+        input_ids: &Tensor,
+        input_embeds: Tensor,
+        ctx: &mut ModelForwardContext<'_>,
+    ) -> Result<Tensor> {
+        let hidden = self.forward_hidden(input_ids, input_embeds, ctx)?;
+        self.logits_from_hidden(&hidden, ctx)
+    }
+
+    pub(crate) fn logits_from_hidden(
+        &self,
+        hidden: &Tensor,
+        ctx: &ModelForwardContext<'_>,
+    ) -> Result<Tensor> {
+        ctx.lm_head(&*self.lm_head, hidden)
+    }
+
+    pub(crate) fn project_decision_slots(
+        &self,
+        hidden: &Tensor,
+        positions: &[usize],
+        token_ids: &[u32],
+    ) -> Result<Tensor> {
+        if positions.is_empty() {
+            return Tensor::zeros((0, token_ids.len()), hidden.dtype(), hidden.device());
+        }
+        let columns = Tensor::new(token_ids, hidden.device())?;
+        let mut logits =
+            Vec::with_capacity(positions.len().div_ceil(DECISION_PROJECTION_CHUNK_SIZE));
+        for positions in positions.chunks(DECISION_PROJECTION_CHUNK_SIZE) {
+            let positions = positions
+                .iter()
+                .map(|&position| u32::try_from(position).map_err(candle_core::Error::wrap))
+                .collect::<Result<Vec<_>>>()?;
+            let indices = Tensor::new(positions.as_slice(), hidden.device())?;
+            logits.push(
+                self.lm_head
+                    .forward(&hidden.index_select(&indices, 0)?)?
+                    .index_select(&columns, 1)?,
+            );
+        }
+        Tensor::cat(&logits, 0)
+    }
+
+    pub(crate) fn forward_decision_hidden(
+        &self,
+        mut input: Tensor,
+        full_mask: impl Fn(usize, usize, DType, &Device) -> Result<Tensor>,
+    ) -> Result<Tensor> {
+        let (batch, seq_len, _) = input.dims3()?;
+        let offsets = vec![0; batch];
+        for (index, layer) in self.layers.iter().enumerate() {
+            input = self.mapper.map(input, index)?;
+            let normalized = layer.operator_norm.forward(&input)?;
+            let output = match &layer.layer_impl {
+                LayerImpl::Attention(attention) => attention.forward_decision(
+                    &normalized,
+                    &crate::pipeline::text_positions_tensor(&offsets, seq_len, input.device())?,
+                    &full_mask,
+                )?,
+                LayerImpl::Conv(conv) => {
+                    let mut state = Tensor::zeros(
+                        (batch, input.dim(2)?, conv.weight.dim(2)?),
+                        input.dtype(),
+                        input.device(),
+                    )?;
+                    conv.forward(&normalized, &mut state, false, None)?
+                }
+            };
+            input = layer.finish(&output, &input)?;
+        }
+        self.embedding_norm.forward(&input.to_device(&self.device)?)
+    }
+
+    pub(crate) fn forward_hidden(
         &self,
         input_ids: &Tensor,
         input_embeds: Tensor,
@@ -1170,8 +1317,7 @@ impl Model {
 
         let x = x.to_device(&self.device)?;
         let x = self.embedding_norm.forward(&x)?;
-        let x = ctx.logits(&x)?;
-        ctx.lm_head(&*self.lm_head, &x)
+        ctx.logits(&x)
     }
 
     pub fn residual_tensors_m(&self, uvb_m: UnVarBuilder) -> Vec<(String, Tensor)> {

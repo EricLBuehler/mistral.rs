@@ -75,7 +75,7 @@ pub struct ModelBuilder {
     pub(crate) no_paged_attn: bool,
     pub(crate) max_num_seqs: usize,
     pub(crate) with_logging: bool,
-    pub(crate) prefix_cache_n: Option<usize>,
+    pub(crate) prefix_cache_n: PrefixCacheCapacity,
 
     // Auto-model unique fields
     pub(crate) max_edge: Option<u32>,
@@ -113,7 +113,7 @@ impl ModelBuilder {
             memory_goal: None,
             no_paged_attn: false,
             max_num_seqs: mistralrs_core::memory_plan::DEFAULT_MAX_NUM_SEQS,
-            prefix_cache_n: Some(16),
+            prefix_cache_n: PrefixCacheCapacity::Auto,
             with_logging: false,
             device_mapping: None,
             imatrix: None,

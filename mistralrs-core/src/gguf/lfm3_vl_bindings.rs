@@ -1,4 +1,5 @@
 use anyhow::{bail, Context, Result};
+use candle_core::DType;
 use mistralrs_quant::{GgufArchive, GgufBindingMap, GgufTensorBinding};
 
 use crate::NormalLoaderType;
@@ -16,7 +17,10 @@ const FAMILY: &str = "LFM3-VL";
 const PATCH_EMBEDDING: &str = "v.patch_embd.weight";
 const SECOND_TEMPORAL_PATCH: &str = "v.patch_embd.weight.1";
 
-pub(crate) fn build_lfm3_vl_bindings(archive: &GgufArchive) -> Result<GgufBindingMap> {
+pub(crate) fn build_lfm3_vl_bindings(
+    archive: &GgufArchive,
+    dtype: DType,
+) -> Result<GgufBindingMap> {
     validate_architecture(archive, "lfm3")?;
     validate_projector(archive, "lfm3vl")?;
     let text = build_normal_bindings(
@@ -24,15 +28,24 @@ pub(crate) fn build_lfm3_vl_bindings(archive: &GgufArchive) -> Result<GgufBindin
         &NormalLoaderType::Lfm3,
         CanonicalGgufArchitecture::Lfm3,
     )?;
-    build_lfm3_vl_bindings_from_parts(&TensorInventory::from_archive(archive), text)
+    let bindings =
+        build_lfm3_vl_bindings_from_parts(&TensorInventory::from_archive(archive), text)?;
+    Ok(bindings
+        .iter()
+        .map(|(name, binding)| {
+            // The vision encoder uses dense layers; the language model and projector keep GGUF quantization.
+            let binding = if name.starts_with("model.vision_tower.") {
+                binding.clone().cast(dtype)
+            } else {
+                binding.clone()
+            };
+            (name.to_string(), binding)
+        })
+        .collect())
 }
 
-fn build_lfm3_vl_bindings_from_parts(
-    inventory: &TensorInventory<'_>,
-    text: GgufBindingMap,
-) -> Result<GgufBindingMap> {
-    let mut bindings = text
-        .iter()
+pub(super) fn rebase_lfm3_text_bindings(text: GgufBindingMap) -> GgufBindingMap {
+    text.iter()
         .map(|(native, binding)| {
             let native = native.strip_prefix("model.").map_or_else(
                 || native.to_string(),
@@ -40,7 +53,14 @@ fn build_lfm3_vl_bindings_from_parts(
             );
             (native, binding.clone())
         })
-        .collect::<GgufBindingMap>();
+        .collect()
+}
+
+fn build_lfm3_vl_bindings_from_parts(
+    inventory: &TensorInventory<'_>,
+    text: GgufBindingMap,
+) -> Result<GgufBindingMap> {
+    let mut bindings = rebase_lfm3_text_bindings(text);
     for (target, source) in [
         ("linear_1", "mm.0"),
         ("linear_2", "mm.2"),

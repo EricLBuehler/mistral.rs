@@ -1,6 +1,8 @@
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 use tokio::sync::RwLock;
 
 use mistralrs::{ModelGenerationDefaults, SearchEmbeddingModel};
@@ -17,7 +19,13 @@ pub struct UiModelInfo {
     pub generation_defaults: GenerationParams,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
+pub struct TextAttachment {
+    pub name: String,
+    pub text: String,
+}
+
+#[derive(Default, Serialize, Deserialize)]
 pub struct ChatMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -29,6 +37,10 @@ pub struct ChatMessage {
     pub images: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub videos: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audios: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<TextAttachment>>,
     /// Rich display blocks (reasoning, tool calls with results/images) for UI rendering.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocks: Option<serde_json::Value>,
@@ -45,6 +57,15 @@ pub struct ChatMessage {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_prompt_tokens: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decode_tok_per_sec: Option<f64>,
+    /// Request failure shown in the UI; never sent back to the model as history.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -61,6 +82,30 @@ pub struct ChatFile {
     /// Active leaf id. Walking `parent_id` from here yields the current conversation path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tail: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct ChatSummary {
+    pub id: String,
+    pub title: Option<String>,
+    pub model: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub preview: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct ChatSearchHit {
+    #[serde(flatten)]
+    pub summary: ChatSummary,
+    pub snippet: String,
+}
+
+pub struct ChatIndexEntry {
+    pub mtime: SystemTime,
+    pub summary: ChatSummary,
+    /// Title and message text, searched by `/api/search_chats`.
+    pub text: String,
 }
 
 /// Default generation parameters
@@ -141,6 +186,10 @@ pub struct AppState {
     pub speech_dir: String,
     pub current_chat: RwLock<Option<String>>,
     pub next_chat_id: RwLock<u32>,
+    /// Serializes read-modify-write of chat files so concurrent saves can't drop each other.
+    pub chat_write_lock: tokio::sync::Mutex<()>,
+    /// Sidebar summaries and search text keyed by chat id, invalidated by file mtime.
+    pub chat_index: tokio::sync::Mutex<HashMap<String, ChatIndexEntry>>,
     /// Default generation parameters
     pub default_params: GenerationParams,
     /// Whether web search is enabled
@@ -166,6 +215,12 @@ impl AppState {
     pub fn chat_session_path(&self, chat_id: &str) -> Option<PathBuf> {
         chat_file_path(&self.chats_dir, chat_id, CHAT_SESSION_FILE_EXT)
     }
+}
+
+/// Chat id for a file in chats_dir, or None for session sidecars and temp files.
+pub fn chat_id_from_filename(name: &str) -> Option<&str> {
+    let id = name.strip_suffix(&format!(".{CHAT_FILE_EXT}"))?;
+    (!name.ends_with(&format!(".{CHAT_SESSION_FILE_EXT}"))).then_some(id)
 }
 
 // ids are server-generated (`chat_<n>`), so anything else is a client trying to leave chats_dir
@@ -206,7 +261,14 @@ pub struct RenameChatRequest {
 
 #[cfg(test)]
 mod tests {
-    use super::{chat_file_path, GenerationParams, ModelGenerationDefaults};
+    use super::{chat_file_path, chat_id_from_filename, GenerationParams, ModelGenerationDefaults};
+
+    #[test]
+    fn only_chat_files_are_listed() {
+        assert_eq!(chat_id_from_filename("chat_3.json"), Some("chat_3"));
+        assert_eq!(chat_id_from_filename("chat_3.session.json"), None);
+        assert_eq!(chat_id_from_filename("chat_3.json.tmp"), None);
+    }
 
     #[test]
     fn chat_paths_stay_inside_chats_dir() {

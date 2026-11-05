@@ -36,7 +36,7 @@ impl MarlinMatMul {
         let scale_shape = scale_l.dims();
 
         let pack_factor: usize = 32 / self.bits as usize;
-        let size_m = x_shape[0] * x_shape[1];
+        let size_m = x_shape[..x_shape.len() - 1].iter().product::<usize>();
         let size_k = weight_shape[0] * pack_factor * 2; //marlin format
         let size_n = weight_shape[1] / 2; //marlin format
 

@@ -2,7 +2,10 @@ use candle_core::{DType, Device, Result, Shape, Tensor};
 
 #[cfg(feature = "cuda")]
 use candle_core::{
-    cuda::{cudarc::driver::DevicePtr, CudaStorageSlice},
+    cuda::{
+        cudarc::driver::{DevicePtr, DevicePtrMut},
+        CudaStorageSlice,
+    },
     CudaStorage, Storage,
 };
 
@@ -37,7 +40,6 @@ mod ffi;
 #[cfg(feature = "cuda")]
 mod bitpack_ffi;
 
-#[cfg(not(feature = "cuda"))]
 mod hqq_op;
 
 mod optimize;
@@ -57,33 +59,34 @@ const HQQ4_LOW_MULTIPLIER: f32 = 1.0;
 macro_rules! dequant_for_dtype {
     ($this:expr, w=$wq_t:ty, sz=$scale_t:ty, $dtype:ident, pack=$pack:expr, $dev:expr, $bit_thing:ident, $postfix:tt) => {{
         paste::paste! {
+            let stream = $dev.cuda_stream();
             let (wq, _) = $this.w_q.storage_and_layout();
             let wq = match &*wq {
                 candle_core::Storage::Cuda(s) => s,
                 _ => candle_core::bail!("wq must be a cuda tensor"),
             };
-            let (w_slice, _w_guard) = crate::utils::slice_ptr(wq.as_cuda_slice::<$wq_t>()?, $this.w_q.layout().start_offset());
+            let (w_slice, _w_guard) = crate::utils::slice_ptr_on_stream(wq.as_cuda_slice::<$wq_t>()?, $this.w_q.layout().start_offset(), &stream);
 
             let (scale, _) = $this.scales.storage_and_layout();
             let scale = match &*scale {
                 candle_core::Storage::Cuda(s) => s,
                 _ => candle_core::bail!("scale must be a cuda tensor"),
             };
-            let (scale_slice, _scale_guard) = crate::utils::slice_ptr(scale.as_cuda_slice::<$scale_t>()?, $this.scales.layout().start_offset());
+            let (scale_slice, _scale_guard) = crate::utils::slice_ptr_on_stream(scale.as_cuda_slice::<$scale_t>()?, $this.scales.layout().start_offset(), &stream);
 
             let (zero, _) = $this.zeros.storage_and_layout();
             let zero = match &*zero {
                 candle_core::Storage::Cuda(s) => s,
                 _ => candle_core::bail!("zero must be a cuda tensor"),
             };
-            let (zero_slice, _zero_guard) = crate::utils::slice_ptr(zero.as_cuda_slice::<$scale_t>()?, $this.zeros.layout().start_offset());
+            let (zero_slice, _zero_guard) = crate::utils::slice_ptr_on_stream(zero.as_cuda_slice::<$scale_t>()?, $this.zeros.layout().start_offset(), &stream);
 
             let (h, w) = $this.w_q.dims2()?;
             let num_packed_elems = $pack;
             let out_shape = Shape::from_dims(&[num_packed_elems * h, w]);
 
-            let out = unsafe { $dev.alloc::<$scale_t>(out_shape.elem_count())? };
-            let (out_ptr, out_guard) = out.device_ptr(out.stream());
+            let mut out = unsafe { $dev.alloc::<$scale_t>(out_shape.elem_count())? };
+            let (out_ptr, out_guard) = out.device_ptr_mut(&stream);
             unsafe {
                 $bit_thing::[< dequantize_ $postfix >](
                     w_slice as *const $wq_t,
@@ -92,6 +95,7 @@ macro_rules! dequant_for_dtype {
                     out_ptr as *mut $scale_t,
                     h as i32,
                     w as i32,
+                    stream.cu_stream(),
                 );
             }
             drop(out_guard);
@@ -821,9 +825,15 @@ impl HqqLayer {
         Ok(Self::from_parts(w_q, scales, zeros, bias, w_shape, cfg))
     }
 
-    /// Dequantize `self` into a tensor of shape `scales` or `zeros`.
-    #[cfg(not(feature = "cuda"))]
     fn dequantize(&self) -> Result<Tensor> {
+        #[cfg(feature = "cuda")]
+        if self.w_q.device().is_cuda() {
+            return self.dequantize_cuda();
+        }
+        self.dequantize_portable()
+    }
+
+    fn dequantize_portable(&self) -> Result<Tensor> {
         use crate::hqq::hqq_op::{Dequant1Bit, Dequant2Bit, Dequant3Bit, Dequant4Bit, Dequant8Bit};
 
         match (self.scales.dtype(), self.zeros.dtype()) {
@@ -869,9 +879,8 @@ impl HqqLayer {
         }
     }
 
-    /// Dequantize `self` into a tensor of shape `scales` or `zeros`.
     #[cfg(feature = "cuda")]
-    fn dequantize(&self) -> Result<Tensor> {
+    fn dequantize_cuda(&self) -> Result<Tensor> {
         match (self.scales.dtype(), self.zeros.dtype()) {
             (DType::F16, DType::F16) | (DType::BF16, DType::BF16) | (DType::F32, DType::F32) => (),
             (a, b) => {
@@ -1156,8 +1165,11 @@ impl QuantMethod for HqqLayer {
         self.dequantize()
     }
 
-    fn embedding_forward_raw(&self, ids: &Tensor) -> Result<Tensor> {
-        self.embedding_forward_raw_with_chunk_elements(ids, HQQ_EMBEDDING_CHUNK_ELEMENTS)
+    fn embedding_forward(&self, ids: &Tensor, out: crate::EmbeddingOutput) -> Result<Tensor> {
+        crate::embedding::finish_rows(
+            self.embedding_forward_raw_with_chunk_elements(ids, HQQ_EMBEDDING_CHUNK_ELEMENTS)?,
+            out,
+        )
     }
 
     fn forward_raw(&self, a: &Tensor) -> Result<Tensor> {
@@ -1172,6 +1184,11 @@ impl QuantMethod for HqqLayer {
 
     fn quantized_act_type(&self) -> Option<DType> {
         Some(self.scales.dtype())
+    }
+
+    fn gather_forward_raw(&self, a: &Tensor, indices: &Tensor) -> Result<Tensor> {
+        let weight = self.dequantize()?.reshape(self.w_shape.clone())?;
+        crate::routed_gemv::dense_gather(&weight, self.bias.as_ref(), a, indices)
     }
 
     fn add_delta_w(&self, _delta: &Tensor) -> Result<Arc<dyn QuantMethod>> {
@@ -1352,6 +1369,108 @@ mod tests {
     const TEST_VOCAB_SIZE: usize = 96;
     const TEST_EMBEDDING_DIM: usize = 32;
 
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn dequantize_waits_for_producer_on_nondefault_stream() -> Result<()> {
+        use candle_core::{CudaStorage, Shape, Storage};
+
+        const PACKED_ROWS: usize = 8;
+        const COLUMNS: usize = 64;
+        let device = Device::new_cuda_with_stream(0)?;
+        let dev = device.as_cuda_device()?;
+        let stream = dev.cuda_stream();
+        let producer = stream
+            .context()
+            .new_stream()
+            .map_err(candle_core::Error::wrap)?;
+        for bits in [
+            HqqBits::One,
+            HqqBits::Two,
+            HqqBits::Three,
+            HqqBits::Four,
+            HqqBits::Eight,
+        ] {
+            let pack = match bits {
+                HqqBits::One => 8,
+                HqqBits::Two => 4,
+                HqqBits::Three => 10,
+                HqqBits::Four => 2,
+                HqqBits::Eight => 1,
+            };
+            for dtype in [DType::F32, DType::F16, DType::BF16] {
+                let scales = Tensor::ones(COLUMNS, dtype, &device)?;
+                let zeros = Tensor::zeros(COLUMNS, dtype, &device)?;
+                let cfg = HqqConfig {
+                    bits,
+                    group_size: (PACKED_ROWS * pack).try_into()?,
+                    axis: HqqAxis::Zero,
+                    optimization_steps: None,
+                    round_zeros: false,
+                    channel_wise: true,
+                };
+                let layer = |packed| {
+                    HqqLayer::from_parts(
+                        packed,
+                        scales.clone(),
+                        zeros.clone(),
+                        None,
+                        Shape::from_dims(&[PACKED_ROWS * pack, COLUMNS]),
+                        cfg,
+                    )
+                };
+                let packed = match bits {
+                    HqqBits::Three => Tensor::from_vec(
+                        vec![0x3fff_ffffi32; PACKED_ROWS * COLUMNS],
+                        (PACKED_ROWS, COLUMNS),
+                        &device,
+                    )?,
+                    _ => Tensor::full(0xffu8, (PACKED_ROWS, COLUMNS), &device)?,
+                };
+                let warm = layer(packed)
+                    .dequantize_w()?
+                    .to_dtype(DType::F32)?
+                    .flatten_all()?
+                    .to_vec1::<f32>()?;
+                let expected = ((1u32 << bits as usize) - 1) as f32;
+                assert!(
+                    warm.iter().all(|&value| value == expected),
+                    "{bits:?} {dtype:?}: dequantization disagrees with unpacked values"
+                );
+                macro_rules! delayed_weights {
+                    ($value:expr) => {{
+                        let mut data = producer
+                            .clone_htod(&vec![$value; PACKED_ROWS * COLUMNS])
+                            .map_err(candle_core::Error::wrap)?;
+                        producer.synchronize().map_err(candle_core::Error::wrap)?;
+                        let delay = crate::utils::cuda_test::delay_stream(&producer)?;
+                        producer
+                            .memset_zeros(&mut data)
+                            .map_err(candle_core::Error::wrap)?;
+                        let packed = Tensor::from((
+                            Storage::Cuda(CudaStorage::wrap_cuda_slice(data, dev.clone())),
+                            (PACKED_ROWS, COLUMNS),
+                        ));
+                        (packed, delay)
+                    }};
+                }
+                let (packed, _delay) = match bits {
+                    HqqBits::Three => delayed_weights!(0x3fff_ffffi32),
+                    _ => delayed_weights!(0xffu8),
+                };
+                let output = layer(packed)
+                    .dequantize_w()?
+                    .to_dtype(DType::F32)?
+                    .flatten_all()?
+                    .to_vec1::<f32>()?;
+                assert!(
+                    output.iter().all(|&value| value == 0.0),
+                    "{bits:?} {dtype:?}: dequantization read stale packed weights"
+                );
+            }
+        }
+        Ok(())
+    }
+
     fn test_layer_on_device(bits: HqqBits, device: &Device) -> Result<HqqLayer> {
         let values = (0..TEST_VOCAB_SIZE * TEST_EMBEDDING_DIM)
             .map(|index| {
@@ -1374,7 +1493,6 @@ mod tests {
         )
     }
 
-    // Dequantization is accelerator-only when built with cuda/metal, so tests must live on that device.
     fn test_device() -> Result<Device> {
         #[cfg(feature = "metal")]
         {
@@ -1393,7 +1511,7 @@ mod tests {
     fn assert_embedding_matches_dequantized_gather(layer: &HqqLayer) -> Result<()> {
         let device = layer.w_q.device().clone();
         let ids = Tensor::from_vec(vec![0u32, 63, 95, 17, 63, 64], (2, 3), &device)?;
-        let actual = layer.embedding_forward_raw(&ids)?;
+        let actual = layer.embedding_forward(&ids, candle_core::DType::F32.into())?;
         let expected = layer
             .dequantize()?
             .index_select(&ids.flatten_all()?, 0)?
@@ -1504,7 +1622,7 @@ mod tests {
         )?
         .narrow(0, 0, 0)?
         .reshape((2, 0, 3))?;
-        let output = layer.embedding_forward_raw(&ids)?;
+        let output = layer.embedding_forward(&ids, candle_core::DType::F32.into())?;
 
         assert_eq!(output.dims(), &[2, 0, 3, TEST_EMBEDDING_DIM]);
         assert_eq!(output.dtype(), DType::F32);
@@ -1537,7 +1655,7 @@ mod tests {
             .load_linear("test.embedding", &device, Shard::default())?
             .unwrap();
         let ids = Tensor::from_vec(vec![95u32, 0, 64, 95], (2, 2), &device)?;
-        let actual = loaded.embedding_forward_raw(&ids)?;
+        let actual = loaded.embedding_forward(&ids, candle_core::DType::F32.into())?;
         let expected = layer
             .dequantize()?
             .index_select(&ids.flatten_all()?, 0)?

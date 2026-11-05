@@ -31,8 +31,6 @@ async fn main() -> Result<()> {
 
 Run with `cargo run --release`. The first run downloads the weights into the Hugging Face cache.
 
-`with_auto_isq(IsqBits::Four)` enables [ISQ (in-situ quantization)](/reference/quantization-types/) to 4 bits; omit it to run the model unquantized.
-
 Full example: [text-generation](/examples/rust/getting-started/text-generation/).
 
 ## Project setup
@@ -68,17 +66,15 @@ Feature names match the CLI build features. The [cargo features reference](/refe
 
 ## The pieces
 
-`ModelBuilder` is a fluent configuration object; each method returns `self`. The only required input is the Hugging Face repository id (or local path) passed to `ModelBuilder::new`. Everything else has a default. `build()` loads the weights and returns a `Model`.
+`ModelBuilder::new` accepts a Hugging Face ID or local path. `build()` loads it and returns a reusable `Model`.
 
 `with_auto_isq(IsqBits::Four)` matches `--isq 4` on the CLI: the engine selects an optimal 4-bit format per platform (AFQ4 on Metal, Q4K on CUDA or CPU). To pin a specific format, use `with_isq(IsqType::Q4K)`; see the [quantization reference](/reference/quantization-types/).
 
-`TextMessages` assembles a basic chat conversation. For per-message sampling, tool schemas, or logprobs, use `RequestBuilder`.
+`TextMessages` assembles a basic chat conversation. For sampling controls, tool schemas, or logprobs, use `RequestBuilder`.
 
 The [Rust SDK reference](/reference/rust-sdk/) lists the full `Model` surface; specialized builders (`GgufModelBuilder`, `EmbeddingModelBuilder`, `LoraModelBuilder`, ...) are on [docs.rs](https://docs.rs/mistralrs).
 
 ## Memory and device placement
-
-For upgrades from 0.9.4, see the [memory and device-mapping migration guide](/guides/perf/paged-attention/#upgrading-from-094) for the `MemoryGoal` and `DeviceMapMetadata` APIs.
 
 The builder automatically chooses device placement and KV cache capacity. PagedAttention is enabled automatically on supported CUDA and Metal devices. Add `.with_max_num_seqs(4)` to allow up to four concurrent sequences; the default is 32.
 
@@ -86,54 +82,35 @@ To choose a shared KV cache capacity, import `mistralrs::MemoryGoal` and add `.w
 
 ## Streaming
 
-`stream_chat_request` returns a futures `Stream` of response chunks:
+To stream instead of calling `send_chat_request`, consume incremental text:
 
 ```rust
-use anyhow::Result;
-use futures::StreamExt;
-use mistralrs::{
-    ChatCompletionChunkResponse, ChunkChoice, Delta, IsqBits, ModelBuilder, Response,
-    TextMessageRole, TextMessages,
-};
+use mistralrs::Response;
 use std::io::Write;
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    let model = ModelBuilder::new("Qwen/Qwen3-4B")
-        .with_auto_isq(IsqBits::Four)
-        .build()
-        .await?;
-
-    let messages = TextMessages::new().add_message(
-        TextMessageRole::User,
-        "Write me a haiku about ownership.",
-    );
-
-    let mut stream = model.stream_chat_request(messages).await?;
-    let stdout = std::io::stdout();
-    let mut out = std::io::BufWriter::new(stdout.lock());
-
-    while let Some(item) = stream.next().await {
-        if let Response::Chunk(ChatCompletionChunkResponse { choices, .. }) = item {
-            if let Some(ChunkChoice {
-                delta: Delta { content: Some(text), .. },
-                ..
-            }) = choices.first()
-            {
+let mut stream = model.stream_chat_request(messages).await?;
+let mut out = std::io::stdout().lock();
+while let Some(item) = stream.next().await {
+    match item {
+        Response::Chunk(chunk) => {
+            if let Some(text) = chunk.choices.first().and_then(|c| c.delta.content.as_ref()) {
                 out.write_all(text.as_bytes())?;
                 out.flush()?;
             }
         }
+        Response::InternalError(e) | Response::ValidationError(e) => {
+            anyhow::bail!("{e}");
+        }
+        Response::ModelError(message, _) => anyhow::bail!("{message}"),
+        _ => {}
     }
-
-    Ok(())
 }
 ```
 
-The stream yields `Response` values. Most are `Response::Chunk` carrying assistant output in `choices[0].delta.content`; other variants cover errors and the final completion event, and production code should match them explicitly. The [streaming guide](/guides/rust/streaming/) covers the variant taxonomy, error handling, and tool-call progress events.
+The stream also implements `futures::Stream`. See [streaming](/guides/rust/streaming/) for tool events, multiple choices, cancellation, and spawning tasks.
 
 ## Notes
 
 `ModelBuilder::build()` performs all model loading and is expensive. Call it once at startup. `Model` methods take `&self` and are safe to call concurrently, so you can share one instance by reference. To move it across spawned tasks, wrap it in `Arc<Model>` (`Model` does not implement `Clone`).
 
-Requests through the Rust SDK bypass the HTTP layer; there is no `/v1/chat/completions` endpoint and no OpenAI compatibility shim. To expose a model over HTTP alongside direct in-process access, see the [embed-in-axum guide](/guides/rust/embed-in-axum/).
+To serve HTTP alongside in-process requests, see [embedding in Axum](/guides/rust/embed-in-axum/).

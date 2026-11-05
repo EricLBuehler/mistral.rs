@@ -3,6 +3,10 @@ use std::ffi::c_void;
 #[allow(dead_code)]
 extern "C" {
 
+    pub(crate) fn gdn_mma_prefill_init() -> i32;
+    pub(crate) fn gdn_mma_prefill(params: *const c_void) -> i32;
+    pub(crate) fn gdn_mma_fused_prefill(params: *const c_void) -> i32;
+
     pub(crate) fn cuda_graph_copy_bytes(
         src: *const c_void,
         dst: *mut c_void,
@@ -1404,6 +1408,7 @@ extern "C" {
         num_v_heads: i32,
         tiled_v_heads: i32,
         norm_eps: f32,
+        sigmoid_gate: i32,
         stream: i64,
     );
     pub(crate) fn gdn_flush_deferred_state_value_major_128(

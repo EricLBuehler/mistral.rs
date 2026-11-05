@@ -1,37 +1,37 @@
 ---
 title: Use pre-quantized UQFF models
-description: Create mistral.rs UQFF files and load them without runtime conversion.
+description: Load prebuilt UQFF models, or quantize a model once and save it as UQFF.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-UQFF (Universal Quantized File Format) stores pre-quantized weights and loads directly without
-runtime conversion.
+UQFF is mistral.rs's file format for a model that's already been quantized. Loading one skips the quantization step, and you download only the quantized weights instead of the full-precision checkpoint. Prebuilt UQFF models are published on Hugging Face under [mistralrs-community](https://huggingface.co/mistralrs-community), named `<model>-UQFF`.
 
-:::caution
-UQFF files produced by pre-1.0 mistral.rs releases are not loadable by current builds and fail
-with a clear error. Regenerate them with `mistralrs quantize`.
-:::
+You often don't need to name a UQFF yourself: `--quant 4` loads a matching prebuilt UQFF automatically when one exists. See [how mistral.rs chooses what to load](/guides/quantization/quantize-a-model/#how-mistralrs-chooses-what-to-load).
 
-## Using a UQFF model
+## Load a UQFF model
 
 <Tabs>
 <TabItem label="CLI">
 
 ```bash
-mistralrs run -m <repo> --from-uqff q4k-0.uqff
+mistralrs run -m mistralrs-community/gemma-4-E4B-it-UQFF --from-uqff 4
 ```
 
-`-m <repo>` is required for tokenizer/base resolution. `--from-uqff` accepts a numeric shorthand
-(`2`, `3`, `4`, `5`, `6`, `8`) or an [ISQ (in-situ quantization)](/reference/quantization-types/)
-type name (`q4k`, `afq8`, etc.) in place of a filename.
+`-m` is the UQFF repo, or the local directory that `mistralrs quantize` wrote. It holds the config and tokenizer along with the quantized weights. `--from-uqff` picks which file to load:
 
-For locally-stored UQFF files, `-m` can be the local directory and `--from-uqff` the filename.
+| Value | Example | What it loads |
+|---|---|---|
+| A bit width | `4` | The file at that width, preferring AFQ on Metal and GGML formats (`q4k`, `q8_0`) elsewhere |
+| A format name | `q4k`, `afq8` | The file in that format |
+| A file name | `q4k-0.uqff` | That file |
+
+Large models are split into several files (`q4k-0.uqff`, `q4k-1.uqff`, and so on). Name the first one, or use a bit width or format name, and mistral.rs loads the rest.
 
 </TabItem>
 <TabItem label="Python">
 
-`from_uqff` on `Which` takes the shard filename (or a list of shard filenames):
+`from_uqff` on `Which` takes a file name or a list of file names:
 
 ```python
 from mistralrs import Runner, Which
@@ -47,7 +47,7 @@ runner = Runner(
 </TabItem>
 <TabItem label="Rust">
 
-`UqffTextModelBuilder` takes the base repo and the first shard:
+`UqffTextModelBuilder` takes the repo and the first file:
 
 ```rust
 use mistralrs::UqffTextModelBuilder;
@@ -57,88 +57,76 @@ let model = UqffTextModelBuilder::new("<repo>", vec!["q4k-0.uqff".into()])
     .await?;
 ```
 
+For vision and audio models, use `UqffMultimodalModelBuilder`.
+
 </TabItem>
 </Tabs>
 
-Conventionally named shards share a prefix and end in `-0`, `-1`, and so on, such as
-`q4k-0.uqff` and `q4k-1.uqff`; selecting one discovers the contiguous shard set. When
-`uqff_report.json` declares an output, its shard list is authoritative and may use custom
-filenames.
+UQFF models work with tensor parallelism; each GPU loads only its share of the weights. Full examples: [Rust](/examples/rust/quantization/uqff/), [multimodal](/examples/rust/quantization/uqff-multimodal/).
 
-UQFF models work under tensor parallelism: each rank loads only its slice of the quantized
-weights.
+If loading fails with a UQFF version error, the file was made either by a mistral.rs release older than 0.8.4 or by a newer release than yours. Regenerate it with `mistralrs quantize`, or upgrade mistral.rs.
 
-Full example: [Rust](/examples/rust/quantization/uqff/),
-[multimodal](/examples/rust/quantization/uqff-multimodal/).
+## Make your own UQFF
 
-## Producing a UQFF
-
-The `quantize` subcommand converts a supported model source to UQFF:
+Quantize the model once into a directory:
 
 ```bash
-mistralrs quantize \
-  -m google/gemma-4-E4B-it \
-  --isq q4k \
-  -o gemma-q4k.uqff
+mistralrs quantize -m google/gemma-4-E4B-it --isq 4 -o gemma-4-E4B-it-UQFF/
 ```
 
-The generated UQFF can be reused without repeating the conversion.
+A bit width writes both formats at that width, so `--isq 4` produces `afq4-0.uqff` for Metal and `q4k-0.uqff` for everything else. To make several variants in one run, list them: `--isq 4,8` or `--isq q4k --isq q8_0`. Files are split into parts of up to about 10 GiB.
 
-GGUF inputs use the same file selection as `run`. For a local file, `-f` infers GGUF and makes
-`-m` optional:
+The directory also gets everything needed to run the model: config, tokenizer, the unquantized leftovers (`residual.safetensors`), a `uqff_report.json` describing the variants, and a README model card. `quantize` asks for the base model and the Hugging Face repo you'll upload to, to fill in the README. Pass `--uqff-base-model` and `--uqff-repo-id` to skip the questions, or `--no-readme` to skip the README.
+
+Run it:
 
 ```bash
-mistralrs quantize \
-  -f /path/model-BF16.gguf \
-  --isq q4k \
-  -o model-q4k.uqff
+mistralrs run -m gemma-4-E4B-it-UQFF/ --from-uqff 4
 ```
 
-For a GGUF repository, `--quant` selects the input artifact and `--isq` selects the output UQFF
-format:
+To publish it, check the files with `mistralrs uqff verify -m gemma-4-E4B-it-UQFF/`, then upload the directory with the `hf upload` command that `quantize` prints at the end.
+
+To write a single variant to a single file instead of a directory, give `-o` a `.uqff` path, like `-o gemma-q4k.uqff`. The config, tokenizer, and other files are written next to it.
+
+### Control the quality
+
+- **imatrix:** for K-quants, pass `--imatrix <file>` (llama.cpp `.imatrix` files work) or `--calibration-file <text-file>` to `quantize`. See [imatrix](/guides/quantization/quantize-a-model/#imatrix).
+- **Keep some layers at higher precision:** pass `--topology <file>` to pin layers to a different format, such as keeping `lm_head` at `q8_0` in an otherwise Q4K file. The pins apply to every variant you write. See [topology](/guides/perf/topology/).
+- **Embeddings and output head:** these are always stored at higher precision than the rest. A `q4k` file keeps them at Q6K, an `afq4` file at AFQ6, and a `q6k` file at Q8_0. The [full table](/reference/quantization-types/#sensitive-tensor-precision) is in the reference. `uqff_report.json` records the format each tensor actually got.
+
+### Quantize from a GGUF
+
+You can also make a UQFF from a GGUF file. Name a local file with `-f`; `-m` is optional then:
 
 ```bash
-mistralrs quantize \
-  -m <gguf-repo> \
-  --quant 8 \
-  --isq q4k \
-  -o output/
+mistralrs quantize -f /path/model-BF16.gguf --isq q4k -o model-UQFF/
 ```
 
-A UQFF produced from GGUF preserves the source Q/K rotary layout. If that layout is adjacent,
-dynamic LoRA and X-LoRA remain unsupported after conversion; UQFF does not reorder those features.
+For a GGUF repo, `--quant` picks which GGUF file to read and `--isq` picks the UQFF format to write:
 
-`--quant` and `-f` are mutually exclusive, and `--quant auto` does not select a GGUF artifact.
-Starting from a high-precision or higher-bit GGUF avoids compounding quantization loss. Supported
-multimodal repositories select their projector and supporting assets when the candidates are
-unambiguous; `--mmproj` and `--tok-model-id` override those choices.
+```bash
+mistralrs quantize -m <gguf-repo> --quant 8 --isq q4k -o model-UQFF/
+```
 
-`--isq` can be repeated or comma-separated to produce multiple variants in one run; pass a
-directory as `-o` in that case. Numeric shorthands expand to all platform variants (`--isq 4`
-writes both `afq4.uqff` and `q4k.uqff`).
+Start from the highest-precision GGUF available, such as BF16 or Q8_0, because quantizing an already quantized file compounds the loss. `--quant auto` doesn't work here. For a multimodal GGUF repo, mistral.rs picks the projector file when there's only one sensible choice; pass `--mmproj <file>` to choose it yourself, and `--tok-model-id <repo>` to take the config and tokenizer from another repo.
 
-When `write_uqff` is used from the Rust or Python SDK and the session keeps serving, the
-in-memory model runs as the first requested type.
+### From the SDKs
 
-A [topology](/guides/perf/topology/) can pin specific layers to a different type
-(e.g. keep `lm_head` at `q8_0` in an otherwise Q4K file); pins are preserved in every output
-variant.
+To save a UQFF while loading a model in Python, set `write_uqff="<path>.uqff"` on `Which` together with `in_situ_quant`. In Rust, call `.write_uqff(path)` on the builder along with `.with_isq(...)`. The model keeps running after the file is written.
 
-Sensitive token embeddings and output heads follow the higher-precision defaults in the
-[quantization type reference](/reference/quantization-types/). For example, AFQ4 uses
-AFQ6 for those tensors, Q4K uses Q6K, and Q6K uses Q8_0. The filename still names the default model
-type, and `uqff_report.json` records the effective type for each tensor. Explicit topology pins take
-precedence. This promotion applies to the language model's embeddings and output head, not its
-vision, audio, or other auxiliary components.
+All `quantize` flags are in the [CLI reference](/reference/cli/quantize/).
 
-In directory mode a README model card is generated unless `--no-readme` is passed;
-`--uqff-base-model` and `--uqff-repo-id` fill in its fields without the interactive prompt.
+## Inspect UQFF files
 
-`quantize` also writes `uqff_report.json` beside the UQFF files. It records the generated variants,
-shard names, stored layer formats, producer version, and fallback layers. When present, loaders use
-it to resolve quantization names and shard sets, including custom filenames. Conventionally named
-UQFF repositories remain loadable without a report. A report can be generated for existing
-artifacts by scanning them:
+These commands read only metadata, so you can point them at a Hugging Face repo without downloading the weights:
+
+| Command | What it does |
+|---|---|
+| `mistralrs uqff verify -m <repo-or-dir>` | Checks that the files are complete and consistent. Run it before publishing. |
+| `mistralrs uqff inspect -m <repo-or-dir> --quant afq3` | Opens an interactive browser of the tensors in one variant. |
+| `mistralrs uqff report -m <repo-or-dir>` | Lists the variants, their files, and the format of each layer. Add `--json` for machine-readable output. |
+
+UQFF files made by `quantize` come with a `uqff_report.json`. To add one to files that don't have it, run `report` with `--write`:
 
 ```bash
 mistralrs uqff report -m gemma4_26b_a4b/ \
@@ -147,35 +135,4 @@ mistralrs uqff report -m gemma4_26b_a4b/ \
   --repo-id mistralrs-community/gemma-4-26B-A4B-it
 ```
 
-For Hugging Face repos, use the same model-id form and select a group with `--quant` when desired:
-
-```bash
-mistralrs uqff report -m mistralrs-community/gemma-4-26B-A4B-it --quant afq3 --json
-```
-
-The `uqff report`, `uqff verify`, and `uqff inspect` commands are metadata-only. For local paths or
-already cached Hugging Face artifacts they seek-read only the needed byte ranges. For remote
-Hugging Face repos they use HTTP byte-range requests for safetensors headers and small UQFF
-metadata tensors, so they do not download the full model weights.
-
-Before publishing, validate the structure:
-
-```bash
-mistralrs uqff verify -m gemma4_26b_a4b/
-```
-
-To browse tensors interactively:
-
-```bash
-mistralrs uqff inspect -m mistralrs-community/gemma-4-26B-A4B-it --quant afq3
-```
-
-K-quant output quality can be improved with an importance matrix: pass `--imatrix <file>`
-(llama.cpp `.imatrix` files work directly) or `--calibration-file <path>` to `quantize`. See
-[imatrix background](/guides/quantization/quantize-a-model/#imatrix).
-
-All `quantize` flags: [CLI reference](/reference/cli/quantize/).
-
-## Format details
-
-Layout and versioning: [UQFF format reference](/reference/uqff-format/).
+The file layout is described in the [UQFF format reference](/reference/uqff-format/).

@@ -351,8 +351,13 @@ async fn build_model_configs(
                 .clone()
                 .or_else(|| runtime.matformer_slice_name.clone()),
         };
-        crate::commands::serve::apply_quant_resolution(&mut model_type, token_source, &matformer)
-            .await?;
+        crate::commands::serve::apply_quant_resolution(
+            &mut model_type,
+            token_source,
+            &matformer,
+            None,
+        )
+        .await?;
         let model_selected = convert_to_model_selected(&model_type, &matformer)?;
 
         let resolved_loader_id = crate::commands::serve::model_id_of(&model_type);

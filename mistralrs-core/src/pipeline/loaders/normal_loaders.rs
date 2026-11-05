@@ -134,6 +134,11 @@ pub struct NormalLoadingMetadata {
 }
 
 pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoader {
+    fn new_lora_registry(&self, config: &str) -> Result<mistralrs_quant::LoraLayerRegistry> {
+        serde_json::from_str::<serde_json::Value>(config)?;
+        Ok(mistralrs_quant::LoraLayerRegistry::new())
+    }
+
     fn load(
         &self,
         config: &str,
@@ -152,14 +157,12 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
         normal_loading_metadata: NormalLoadingMetadata,
         preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
     ) -> Result<Box<dyn NormalModel + Send + Sync>>;
+    /// Overridden by families that size RoPE from `max_model_len`; otherwise the engine enforces it alone.
     fn runtime_config<'a>(
         &self,
         config: &'a str,
-        max_model_len: Option<usize>,
+        _max_model_len: Option<usize>,
     ) -> Result<Cow<'a, str>> {
-        if let Some(max_model_len) = max_model_len {
-            anyhow::bail!("max_model_len={max_model_len} is not supported by this model loader");
-        }
         Ok(Cow::Borrowed(config))
     }
     fn is_gptx(&self, config: &str) -> Result<bool>;
@@ -515,6 +518,10 @@ impl AutoNormalLoader {
 }
 
 impl NormalModelLoader for AutoNormalLoader {
+    fn new_lora_registry(&self, config: &str) -> Result<mistralrs_quant::LoraLayerRegistry> {
+        Self::get_loader(config)?.new_lora_registry(config)
+    }
+
     fn runtime_config<'a>(
         &self,
         config: &'a str,
@@ -6377,6 +6384,28 @@ impl DeviceMappedModelLoader for GptOssLoader {
 pub struct Qwen3NextLoader;
 
 impl NormalModelLoader for Qwen3NextLoader {
+    fn new_lora_registry(&self, config: &str) -> Result<mistralrs_quant::LoraLayerRegistry> {
+        let config = serde_json::from_str::<serde_json::Value>(config)?;
+        let qwen35_moe_identity = config
+            .get("architectures")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|architectures| architectures.first())
+            .and_then(serde_json::Value::as_str)
+            == Some(NormalLoaderType::Qwen3Next.causal_lm_name())
+            && config
+                .get(crate::gdn::GDN_V_HEAD_LAYOUT_CONFIG_KEY)
+                .and_then(serde_json::Value::as_str)
+                == Some("tiled");
+        Ok(if qwen35_moe_identity {
+            mistralrs_quant::LoraLayerRegistry::new_with_site_prefix_alias(
+                "model",
+                "model.language_model",
+            )?
+        } else {
+            mistralrs_quant::LoraLayerRegistry::new()
+        })
+    }
+
     fn load(
         &self,
         config: &str,

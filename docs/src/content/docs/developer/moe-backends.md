@@ -1,13 +1,34 @@
 ---
 title: cuTile setup
-description: Install the optional cuTile runtime tool for supported NVIDIA GPUs.
+description: Install NVIDIA's tileiras tool so supported NVIDIA GPUs can use cuTile kernels.
 ---
 
-Supported CUDA builds can use cuTile acceleration for MoE, quantized linear, and routed LoRA workloads. The installer
-selects a cuTile-capable binary automatically when one matches the GPU and driver. NVIDIA's
-`tileiras` tool is installed separately. mistral.rs checks it automatically and uses other backends
-for workloads with a supported fallback. NVFP4 CUDA inference requires cuTile and reports an error
-when its requirements are not met. Source builds use the workspace-pinned cuTile Rust 0.3.0 release.
+cuTile is NVIDIA's tile-based way of writing CUDA kernels. Some mistral.rs kernels are written in cuTile, and NVIDIA's `tileiras` compiler turns them into code for your exact GPU at runtime.
+
+With cuTile available, mistral.rs uses faster kernels for:
+
+- Mixture-of-experts (MoE) layers.
+- FP8, MXFP8, and NVFP4 quantized linear layers.
+- Routed LoRA.
+
+Without cuTile, these layers use CUDA or CUTLASS kernels instead. For NVFP4, cuTile on Blackwell runs W4A4 checkpoints (4-bit weights and activations) on FP4 tensor cores. Without cuTile, NVFP4 uses slower kernels that keep activations in BF16 or F16, on compute capability 8.0 and newer.
+
+To use cuTile you need a mistral.rs binary built with the `cutile` feature, and a separate install of `tileiras`. The installer picks a cuTile build automatically when your GPU and driver support one, but release archives and Docker images don't include `tileiras`.
+
+## Requirements
+
+| GPU | Compute capability | CUDA toolkit used to build mistral.rs |
+|---|---|---|
+| Ampere, Ada | 8.x | 13.2 or newer |
+| Hopper | 9.0 | 13.3 or newer |
+| Blackwell | 10.x, 12.x | 13.2 or newer. The block-scaled NVFP4 and MXFP8 kernels need 13.3 or newer. |
+
+For a prebuilt binary, the toolkit is the artifact's CUDA lane. See [hardware support](/reference/hardware-support/#cuda-artifacts) for the published lanes.
+
+You also need:
+
+- A `tileiras` that is version 13.1 or newer and supports your GPU. The Blackwell block-scaled kernels need `tileiras` 13.3 or newer.
+- For source builds, `libclang`, because cuTile generates CUDA bindings during the build.
 
 ## Install tileiras
 
@@ -17,62 +38,81 @@ For Ampere, Ada, and Blackwell, install NVIDIA's cuTile package:
 python3 -m pip install --upgrade "cuda-tile[tileiras]"
 ```
 
-cuTile on Hopper, and [NVFP4 inference](/reference/quantization-types/#nvfp4) on Blackwell, require
-the CUDA 13.3 or newer toolkit components:
+Hopper, and [NVFP4 inference](/reference/quantization-types/#nvfp4) on Blackwell, need the CUDA 13.3 or newer toolkit components:
 
 ```bash
 python3 -m pip install --upgrade "cuda-toolkit[tileiras,nvvm,nvcc]>=13.3"
 ```
 
-The pip packages do not add `tileiras` to `PATH`. Point mistral.rs at the installed binary, and add
-the same export to the shell profile or service environment that starts the server:
+The pip packages don't put `tileiras` on `PATH`. Point mistral.rs at the installed binary, and add the same line to the shell profile or service environment that starts the server:
 
 ```bash
 export CUTILE_TILEIRAS_PATH="$(python3 -c 'import nvidia.cu13.bin as b; print(next(iter(b.__path__)))')/tileiras"
 ```
 
-A system CUDA installation containing a compatible `tileiras` works as well. Keep the NVIDIA CUDA
-package components on the same major/minor release. Set `CUDA_TOOLKIT_PATH` to the toolkit root for
-a reproducible source build, or set `CUTILE_TILEIRAS_PATH` to the executable directly. cuTile also
-searches standard CUDA 13.3 and 13.2 installations before falling back to `PATH`. Release archives
-do not redistribute `tileiras`.
+A system CUDA install that includes a compatible `tileiras` works too. Keep all NVIDIA CUDA package components on the same major.minor release.
 
-For CUDA 13.4, explicitly select the toolkit with `CUDA_TOOLKIT_PATH` and add its `bin` directory
-to `PATH`; see the [source build instructions](/developer/from-source/#clone-and-build). This
-keeps cuTile from selecting an older standard installation on a machine with multiple toolkits.
-If `CUTILE_TILEIRAS_PATH` is already set, update it to `/usr/local/cuda-13.4/bin/tileiras` as well.
+cuTile looks for `tileiras` in this order:
 
-Run `mistralrs doctor` to check cuTile availability for every detected GPU. See NVIDIA's
-[cuTile installation guide](https://docs.nvidia.com/cuda/cutile-python/quickstart.html).
+1. `CUTILE_TILEIRAS_PATH`, the path to the executable.
+2. The `bin` directory of `CUDA_TOOLKIT_PATH`, the toolkit root.
+3. Standard CUDA 13.3 and 13.2 installs.
+4. `PATH`.
 
-## Requirements
+Setting `CUDA_TOOLKIT_PATH` makes source builds reproducible on machines with several toolkits.
 
-- Ampere and Ada require CUDA 13.2 or newer.
-- Hopper requires CUDA 13.3 or newer.
-- Blackwell requires CUDA 13.2 or newer for source builds. cuTile 0.3 can emit CUDA 13.1 Tile IR,
-  but its published CUDA bindings require CUDA 13.2 or newer headers. NVFP4 kernels require CUDA
-  13.3 or newer, including `tileiras`.
-- The `tileiras` installation must support the active GPU.
-- The mistral.rs binary must include the `cutile` feature.
-- Source builds require `libclang` because cuTile generates CUDA bindings during the build.
+### CUDA 13.4
 
-`CUTILE_TILEIRAS_PATH` selects a specific `tileiras` binary and takes precedence over
-`CUDA_TOOLKIT_PATH` and automatic discovery.
+cuTile's standard search doesn't include CUDA 13.4, so on a machine that also has an older toolkit it finds the older one first. To use 13.4:
+
+- Set `CUDA_TOOLKIT_PATH=/usr/local/cuda-13.4` and put `/usr/local/cuda-13.4/bin` first on `PATH`. The [source build instructions](/developer/from-source/#clone-and-build) list the full set of exports.
+- If you set `CUTILE_TILEIRAS_PATH`, point it at `/usr/local/cuda-13.4/bin/tileiras`.
+
+### Check the install
+
+Run `mistralrs doctor`. In a binary built with `cutile`, it reports for each GPU whether the build supports that GPU and whether `tileiras` can compile for it. NVIDIA's [cuTile installation guide](https://docs.nvidia.com/cuda/cutile-python/quickstart.html) covers the NVIDIA side.
 
 ## Autotuning
 
-cuTile kernels are JIT-compiled for the GPU in the machine, so their launch configs are measured
-there too. The first time a model loads, the warmup step times candidate tile shapes and compiler
-knobs for each MoE expert shape and FP8 GEMM shape, about a minute for a large MoE model, and
-records the winners under `cutile_tune` in the mistral.rs cache directory. Later loads reuse a
-record whose provenance matches: the kernel source, the GPU architecture, the `tileiras` build,
-and the candidate set. A record that no longer matches is re-measured, never approximated. Routed
-LoRA tunes each route bucket the first time it is launched and persists the result the same way.
+cuTile kernels are compiled for the exact GPU in the machine, so the fastest launch settings (tile shapes and compiler options) are measured on that GPU too. Each kernel ships with a built-in default, called its policy config. Autotuning looks for a faster one.
 
-Every candidate is checked against the built-in policy config's output before it is timed, and a
-winner replaces the policy only when it is measurably faster, so tuning can only leave a machine
-where it started or better. `MISTRALRS_CUTILE_TUNE=off` keeps the built-in policies,
-`force` re-measures, and `MISTRALRS_CUTILE_TUNE_CACHE` moves the records directory.
+`MISTRALRS_CUTILE_TUNE` controls it:
 
-See also: [environment variables](/reference/environment-variables/),
-[cargo features](/reference/cargo-features/).
+| Value | What happens |
+|---|---|
+| `cached` (default) | Use a saved result if one matches. Otherwise use the policy config. Never measures. |
+| `auto` | Use a saved result if one matches. Otherwise measure during warmup and save the winner. |
+| `force` | Ignore saved results, measure again, and save. |
+| `off` | Ignore saved results and always use the policy config. |
+
+What gets tuned:
+
+- MoE expert GEMMs and FP8, MXFP8, and NVFP4 GEMMs, once per shape during warmup.
+- Routed LoRA, once per route bucket the first time it's launched.
+
+`MISTRALRS_CUTILE_TUNE_BUDGET_SECS` caps the total measuring time per process. The default is 300 seconds, and each bucket gets at most 20 seconds. When the budget runs out, the remaining shapes keep the policy config.
+
+### Saved results
+
+Results are saved in `MISTRALRS_CUTILE_TUNE_CACHE` if it's set, otherwise in `$XDG_CACHE_HOME/mistralrs/cutile_tune` or `~/.cache/mistralrs/cutile_tune`.
+
+A saved result is used only if all of these match the current run:
+
+- The kernel source.
+- The GPU architecture.
+- The `tileiras` build.
+- The set of candidate configs.
+
+A result that doesn't match is ignored, never adapted.
+
+### Why tuning can't make things slower
+
+A tuned config replaces the policy config only if it passes every check:
+
+1. Its output must stay within 2% (relative) of the policy config's output.
+2. It must be at least 3% faster than the policy config during the search.
+3. It must win again, by the same margin, in a final paired A/B run against the policy config.
+
+If any check fails, or the search errors out, the policy config stays.
+
+See also: [environment variables](/reference/environment-variables/), [cargo features](/reference/cargo-features/).

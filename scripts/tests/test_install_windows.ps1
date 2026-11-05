@@ -133,13 +133,14 @@ $fixtureFunctions = {
 
     function Enable-FakeSourcePrerequisites {
         function script:Test-MsvcTools { return $true }
-        function script:Get-RustVersion { return [version]'1.94.0' }
+        function script:Get-RustVersion { return [version]'1.95.0' }
         function script:git { throw 'Git should only be detected by this fixture' }
     }
 
     function Enable-FakeDownload {
         function script:Download-File($Url, $Destination, $Label) {
             $script:DownloadedUrl = $Url
+            Add-Type -AssemblyName System.IO.Compression
             Add-Type -AssemblyName System.IO.Compression.FileSystem
             $archive = [IO.Compression.ZipFile]::Open($Destination, [IO.Compression.ZipArchiveMode]::Create)
             try {

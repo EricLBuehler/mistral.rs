@@ -2,8 +2,8 @@ use std::{cmp::Ordering, fs::File, sync::Arc};
 
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::Module;
-use hf_hub::api::sync::{Api, ApiBuilder};
 use mistralrs_quant::ShardedVarBuilder;
+use std::path::PathBuf;
 use tokenizers::Tokenizer;
 use tracing::info;
 
@@ -19,9 +19,6 @@ use crate::{
 };
 
 use super::{autoencoder::AutoEncoder, model::Flux};
-
-const T5_XXL_SAFETENSOR_FILES: &[&str] =
-    &["t5_xxl-shard-0.safetensors", "t5_xxl-shard-1.safetensors"];
 
 #[derive(Clone, Copy, Debug)]
 pub struct FluxStepperShift {
@@ -69,62 +66,56 @@ pub struct FluxStepper {
     is_guidance: bool,
     device: Device,
     dtype: DType,
-    api: Api,
+    auxiliary_paths: FluxAuxiliaryPaths,
     silent: bool,
     offloaded: bool,
 }
 
-fn get_t5_tokenizer(api: &Api) -> anyhow::Result<Tokenizer> {
-    let repo_id = "EricB/t5_tokenizer";
-    let revision = "main";
-    let repo = api.model(repo_id.to_string());
-    let tokenizer_filename =
-        fetch_repo_file(&repo, repo_id, revision, "t5-v1_1-xxl.tokenizer.json")?;
-    let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(anyhow::Error::msg)?;
-
-    Ok(tokenizer)
+#[derive(Clone, Debug)]
+pub struct FluxAuxiliaryPaths {
+    pub t5_tokenizer: PathBuf,
+    pub t5_config: PathBuf,
+    pub t5_weights: Vec<PathBuf>,
+    pub clip_tokenizer: PathBuf,
+    pub clip_config: PathBuf,
+    pub clip_weights: PathBuf,
 }
 
-fn fetch_repo_file(
-    api_repo: &hf_hub::api::sync::ApiRepo,
-    repo_id: &str,
-    revision: &str,
-    file: &str,
-) -> candle_core::Result<std::path::PathBuf> {
-    if crate::pipeline::hf::is_hf_hub_offline() {
-        return crate::pipeline::hf::offline_cache_repo(std::path::Path::new(repo_id), revision)
-            .get(file)
-            .ok_or_else(|| {
-                candle_core::Error::msg(crate::pipeline::hf::offline_missing_file_error(
-                    std::path::Path::new(repo_id),
-                    file,
-                    revision,
-                ))
-            });
+impl FluxAuxiliaryPaths {
+    pub fn files(&self) -> Vec<PathBuf> {
+        let mut files = self.t5_weights.clone();
+        files.extend([
+            self.t5_tokenizer.clone(),
+            self.t5_config.clone(),
+            self.clip_tokenizer.clone(),
+            self.clip_config.clone(),
+            self.clip_weights.clone(),
+        ]);
+        files
     }
-    api_repo.get(file).map_err(candle_core::Error::msg)
+}
+
+pub struct FluxStepperLoadContext<'a> {
+    pub dtype: DType,
+    pub device: &'a Device,
+    pub silent: bool,
+    pub offloaded: bool,
+    pub paths: &'a FluxAuxiliaryPaths,
+}
+
+fn get_t5_tokenizer(paths: &FluxAuxiliaryPaths) -> anyhow::Result<Tokenizer> {
+    Tokenizer::from_file(&paths.t5_tokenizer).map_err(anyhow::Error::msg)
 }
 
 fn get_t5_model(
-    api: &Api,
+    paths: &FluxAuxiliaryPaths,
     dtype: DType,
     device: &Device,
     silent: bool,
     offloaded: bool,
 ) -> candle_core::Result<T5EncoderModel> {
-    let repo_id = "EricB/t5-v1_1-xxl-enc-only";
-    let revision = "main";
-    let repo = api.repo(hf_hub::Repo::with_revision(
-        repo_id.to_string(),
-        hf_hub::RepoType::Model,
-        revision.to_string(),
-    ));
-
     let vb = from_mmaped_safetensors(
-        T5_XXL_SAFETENSOR_FILES
-            .iter()
-            .map(|f| fetch_repo_file(&repo, repo_id, revision, f))
-            .collect::<candle_core::Result<Vec<_>>>()?,
+        paths.t5_weights.clone(),
         vec![],
         Some(dtype),
         device,
@@ -134,25 +125,18 @@ fn get_t5_model(
         |_| true,
         Arc::new(|_| DeviceForLoadTensor::Base),
     )?;
-    let config_filename = fetch_repo_file(&repo, repo_id, revision, "config.json")?;
-    let config = std::fs::read_to_string(config_filename)?;
+    let config = std::fs::read_to_string(&paths.t5_config)?;
     let config: t5::Config = serde_json::from_str(&config).map_err(candle_core::Error::msg)?;
-
     t5::T5EncoderModel::load(vb, &config, device, offloaded)
 }
 
 fn get_clip_model_and_tokenizer(
-    api: &Api,
+    paths: &FluxAuxiliaryPaths,
     device: &Device,
     silent: bool,
 ) -> anyhow::Result<(ClipTextTransformer, Tokenizer)> {
-    let repo_id = "openai/clip-vit-large-patch14";
-    let revision = "main";
-    let repo = api.repo(hf_hub::Repo::model(repo_id.to_string()));
-
-    let model_file = fetch_repo_file(&repo, repo_id, revision, "model.safetensors")?;
     let vb = from_mmaped_safetensors(
-        vec![model_file],
+        vec![paths.clip_weights.clone()],
         vec![],
         None,
         device,
@@ -162,14 +146,9 @@ fn get_clip_model_and_tokenizer(
         |_| true,
         Arc::new(|_| DeviceForLoadTensor::Base),
     )?;
-    let config_file = fetch_repo_file(&repo, repo_id, revision, "config.json")?;
-    let config: ClipConfig = serde_json::from_reader(File::open(config_file)?)?;
-    let config = config.text_config;
-    let model = ClipTextTransformer::new(vb.pp("text_model"), &config)?;
-
-    let tokenizer_filename = fetch_repo_file(&repo, repo_id, revision, "tokenizer.json")?;
-    let tokenizer = Tokenizer::from_file(tokenizer_filename).map_err(anyhow::Error::msg)?;
-
+    let config: ClipConfig = serde_json::from_reader(File::open(&paths.clip_config)?)?;
+    let model = ClipTextTransformer::new(vb.pp("text_model"), &config.text_config)?;
+    let tokenizer = Tokenizer::from_file(&paths.clip_tokenizer).map_err(anyhow::Error::msg)?;
     Ok((model, tokenizer))
 }
 
@@ -189,17 +168,20 @@ impl FluxStepper {
         cfg: FluxStepperConfig,
         (flux_vb, flux_cfg): (ShardedVarBuilder, &flux::model::Config),
         (flux_ae_vb, flux_ae_cfg): (ShardedVarBuilder, &flux::autoencoder::Config),
-        dtype: DType,
-        device: &Device,
-        silent: bool,
-        offloaded: bool,
+        context: FluxStepperLoadContext<'_>,
     ) -> anyhow::Result<Self> {
-        let api = ApiBuilder::from_env().build()?;
+        let FluxStepperLoadContext {
+            dtype,
+            device,
+            silent,
+            offloaded,
+            paths,
+        } = context;
 
         info!("Loading T5 XXL tokenizer.");
-        let t5_tokenizer = get_t5_tokenizer(&api)?;
+        let t5_tokenizer = get_t5_tokenizer(paths)?;
         info!("Loading CLIP model and tokenizer.");
-        let (clip_encoder, clip_tokenizer) = get_clip_model_and_tokenizer(&api, device, silent)?;
+        let (clip_encoder, clip_tokenizer) = get_clip_model_and_tokenizer(paths, device, silent)?;
 
         Ok(Self {
             cfg,
@@ -211,7 +193,7 @@ impl FluxStepper {
             is_guidance: cfg.is_guidance,
             device: device.clone(),
             dtype,
-            api,
+            auxiliary_paths: paths.clone(),
             silent,
             offloaded,
         })
@@ -240,7 +222,7 @@ impl DiffusionModel for FluxStepper {
         let t5_embed = {
             info!("Hotloading T5 XXL model.");
             let mut t5_encoder = get_t5_model(
-                &self.api,
+                &self.auxiliary_paths,
                 self.dtype,
                 &self.device,
                 self.silent,

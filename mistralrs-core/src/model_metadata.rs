@@ -12,7 +12,7 @@ use crate::pipeline::SupportedModality;
 use crate::speech_models::SpeechLoaderType;
 use crate::{DiffusionLoaderType, EmbeddingLoaderType, MultimodalLoaderType, NormalLoaderType};
 
-use SupportedModality::{Audio, Embedding, Text, Video, Vision};
+use SupportedModality::{Audio, Decision, Embedding, Text, Video, Vision};
 
 #[derive(Clone, Copy)]
 pub struct ModelExample {
@@ -242,6 +242,21 @@ impl MultimodalLoaderType {
                 modalities: &[Text, Vision, Video],
                 examples: &[ex!("LiquidAI/LFM3-VL-2B")],
             },
+            Self::Lfm3Audio => ArchMetadata {
+                families: &["LFM3-Audio"],
+                modalities: &[Text, Audio],
+                examples: &[ex!("LiquidAI/LFM3-Audio-2B")],
+            },
+            Self::Lfm3Omni => ArchMetadata {
+                families: &["LFM3-Omni"],
+                modalities: &[Text, Vision, Video, Audio],
+                examples: &[ex!("LiquidAI/LFM3-Omni-2B")],
+            },
+            Self::Lfm3D1 => ArchMetadata {
+                families: &["d1", "d1-Omni"],
+                modalities: &[Text, Vision, Video, Audio, Decision],
+                examples: &[ex!("LiquidAI/d1-2B"), ex!("LiquidAI/d1-Omni-2B")],
+            },
             Self::VLlama => ArchMetadata {
                 families: &["Llama 3.2 Vision"],
                 modalities: &[Text, Vision],
@@ -444,6 +459,9 @@ impl MultimodalLoaderType {
             Self::LLaVA => "LlavaForConditionalGeneration",
             Self::Lfm2Vl => "Lfm2VlForConditionalGeneration",
             Self::Lfm3Vl => "Lfm3VlForConditionalGeneration",
+            Self::Lfm3Audio => "Lfm3AudioForConditionalGeneration",
+            Self::Lfm3Omni => "Lfm3OmniForConditionalGeneration",
+            Self::Lfm3D1 => "D1Model",
             Self::VLlama => "MllamaForConditionalGeneration",
             Self::Qwen2VL => "Qwen2VLForConditionalGeneration",
             Self::Idefics3 => "Idefics3ForConditionalGeneration",
@@ -478,40 +496,31 @@ impl EmbeddingLoaderType {
 
 const HEADER: &str = r#"---
 title: Supported models
-description: Architectures supported by mistral.rs, and how to tell if yours is one of them.
+description: Supported model families, example checkpoints, and architecture identifiers.
 ---
 
 <!-- Generated from the loader registry by mistralrs-core model_metadata. Do not edit by hand. -->
 
-## Is my model supported?
-
-mistral.rs auto-detects the architecture from a repo's `config.json`. To check yours:
-
-1. Open the model's `config.json` on Hugging Face and read the `architectures` field (e.g. `"Qwen3ForCausalLM"`, `"Gemma4ForConditionalGeneration"`).
-2. Find the matching row below. Each architecture covers every checkpoint that reports that class, including future fine-tunes and sizes, so the families and examples here are a sample, not the full list.
-3. If the architecture is not listed, check the [GGUF compatibility reference](/reference/gguf-support/) or [request model support](https://github.com/EricLBuehler/mistral.rs/issues/156). Use `--arch` only when the checkpoint matches a known architecture.
+Browse by family below, or [choose a model by task](/guides/models/choose-a-model/). Expand an example for a command. For model-specific setup and limits, see [model family notes](/guides/models/model-family-notes/).
 
 ```bash
 mistralrs run -m <model>     # interactive
 mistralrs serve -m <model>   # OpenAI-compatible server
 ```
 
-Expand a listed example to copy a ready-to-run command. One loader often serves several brand names (Qwen 3.5 and 3.6 share `Qwen3_5`; LFM2 and LFM2.5 share `Lfm2`) - the `Model families` column lists them. Behavior that differs from the defaults is collected in [model family notes](/guides/models/model-family-notes/).
-
-The `Architecture` column is the `config.json` `architectures` value. Per-family quantization, thinking, gated-repo, and tool-calling details live in [model family notes](/guides/models/model-family-notes/).
-
 "#;
 
-const FOOTER: &str = r#"## Format and quantization notes
+const FOOTER: &str = r#"## Is my model supported?
+
+For a checkpoint not shown here, match its `config.json` `architectures` value to the Architecture column. The examples are not an exhaustive list of sizes or fine-tunes. GGUF has a separate [compatibility table](/reference/gguf-support/). If neither lists your architecture, [request model support](https://github.com/EricLBuehler/mistral.rs/issues/156).
+
+## Format and quantization notes
 
 Text, multimodal, speech, and embedding models support ISQ at load time. Diffusion models (FLUX) do not; they load at native precision. See [GGUF support](/reference/gguf-support/) for GGUF compatibility; availability of [UQFF](/reference/uqff-format/), GPTQ, and AWQ artifacts varies by model on Hugging Face.
 
 ## Speculative decoding
 
-| Mode | Target architecture | Assistant checkpoint family | Guide |
-|---|---|---|---|
-| MTP | `Gemma4` | Gemma 4 assistant checkpoints, PagedAttention required | [Speculative decoding (MTP)](/guides/perf/speculative-decoding/) |
-| MTP | `Qwen3_5`, `Qwen3.8`, `Qwen3.8-Flash-Next` | Built-in `mtp.*` head (`--mtp`) from safetensors/UQFF, PagedAttention required | [Speculative decoding (MTP)](/guides/perf/speculative-decoding/) |
+See [speculative decoding](/guides/perf/speculative-decoding/) for supported models and setup.
 "#;
 
 fn md_cell(s: &str) -> String {
@@ -539,10 +548,15 @@ fn examples_cell(meta: &ArchMetadata) -> String {
         .map(label)
         .collect::<Vec<_>>()
         .join(", ");
+    let command = if meta.modalities.contains(&Decision) {
+        "serve"
+    } else {
+        "run"
+    };
     let body = meta
         .examples
         .iter()
-        .map(|e| format!("<code>mistralrs run -m {}</code>", e.repo))
+        .map(|e| format!("<code>mistralrs {command} -m {}</code>", e.repo))
         .collect::<Vec<_>>()
         .join("<br>");
     md_cell(&format!(
@@ -551,11 +565,13 @@ fn examples_cell(meta: &ArchMetadata) -> String {
 }
 
 fn simple_table(md: &mut String, rows: impl Iterator<Item = (String, ArchMetadata)>) {
-    md.push_str("| Architecture | Model families | Example |\n|---|---|---|\n");
+    let mut rows = rows.collect::<Vec<_>>();
+    rows.sort_by_key(|(_, meta)| meta.families[0].to_ascii_lowercase());
+    md.push_str("| Model families | Example | Architecture |\n|---|---|---|\n");
     for (name, meta) in rows {
         writeln!(
             md,
-            "| `{name}` | {} | {} |",
+            "| {} | {} | `{name}` |",
             families_cell(&meta),
             examples_cell(&meta),
         )
@@ -582,7 +598,17 @@ pub fn render_supported_models_markdown() -> String {
     md.push_str("## Multimodal models\n\n");
     simple_table(
         &mut md,
-        MultimodalLoaderType::iter().map(|t| (t.config_arch().to_string(), t.arch_metadata())),
+        MultimodalLoaderType::iter()
+            .filter(|t| !t.arch_metadata().modalities.contains(&Decision))
+            .map(|t| (t.config_arch().to_string(), t.arch_metadata())),
+    );
+
+    md.push_str("## Decision models\n\nUse the [decision API](/guides/models/use-decision-models/) to classify, score, or extract values. These models do not generate chat responses.\n\n");
+    simple_table(
+        &mut md,
+        MultimodalLoaderType::iter()
+            .filter(|t| t.arch_metadata().modalities.contains(&Decision))
+            .map(|t| (t.config_arch().to_string(), t.arch_metadata())),
     );
 
     md.push_str("## Image generation\n\n");

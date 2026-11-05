@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use hf_hub::{api::sync::ApiBuilder, Cache};
+use crate::pipeline::hf::{build_api, resolve_hf_cache};
 use serde::{Deserialize, Serialize};
 use sysinfo::{Disks, System};
 
@@ -284,8 +284,7 @@ pub fn collect_system_info() -> SystemInfo {
         available_bytes: sys.available_memory(),
     };
 
-    let hf_cache = Cache::from_env();
-    let hf_cache_path = hf_cache.path().to_string_lossy().to_string();
+    let hf_cache_path = resolve_hf_cache(None).to_string_lossy().to_string();
 
     SystemInfo {
         os: System::name(),
@@ -316,10 +315,11 @@ pub fn check_hf_gated_access() -> HfConnectivityInfo {
     }
 
     // Try to access a gated model (google/gemma-3-4b-it)
-    let api_result = ApiBuilder::from_env()
-        .with_progress(false)
-        .build()
-        .and_then(|api| api.model("google/gemma-3-4b-it".to_string()).info());
+    let api_result = build_api(&crate::TokenSource::CacheToken, false).and_then(|api| {
+        api.repo("google/gemma-3-4b-it", "main")
+            .files()
+            .map_err(Into::into)
+    });
 
     let latency_ms = start.elapsed().as_millis() as u64;
 
@@ -388,9 +388,16 @@ fn cuda_driver_version_code() -> Option<u32> {
     parse_cuda_driver_version_code(&stdout)
 }
 
+// Driver 13.x renamed the banner field to "CUDA UMD Version:"; older drivers still print "CUDA Version:".
+#[cfg(feature = "cuda")]
+const CUDA_VERSION_MARKERS: [&str; 2] = ["CUDA UMD Version:", "CUDA Version:"];
+
 #[cfg(feature = "cuda")]
 fn parse_cuda_driver_version_code(output: &str) -> Option<u32> {
-    let version = output.split("CUDA Version:").nth(1)?.trim_start();
+    let version = CUDA_VERSION_MARKERS
+        .iter()
+        .find_map(|marker| output.split(marker).nth(1))?
+        .trim_start();
     let version = version
         .split(|c: char| !(c.is_ascii_digit() || c == '.'))
         .next()?;
@@ -679,7 +686,7 @@ pub fn run_doctor() -> DoctorReport {
         .hf_cache_path
         .as_ref()
         .map(PathBuf::from)
-        .unwrap_or_else(|| Cache::from_env().path().clone());
+        .unwrap_or_else(|| resolve_hf_cache(None));
 
     if std::fs::create_dir_all(&hf_cache_path).is_err() {
         checks.push(DoctorCheck {
@@ -783,4 +790,34 @@ pub fn run_doctor() -> DoctorReport {
     }
 
     DoctorReport { system, checks }
+}
+
+#[cfg(all(test, feature = "cuda"))]
+mod tests {
+    use super::parse_cuda_driver_version_code;
+
+    #[test]
+    fn parses_the_umd_banner_emitted_by_driver_13x() {
+        let output = "\
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 615.71.09              KMD Version: 615.71.09     CUDA UMD Version: 13.4     |
++-----------------------------------------+------------------------+----------------------+";
+
+        assert_eq!(parse_cuda_driver_version_code(output), Some(1304));
+    }
+
+    #[test]
+    fn still_parses_the_classic_banner() {
+        let output = "\
++---------------------------------------------------------------------------------------+
+| NVIDIA-SMI 550.54.14              Driver Version: 550.54.14      CUDA Version: 12.4     |
++-----------------------------------------+----------------------+----------------------+";
+
+        assert_eq!(parse_cuda_driver_version_code(output), Some(1204));
+    }
+
+    #[test]
+    fn reports_nothing_when_the_banner_has_no_cuda_field() {
+        assert_eq!(parse_cuda_driver_version_code("no cuda here"), None);
+    }
 }

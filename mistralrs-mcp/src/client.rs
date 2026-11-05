@@ -1,5 +1,5 @@
 use crate::tools::{
-    Function, Tool, ToolCallback, ToolCallbackKind, ToolCallbackWithTool, ToolType,
+    AgentToolSource, Function, Tool, ToolCallback, ToolCallbackKind, ToolCallbackWithTool, ToolType,
 };
 use crate::transport::{HttpTransport, McpTransport, ProcessTransport, WebSocketTransport};
 use crate::types::McpToolResult;
@@ -502,6 +502,7 @@ impl McpClient {
                     ToolCallbackWithTool {
                         callback: ToolCallbackKind::Text(callback),
                         tool: tool_def,
+                        source: AgentToolSource::Mcp,
                     },
                 );
                 self.tools.insert(tool_name, tool);
@@ -657,6 +658,7 @@ impl McpClient {
                 ToolCallbackWithTool {
                     callback: ToolCallbackKind::Text(callback),
                     tool: tool_def,
+                    source: AgentToolSource::Mcp,
                 },
             );
             self.tools.insert(tool_name, tool);
@@ -1376,5 +1378,85 @@ impl McpServerConnection for WebSocketMcpConnection {
 
     async fn close(&self) -> Result<()> {
         self.transport.close().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SERVER_ID: &str = "fake";
+    const TOOL_NAME: &str = "lookup";
+
+    struct FakeConnection;
+
+    #[async_trait::async_trait]
+    impl McpServerConnection for FakeConnection {
+        fn server_id(&self) -> &str {
+            SERVER_ID
+        }
+
+        fn server_name(&self) -> &str {
+            SERVER_ID
+        }
+
+        async fn list_tools(&self) -> Result<Vec<McpToolInfo>> {
+            Ok(vec![McpToolInfo {
+                name: TOOL_NAME.to_string(),
+                description: None,
+                input_schema: serde_json::json!({"type": "object"}),
+                server_id: SERVER_ID.to_string(),
+                server_name: SERVER_ID.to_string(),
+            }])
+        }
+
+        async fn call_tool(&self, _name: &str, _arguments: Value) -> Result<String> {
+            Ok(String::new())
+        }
+
+        async fn list_resources(&self) -> Result<Vec<Resource>> {
+            Ok(Vec::new())
+        }
+
+        async fn read_resource(&self, _uri: &str) -> Result<String> {
+            Ok(String::new())
+        }
+
+        async fn ping(&self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn close(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    fn assert_registered_as_mcp(client: &McpClient) {
+        let callback = &client.get_tool_callbacks_with_tools()[TOOL_NAME];
+        assert!(matches!(callback.source, AgentToolSource::Mcp));
+    }
+
+    #[tokio::test]
+    async fn registered_tools_are_tagged_as_mcp() {
+        let server = McpServerConfig {
+            id: SERVER_ID.to_string(),
+            tool_prefix: None,
+            ..Default::default()
+        };
+        let mut client = McpClient::new(McpClientConfig {
+            servers: vec![server],
+            ..Default::default()
+        });
+        client
+            .servers
+            .insert(SERVER_ID.to_string(), Arc::new(FakeConnection));
+
+        client.discover_and_register_tools().await.unwrap();
+        assert_registered_as_mcp(&client);
+
+        client.remove_tools_for_server(SERVER_ID);
+        assert!(client.get_tool_callbacks_with_tools().is_empty());
+        client.register_tools_for_server(SERVER_ID).await.unwrap();
+        assert_registered_as_mcp(&client);
     }
 }

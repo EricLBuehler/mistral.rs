@@ -7,7 +7,8 @@ macro_rules! dequant_kernel {
                 zero: *const $scalar,
                 out: *const $scalar,
                 h: i32,
-                w: i32
+                w: i32,
+                stream: candle_core::cuda::cudarc::driver::sys::CUstream
             );
         }
     };

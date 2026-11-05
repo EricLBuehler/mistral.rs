@@ -125,6 +125,7 @@ impl ExecutionMemoryLimits {
 pub struct RuntimeMemoryPlan {
     pub memory_goal: MemoryGoal,
     pub limits: ExecutionMemoryLimits,
+    pub recurrent_prefix_capacity: usize,
     pub primary_activation_bytes: usize,
     pub mapped_activation_bytes: usize,
     pub primary_non_attention_bytes: usize,
@@ -186,6 +187,8 @@ impl RuntimeMemoryPlan {
     }
 }
 
+pub use mistralrs_quant::embedding::WeightAllocationBudget;
+
 #[derive(Clone, Copy, Debug)]
 pub struct DeviceMemoryBudget {
     pub physical_bytes: usize,
@@ -228,7 +231,6 @@ pub fn device_memory_budget(goal: MemoryGoal, memory: DeviceMemory) -> Result<us
     Ok(resolve_device_budget(goal, memory)?.allocatable_bytes)
 }
 
-#[cfg(any(feature = "cuda", feature = "metal", test))]
 pub(crate) fn resolve_forward_budget(
     goal: MemoryGoal,
     memory: DeviceMemory,
@@ -245,9 +247,45 @@ pub(crate) fn resolve_forward_budget(
     Ok(budget)
 }
 
+pub(crate) fn allocation_budget_with_reservations(
+    policy_budget: usize,
+    execution_budget: usize,
+    persistent_reservation: usize,
+    transient_reservation: usize,
+) -> Result<usize> {
+    let execution_reservation = persistent_reservation
+        .checked_add(transient_reservation)
+        .context("Execution memory reservation overflow")?;
+    Ok(policy_budget
+        .saturating_sub(persistent_reservation)
+        .min(execution_budget.saturating_sub(execution_reservation)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn weight_preparation_keeps_workspace_out_of_persistent_budget() {
+        let budget = WeightAllocationBudget {
+            persistent_bytes: 28 * GIB,
+            execution_bytes: 44 * GIB,
+        };
+        assert!(budget.fits(28 * GIB, 2 * GIB));
+        assert!(budget.fits(28 * GIB, 16 * GIB));
+        assert!(!budget.fits(28 * GIB + 1, 0));
+        assert!(!budget.fits(28 * GIB, 16 * GIB + 1));
+        assert!(!WeightAllocationBudget {
+            persistent_bytes: 28 * GIB,
+            execution_bytes: 28 * GIB,
+        }
+        .fits(28 * GIB, 1));
+        assert!(!WeightAllocationBudget {
+            persistent_bytes: usize::MAX,
+            execution_bytes: usize::MAX,
+        }
+        .fits(usize::MAX, 1));
+    }
 
     #[test]
     fn capacity_units_and_validation() {

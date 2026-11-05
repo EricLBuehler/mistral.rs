@@ -497,7 +497,8 @@ impl Phi4MMModel {
                 &self.encoder_cache,
             )?
         } else {
-            self.embed_tokens.embedding_forward(input_ids, self.dtype)?
+            self.embed_tokens
+                .embedding_forward(input_ids, self.dtype.into())?
         };
         let cache = &mut self.cache.normal().0;
         let mask_cache = ctx.mask_cache(cache);

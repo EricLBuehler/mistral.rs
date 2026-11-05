@@ -53,6 +53,7 @@ impl<'a> Adapter<'a> {
             xlora_order,
             xlora_config,
             lora_preload_adapter_info,
+            ..
         } = paths.get_adapter_paths()
         else {
             todo!()

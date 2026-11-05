@@ -3,8 +3,8 @@
 use anyhow::Result;
 use comfy_table::{presets::UTF8_FULL, Cell, Color, ContentArrangement, Table};
 use mistralrs_core::{
-    initialize_logging, AdapterSelection, Constraint, NormalRequest, Request, RequestMessage,
-    Response, SamplingParams,
+    initialize_logging, AdapterSelection, Constraint, NormalRequest, PrefixCacheCapacity, Request,
+    RequestMessage, Response, SamplingParams,
 };
 use mistralrs_server_core::mistralrs_for_server_builder::MistralRsForServerBuilder;
 use std::{
@@ -115,7 +115,7 @@ pub async fn run_bench(
     let model_id = get_model_id(&model_type);
     // Convert args and load model
     let matformer = runtime.matformer_selection();
-    apply_quant_resolution(&mut model_type, &global.token_source, &matformer).await?;
+    apply_quant_resolution(&mut model_type, &global.token_source, &matformer, None).await?;
     let model_selected = convert_to_model_selected(&model_type, &matformer)?;
     let (max_model_len, hf_config_overrides) = extract_hf_config_settings(&model_type);
 
@@ -135,7 +135,7 @@ pub async fn run_bench(
         .with_no_kv_cache(runtime.no_kv_cache)
         .with_token_source(global.token_source)
         .with_interactive_mode(false)
-        .with_prefix_cache_n(0) // Disable prefix cache for benchmarking
+        .with_prefix_cache_n(PrefixCacheCapacity::DISABLED)
         .with_disable_eos_stop(true) // Always generate exactly gen_len tokens
         .with_mtp_config_optional(runtime.mtp_config())
         .with_max_model_len_optional(max_model_len)
@@ -163,7 +163,7 @@ pub async fn run_bench(
     if let Some(max_seq_len) = mistralrs
         .config(None)
         .map_err(anyhow::Error::msg)?
-        .max_seq_len
+        .max_model_len
     {
         let longest_ttft = prompt_lens
             .iter()
@@ -387,6 +387,7 @@ async fn run_single_bench(
     let tokens = bench_tokens(prompt_tokens, token_start);
 
     let req = Request::Normal(Box::new(NormalRequest {
+        audio_output: None,
         id: mistralrs.next_request_id(),
         queued_at: None,
         messages: RequestMessage::CompletionTokens(tokens),

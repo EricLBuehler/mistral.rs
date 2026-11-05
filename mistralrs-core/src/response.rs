@@ -27,9 +27,43 @@ macro_rules! generate_repr {
 
 #[cfg_attr(feature = "pyo3_macros", pyclass)]
 #[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
+#[cfg_attr(feature = "utoipa", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ChatAudioResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transcript: Option<String>,
+}
+
+generate_repr!(ChatAudioResponse);
+
+impl ChatAudioResponse {
+    pub fn from_pcm(
+        samples: &[f32],
+        sample_rate: u32,
+        format: crate::ChatAudioFormat,
+    ) -> anyhow::Result<Self> {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        Ok(Self {
+            data: Some(STANDARD.encode(crate::encode_audio_pcm(samples, sample_rate, 1, format)?)),
+            ..Default::default()
+        })
+    }
+}
+
+#[cfg_attr(feature = "pyo3_macros", pyclass)]
+#[cfg_attr(feature = "pyo3_macros", pyo3(get_all))]
 #[derive(Debug, Clone, Serialize)]
 /// Chat completion response message.
 pub struct ResponseMessage {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio: Option<ChatAudioResponse>,
     pub content: Option<String>,
     pub role: String,
     pub tool_calls: Option<Vec<ToolCallResponse>>,
@@ -46,6 +80,8 @@ generate_repr!(ResponseMessage);
 #[derive(Debug, Clone, Serialize)]
 /// Delta in content for streaming response.
 pub struct Delta {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio: Option<ChatAudioResponse>,
     pub content: Option<String>,
     pub role: String,
     pub tool_calls: Option<Vec<ToolCallResponse>>,
@@ -357,6 +393,9 @@ pub struct ServiceUnavailableError(pub String);
 /// - Chat (no prefix)
 /// - Completion (Completion- prefix)
 pub enum Response {
+    Decision {
+        result: crate::decision::DecisionResponse,
+    },
     InternalError(Box<dyn Error + Send + Sync>),
     ValidationError(Box<dyn Error + Send + Sync>),
     // Chat
@@ -405,6 +444,9 @@ pub enum Response {
 
 #[derive(Debug, Clone)]
 pub enum ResponseOk {
+    Decision {
+        result: crate::decision::DecisionResponse,
+    },
     // Chat
     Done(ChatCompletionResponse),
     Chunk(ChatCompletionChunkResponse),
@@ -446,6 +488,25 @@ pub enum ResponseOk {
     },
     File(crate::files::File),
 }
+
+/// A prompt that leaves no room in the per-request context; servers map it to each API's overflow error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ContextLengthExceeded {
+    pub prompt_tokens: usize,
+    pub max_model_len: usize,
+}
+
+impl Display for ContextLengthExceeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "This model's maximum context length is {} tokens. However, your messages resulted in {} tokens. Please reduce the length of the messages.",
+            self.max_model_len, self.prompt_tokens
+        )
+    }
+}
+
+impl Error for ContextLengthExceeded {}
 
 pub enum ResponseErr {
     InternalError(Box<dyn Error + Send + Sync>),
@@ -496,6 +557,7 @@ impl Response {
     /// Convert the response into a result form.
     pub fn as_result(self) -> Result<ResponseOk, Box<ResponseErr>> {
         match self {
+            Self::Decision { result } => Ok(ResponseOk::Decision { result }),
             Self::Done(x) => Ok(ResponseOk::Done(x)),
             Self::Chunk(x) => Ok(ResponseOk::Chunk(x)),
             Self::CompletionDone(x) => Ok(ResponseOk::CompletionDone(x)),

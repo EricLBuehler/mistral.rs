@@ -15,6 +15,9 @@ extend-ignore-re = [
     "cudaDevAttrMaxSharedMemoryPerBlockOptin",
     '"tese"',
     "setp\\.ne\\.b32",
+    "setp\\.lt\\.u64",
+    'caf\\u00e9',
+    "caf' \\+ \\[char\\]0x00e9",
     # metal_kernels
     "out uneeded values",
     "copy_gg_dynamic_nd1",
@@ -85,3 +88,23 @@ shll = "shll"
 "layrnorm" = "layrnorm"
 "pre_layrnorm" = "pre_layrnorm"
 "numer_denom_ms" = "numer_denom_ms"
+"from_numer_denom_ms" = "from_numer_denom_ms"
+"smem_optin" = "smem_optin"
+"DEFAULT_SMEM_OPTIN" = "DEFAULT_SMEM_OPTIN"
+"SMALL_SMEM_OPTIN_BYTES" = "SMALL_SMEM_OPTIN_BYTES"
+
+[type.lfm3-d1-parsing]
+extend-glob = ["parsing.rs"]
+
+# Multilingual month names and ordinal suffixes.
+[type.lfm3-d1-parsing.extend-words]
+januar = "januar"
+februar = "februar"
+marz = "marz"
+juni = "juni"
+juli = "juli"
+aout = "aout"
+oktober = "oktober"
+decembre = "decembre"
+dezember = "dezember"
+nd = "nd"

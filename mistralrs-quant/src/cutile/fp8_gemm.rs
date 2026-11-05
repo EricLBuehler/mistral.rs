@@ -16,7 +16,7 @@ use super::tune::{
     buckets_from_breakpoints, config, cutile_error, tune, Bucket, Prepared, Space, TuneMode,
     TuneRequest, TunedTable, TUNE_WEIGHT_SETS,
 };
-use super::warmup::CutileKernel;
+use super::warmup::{CutileKernel, WarmupProgress};
 use super::{catch_cutile_panic, context, device_multiprocessor_count, jit_available};
 use crate::blockwise_fp8::mma::quantize_activation_padded;
 use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
@@ -496,7 +496,7 @@ impl GemmTuner {
 }
 
 impl CutileKernel for Fp8GemmKernel {
-    fn warm(&self, dev: &CudaDevice) -> Result<()> {
+    fn warm(&self, dev: &CudaDevice, silent: bool) -> Result<()> {
         let shapes: Vec<Vec<GemmWeights>> = SHAPES
             .get_or_init(|| Mutex::new(Vec::new()))
             .lock()
@@ -524,7 +524,9 @@ impl CutileKernel for Fp8GemmKernel {
             });
             TUNED.set(shape, &tuned, Fp8GemmConfig::from_config);
         }
-        tracing::info!("Warming {} cuTile FP8 GEMM kernels.", shapes.len());
+        let total = shapes.len() * buckets.len();
+        tracing::info!("Warming {total} cuTile FP8 GEMM variants.");
+        let progress = WarmupProgress::new("FP8 GEMM variants", total, silent);
         let device = candle_core::Device::Cuda(dev.clone());
         for sets in &shapes {
             let (n, k) = sets[0].shape()?;
@@ -539,7 +541,9 @@ impl CutileKernel for Fp8GemmKernel {
                     weight_scales: &sets[0].scales,
                 };
                 let cfg = gemm_config((n, k), bucket.probe);
-                if let Err(err) = launch(&operands, cfg, dev, true) {
+                if let Err(err) = progress.run(format!("n={n} k={k} rows={rows}"), || {
+                    launch(&operands, cfg, dev, true)
+                }) {
                     tracing::warn!(
                         "cuTile FP8 GEMM warmup failed (n={n} k={k} rows={rows}): {err}"
                     );

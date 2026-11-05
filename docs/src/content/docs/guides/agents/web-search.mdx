@@ -5,9 +5,13 @@ description: Built-in web search tool.
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-`--enable-search` exposes a `web_search` tool to the model.
+Web search lets the model look things up before it answers. It gets two tools: one runs a search query and returns the top results with their page text, and the other fetches the text of a specific URL. Use it for current events, documentation lookups, or anything past the model's training data.
+
+Searches go to DuckDuckGo and return up to 10 results per query. Each page is cleaned down to its main text before the model sees it.
 
 ## Turning it on
+
+Start the server with `--enable-search` (or `--agent`), then turn search on for each request that should use it. A server started without it rejects search requests with a 400 error, so clients can't make it fetch from the web unless you allow it.
 
 <Tabs>
 <TabItem label="CLI">
@@ -19,7 +23,7 @@ mistralrs serve --enable-search -m <model>
 </TabItem>
 <TabItem label="HTTP">
 
-Once the server is started with `--enable-search`, Chat Completions requests control per-request behavior with `web_search_options`:
+Chat Completions requests turn search on with `web_search_options`. An empty object `{}` uses the defaults:
 
 ```json
 {
@@ -31,7 +35,7 @@ Once the server is started with `--enable-search`, Chat Completions requests con
 }
 ```
 
-Responses requests use OpenAI hosted-tool syntax instead:
+Responses requests use OpenAI's hosted-tool syntax instead:
 
 ```json
 {
@@ -52,66 +56,78 @@ Responses requests use OpenAI hosted-tool syntax instead:
 <TabItem label="Python">
 
 ```python
-from mistralrs import ChatCompletionRequest, Runner, Which
+from mistralrs import ChatCompletionRequest, Runner, WebSearchOptions, Which
 
 runner = Runner(
     which=Which.Plain(model_id="Qwen/Qwen3-4B"),
     enable_search=True,
 )
+
+response = runner.send_chat_completion_request(
+    ChatCompletionRequest(
+        model="default",
+        messages=[{"role": "user", "content": "What happened at CES this year?"}],
+        web_search_options=WebSearchOptions(),
+    )
+)
 ```
+
+[Full example](/examples/python/web-search/)
 
 </TabItem>
 <TabItem label="Rust">
 
 ```rust
-use mistralrs::{IsqBits, ModelBuilder, SearchEmbeddingModel};
+use mistralrs::{IsqBits, ModelBuilder, RequestBuilder, SearchEmbeddingModel, WebSearchOptions};
 
 let model = ModelBuilder::new("Qwen/Qwen3-4B")
     .with_auto_isq(IsqBits::Four)
     .with_search(SearchEmbeddingModel::default())
     .build()
     .await?;
+
+let request = RequestBuilder::from(messages).with_web_search_options(WebSearchOptions::default());
 ```
+
+[Full example](/examples/rust/advanced/web-search/)
 
 </TabItem>
 </Tabs>
 
-The built-in backend uses DuckDuckGo (`https://html.duckduckgo.com/html/?q=...`). Up to 10 results are returned per query. Results pass through a readability-style extractor.
-
-The built-in search and extraction tools use [strict tool calling](/guides/agents/tool-calling-basics/#strict-tool-calling) by default, so generated queries and URLs are constrained to the declared JSON Schema.
+The search and page tools use [strict tool calling](/guides/agents/tool-calling-basics/#strict-tool-calling), so the model's queries and URLs always arrive as valid arguments.
 
 ## Reranking
 
-The neural reranker is opt-in. When a search embedding model is configured, retrieved results pass through a BM25 keyword pre-filter and then an embedding-based reranker before reaching the model. With no embedding model, results go straight to the model unranked.
+A search returns more page text than the model can usefully read, so mistral.rs picks the most relevant parts before passing them on. It does this one of two ways:
 
-In the SDKs, enabling search already loads the reranker (EmbeddingGemma by default). On the CLI it is off until you pass `--search-embedding-model`:
+| | How results are picked | What the model gets |
+|---|---|---|
+| With a reranker | Pages are split into passages of about 500 tokens. A keyword pass keeps the best 20, and an embedding model orders those by how well they answer the query. | The most relevant passages, drawn from across all the results. |
+| Without a reranker | Whole pages are ranked by keyword overlap with the query. | As many complete pages as fit in the budget. |
 
-```bash
-mistralrs serve --enable-search \
-  --search-embedding-model embedding-gemma \
-  -m <model>
-```
+The reranker gives the model more relevant text, from more sources, in the same budget. The cost is an extra small model, [google/embeddinggemma-300m](https://huggingface.co/google/embeddinggemma-300m), which is downloaded and loaded at startup.
 
-`--search-embedding-model` accepts `embedding-gemma`. It requires `--enable-search` (or `--agent`/`--agentic`, the [one-flag agent preset](/guides/agents/build-an-agent/) that turns search on).
+The reranker is on by default whenever you turn on search: `--enable-search` or `--agent` on the CLI, `enable_search=True` in Python, and `.with_search(...)` in Rust. `--search-embedding-model embedding-gemma` selects it explicitly; it's currently the only choice. In Rust, a request with `web_search_options` on a model built without `.with_search(...)` still searches, using keyword ranking only.
 
 ## Per-request options
 
-Fields on `WebSearchOptions`:
+These fields go in `web_search_options` for Chat Completions, or in the `web_search` tool entry for Responses.
 
-- `search_context_size`: `low`, `medium` (default), `high`.
-- `user_location`: optional location hint.
-- `filters`: `allowed_domains` and `blocked_domains`, each up to 100 domains. A domain matches its subdomains.
-- `return_token_budget`: `default` or `unlimited` for Responses `web_search`.
-- `search_content_types`: `["text"]` is supported. Image search is not supported.
-- `external_web_access`: `true` or omitted. `false` is not supported for `web_search`; it is ignored for `web_search_preview`.
-- `search_description`: optional description shown to the model.
-- `extract_description`: optional description for content extraction.
+| Field | Values | What it does |
+|---|---|---|
+| `search_context_size` | `low`, `medium` (default), `high` | How much result text the model gets per search: about 4,096, 8,192, or 16,384 tokens. |
+| `user_location` | Any of `city`, `region`, `country`, `timezone`, inside `{"type": "approximate", "approximate": {...}}` for Chat Completions or directly in `{"type": "approximate", ...}` for Responses | Tells the model where the user is, so it can search for local results such as weather or opening hours. |
+| `filters` | `allowed_domains`, `blocked_domains` (Responses allows up to 100 each) | Keeps only results from allowed domains, or drops results from blocked ones. A domain also covers its subdomains. |
+| `return_token_budget` | `default`, `unlimited` | Responses `web_search` only. `unlimited` uses the `high` budget whatever `search_context_size` says. |
+| `search_content_types` | `["text"]` | Text is the only content type. Responses rejects a request for images. |
+| `external_web_access` | `true` (default), `false` | Responses `web_search` only. `false` turns search off for that request. |
+| `search_description`, `extract_description` | Any text | Chat Completions and SDKs. Replaces the description the model sees for the search tool or the page tool, for example to steer it toward particular sources. |
 
-`web_search_preview` is accepted for Responses, but it does not support `filters` or `return_token_budget`.
+Responses also accepts `web_search_preview`, without `filters` or `return_token_budget`.
 
 ## Custom search backends
 
-The Python and Rust SDKs accept a `search_callback` that replaces the default web search. The callback receives a query string and returns search results. Used for searching internal corpora.
+To search your own documents, an internal wiki, or a private search service instead of DuckDuckGo, pass a `search_callback` in the Python or Rust SDK. It receives the model's query and returns a list of results. The results then go through the same filters and ranking as web results.
 
 <Tabs>
 <TabItem label="Python">
@@ -130,6 +146,8 @@ runner = Runner(
     search_callback=my_search,
 )
 ```
+
+[Full example](/examples/python/custom-search/)
 
 </TabItem>
 <TabItem label="Rust">
@@ -152,6 +170,8 @@ let model = ModelBuilder::new("Qwen/Qwen3-4B")
     .build()
     .await?;
 ```
+
+[Full example](/examples/rust/advanced/search-callback/)
 
 </TabItem>
 </Tabs>

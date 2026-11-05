@@ -774,7 +774,7 @@ detect_os() {
 }
 
 # Minimum required Rust version
-REQUIRED_RUST_VERSION="1.94"
+REQUIRED_RUST_VERSION="1.95"
 RUSTUP_INSTALL_CMD="curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y"
 MISTRALRS_REPO_URL="https://github.com/EricLBuehler/mistral.rs"
 MISTRALRS_BRANCH="master"

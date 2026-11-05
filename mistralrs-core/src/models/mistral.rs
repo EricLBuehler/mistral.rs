@@ -565,7 +565,8 @@ impl Model {
     }
 
     pub fn get_input_embeddings(&self, input_ids: &Tensor) -> Result<Tensor> {
-        self.embed_tokens.embedding_forward(input_ids, self.dtype)
+        self.embed_tokens
+            .embedding_forward(input_ids, self.dtype.into())
     }
 
     pub fn forward(
@@ -575,7 +576,8 @@ impl Model {
     ) -> Result<Tensor> {
         self.forward_embeds(
             input_ids,
-            self.embed_tokens.embedding_forward(input_ids, self.dtype)?,
+            self.embed_tokens
+                .embedding_forward(input_ids, self.dtype.into())?,
             ctx,
         )
     }

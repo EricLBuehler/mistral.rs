@@ -4,6 +4,63 @@ description: "Response and streaming types returned by the engine."
 sidebar:
   order: 5
 ---
+## `DecisionResponse`
+
+| Field | Type |
+| --- | --- |
+| `answers` | `dict[str, DecisionAnswer]` |
+| `usage` | `DecisionUsage` |
+
+### `DecisionResponse.to_dict`
+
+```text
+to_dict() -> dict[str, Any]
+```
+
+
+## `DecisionAnswer`
+
+Fields depend on type; absent optional fields return None. to_dict preserves the wire object.
+
+| Field | Type |
+| --- | --- |
+| `type` | `Literal['noul', 'choice', 'score', 'text', 'number', 'date', 'box', 'boxes']` |
+| `noul` | `float` |
+| `choice` | `str \| None` |
+| `choices` | `list[str] \| None` |
+| `confidence` | `float \| None` |
+| `probabilities` | `dict[str, float]` |
+| `score` | `float` |
+| `legend` | `dict[str, str]` |
+| `text` | `str \| None` |
+| `span` | `list[int] \| None` |
+| `found` | `float \| None` |
+| `path` | `str \| None` |
+| `number` | `float \| None` |
+| `unit` | `str \| None` |
+| `interval` | `list[float] \| None` |
+| `date` | `str \| None` |
+| `box` | `dict[str, float] \| None` |
+| `boxes` | `list[dict[str, Any]]` |
+| `count` | `int` |
+| `at_least` | `bool` |
+| `presence` | `list[float]` |
+
+### `DecisionAnswer.to_dict`
+
+```text
+to_dict() -> dict[str, Any]
+```
+
+
+## `DecisionUsage`
+
+| Field | Type |
+| --- | --- |
+| `input_tokens` | `int` |
+| `output_tokens` | `int` |
+
+
 ## `ChatCompletionResponse`
 
 | Field | Type | Default |
@@ -76,6 +133,7 @@ sidebar:
 | `role` | `str` | required |
 | `tool_calls` | `list[ToolCallResponse] \| None` | `None` |
 | `reasoning_content` | `str \| None` | `None` |
+| `audio` | `ChatAudioResponse \| None` | `None` |
 
 
 ## `ResponseMessage`
@@ -86,6 +144,17 @@ sidebar:
 | `role` | `str` | required |
 | `tool_calls` | `list[ToolCallResponse] \| None` | required |
 | `reasoning_content` | `str \| None` | `None` |
+| `audio` | `ChatAudioResponse \| None` | `None` |
+
+
+## `ChatAudioResponse`
+
+| Field | Type | Default |
+| --- | --- | --- |
+| `id` | `str \| None` | `None` |
+| `data` | `str \| None` | `None` |
+| `expires_at` | `int \| None` | `None` |
+| `transcript` | `str \| None` | `None` |
 
 
 ## `CompletionResponse`
@@ -192,11 +261,9 @@ This wraps PCM values, sampling rate and the number of channels.
 
 ## `ToolCallType`
 
-Members and their wire/config names where relevant. The members are fieldless PyO3 enum variants and do not expose `.value`.
-
-| Member | Wire/config name |
-| --- | --- |
-| `ToolCallType.Function` | `'function'` |
+| Member |
+| --- |
+| `ToolCallType.Function` |
 
 
 ## `CalledFunction`

@@ -20,7 +20,8 @@ pub const SUPPORTED_CUDA_TOOLKIT_VERSIONS: &[(usize, usize)] = &[
     (11, 4),
 ];
 const NVFP4_MIN_CUDA_VERSION: (usize, usize) = (13, 3);
-const NVFP4_COMPUTE_CAP: usize = 121;
+// CUTLASS Sm120 block-scaled MMA exists only under the arch-specific sm_120a/sm_121a targets; SM10x is tcgen05.
+const NVFP4_CUTLASS_COMPUTE_CAPS: &[usize] = &[120, 121];
 
 pub fn parse_cuda_version_from_nvcc(stdout: &str) -> Option<(usize, usize)> {
     let release = stdout.split("release ").nth(1)?;
@@ -33,16 +34,17 @@ pub fn parse_cuda_version_from_nvcc(stdout: &str) -> Option<(usize, usize)> {
     Some((major, minor))
 }
 
-pub fn nvfp4_cutlass_supported_for_build(
+pub fn nvfp4_cutlass_arch_for_build(
     cuda_version: (usize, usize),
     compute_cap: usize,
     cutile: bool,
     target: &str,
-) -> bool {
-    cuda_version >= NVFP4_MIN_CUDA_VERSION
-        && compute_cap == NVFP4_COMPUTE_CAP
+) -> Option<String> {
+    (cuda_version >= NVFP4_MIN_CUDA_VERSION
+        && NVFP4_CUTLASS_COMPUTE_CAPS.contains(&compute_cap)
         && cutile
-        && target.contains("linux")
+        && target.contains("linux"))
+    .then(|| format!("{compute_cap}a"))
 }
 
 #[cfg(test)]
@@ -64,42 +66,24 @@ mod tests {
     #[test]
     fn nvfp4_accepts_cuda_13_3_and_newer() {
         for version in [(13, 3), (13, 4)] {
-            assert!(nvfp4_cutlass_supported_for_build(
-                version,
-                121,
-                true,
-                LINUX_TARGET
-            ));
+            assert_eq!(
+                nvfp4_cutlass_arch_for_build(version, 121, true, LINUX_TARGET).as_deref(),
+                Some("121a")
+            );
         }
-        assert!(!nvfp4_cutlass_supported_for_build(
-            (13, 2),
-            121,
-            true,
-            LINUX_TARGET
-        ));
+        assert!(nvfp4_cutlass_arch_for_build((13, 2), 121, true, LINUX_TARGET).is_none());
     }
 
     #[test]
     fn nvfp4_preserves_target_and_feature_requirements() {
-        for compute_cap in [80, 90, 100, 120] {
-            assert!(!nvfp4_cutlass_supported_for_build(
-                (13, 4),
-                compute_cap,
-                true,
-                LINUX_TARGET
-            ));
+        for compute_cap in [80, 90, 100, 103, 110] {
+            assert!(
+                nvfp4_cutlass_arch_for_build((13, 4), compute_cap, true, LINUX_TARGET).is_none()
+            );
         }
-        assert!(!nvfp4_cutlass_supported_for_build(
-            (13, 4),
-            121,
-            false,
-            LINUX_TARGET
-        ));
-        assert!(!nvfp4_cutlass_supported_for_build(
-            (13, 4),
-            121,
-            true,
-            "x86_64-pc-windows-msvc"
-        ));
+        assert!(nvfp4_cutlass_arch_for_build((13, 4), 121, false, LINUX_TARGET).is_none());
+        assert!(
+            nvfp4_cutlass_arch_for_build((13, 4), 121, true, "x86_64-pc-windows-msvc").is_none()
+        );
     }
 }

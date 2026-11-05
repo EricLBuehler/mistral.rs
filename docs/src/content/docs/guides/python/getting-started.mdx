@@ -30,7 +30,7 @@ The first run downloads the weights into the Hugging Face cache.
 
 ## Installing
 
-`pip install mistralrs` covers CPU (Linux x86_64/aarch64, Windows) and Metal (macOS arm64) - one package; pip picks the wheel for your platform. Python 3.10 or newer.
+You need Python 3.10 or newer. One package covers CPU on Linux (x86_64 and aarch64) and Windows, and Metal on Apple Silicon Macs; pip picks the right wheel for your platform:
 
 ```bash
 pip install mistralrs
@@ -38,7 +38,7 @@ pip install mistralrs
 
 ### NVIDIA GPU (CUDA)
 
-CUDA wheels are GitHub release assets because PyPI cannot select by GPU. Pick a wheel version from your driver CUDA level and compute capability:
+CUDA wheels are published on GitHub releases instead of PyPI, because pip can't pick a wheel by GPU. Choose the wheel suffix from the CUDA version `nvidia-smi` reports and your GPU's compute capability (`{cc}`, such as `89` for an RTX 4090):
 
 | Driver reports | Wheel suffix |
 |---|---|
@@ -57,40 +57,50 @@ pip install "mistralrs==0.9.5+cuda128.sm89" \
   --find-links https://github.com/EricLBuehler/mistral.rs/releases/expanded_assets/v0.9.5
 ```
 
-Look up your GPU's compute capability in [hardware support](/reference/hardware-support/). CUDA wheels bundle the CUDA runtime but do not include cuTile. For cuTile acceleration, use a [cuTile-capable CLI binary](/reference/installer/) and follow [cuTile setup](/developer/moe-backends/).
+Look up your GPU's compute capability in [hardware support](/reference/hardware-support/). CUDA wheels bundle the CUDA runtime, so you don't need a CUDA toolkit installed. They don't include cuTile, the optional NVIDIA backend that speeds up MoE and quantized models and that NVFP4 models require. If you need it, use the CLI from the [installer](/reference/installer/) instead.
 
-All install paths expose the same `from mistralrs import ...` API.
+Every wheel exposes the same `from mistralrs import ...` API.
 
 ## The pieces
 
-[`Runner`](/reference/python/runner/) owns the loaded model. Construction loads the weights; reuse one `Runner` for the lifetime of the process to avoid reloading.
+[`Runner`](/reference/python/runner/) owns the loaded model. Creating one loads the weights, so create it once and reuse it for every request in your process.
 
-[`Which`](/reference/python/which/) selects the model loader. `Which.Plain(model_id="...")` is correct for standard text models. Other variants cover multimodal models (`Which.MultimodalPlain`), GGUF checkpoints (`Which.GGUF`), embeddings (`Which.Embedding`), and LoRA adapters (`Which.Lora`).
+[`Which`](/reference/python/which/) tells `Runner` what kind of model to load:
 
-`in_situ_quant="4"` is the equivalent of the CLI's `--isq 4`: it applies [ISQ (in-situ quantization)](/reference/quantization-types/), quantizing the weights to 4 bits at load time. Omit it for full precision.
+| Variant | Use for |
+|---|---|
+| `Which.Plain(model_id=...)` | Text models |
+| `Which.MultimodalPlain(model_id=...)` | Models that take images, audio, or video |
+| `Which.GGUF(...)` | GGUF checkpoints |
+| `Which.Embedding(model_id=...)` | Embedding models |
+| `Which.Lora(model_id=..., adapters=[...])` | A base model with [LoRA adapters](/guides/customize/lora-adapters/) |
 
-Full example: [plain](/examples/python/plain/).
+`in_situ_quant` quantizes the weights while loading, like the CLI's `--isq`. Pass `"8"` for about half the memory of the original weights or `"4"` for about a quarter; `"2"`, `"3"`, `"5"`, and `"6"` also work. Leave it out to load at full precision. See [quantization types](/reference/quantization-types/) for named formats.
+
+Embeddings, speech, image generation, and multimodal requests are covered in the [Python reference](/reference/python/). Full example: [plain](/examples/python/plain/).
 
 ## Memory and device placement
 
-For upgrades from 0.9.4, see the [memory and device-mapping migration guide](/guides/perf/paged-attention/#upgrading-from-094) for removed `Runner` and `Which` arguments.
+By default, mistral.rs places the model on your devices automatically and gives the KV cache the memory left over. On CUDA and Metal it uses [paged attention](/guides/perf/paged-attention/), so all running requests share one cache pool.
 
-Leave `memory_goal` and `num_device_layers` unset for automatic device placement and KV cache sizing. PagedAttention is enabled automatically on supported CUDA and Metal devices. Set `max_seqs=4` on `Runner` to allow up to four concurrent sequences; the default is 32.
+`max_seqs` on `Runner` sets how many requests run at once. The default is 32.
 
-To choose a shared KV cache capacity, add `memory_goal="4GiB"` or `memory_goal="65536tokens"` to `Runner`. These capacities are shared across requests; each request still has its own context and output limits. Explicit memory goals require paging. See [memory budgets](/guides/perf/paged-attention/#memory-budget) for sizing options and [layer mapping](/guides/perf/distributed-inference/#layer-mapping-cuda-p2p) for manual placement.
+To size the cache yourself, pass `memory_goal` to `Runner`:
+
+| `memory_goal` | What happens |
+|---|---|
+| Unset (default) | The cache gets whatever memory is left after loading the model. |
+| `"4GiB"` | The cache gets exactly 4 GiB. |
+| `"65536tokens"` | The cache holds 65,536 tokens in total. |
+| `0.9` | Everything mistral.rs allocates stays under 90% of GPU memory. |
+
+The cache is shared, so with `"65536tokens"` and 8 requests running, each has room for about 8,192 tokens. Setting `memory_goal` on CPU, or with `no_paged_attn=True`, is an error. See [memory budget](/guides/perf/paged-attention/#memory-budget) for the details and [layer mapping](/guides/perf/distributed-inference/#layer-mapping-cuda-p2p) to place layers by hand.
 
 ## Streaming tokens
 
-Set `stream=True` to receive an iterator of chunks instead of a single response:
+Set `stream=True` to get an iterator of chunks instead of a single response. Using the `runner` from above:
 
 ```python
-from mistralrs import Runner, Which, ChatCompletionRequest
-
-runner = Runner(
-    which=Which.Plain(model_id="Qwen/Qwen3-4B"),
-    in_situ_quant="4",
-)
-
 stream = runner.send_chat_completion_request(
     ChatCompletionRequest(
         model="default",
@@ -107,14 +117,25 @@ for chunk in stream:
 print()
 ```
 
-Each chunk is a `ChatCompletionChunkResponse` with the OpenAI streaming shape. `choices[0].delta.content` carries one incremental piece of the reply; it can be `None` (for example on the final chunk, which carries `finish_reason`), which is why the example checks `delta` before printing.
+Each chunk has the OpenAI streaming shape, with new text in `choices[0].delta.content`. That field can be `None`, for example on the last chunk, which carries `finish_reason`, so check it before printing.
 
-Full example: [streaming](/examples/python/streaming/). For async iteration, FastAPI integration, and mid-stream error handling, see [streaming from Python](/guides/python/streaming/).
+Full example: [streaming](/examples/python/streaming/). For async iteration, FastAPI, and handling errors mid-stream, see [streaming from Python](/guides/python/streaming/).
 
-## Notes
+## Multi-turn chat
 
-The Runner keeps the model in memory for the process lifetime. Requests can be sent sequentially or from multiple threads, all reusing the loaded weights. To swap models, construct a new Runner; the old one releases GPU memory when it goes out of scope.
+Each request stands alone. To continue a conversation, send the earlier messages again, including the model's replies:
 
-Chat history is not tracked. Each call to `send_chat_completion_request` is independent; multi-turn conversation means assembling the `messages` list yourself, appending each new user question and prior assistant reply.
+```python
+messages = [{"role": "user", "content": "Name a Rust web framework."}]
+response = runner.send_chat_completion_request(
+    ChatCompletionRequest(model="default", messages=messages)
+)
 
-The full Python surface (embeddings, speech, image generation, multimodal requests) is documented in the [Python reference](/reference/python/).
+messages.append({"role": "assistant", "content": response.choices[0].message.content})
+messages.append({"role": "user", "content": "Show a hello-world server in it."})
+response = runner.send_chat_completion_request(
+    ChatCompletionRequest(model="default", messages=messages)
+)
+```
+
+Agent requests can keep history for you instead; see [sessions](/guides/agents/persist-sessions/).

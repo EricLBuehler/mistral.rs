@@ -58,7 +58,7 @@ pub struct MultimodalModelBuilder {
     pub(crate) no_paged_attn: bool,
     pub(crate) max_num_seqs: usize,
     pub(crate) with_logging: bool,
-    pub(crate) prefix_cache_n: Option<usize>,
+    pub(crate) prefix_cache_n: PrefixCacheCapacity,
 }
 
 impl MultimodalModelBuilder {
@@ -107,7 +107,7 @@ impl MultimodalModelBuilder {
             matformer_slice_name: None,
             organization: IsqOrganization::Default,
             encoder_cache_memory_bytes: None,
-            prefix_cache_n: None,
+            prefix_cache_n: PrefixCacheCapacity::Auto,
         }
     }
 

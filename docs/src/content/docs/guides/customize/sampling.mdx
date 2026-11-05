@@ -1,84 +1,100 @@
 ---
 title: Sampling parameters
-description: Temperature, top-k, top-p, min-p, penalties, DRY, and the order the engine applies them.
+description: Control randomness, repetition, and stopping for each request.
 ---
 
 import { Tabs, TabItem } from '@astrojs/starlight/components';
 
-Sampling parameters control how the engine selects the next token from the model's probability distribution. They are set per request on every surface:
+Sampling parameters decide how the model picks each next token: always the most likely one, or a random draw from the likely candidates. You set them per request, and the field names are the same over HTTP, in Python, and in Rust.
 
-```bash
-curl http://localhost:1234/v1/chat/completions -H "Content-Type: application/json" -d '{
-  "model": "default",
-  "messages": [{"role": "user", "content": "Write a haiku."}],
-  "temperature": 0.7,
-  "top_p": 0.9
-}'
-```
+Any field you leave out comes from the model's `generation_config.json`, which can set temperature, top-k, top-p, min-p, and repetition penalty. Anything the model doesn't set defaults to temperature 1.0 with no filtering and no penalties.
 
-Fields a request leaves unset fall back to the model's `generation_config.json` (temperature, top-k, top-p, min-p, repetition penalty). Without such defaults the engine samples at temperature 1.0 with no filters. Send `temperature: 0` (or `top_k: 1`) for greedy decoding.
+If a model's `generation_config.json` sets `do_sample: false`, its default top-k is 1, so output stays greedy even when you raise the temperature. Send your own `top_k` (`0` turns it off) to sample from such a model.
 
-## Application order
+## Common starting points
 
-When a request is sampled, the engine applies filters in this order:
-
-1. Penalties, on the raw logits: DRY first, then frequency/presence/repetition in one pass, then logit bias.
-2. Custom logits processors (Rust SDK only).
-3. Temperature scaling and softmax. Temperature absent or `0.0` means greedy argmax, skipping step 4.
-4. On the resulting probabilities: top-k, then top-p, then min-p.
-
-Penalties therefore act before temperature, and the top-k/top-p/min-p trio act after it, on probabilities rather than logits.
+| Goal | Settings |
+|---|---|
+| Always pick the most likely token (greedy), for tests or extraction | `temperature: 0` |
+| General chat | Leave everything unset to get the model's own defaults. If the model has none, try what interactive mode falls back to: temperature 0.8, top-k 40, top-p 0.95, and min-p 0.05. |
+| More varied or creative output | Raise `temperature`, and keep top-p or min-p on so very unlikely tokens stay out. |
+| Output that loops or repeats itself | Add `repetition_penalty` a little above 1.0, such as 1.1, or turn on [DRY](#dry-dont-repeat-yourself). |
 
 ## Temperature, top-p, top-k, min-p
 
-**Temperature** scales the logit distribution before sampling. Higher temperature flattens it; lower temperature sharpens it. `0.0` (or unset) is greedy; `1.0` matches the model's training distribution. Values below `1e-7` are treated as greedy.
+**Temperature** controls how random the choice is:
 
-**Top-k** keeps only the `k` most likely tokens. `top_k <= 0` disables it.
+- `0`, or anything below `1e-7`: always the most likely token.
+- Below 1: sharper. The model sticks closer to its top choices.
+- `1.0`: the model's own probabilities, unchanged.
+- Above 1: flatter. Unlikely tokens get picked more often, and output gets less coherent the higher you go.
 
-**Top-p (nucleus sampling)** keeps the smallest set of tokens whose cumulative probability exceeds `p`. Values outside `(0.0, 1.0)` disable it.
+**Top-k** keeps only the `k` most likely tokens and samples among them. `top_k: 1` is greedy, larger values allow more variety, and `0` or unset turns it off.
 
-**Min-p** scales with the model's confidence: tokens below `min_p` times the top token's probability are dropped. When the model is confident, min-p filters more tokens; when uncertain, fewer. Values outside `(0.0, 1.0)` disable it.
+**Top-p** (nucleus sampling) keeps the smallest set of top tokens whose probabilities add up to `p`. With `top_p: 0.9`, the model samples from the tokens that cover 90% of the probability. Lower values are stricter. `1.0` turns it off, and so does `0` or anything outside that range.
+
+**Min-p** drops tokens that are less likely than `min_p` times the top token's probability. With `min_p: 0.05`, a token survives only if it's at least 5% as likely as the best one. This adapts to the model's confidence: when one token dominates, few others survive, and when many are close, more do. `0` turns it off, and so does any value of 1 or more.
+
+## Application order
+
+For each token, mistral.rs applies settings in this order:
+
+1. Penalties: DRY, then presence, frequency, and repetition penalties, then `logit_bias`.
+2. Custom logits processors, which you can add only from Rust with `RequestBuilder::add_logits_processor`.
+3. Temperature. At temperature 0 the most likely token is picked here and the filters below are skipped.
+4. Top-k, then top-p, then min-p. Top-p is measured on what top-k left.
 
 ## Penalties
 
-Three distinct parameters discourage repetition; all see the full token context so far:
+Three separate parameters push the model away from tokens it has already used:
 
-- `presence_penalty`: flat logit subtraction for any token that has appeared at all (OpenAI-compatible).
-- `frequency_penalty`: logit subtraction proportional to a token's occurrence count (OpenAI-compatible).
-- `repetition_penalty`: llama.cpp-style multiplicative penalty on seen tokens; positive logits are divided by it, negative logits multiplied. `1.0` disables it. This is a separate parameter, not another name for `presence_penalty`.
+| Parameter | What it looks at | Effect | Off |
+|---|---|---|---|
+| `presence_penalty` | Generated tokens | Subtracts a flat amount from every token that has appeared at least once. | `0` |
+| `frequency_penalty` | Generated tokens | Subtracts an amount proportional to how many times each token has appeared. | `0` |
+| `repetition_penalty` | Prompt and generated tokens | Divides positive scores of seen tokens by the value and multiplies negative ones, Hugging Face style. | `1.0` |
+
+Positive presence and frequency penalties discourage repeats, and negative ones encourage them. A `repetition_penalty` above 1.0 discourages repeats, and below 1.0 encourages them. `presence_penalty` and `frequency_penalty` follow OpenAI's definitions; `repetition_penalty` is a different setting, not another name for either.
+
+`logit_bias` maps token IDs to an amount added to their score. A large negative value effectively bans a token, and a positive one makes it more likely.
 
 ## DRY (Don't Repeat Yourself)
 
-DRY penalizes continuing token sequences that would reproduce spans from the preceding text. Off by default (`dry_multiplier: 0`).
+DRY targets one kind of repetition: the model copying a run of tokens that already appears earlier in the context, including the prompt. When the latest tokens match an earlier span, DRY penalizes the token that would continue the copy, and the penalty grows with the length of the match. It's off until you set `dry_multiplier`.
 
-- `dry_multiplier`: penalty strength; nonzero enables DRY.
-- `dry_base`: exponent base for penalty growth with match length. Default `1.75`.
-- `dry_allowed_length`: match length tolerated before the penalty applies. Default `2`.
-- `dry_sequence_breakers`: strings that reset matching. Default `["\n", ":", "\"", "*"]`.
+| Field | Default | What it does |
+|---|---|---|
+| `dry_multiplier` | `0` (off) | Overall strength. Any value above 0 turns DRY on. |
+| `dry_base` | `1.75` | How fast the penalty grows with each extra matching token. |
+| `dry_allowed_length` | `2` | Matches shorter than this aren't penalized. |
+| `dry_sequence_breakers` | `["\n", ":", "\"", "*"]` | Strings that end a match, so repeated formatting doesn't build up a penalty. |
+
+The penalty is `dry_multiplier * dry_base ^ (match length - dry_allowed_length)`. With `dry_multiplier: 0.8` and the other defaults, continuing a 2-token match costs 0.8, a 4-token match costs 2.45, and a 6-token match costs about 7.5.
 
 ## Stopping
 
-Generation stops at the model's EOS tokens, a request-supplied `stop` string or token, or the token
-limit (`max_tokens`), whichever comes first.
+Generation stops at whichever comes first:
 
-Set `ignore_eos: true` to continue after the model emits EOS. Explicit stops and the token limit
-still apply, so set `max_tokens` or `stop` to bound the response. This option can be used with base
-(non-instruct) models that emit EOS early or when measuring decode throughput.
+- the model's end-of-sequence (EOS) token,
+- one of your stop strings (`stop` over HTTP, `stop_seqs` in Python, `set_sampler_stop_toks` in Rust, which also takes token IDs),
+- the `max_tokens` limit.
+
+Set `ignore_eos: true` to keep going after the model emits EOS. Stop strings and `max_tokens` still apply, so set one of them to end the response. This helps with base (non-instruct) models that stop too early, and when measuring decode speed.
 
 ## Setting parameters
 
 <Tabs>
 <TabItem label="CLI">
 
-Interactive mode (`mistralrs run`) exposes slash commands that persist for the rest of the session:
+Interactive mode (`mistralrs run`) has slash commands that last for the rest of the session:
 
 ```text
-/temperature 0.7    set sampling temperature, range [0.0, 2.0]; 0 means greedy
-/topk 40            set top-k, a positive integer
-/topp 0.9           set top-p, in (0.0, 1.0]
+/temperature 0.7    sampling temperature, 0.0 to 2.0; 0 means greedy
+/topk 40            top-k, a positive integer
+/topp 0.9           top-p, above 0.0 and up to 1.0
 ```
 
-Until overridden, interactive mode seeds its sampling from the model's `generation_config.json` when present, else temperature 0.8, top-k 40, top-p 0.95, min-p 0.05.
+Until you change them, interactive mode uses the model's `generation_config.json`, or temperature 0.8, top-k 40, top-p 0.95, and min-p 0.05 if the model has none.
 
 </TabItem>
 <TabItem label="HTTP">
@@ -122,7 +138,7 @@ request = ChatCompletionRequest(
 </TabItem>
 <TabItem label="Rust">
 
-`RequestBuilder` has per-parameter setters, or pass a whole `SamplingParams`:
+`RequestBuilder` has a setter for each parameter, or you can pass a whole `SamplingParams` with `set_sampling`:
 
 ```rust
 let request = RequestBuilder::new()
@@ -139,4 +155,6 @@ let request = RequestBuilder::new()
 
 ## Seeds
 
-The engine-wide random seed is set with `--seed` on the CLI or `seed=` on the Python `Runner`. OpenAI-compatible generation requests can instead provide `seed` for a deterministic request-scoped stream. Each choice in an `n > 1` request receives a distinct deterministic stream.
+To make sampling repeatable, set a seed. Send `seed` in a Chat Completions, Completions, or Responses request to seed that request alone: the same request with the same seed and settings makes the same random choices again. With `n > 1`, choice `i` uses `seed + i`, so the choices differ from each other but each one is repeatable.
+
+To seed the whole engine instead, pass `--seed` on the CLI or `seed=` to the Python `Runner`.

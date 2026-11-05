@@ -1,0 +1,117 @@
+---
+title: Context length
+description: See how long one request can be, make it longer, or cap it.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+A request's prompt plus its output has to fit in the context length. mistral.rs sets it to the smallest of:
+
+- the model's own context window,
+- what the KV cache can hold, on CUDA and Metal,
+- `--max-model-len`, if you set it.
+
+## Check your limit
+
+mistral.rs prints the limit when it starts:
+
+```text
+Context: up to 40960 tokens per request. KV cache: 393216 tokens, room for 9 full-length requests at once.
+```
+
+A running server reports it as `max_model_len` for each model:
+
+```bash
+curl http://localhost:1234/v1/models
+```
+
+In Python, call `runner.max_sequence_length()`. In Rust, call `model.max_sequence_length()`.
+
+## Get more context
+
+If the KV cache is what limits you, the startup line is a warning that names the model's own window:
+
+```text
+Context: up to 24576 tokens per request (model supports 262144; limited by KV cache memory). KV cache: 24576 tokens, room for 1 full-length request at once.
+```
+
+To fit more, store each token in less memory or give the cache more room:
+
+| Option | Effect |
+|---|---|
+| `--pa-cache-type f8e4m3` | Stores the cache in FP8, which holds twice as many tokens in the same memory. |
+| A smaller `--quant`, such as `4` instead of `8` | Smaller weights leave more memory for the cache. |
+| A larger `--kv-cache` or `--gpu-memory-utilization`, if you set one | Gives the cache more of the GPU. |
+| More GPUs | [Distributed inference](/guides/perf/distributed-inference/) splits the weights and the cache across them. |
+| Close other apps (Apple Silicon) | The GPU shares memory with everything else, so memory in use at startup is memory the cache can't have. |
+
+See [memory budget](/guides/perf/paged-attention/#memory-budget) for how mistral.rs splits memory between the weights and the cache.
+
+## Cap it
+
+Set a limit for every request:
+
+<Tabs>
+<TabItem label="CLI">
+
+```bash
+mistralrs serve -m Qwen/Qwen3-4B --max-model-len 32768
+```
+
+In a [TOML config](/reference/cli-toml-config/), set `max_model_len` on each `[[models]]` entry.
+
+</TabItem>
+<TabItem label="Python">
+
+```python
+from mistralrs import Runner, Which
+
+runner = Runner(
+    which=Which.Plain(model_id="Qwen/Qwen3-4B"),
+    max_model_len=32768,
+)
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+use mistralrs::ModelBuilder;
+
+let model = ModelBuilder::new("Qwen/Qwen3-4B")
+    .with_max_model_len(32768)
+    .build()
+    .await?;
+```
+
+</TabItem>
+</Tabs>
+
+A cap matters most on a server with several users. Every request in flight shares one KV cache, so one very long request can take most of it, and the others are paused and recomputed later. The startup line shows the trade: a 393,216-token cache has room for 3 requests of 131,072 tokens, or 12 of 32,768.
+
+Rough sizes:
+
+- Chat: 8k to 32k tokens.
+- [Coding agents](/guides/serve/coding-agents/): as much as the model and memory allow, with the agent's own context setting matched to it.
+- Batch jobs on short inputs: the longest input plus `max_tokens`.
+
+mistral.rs checks the cap when it loads. A cap the cache can't hold fails right away and names the fix, such as `--pa-cache-type f8e4m3` or a smaller `--quant`, instead of failing on the first long request.
+
+## What clients see
+
+A prompt longer than the limit is rejected before it runs, with the error each API uses for this:
+
+| API | Error |
+|---|---|
+| OpenAI: Chat Completions, Completions, Responses | Code `context_length_exceeded`. A streaming Responses request gets it in a `response.failed` event. |
+| Anthropic Messages | `prompt is too long: N tokens > M maximum` |
+
+Coding agents recognize these errors and compact the conversation instead of retrying.
+
+A prompt that fits, but leaves less room than `max_tokens` asks for, still runs. Generation stops at the limit with finish reason `length`, or stop reason `max_tokens` on `/v1/messages`.
+
+## Go past the model's window
+
+`--max-model-len` can't be larger than the model's own window. Models that support RoPE scaling can stretch it: turn scaling on with `--hf-overrides`, then raise `--max-model-len` to match. [Qwen3.5](/guides/models/model-family-notes/#qwen35-and-qwen36) shows a full example. Scaling can lower quality on short inputs, so turn it on only when you need the extra length.
+
+On CPU, and for models without paged attention, the limit is the smaller of the model's window and `--max-model-len`. mistral.rs doesn't check up front that memory can hold a request that long.

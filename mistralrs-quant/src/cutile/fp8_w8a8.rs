@@ -18,10 +18,10 @@ use super::tune::{
     buckets_from_breakpoints, config, cutile_error, tune, Bucket, Prepared, Space, TuneMode,
     TuneRequest, TunedTable, TUNE_WEIGHT_SETS,
 };
-use super::warmup::CutileKernel;
+use super::warmup::{CutileKernel, WarmupProgress};
 use super::{
-    catch_cutile_panic, context, device_compute_capability, device_multiprocessor_count,
-    jit_available,
+    catch_cutile_panic, context, device_multiprocessor_count, fp8_gemm_entry_hints, jit_available,
+    EntryHints,
 };
 use crate::utils::{slice_ptr_mut_on_stream, slice_ptr_on_stream};
 use crate::{Fp8ActivationMode, Fp8WeightScaleLayout};
@@ -36,21 +36,16 @@ mod kernels {
     #![allow(deprecated)]
     use cutile::core::*;
 
-    #[cutile::entry(
-        unchecked_accesses = false,
-        optimization_hints = (
-            sm_120 = (num_cta_in_cga = 2, occupancy = 2,),
-            sm_121 = (num_cta_in_cga = 2, occupancy = 2,),
-        )
-    )]
-    fn fp8_w8a8_bf16<
+    #[cutile::entry(unchecked_accesses = false)]
+    fn fp8_w8a8<
+        T: ElementType,
         const BM: i32,
         const BN: i32,
         const BK: i32,
         const MAP_SHAPE: [i32; 2],
         const LATENCY: i32,
     >(
-        mut y: MappedPartitionMut<bf16, { [BM, BN] }, MAP_SHAPE>,
+        mut y: MappedPartitionMut<T, { [BM, BN] }, MAP_SHAPE>,
         x: &Tensor<f8e4m3fn, { [-1, -1] }>,
         w: &Tensor<f8e4m3fn, { [-1, -1] }>,
         xs: &Tensor<f32, { [-1] }>,
@@ -89,65 +84,7 @@ mod kernels {
             let sw: Tile<f32, { [BM, BN] }> = sw
                 .reshape(const_shape![1, BN])
                 .broadcast(const_shape![BM, BN]);
-            let out: Tile<bf16, { [BM, BN] }> = convert_tile(acc * sx * sw);
-            y.store(out, out_idx);
-        }
-    }
-
-    #[cutile::entry(
-        unchecked_accesses = false,
-        optimization_hints = (
-            sm_120 = (num_cta_in_cga = 2, occupancy = 2,),
-            sm_121 = (num_cta_in_cga = 2, occupancy = 2,),
-        )
-    )]
-    fn fp8_w8a8_f16<
-        const BM: i32,
-        const BN: i32,
-        const BK: i32,
-        const MAP_SHAPE: [i32; 2],
-        const LATENCY: i32,
-    >(
-        mut y: MappedPartitionMut<f16, { [BM, BN] }, MAP_SHAPE>,
-        x: &Tensor<f8e4m3fn, { [-1, -1] }>,
-        w: &Tensor<f8e4m3fn, { [-1, -1] }>,
-        xs: &Tensor<f32, { [-1] }>,
-        ws: &Tensor<f32, { [-1] }>,
-    ) {
-        let px = x.partition(const_shape![BM, BK]);
-        let pw = w.partition(const_shape![BN, BK]);
-        let pxs = xs.partition(const_shape![BM]);
-        let pws = ws.partition(const_shape![BN]);
-        let k = num_tiles(&px, 1);
-        let transpose: Array<{ [1, 0] }> = Array::<{ [1, 0] }> {
-            dims: &[1i32, 0i32],
-        };
-        for out_idx in y.iter_indices() {
-            let (bid_m, bid_n) = out_idx.components();
-            let mut acc: Tile<f32, { [BM, BN] }> = constant(0.0f32, const_shape![BM, BN]);
-            for kg in 0..k {
-                let xt: Tile<f8e4m3fn, { [BM, BK] }> = if LATENCY > 0 {
-                    px.load_pipelined::<LATENCY>([bid_m, kg])
-                } else {
-                    px.load([bid_m, kg])
-                };
-                let wt: Tile<f8e4m3fn, { [BN, BK] }> = if LATENCY > 0 {
-                    pw.load_pipelined::<LATENCY>([bid_n, kg])
-                } else {
-                    pw.load([bid_n, kg])
-                };
-                let wt: Tile<f8e4m3fn, { [BK, BN] }> = permute(wt, transpose);
-                acc = mmaf(xt, wt, acc);
-            }
-            let sx: Tile<f32, { [BM] }> = pxs.load([bid_m]);
-            let sx: Tile<f32, { [BM, BN] }> = sx
-                .reshape(const_shape![BM, 1])
-                .broadcast(const_shape![BM, BN]);
-            let sw: Tile<f32, { [BN] }> = pws.load([bid_n]);
-            let sw: Tile<f32, { [BM, BN] }> = sw
-                .reshape(const_shape![1, BN])
-                .broadcast(const_shape![BM, BN]);
-            let out: Tile<f16, { [BM, BN] }> = convert_tile(acc * sx * sw);
+            let out: Tile<T, { [BM, BN] }> = convert_tile(acc * sx * sw);
             y.store(out, out_idx);
         }
     }
@@ -289,16 +226,22 @@ impl CutileFp8W8A8Config {
         })
     }
 
-    fn compile_options(self) -> CompileOptions {
+    fn compile_options(self, defaults: Option<EntryHints>) -> CompileOptions {
         let mut options = CompileOptions::new();
         if self.warps > 0 {
             options = options.num_worker_warps_per_cta(self.warps);
         }
-        if self.occupancy > 0 {
-            options = options.occupancy(self.occupancy);
+        let occupancy = Some(self.occupancy)
+            .filter(|&value| value > 0)
+            .or(defaults.map(|hints| hints.occupancy));
+        if let Some(occupancy) = occupancy {
+            options = options.occupancy(occupancy);
         }
-        if self.cluster > 0 {
-            options = options.num_cta_in_cga(self.cluster);
+        let cluster = Some(self.cluster)
+            .filter(|&value| value > 0)
+            .or(defaults.map(|hints| hints.num_cta_in_cga));
+        if let Some(cluster) = cluster {
+            options = options.num_cta_in_cga(cluster);
         }
         options
     }
@@ -383,11 +326,9 @@ pub fn fp8_w8a8_supported(
     activation_dtype: DType,
     scheme: Fp8W8A8Scheme,
 ) -> bool {
-    let (major, minor) = device_compute_capability(dev);
-    let has_native_fp8_mma = major > 8 || (major == 8 && minor >= 9);
     cfg!(has_blockwise_fp8_kernels)
         && jit_available(dev)
-        && has_native_fp8_mma
+        && crate::cuda_device::cuda_device_info(dev).has_fp8_mma()
         && matches!(activation_dtype, DType::BF16 | DType::F16)
         && output_features > 0
         && input_features > 0
@@ -652,6 +593,7 @@ fn launch(
     let blocks_per_sm = usize::try_from(cfg.blocks_per_sm).unwrap_or(1).max(1);
     let tile_blocks = (blocks_per_sm * device_multiprocessor_count(dev)).clamp(1, tiles) as u32;
     let generics = vec![
+        operands.scheme.output_dtype.as_str().to_owned(),
         cfg.bm.to_string(),
         TILE_SIZE.to_string(),
         TILE_SIZE.to_string(),
@@ -665,7 +607,7 @@ fn launch(
         ($launcher:expr, $label:literal) => {{
             let launcher = $launcher
                 .generics(generics.clone())
-                .compile_options(cfg.compile_options());
+                .compile_options(cfg.compile_options(fp8_gemm_entry_hints(dev)));
             if compile_only {
                 catch_cutile_panic("W8A8 compile", || {
                     launcher.compile_on(&cutile_stream).map_err(|error| {
@@ -688,63 +630,37 @@ fn launch(
         }};
     }
 
+    macro_rules! launch {
+        ($dtype:ty) => {{
+            let mut output = unsafe { dev.alloc::<$dtype>(padded_rows * n)? };
+            let (out_addr, out_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
+            let (shape, strides) = dims(padded_rows, n);
+            let y = unsafe {
+                cutile::tensor::Tensor::<$dtype>::borrow_raw_parts(
+                    out_addr as CUdeviceptr,
+                    ordinal,
+                    shape,
+                    strides,
+                )
+            };
+            let mapped = y
+                .partition([bm, TILE_SIZE])
+                .map([cfg.map_m as usize, cfg.map_n as usize], tile_blocks);
+            run!(
+                kernels::fp8_w8a8(mapped, Arc::new(x), Arc::new(w), Arc::new(xs), Arc::new(ws)),
+                "W8A8 GEMM"
+            );
+            drop(out_guard);
+            Tensor::from((
+                Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
+                Shape::from_dims(&[padded_rows, n]),
+            ))
+        }};
+    }
+
     let output = match operands.scheme.output_dtype {
-        DType::BF16 => {
-            let mut output = unsafe { dev.alloc::<bf16>(padded_rows * n)? };
-            let (out_addr, out_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
-            let (shape, strides) = dims(padded_rows, n);
-            let y = unsafe {
-                cutile::tensor::Tensor::<bf16>::borrow_raw_parts(
-                    out_addr as CUdeviceptr,
-                    ordinal,
-                    shape,
-                    strides,
-                )
-            };
-            let mapped = y
-                .partition([bm, TILE_SIZE])
-                .map([cfg.map_m as usize, cfg.map_n as usize], tile_blocks);
-            run!(
-                kernels::fp8_w8a8_bf16(
-                    mapped,
-                    Arc::new(x),
-                    Arc::new(w),
-                    Arc::new(xs),
-                    Arc::new(ws)
-                ),
-                "W8A8 BF16 GEMM"
-            );
-            drop(out_guard);
-            Tensor::from((
-                Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
-                Shape::from_dims(&[padded_rows, n]),
-            ))
-        }
-        DType::F16 => {
-            let mut output = unsafe { dev.alloc::<f16>(padded_rows * n)? };
-            let (out_addr, out_guard) = slice_ptr_mut_on_stream(&mut output, 0, &stream);
-            let (shape, strides) = dims(padded_rows, n);
-            let y = unsafe {
-                cutile::tensor::Tensor::<f16>::borrow_raw_parts(
-                    out_addr as CUdeviceptr,
-                    ordinal,
-                    shape,
-                    strides,
-                )
-            };
-            let mapped = y
-                .partition([bm, TILE_SIZE])
-                .map([cfg.map_m as usize, cfg.map_n as usize], tile_blocks);
-            run!(
-                kernels::fp8_w8a8_f16(mapped, Arc::new(x), Arc::new(w), Arc::new(xs), Arc::new(ws)),
-                "W8A8 F16 GEMM"
-            );
-            drop(out_guard);
-            Tensor::from((
-                Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
-                Shape::from_dims(&[padded_rows, n]),
-            ))
-        }
+        DType::BF16 => launch!(bf16),
+        DType::F16 => launch!(f16),
         _ => unreachable!(),
     };
     output.narrow(0, 0, rows)
@@ -824,7 +740,7 @@ impl GemmTuner {
 }
 
 impl CutileKernel for Fp8W8A8Kernel {
-    fn warm(&self, _dev: &CudaDevice) -> Result<()> {
+    fn warm(&self, _dev: &CudaDevice, silent: bool) -> Result<()> {
         let shapes = std::mem::take(
             &mut *SHAPES
                 .get_or_init(|| Mutex::new(Vec::new()))
@@ -859,7 +775,13 @@ impl CutileKernel for Fp8W8A8Kernel {
             });
             TUNED.set(key, &tuned, CutileFp8W8A8Config::from_config);
         }
-        tracing::info!("Warming {} cuTile W8A8 GEMM kernels.", shapes.len());
+        let total = shapes
+            .iter()
+            .filter(|sets| sets[0].weight.device().is_cuda())
+            .count()
+            * buckets.len();
+        tracing::info!("Warming {total} cuTile W8A8 GEMM variants.");
+        let progress = WarmupProgress::new("W8A8 GEMM variants", total, silent);
         for sets in &shapes {
             let key = sets[0].key;
             let Device::Cuda(dev) = sets[0].weight.device() else {
@@ -875,25 +797,31 @@ impl CutileKernel for Fp8W8A8Kernel {
                 },
             };
             for bucket in &buckets {
-                let result = (|| -> Result<()> {
-                    let activation = Tensor::zeros((bucket.probe, key.k), DType::F8E4M3, &device)?;
-                    let activation_scales = match key.activation {
-                        Fp8ActivationMode::StaticTensor => Tensor::ones((), DType::F32, &device)?,
-                        Fp8ActivationMode::DynamicToken => {
-                            Tensor::ones(bucket.probe, DType::F32, &device)?
-                        }
-                        _ => unreachable!(),
-                    };
-                    let operands = GemmOperands {
-                        activation: &activation,
-                        activation_scales: &activation_scales,
-                        weight: &sets[0].weight,
-                        weight_scales: &sets[0].scales,
-                        scheme,
-                    };
-                    launch(&operands, gemm_config(key, bucket.probe), true)?;
-                    Ok(())
-                })();
+                let result = progress.run(
+                    format!("n={} k={} rows={}", key.n, key.k, bucket.probe),
+                    || -> Result<()> {
+                        let activation =
+                            Tensor::zeros((bucket.probe, key.k), DType::F8E4M3, &device)?;
+                        let activation_scales = match key.activation {
+                            Fp8ActivationMode::StaticTensor => {
+                                Tensor::ones((), DType::F32, &device)?
+                            }
+                            Fp8ActivationMode::DynamicToken => {
+                                Tensor::ones(bucket.probe, DType::F32, &device)?
+                            }
+                            _ => unreachable!(),
+                        };
+                        let operands = GemmOperands {
+                            activation: &activation,
+                            activation_scales: &activation_scales,
+                            weight: &sets[0].weight,
+                            weight_scales: &sets[0].scales,
+                            scheme,
+                        };
+                        launch(&operands, gemm_config(key, bucket.probe), true)?;
+                        Ok(())
+                    },
+                );
                 if let Err(error) = result {
                     tracing::warn!(
                         "cuTile W8A8 warmup failed (n={} k={} rows={}): {error}",
