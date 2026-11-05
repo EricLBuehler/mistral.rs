@@ -13,8 +13,8 @@ use crate::{
     get_mut_arcmutex,
     paged_attention::{
         block_hash::{
-            adapter_generation_key, clamp_prefix_cache_hit_len, compute_block_hashes,
-            compute_new_block_hashes, BlockHash, MultiModalFeature,
+            clamp_prefix_cache_hit_len, compute_block_hashes, compute_new_block_hashes,
+            sequence_extra_keys, BlockHash, MultiModalFeature,
         },
         kv_cache_manager::KVCacheManager,
     },
@@ -746,22 +746,18 @@ impl PagedAttentionScheduler {
         tokens: &[u32],
         mm_features: &[MultiModalFeature],
         adapter_generation: Option<AdapterGenerationId>,
+        cache_salt: Option<&str>,
         revision: u64,
     ) {
         let Some(update) = self.block_hash_update(seq_id, tokens.len(), revision) else {
             return;
         };
-        let adapter_key = adapter_generation_key(adapter_generation);
+        let extra_keys = sequence_extra_keys(adapter_generation, cache_salt);
         match update {
             BlockHashUpdate::Rebuild => {
                 self.seq_block_hashes.insert(
                     seq_id,
-                    compute_block_hashes(
-                        tokens,
-                        self.block_size,
-                        mm_features,
-                        adapter_key.as_slice(),
-                    ),
+                    compute_block_hashes(tokens, self.block_size, mm_features, &extra_keys),
                 );
                 self.seq_block_hash_revisions.insert(seq_id, revision);
             }
@@ -775,7 +771,7 @@ impl PagedAttentionScheduler {
                     self.block_size,
                     hashes,
                     mm_features,
-                    adapter_key.as_slice(),
+                    &extra_keys,
                 );
                 hashes.extend(new_hashes);
             }
@@ -1000,6 +996,7 @@ impl PagedAttentionScheduler {
                 seq_guard.get_toks(),
                 seq_guard.mm_features(),
                 seq_guard.adapter_generation(),
+                seq_guard.cache_salt(),
                 block_hash_revision,
             );
             drop(seq_guard);
@@ -1313,6 +1310,7 @@ impl PagedAttentionScheduler {
                     seq_guard.get_toks(),
                     seq_guard.mm_features(),
                     seq_guard.adapter_generation(),
+                    seq_guard.cache_salt(),
                     seq_guard.block_hash_revision(),
                 );
                 drop(seq_guard);
@@ -1389,6 +1387,7 @@ impl PagedAttentionScheduler {
                     seq_guard.get_toks(),
                     seq_guard.mm_features(),
                     seq_guard.adapter_generation(),
+                    seq_guard.cache_salt(),
                     seq_guard.block_hash_revision(),
                 );
                 drop(seq_guard);
@@ -1438,6 +1437,7 @@ impl PagedAttentionScheduler {
             seq_guard.get_toks(),
             seq_guard.mm_features(),
             seq_guard.adapter_generation(),
+            seq_guard.cache_salt(),
             seq_guard.block_hash_revision(),
         );
         seq_guard.set_num_computed_tokens(0);
@@ -1890,7 +1890,7 @@ mod tests {
             scheduler.block_hash_update(seq_id, tokens.len(), revision),
             Some(BlockHashUpdate::Rebuild)
         );
-        scheduler.ensure_block_hashes(seq_id, &tokens, &[], None, revision);
+        scheduler.ensure_block_hashes(seq_id, &tokens, &[], None, None, revision);
         assert!(scheduler.seq_block_hashes[&seq_id].is_empty());
         assert_eq!(
             scheduler.block_hash_update(seq_id, tokens.len(), revision),
@@ -1902,7 +1902,7 @@ mod tests {
             scheduler.block_hash_update(seq_id, tokens.len(), revision),
             Some(BlockHashUpdate::Append)
         );
-        scheduler.ensure_block_hashes(seq_id, &tokens, &[], None, revision);
+        scheduler.ensure_block_hashes(seq_id, &tokens, &[], None, None, revision);
         assert_eq!(scheduler.seq_block_hashes[&seq_id].len(), 1);
 
         tokens.extend(std::iter::repeat_n(2, scheduler.block_size - 1));
@@ -1919,7 +1919,7 @@ mod tests {
         let revision = 4;
         let mut tokens = vec![1; scheduler.block_size];
 
-        scheduler.ensure_block_hashes(seq_id, &tokens, &[], None, revision);
+        scheduler.ensure_block_hashes(seq_id, &tokens, &[], None, None, revision);
         let first_hashes = scheduler.seq_block_hashes[&seq_id].clone();
         tokens.extend(std::iter::repeat_n(2, scheduler.block_size));
 
@@ -1927,7 +1927,7 @@ mod tests {
             scheduler.block_hash_update(seq_id, tokens.len(), revision),
             Some(BlockHashUpdate::Append)
         );
-        scheduler.ensure_block_hashes(seq_id, &tokens, &[], None, revision);
+        scheduler.ensure_block_hashes(seq_id, &tokens, &[], None, None, revision);
         assert_eq!(
             scheduler.seq_block_hashes[&seq_id],
             compute_block_hashes(&tokens, scheduler.block_size, &[], &[])
@@ -1943,7 +1943,7 @@ mod tests {
             scheduler.block_hash_update(seq_id, tokens.len(), next_revision),
             Some(BlockHashUpdate::Rebuild)
         );
-        scheduler.ensure_block_hashes(seq_id, &tokens, &[], None, next_revision);
+        scheduler.ensure_block_hashes(seq_id, &tokens, &[], None, None, next_revision);
         assert_ne!(scheduler.seq_block_hashes[&seq_id][0], first_hashes[0]);
         assert_eq!(
             scheduler.seq_block_hashes[&seq_id],
@@ -2056,7 +2056,7 @@ mod tests {
         let seq_id = 10;
         let seq = test_sequence(seq_id, scheduler.block_size);
         let initial_tokens = get_mut_arcmutex!(seq).get_toks().to_vec();
-        scheduler.ensure_block_hashes(seq_id, &initial_tokens, &[], None, 0);
+        scheduler.ensure_block_hashes(seq_id, &initial_tokens, &[], None, None, 0);
 
         {
             let mut seq = get_mut_arcmutex!(seq);
@@ -2106,11 +2106,12 @@ mod tests {
         let error_tokens = get_mut_arcmutex!(error).get_toks().to_vec();
         let done_hashes = compute_block_hashes(&done_tokens, scheduler.block_size, &[], &[]);
         let error_hashes = compute_block_hashes(&error_tokens, scheduler.block_size, &[], &[]);
-        scheduler.ensure_block_hashes(done_id, &done_tokens, &[], None, 0);
+        scheduler.ensure_block_hashes(done_id, &done_tokens, &[], None, None, 0);
         scheduler.ensure_block_hashes(
             error_id,
             &error_tokens,
             &[],
+            None,
             None,
             get_mut_arcmutex!(error).block_hash_revision(),
         );

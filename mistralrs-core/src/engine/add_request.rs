@@ -893,6 +893,7 @@ impl Engine {
             if let Some(adapter_lease) = &adapter_lease {
                 seq.bind_adapter(adapter_lease.clone());
             }
+            seq.set_cache_salt(request.cache_salt.clone());
 
             {
                 let pipeline = get_mut_arcmutex!(self.pipeline);
@@ -973,9 +974,10 @@ impl Engine {
                 None
             } else {
                 handle_seq_error!(
-                    get_mut_arcmutex!(self.prefix_cacher).search_for_matching_cache(
+                    get_mut_arcmutex!(self.prefix_cacher).search_for_matching_cache_salted(
                         seq.get_toks(),
                         seq.adapter_generation(),
+                        seq.cache_salt(),
                         seq.mm_features(),
                         seq.image_hashes(),
                         seq.audio_hashes(),

@@ -58,12 +58,23 @@ pub enum ExtraHashKey {
     },
     AdapterGeneration(AdapterGenerationId),
     /// User-provided cache salt for per-request isolation.
-    #[allow(dead_code)]
     CacheSalt(String),
 }
 
 pub fn adapter_generation_key(generation: Option<AdapterGenerationId>) -> Option<ExtraHashKey> {
     generation.map(ExtraHashKey::AdapterGeneration)
+}
+
+/// Extra keys mixed into every block hash of a sequence: the adapter generation and the
+/// request's cache salt. Blocks are only shared between sequences whose keys match.
+pub fn sequence_extra_keys(
+    generation: Option<AdapterGenerationId>,
+    cache_salt: Option<&str>,
+) -> Vec<ExtraHashKey> {
+    adapter_generation_key(generation)
+        .into_iter()
+        .chain(cache_salt.map(|salt| ExtraHashKey::CacheSalt(salt.to_string())))
+        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -411,6 +422,36 @@ mod tests {
         assert_ne!(base, adapter_a);
         assert_ne!(base, adapter_b);
         assert_ne!(adapter_a, adapter_b);
+    }
+
+    #[test]
+    fn cache_salts_cannot_cross_hit_block_cache() {
+        let tokens = [1, 2, 3, 4, 5, 6, 7, 8];
+        let salt_a = sequence_extra_keys(None, Some("tenant-a"));
+        let salt_b = sequence_extra_keys(None, Some("tenant-b"));
+
+        let base = compute_block_hashes(&tokens, 4, &[], &sequence_extra_keys(None, None));
+        let salted_a = compute_block_hashes(&tokens, 4, &[], &salt_a);
+        let salted_b = compute_block_hashes(&tokens, 4, &[], &salt_b);
+
+        assert_eq!(base, compute_block_hashes(&tokens, 4, &[], &[]));
+        assert_eq!(salted_a, compute_block_hashes(&tokens, 4, &[], &salt_a));
+        assert!(base.iter().zip(&salted_a).all(|(x, y)| x != y));
+        assert!(salted_a.iter().zip(&salted_b).all(|(x, y)| x != y));
+    }
+
+    #[test]
+    fn sequence_extra_keys_combine_adapter_and_salt() {
+        let generation = Some(AdapterGenerationId::from_bytes([1; 32]));
+        let keys = sequence_extra_keys(generation, Some("tenant-a"));
+        assert_eq!(
+            keys,
+            vec![
+                ExtraHashKey::AdapterGeneration(AdapterGenerationId::from_bytes([1; 32])),
+                ExtraHashKey::CacheSalt("tenant-a".to_string()),
+            ]
+        );
+        assert!(sequence_extra_keys(None, None).is_empty());
     }
 
     #[test]
