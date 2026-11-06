@@ -1,5 +1,7 @@
 #[cfg(feature = "cuda")]
 mod ffi;
+#[cfg(feature = "vulkan")]
+mod vulkan;
 
 use candle_core::{
     backend::BackendStorage, CpuStorage, CustomOp3, Layout, Result, Shape, Storage, Tensor,
@@ -139,6 +141,31 @@ impl CustomOp3 for RotaryEmb {
                 s3.dtype()
             ),
         }
+    }
+
+    #[cfg(feature = "vulkan")]
+    fn vulkan_fwd(
+        &self,
+        s1: &candle_core::VulkanStorage,
+        l1: &Layout,
+        s2: &candle_core::VulkanStorage,
+        l2: &Layout,
+        s3: &candle_core::VulkanStorage,
+        l3: &Layout,
+    ) -> Result<(candle_core::VulkanStorage, Shape)> {
+        use candle_core::backend::BackendDevice;
+        if let Some(out) = vulkan::custom_op_fwd(s1, l1, s2, l2, s3, l3, self.is_neox) {
+            return Ok((out, l1.shape().clone()));
+        }
+        let (out, shape) = self.cpu_fwd(
+            &s1.to_cpu_storage()?,
+            l1,
+            &s2.to_cpu_storage()?,
+            l2,
+            &s3.to_cpu_storage()?,
+            l3,
+        )?;
+        Ok((s1.device().storage_from_cpu_storage(&out)?, shape))
     }
 
     #[cfg(feature = "metal")]
@@ -835,6 +862,10 @@ fn apply_rotary_q_inner(
     if q.device().is_metal() {
         return metal_apply_rotary_q(q, cos, sin, positions, is_neox);
     }
+    #[cfg(feature = "vulkan")]
+    if q.device().is_vulkan() {
+        return vulkan::apply_rotary_q(q, cos, sin, positions, is_neox);
+    }
     cpu_apply_rotary_q(q, cos, sin, positions, is_neox)
 }
 
@@ -877,6 +908,14 @@ fn apply_rotary_qk_inner(
     #[cfg(feature = "metal")]
     if q.device().is_metal() {
         return metal_apply_rotary_qk(q, k, cos, sin, positions, is_neox);
+    }
+    #[cfg(feature = "vulkan")]
+    if q.device().is_vulkan() {
+        check_qk_shape(q, k)?;
+        return Ok((
+            vulkan::apply_rotary_q(q, cos, sin, positions, is_neox)?,
+            vulkan::apply_rotary_q(k, cos, sin, positions, is_neox)?,
+        ));
     }
     cpu_apply_rotary_qk(q, k, cos, sin, positions, is_neox)
 }
