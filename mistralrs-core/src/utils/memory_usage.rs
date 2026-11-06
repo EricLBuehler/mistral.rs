@@ -239,6 +239,23 @@ impl MemoryUsage {
             Device::Metal(_) => {
                 candle_core::bail!("Cannot query memory for Metal device")
             }
+            #[cfg(feature = "vulkan")]
+            Device::Vulkan(dev) => {
+                // Tensors live in the device-local heap(s) (on an APU such as the
+                // BC-250 this is the carve-out shared with the CPU). `used` is this
+                // process's sub-allocator usage, including blocks kept for reuse.
+                let total = usize::try_from(dev.adapter_info().device_local_bytes)?;
+                let (reserved, _used) = dev.memory_stats();
+                let reserved = usize::try_from(reserved)?;
+                Ok(DeviceMemory::Discrete {
+                    total,
+                    free: total.saturating_sub(reserved),
+                })
+            }
+            #[cfg(not(feature = "vulkan"))]
+            Device::Vulkan(_) => {
+                candle_core::bail!("Cannot query memory for Vulkan device")
+            }
         }
     }
 

@@ -1349,6 +1349,15 @@ fn init_device(force_cpu: bool, seed: Option<u64>) -> Result<candle_core::Device
     } else {
         Device::cuda_if_available(0)?
     };
+    // A Vulkan build without CUDA: use the Vulkan adapter from `MISTRALRS_VULKAN_DEVICE`
+    // (default 0). This fails rather than silently using the CPU unless
+    // `MISTRALRS_VULKAN_FALLBACK=cpu` is set.
+    #[cfg(all(feature = "vulkan", not(feature = "metal")))]
+    let device = if device.is_cpu() && !force_cpu && !mistralrs_core::distributed::use_nccl() {
+        mistralrs_core::auto_vulkan_device()?
+    } else {
+        device
+    };
 
     if let Some(seed) = seed {
         device.set_seed(seed)?;
