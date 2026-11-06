@@ -235,3 +235,10 @@ debug = true
 [profile.dev]
 debug = true
 opt-level = 3
+
+# Vulkan backend: candle-core/candle-nn 0.11.1 + the Vulkan backend port, pinned to a
+# revision of the `vulkan-0.11.1` branch (see docs/vulkan-backend.md). Every crate that
+# depends on candle-core/candle-nn 0.11.1 resolves to this single copy.
+[patch.crates-io]
+candle-core = { git = "https://github.com/nglmercer/candle.git", rev = "20b1cf4ce070d1f1f00e4366e0801d41440179b3" }
+candle-nn = { git = "https://github.com/nglmercer/candle.git", rev = "20b1cf4ce070d1f1f00e4366e0801d41440179b3" }

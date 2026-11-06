@@ -293,6 +293,7 @@ cutile = ["cuda", "mistralrs-core/cutile"]
 cudnn = ["mistralrs-core/cudnn"]
 # Apple Metal GPU support (macOS/iOS)
 metal = ["mistralrs-core/metal"]
+vulkan = ["mistralrs-core/vulkan"]
 # Flash Attention 2 kernels (requires cuda)
 flash-attn = ["cuda", "mistralrs-core/flash-attn"]
 # Apple Accelerate framework for BLAS operations

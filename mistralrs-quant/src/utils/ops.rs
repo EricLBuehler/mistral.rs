@@ -2971,6 +2971,20 @@ pub fn fused_glu(a: &Tensor, b: &Tensor, activation: GluActivationType) -> Resul
         return a.apply_op2_no_bwd(b, &FusedGlu(activation));
     }
 
+    // Vulkan: compose the activation and the product from native kernels (two
+    // dispatches) instead of the CPU round-trip of the fused custom op.
+    #[cfg(feature = "vulkan")]
+    if a.device().is_vulkan() {
+        let activated = match activation {
+            GluActivationType::Silu => a.silu()?,
+            GluActivationType::Gelu => a.gelu()?,
+            GluActivationType::GeluErf => a.gelu_erf()?,
+            GluActivationType::Relu => a.relu()?,
+            GluActivationType::Sigmoid => candle_nn::ops::sigmoid(a)?,
+        };
+        return activated * b;
+    }
+
     let a = a.contiguous()?;
     let b = b.contiguous()?;
 

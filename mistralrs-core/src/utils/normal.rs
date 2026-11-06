@@ -131,6 +131,11 @@ fn determine_auto_dtype_all(devices: &[&Device]) -> candle_core::Result<DType> {
         if devices.iter().all(|d| matches!(d, Device::Cpu)) {
             return Ok(DType::F32);
         }
+        // The Vulkan backend's native kernels are f32: a bf16/f16 probe matmul would
+        // "succeed" through the CPU round-trip and silently move inference to the CPU.
+        if devices.iter().any(|d| d.is_vulkan()) {
+            return Ok(DType::F32);
+        }
         let dev_dtypes = get_dtypes();
         for dtype in get_dtypes_non_cuda()
             .iter()
@@ -176,6 +181,12 @@ impl TryIntoDType for ModelDType {
             Self::F16 => DType::F16,
             Self::F32 => DType::F32,
         };
+        if dtype != DType::F32 && devices.iter().any(|d| d.is_vulkan()) {
+            tracing::warn!(
+                "DType {dtype:?} was requested on a Vulkan device, but the Vulkan kernels are f32-only: \
+                 most ops will run through the CPU fallback. Use `--dtype f32` (or `auto`) for GPU execution."
+            );
+        }
         once_log_info(format!("DType selected is {dtype:?}."));
         Ok(dtype)
     }
@@ -208,6 +219,11 @@ pub fn is_integrated_gpu(device: &Device) -> bool {
                 .map(|v| v != 0)
                 .unwrap_or(false)
             }
+        }
+        #[cfg(feature = "vulkan")]
+        Device::Vulkan(dev) => {
+            let info = dev.adapter_info();
+            info.unified_memory && info.device_type == "integrated"
         }
         _ => false,
     }

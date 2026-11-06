@@ -236,6 +236,8 @@ pub async fn run_bench(
         "Running {} iteration(s) with prompt lengths {:?}, {} generation tokens, decode depths {:?}...",
         iterations, prompt_lens, gen_len, depths
     );
+    // Vulkan builds: measure CPU fallback and host/device traffic over the timed runs only.
+    mistralrs_core::reset_vulkan_execution_stats();
 
     #[cfg(feature = "cuda")]
     let cuda_profiler_range = std::env::var_os("MISTRALRS_BENCH_CUDA_PROFILER_RANGE").is_some();
@@ -352,6 +354,10 @@ pub async fn run_bench(
 
     // Print results
     print_results(&model_id, request_adapter.as_deref(), iterations, &results);
+    if let Some(report) = mistralrs_core::vulkan_execution_report() {
+        println!("Vulkan execution (timed runs): {report}");
+        println!();
+    }
 
     Ok(())
 }

@@ -65,6 +65,7 @@ metal = [
     "dep:mistralrs-metal-compile",
 ]
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate"]
+vulkan = ["candle-core/vulkan", "candle-nn/vulkan"]
 arm-nightly-feat = []
 ring = []
 

@@ -287,6 +287,8 @@ fn mapped_device_for_ordinal(
             }),
         DeviceLocation::Metal { gpu_id } if gpu_id == ordinal => Ok(device.clone()),
         DeviceLocation::Metal { .. } => Device::new_metal(ordinal),
+        DeviceLocation::Vulkan { gpu_id } if gpu_id == ordinal => Ok(device.clone()),
+        DeviceLocation::Vulkan { .. } => Device::new_vulkan(ordinal),
     }
 }
 
@@ -295,6 +297,7 @@ fn device_ordinal(device: &Device) -> usize {
         DeviceLocation::Cpu => 0,
         DeviceLocation::Cuda { gpu_id } => gpu_id,
         DeviceLocation::Metal { gpu_id } => gpu_id,
+        DeviceLocation::Vulkan { gpu_id } => gpu_id,
     }
 }
 
@@ -385,6 +388,27 @@ pub fn get_all_similar_devices(base: &Device) -> Result<Vec<Device>> {
                     ord += 1;
                 } else {
                     break;
+                }
+            }
+        }
+        #[cfg(not(feature = "vulkan"))]
+        Device::Vulkan(_) => {
+            candle_core::bail!("Not compiled with vulkan features, but have a vulkan device.");
+        }
+        #[cfg(feature = "vulkan")]
+        Device::Vulkan(_) => {
+            let DeviceLocation::Vulkan { gpu_id: base_ord } = base.location() else {
+                candle_core::bail!("location and device do not match");
+            };
+            // Only hardware adapters take part in multi-device mapping; software
+            // implementations (lavapipe) would silently move layers to the CPU.
+            for info in candle_core::vulkan_backend::enumerate_adapters()? {
+                if info.index == base_ord {
+                    devices.push(base.clone());
+                } else if !info.is_software() {
+                    if let Ok(dev) = Device::new_vulkan(info.index) {
+                        devices.push(dev);
+                    }
                 }
             }
         }
