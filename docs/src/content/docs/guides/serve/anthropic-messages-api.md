@@ -126,11 +126,11 @@ Messages, client tool loops, errors, and token counts use Anthropic wire shapes.
 | Server tools | Web search and code execution use mistral.rs agentic implementations. Their extra streaming events are mistral.rs extensions, not Anthropic server-tool result blocks. |
 | Beta request controls | Unknown forward-compatible fields are ignored. Anthropic context management and context editing are not implemented. |
 
-The thinking budget is shared across automatic tool-call rounds in the request and also applies during speculative decoding. Block-diffusion models reject the budget field.
+The thinking budget is shared across automatic tool-call rounds in the request. Block-diffusion models reject the budget field.
 
 The `usage.reasoning_tokens` extension reports reasoning tokens, excluding delimiters. These tokens are included in `usage.output_tokens`.
 
-Combining a thinking budget with `output_config.format`, a JSON `response_format`, or an explicit `grammar` returns HTTP 400. Tool calling remains supported.
+Combining a thinking budget with `output_config.format`, a JSON `response_format`, or an explicit `grammar` returns HTTP 400.
 
 `max_tokens` must be greater than zero.
 

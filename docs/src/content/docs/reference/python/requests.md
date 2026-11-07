@@ -39,8 +39,8 @@ Reasoning controls:
   `max` means `xhigh`. Case and surrounding spaces are ignored.
 - If you set neither control, thinking is on for text output and off for speech output.
 - Contradictory values, such as `enable_thinking=False` with `reasoning_effort="high"`, raise `ValueError`.
-- `reasoning_max_tokens` caps reasoning before the engine closes the reasoning section and continues with the answer. Zero closes reasoning immediately; `None` leaves it uncapped. The budget is shared across automatic tool-call rounds. Reasoning and closing-marker tokens still count toward `max_tokens`.
-- A reasoning budget cannot be combined with an explicit output grammar. Tool calling remains supported.
+- `reasoning_max_tokens` caps reasoning before the engine closes the reasoning section and continues with the answer. Zero closes reasoning immediately; `None` leaves it uncapped. The budget is shared across automatic tool-call rounds. Reasoning and closing-marker tokens count toward `max_tokens`.
+- A reasoning budget cannot be combined with an explicit output grammar.
 
 Audio:
 

@@ -50,9 +50,9 @@ To continue a conversation, keep the assistant's text yourself. The HTTP server'
 
 Set `ReasoningEffort::{Off, Low, Medium, High, XHigh}` with `with_reasoning_effort` on `TextMessages`, `MultimodalMessages`, `RequestBuilder`, or `AgentBuilder`. To turn thinking on or off without choosing an effort, use `enable_thinking(bool)` or `with_enable_thinking(bool)`.
 
-Use `RequestBuilder::set_sampler_reasoning_max_tokens(n)` or `SamplingParams::reasoning_max_tokens` to cap reasoning before generation switches to the answer. Zero closes reasoning immediately. The budget is shared across automatic tool-call rounds. Reasoning and closing-marker tokens still count toward the total output limit set with `set_sampler_max_len`.
+Use `RequestBuilder::set_sampler_reasoning_max_tokens(n)` or `SamplingParams::reasoning_max_tokens` to cap reasoning before generation switches to the answer. Zero closes reasoning immediately. The budget is shared across automatic tool-call rounds. Reasoning and closing-marker tokens count toward the total output limit set with `set_sampler_max_len`.
 
-A reasoning budget cannot be combined with an explicit output constraint. Tool calling remains supported.
+A reasoning budget cannot be combined with an explicit output constraint.
 
 Defaults and conflicts:
 
