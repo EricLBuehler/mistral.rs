@@ -4,6 +4,8 @@
 //! - **Think tags**: `<think>...</think>` (DeepSeek R1, QwQ, SmolLM3)
 //! - **Channel tags**: `<|channel>thought\n...<channel|>` (Gemma 4)
 
+pub(crate) mod budget;
+pub(crate) mod format;
 pub mod harmony;
 pub mod tag_based;
 

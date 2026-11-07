@@ -91,7 +91,7 @@ Request fields:
 | `tools` | Client tools are converted to OpenAI-compatible function tools. Anthropic server tools for `web_search_*` and `code_execution_*` map to mistral.rs agentic features. |
 | `tool_choice` | `auto`, `any`, `none`, and specific client `tool` choices are supported. `any` requires a client tool call when client tools are present. Anthropic server-tool choices use local agentic auto-selection. |
 | `container.skills` | Supports uploaded custom Skills with `{"type":"custom","skill_id":"...","version":"latest"}`. Anthropic-managed built-in Skills such as `pptx`, `xlsx`, `docx`, and `pdf` are not bundled. |
-| `thinking` | `enabled` and `adaptive` map to thinking on; `disabled` maps to thinking off. `display: "omitted"` suppresses reasoning text while preserving the thinking block lifecycle. The loaded chat template determines the effect. |
+| `thinking` | `enabled` and `adaptive` map to thinking on; `disabled` maps to thinking off. `budget_tokens` caps reasoning before switching to the answer. `display: "omitted"` suppresses reasoning text while preserving the thinking block lifecycle. The loaded chat template determines the effect. |
 | `output_config` | Native `effort` and JSON Schema `format` are supported. Effort accepts `low`, `medium`, `high`, `xhigh`, and `max`; `max` maps to local `xhigh`. Do not combine these fields with the equivalent mistral.rs extensions. |
 | `enable_thinking`, `reasoning_effort` | Supported as mistral.rs extensions. Effort also accepts `off`; `none` aliases `off`. If all controls are omitted, thinking defaults on with no selected effort. Contradictory native and extension controls return a validation error. |
 | `logit_bias`, `logprobs`, `top_logprobs` | Supported as mistral.rs extensions. |
@@ -121,10 +121,16 @@ Messages, client tool loops, errors, and token counts use Anthropic wire shapes.
 | Feature | Local behavior |
 |---|---|
 | Prompt caching | `cache_control` is accepted. mistral.rs uses its own automatic prefix cache, reports detected hits as `cache_read_input_tokens`, and reports `cache_creation_input_tokens` as `0`; explicit breakpoints and TTLs are not implemented. |
-| Extended thinking | Thinking maps to the loaded model's chat-template reasoning controls. `budget_tokens` is accepted but not enforced. Returned thinking blocks include an empty structural signature because mistral.rs cannot produce Anthropic cryptographic signatures. |
+| Extended thinking | `thinking.budget_tokens` limits reasoning tokens before the engine closes the reasoning section and continues with the answer. Zero closes reasoning immediately. Reasoning and closing-marker tokens count toward `max_tokens`. Unsupported reasoning formats and positive budgets with thinking disabled are rejected. Returned thinking blocks include an empty structural signature because mistral.rs cannot produce Anthropic cryptographic signatures. |
 | Rich tool results | Text results are supported. Nested image, document, search-result, and citation blocks are not translated as multimodal tool content, and `is_error` is not separately modeled. |
 | Server tools | Web search and code execution use mistral.rs agentic implementations. Their extra streaming events are mistral.rs extensions, not Anthropic server-tool result blocks. |
 | Beta request controls | Unknown forward-compatible fields are ignored. Anthropic context management and context editing are not implemented. |
+
+The thinking budget is shared across automatic tool-call rounds in the request. Block-diffusion models reject the budget field.
+
+The `usage.reasoning_tokens` extension reports reasoning tokens, excluding delimiters. These tokens are included in `usage.output_tokens`.
+
+Combining a thinking budget with `output_config.format`, a JSON `response_format`, or an explicit `grammar` returns HTTP 400.
 
 `max_tokens` must be greater than zero.
 

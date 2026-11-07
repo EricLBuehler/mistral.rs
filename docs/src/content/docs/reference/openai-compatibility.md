@@ -51,6 +51,7 @@ See [tool calling](/guides/agents/tool-calling-basics/), [structured output](/gu
 | `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers` | DRY sampling. |
 | `grammar` | Constraints beyond JSON Schema. |
 | `reasoning_effort`, `enable_thinking` | Reasoning controls described below. |
+| `reasoning_max_tokens` | Limit reasoning tokens before switching to the answer. |
 | `web_search_options` | Server-side search configuration. |
 | `session_id` | Agent session persistence. |
 | `files` | Requested output files. |
@@ -64,6 +65,23 @@ See [tool calling](/guides/agents/tool-calling-basics/), [structured output](/gu
 - With neither set, thinking is on for text replies and off for spoken replies.
 - Setting both to values that disagree, such as `"high"` with `enable_thinking: false`, is rejected.
 - The model's chat template decides what each level does. Effort doesn't change sampling settings.
+
+Set `reasoning_max_tokens` to cap thinking during generation. When the budget is exhausted, the engine generates the format's closing marker and continues with the answer. A budget of `0` closes reasoning immediately. Thinking and closing-marker tokens count toward `max_tokens`, so leave enough room for the answer. Omitting the budget leaves reasoning uncapped. A positive budget with thinking disabled is rejected, as is a budget for a model without a supported reasoning format.
+
+The reasoning budget is shared across automatic tool-call rounds in the request. Block-diffusion models do not support reasoning budgets and reject the field.
+
+Chat Completions reports reasoning usage in `usage.completion_tokens_details.reasoning_tokens`; Responses reports it in `usage.output_tokens_details.reasoning_tokens`. These tokens are included in the total output count. Reasoning delimiters are excluded from the reasoning count.
+
+A reasoning budget cannot be combined with an explicit `grammar`, a JSON `response_format`, or Responses `text.format` constrained output. These combinations return HTTP 400.
+
+```json
+{
+  "model": "default",
+  "messages": [{"role": "user", "content": "What is 9 times 7?"}],
+  "max_tokens": 256,
+  "reasoning_max_tokens": 64
+}
+```
 
 LoRA responses expose the selected `adapter_generation`, including Chat/Completions streaming chunks and completed Responses objects. See [adapter management](/reference/http-api/#lora-adapter-routing-and-management) for runtime requirements and errors.
 
@@ -111,7 +129,7 @@ Upload, list, and version Skills through `/v1/skills`, then reference them in a 
 
 ### mistralrs extensions on Responses
 
-`top_k`, `min_p`, `repetition_penalty`, the `dry_*` sampling fields, `grammar`, `seed`, `ignore_eos`, and `adapter` follow the Chat Completions behavior. `files` requests tool-produced output files; `max_tool_rounds` caps agentic rounds. Chat-only `session_id`, `agent_permission`, and `web_search_options` are not accepted as controls here. Use the Responses `tools` array for hosted tools and Skills.
+`top_k`, `min_p`, `repetition_penalty`, the `dry_*` sampling fields, `grammar`, `seed`, `ignore_eos`, `reasoning_max_tokens`, and `adapter` follow the Chat Completions behavior. `files` requests tool-produced output files; `max_tool_rounds` caps agentic rounds. Chat-only `session_id`, `agent_permission`, and `web_search_options` are not accepted as controls here. Use the Responses `tools` array for hosted tools and Skills.
 
 For thinking and truncation, Responses uses the standard OpenAI fields instead of the Chat Completions extensions:
 

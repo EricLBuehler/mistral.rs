@@ -342,6 +342,7 @@ pub struct MistralRsConfig {
     /// Prompt-plus-output token limit per request; `None` for diffusion and speech models.
     pub max_model_len: Option<usize>,
     pub generation_defaults: Option<ModelGenerationDefaults>,
+    pub supports_reasoning_budget: bool,
 }
 
 /// Configuration for recreating a model loader when reloading an unloaded model.
@@ -1211,6 +1212,17 @@ impl MistralRs {
             _ => Some(metadata.max_model_len),
         };
         let generation_defaults = pipeline_guard.generation_defaults();
+        let supports_reasoning_budget = matches!(
+            category,
+            ModelCategory::Text | ModelCategory::Multimodal { .. }
+        ) && pipeline_guard.supports_reasoning_budget()
+            && pipeline_guard
+                .get_chat_template()
+                .and_then(|template| {
+                    reasoning_parsers::format::ReasoningFormat::from_template(&template)
+                })
+                .zip(pipeline_guard.tokenizer())
+                .is_some_and(|(format, tokenizer)| format.supports_tokenizer(&tokenizer));
         let encoder_cache_counters = pipeline_guard.encoder_cache_counters();
         let adapter_runtime = pipeline_guard.adapter_runtime();
         drop(pipeline_guard);
@@ -1235,6 +1247,7 @@ impl MistralRs {
             modalities,
             max_model_len,
             generation_defaults,
+            supports_reasoning_budget,
         };
 
         // Shared between engine and EngineInstance so the SDK/HTTP API
@@ -2628,10 +2641,18 @@ impl MistralRs {
             .read()
             .map_err(|_| "Failed to acquire read lock on engines")?;
         if let Some(engine_instance) = engines.get(&resolved_model_id) {
-            Ok(engine_instance.config.clone())
-        } else {
-            Err(format!("Model {resolved_model_id} not found"))
+            return Ok(engine_instance.config.clone());
         }
+        drop(engines);
+
+        let unloaded = self
+            .unloaded_models
+            .read()
+            .map_err(|_| "Failed to acquire read lock on unloaded models")?;
+        unloaded
+            .get(&resolved_model_id)
+            .map(|state| state.mistralrs_config.clone())
+            .ok_or_else(|| format!("Model {resolved_model_id} not found"))
     }
 
     /// Unload a model from memory while preserving its configuration for later reload.

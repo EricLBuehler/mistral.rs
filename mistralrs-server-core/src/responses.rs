@@ -56,7 +56,7 @@ use crate::{
         enums::{ItemStatus, ResponseStatus},
         events::StreamingState,
         items::{InputItem, MessageContentParam, OutputItem, ShellCallOutputPart},
-        resource::{InputTokensDetails, ResponseError, ResponseResource, ResponseUsage},
+        resource::{ResponseError, ResponseResource, ResponseUsage},
     },
     skills::SkillStore,
     streaming::{get_keep_alive_interval, observe_response, DoneState, StreamOutcomeHandle},
@@ -584,6 +584,10 @@ pub struct OpenResponsesCreateRequest {
     /// Configuration for reasoning/thinking behavior
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<ReasoningConfig>,
+
+    /// Maximum reasoning tokens before generation switches to the answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_max_tokens: Option<usize>,
 
     // ===== Output Format =====
     /// Text output configuration
@@ -1483,17 +1487,7 @@ impl futures::Stream for OpenResponsesStreamer {
 
                             // Add usage from chunk if available
                             if let Some(usage) = &chat_chunk.usage {
-                                let mut resp_usage = ResponseUsage::new(
-                                    usage.prompt_tokens,
-                                    usage.completion_tokens,
-                                );
-                                if let Some(details) = &usage.prompt_tokens_details {
-                                    resp_usage.input_tokens_details = Some(InputTokensDetails {
-                                        cached_tokens: Some(details.cached_tokens),
-                                        ..Default::default()
-                                    });
-                                }
-                                response.usage = Some(resp_usage);
+                                response.usage = Some(ResponseUsage::from(usage));
                             }
 
                             events_to_emit.push(OpenResponsesStreamEvent::ResponseCompleted {
@@ -1800,17 +1794,7 @@ fn chat_response_to_response_resource(
     } else {
         Some(reasoning_parts.join(""))
     };
-    let mut resp_usage = ResponseUsage::new(
-        chat_resp.usage.prompt_tokens,
-        chat_resp.usage.completion_tokens,
-    );
-    if let Some(details) = &chat_resp.usage.prompt_tokens_details {
-        resp_usage.input_tokens_details = Some(InputTokensDetails {
-            cached_tokens: Some(details.cached_tokens),
-            ..Default::default()
-        });
-    }
-    resource.usage = Some(resp_usage);
+    resource.usage = Some(ResponseUsage::from(&chat_resp.usage));
     resource.metadata = metadata;
     resource.completed_at = Some(
         SystemTime::now()
@@ -2015,6 +1999,7 @@ async fn parse_openresponses_request(
         dry_allowed_length: oairequest.dry_allowed_length,
         dry_sequence_breakers: oairequest.dry_sequence_breakers,
         enable_thinking,
+        reasoning_max_tokens: oairequest.reasoning_max_tokens,
         truncate_sequence,
         reasoning_effort,
         chat_template_kwargs: None,
@@ -2692,7 +2677,7 @@ mod tests {
 
     #[test]
     fn response_resource_preserves_the_request_facing_model() {
-        let chat_response = ChatCompletionResponse {
+        let mut chat_response = ChatCompletionResponse {
             id: "chatcmpl_test".to_string(),
             choices: Vec::new(),
             created: 1,
@@ -2700,10 +2685,15 @@ mod tests {
             system_fingerprint: "local".to_string(),
             object: "chat.completion".to_string(),
             usage: mistralrs_core::Usage {
-                completion_tokens: 0,
-                prompt_tokens: 0,
-                total_tokens: 0,
-                prompt_tokens_details: None,
+                completion_tokens: 8,
+                prompt_tokens: 12,
+                total_tokens: 20,
+                prompt_tokens_details: Some(mistralrs_core::PromptTokensDetails {
+                    cached_tokens: 8,
+                }),
+                completion_tokens_details: Some(mistralrs_core::CompletionTokensDetails {
+                    reasoning_tokens: 3,
+                }),
                 avg_tok_per_sec: 0.0,
                 avg_prompt_tok_per_sec: 0.0,
                 avg_compl_tok_per_sec: 0.0,
@@ -2729,5 +2719,24 @@ mod tests {
 
         assert_eq!(response.model, "base-model::production");
         assert_eq!(response.adapter_generation.as_deref(), Some("generation"));
+        let usage = response.usage.unwrap();
+        assert_eq!(usage.input_tokens, 12);
+        assert_eq!(usage.input_tokens_details.unwrap().cached_tokens, Some(8));
+        assert_eq!(usage.output_tokens, 8);
+        assert_eq!(usage.total_tokens, 20);
+        assert_eq!(
+            usage.output_tokens_details.unwrap().reasoning_tokens,
+            Some(3)
+        );
+
+        chat_response.usage.completion_tokens_details =
+            Some(mistralrs_core::CompletionTokensDetails {
+                reasoning_tokens: 0,
+            });
+        let usage = serde_json::to_value(ResponseUsage::from(&chat_response.usage)).unwrap();
+        assert_eq!(usage["output_tokens_details"]["reasoning_tokens"], 0);
+        chat_response.usage.completion_tokens_details = None;
+        let usage = serde_json::to_value(ResponseUsage::from(&chat_response.usage)).unwrap();
+        assert!(usage.get("output_tokens_details").is_none());
     }
 }

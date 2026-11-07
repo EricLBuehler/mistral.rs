@@ -802,6 +802,138 @@ pub(crate) struct VerificationInput {
     pub(crate) device_verification: Option<DeviceVerification>,
 }
 
+struct VerificationSamplingContext<'a> {
+    logits: &'a Tensor,
+    proposal: &'a [u32],
+    eos_tok: Option<&'a [u32]>,
+    llg_factory: Option<Arc<llguidance::ParserFactory>>,
+    max_model_len: usize,
+    rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+}
+
+enum VerificationSampler {
+    Regular,
+    TargetTokens(Vec<u32>),
+    SparseRejection {
+        accepted_drafts: usize,
+        continuation_token: u32,
+        proposal_distribution: Option<SpeculativeProposalDistribution>,
+    },
+    Stochastic(StochasticVerification),
+}
+
+impl VerificationSampler {
+    fn new(
+        seq: &Sequence,
+        device: Option<DeviceVerification>,
+        proposal: Option<SpeculativeProposalDistribution>,
+        positions: usize,
+    ) -> Result<Self> {
+        validate_device_verification(device.as_ref(), positions)?;
+        let stochastic_allowed = stochastic_verification_allowed_for_sequence(seq);
+        Ok(match device {
+            Some(DeviceVerification::TargetTokens(tokens)) => Self::TargetTokens(tokens),
+            Some(DeviceVerification::SparseRejection {
+                accepted_drafts,
+                continuation_token,
+            }) => Self::SparseRejection {
+                accepted_drafts,
+                continuation_token,
+                proposal_distribution: proposal,
+            },
+            Some(DeviceVerification::SparseRejectionCpuFallback(uniforms)) => {
+                if !stochastic_allowed {
+                    candle_core::bail!(
+                        "sparse CUDA verification cannot fall back under constrained sampling"
+                    );
+                }
+                Self::Stochastic(StochasticVerification::new(
+                    proposal,
+                    positions,
+                    Some(uniforms),
+                )?)
+            }
+            None if proposal.is_some() && stochastic_allowed => {
+                Self::Stochastic(StochasticVerification::new(proposal, positions, None)?)
+            }
+            None => Self::Regular,
+        })
+    }
+
+    async fn sample(
+        &mut self,
+        seq: &mut Sequence,
+        idx: usize,
+        context: &VerificationSamplingContext<'_>,
+    ) -> Result<(Logprobs, bool)> {
+        let draft = context.proposal.get(idx).copied();
+        if !matches!(self, Self::Regular) {
+            if let Some(forced) = seq.next_reasoning_token()? {
+                let accepted = draft == Some(forced.token);
+                match self {
+                    Self::SparseRejection {
+                        accepted_drafts,
+                        proposal_distribution,
+                        ..
+                    } if accepted && idx >= *accepted_drafts => {
+                        // Accepting a forced draft can move past the device's original rejection.
+                        *self = Self::Stochastic(StochasticVerification::new(
+                            proposal_distribution.take(),
+                            context.proposal.len(),
+                            None,
+                        )?);
+                    }
+                    _ => {}
+                }
+                return Ok((forced, accepted));
+            }
+        }
+        let return_logprobs = seq.return_logprobs();
+        let sampled = match self {
+            Self::TargetTokens(tokens) => device_token_logprobs(tokens[idx]),
+            Self::SparseRejection {
+                accepted_drafts,
+                continuation_token,
+                ..
+            } => {
+                let accepted = idx < *accepted_drafts;
+                let token = if accepted {
+                    draft.expect("validated accepted draft")
+                } else {
+                    *continuation_token
+                };
+                return Ok((device_token_logprobs(token), accepted));
+            }
+            Self::Stochastic(stochastic) => {
+                return stochastic.sample(
+                    seq,
+                    logit_row(context.logits, idx)?,
+                    idx,
+                    draft,
+                    context.rng.clone(),
+                );
+            }
+            Self::Regular => {
+                sample_sequence(
+                    logit_row(context.logits, idx)?,
+                    seq,
+                    return_logprobs,
+                    context.eos_tok,
+                    context.llg_factory.clone(),
+                    context.max_model_len,
+                    context.rng.clone(),
+                    false,
+                    false,
+                    false,
+                )
+                .await?
+            }
+        };
+        let accepted = draft == Some(sampled.token);
+        Ok((sampled, accepted))
+    }
+}
+
 pub(crate) async fn finish_verified_step<P: Pipeline>(
     pipeline: &P,
     seq: &mut Sequence,
@@ -821,7 +953,6 @@ pub(crate) async fn finish_verified_step<P: Pipeline>(
     } = input;
     let general_metadata = pipeline.get_metadata();
     let eos_tok = seq.effective_eos_tokens(&general_metadata.eos_tok, disable_eos_stop);
-    let return_logprobs = seq.return_logprobs();
 
     if let Some(anchor) = anchor_to_emit {
         finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, anchor, eos_tok, false).await?;
@@ -837,152 +968,39 @@ pub(crate) async fn finish_verified_step<P: Pipeline>(
         }
     }
 
-    validate_device_verification(device_verification.as_ref(), proposal.len())?;
-
-    let fallback_uniforms = match &device_verification {
-        Some(DeviceVerification::SparseRejectionCpuFallback(uniforms)) => Some(uniforms),
-        _ => None,
+    let mut sampling = VerificationSampler::new(
+        seq,
+        device_verification,
+        proposal_distribution,
+        proposal.len(),
+    )?;
+    let sampling_context = VerificationSamplingContext {
+        logits: &verify_logits,
+        proposal: &proposal,
+        eos_tok,
+        llg_factory: general_metadata.llg_factory.clone(),
+        max_model_len: general_metadata.max_model_len,
+        rng,
     };
-    let stochastic = fallback_uniforms.is_some()
-        || (device_verification.is_none() && proposal_distribution.is_some());
-    if stochastic && stochastic_verification_allowed_for_sequence(seq) {
-        return finish_verified_step_stochastic(
-            pipeline,
-            seq,
-            verify_logits,
-            proposal,
-            proposal_distribution,
-            base_len,
-            prefix_cacher,
-            eos_tok,
-            return_logprobs,
-            rng,
-            fallback_uniforms,
-        )
-        .await;
-    }
-    if fallback_uniforms.is_some() {
-        candle_core::bail!("sparse CUDA verification cannot fall back under constrained sampling");
-    }
-
     let mut accepted = 0usize;
-    for (idx, draft) in proposal.iter().copied().enumerate() {
-        let (sampled, accepted_by_device) = match &device_verification {
-            Some(DeviceVerification::TargetTokens(tokens)) => {
-                (device_token_logprobs(tokens[idx]), None)
-            }
-            Some(DeviceVerification::SparseRejection {
-                accepted_drafts,
-                continuation_token,
-            }) => {
-                if idx < *accepted_drafts {
-                    (device_token_logprobs(draft), Some(true))
-                } else {
-                    (device_token_logprobs(*continuation_token), Some(false))
-                }
-            }
-            Some(DeviceVerification::SparseRejectionCpuFallback(_)) => {
-                unreachable!("sparse CPU fallback returned before token verification")
-            }
-            None => {
-                let row = logit_row(&verify_logits, idx)?;
-                (
-                    sample_sequence(
-                        row.clone(),
-                        seq,
-                        return_logprobs,
-                        eos_tok,
-                        general_metadata.llg_factory.clone(),
-                        general_metadata.max_model_len,
-                        rng.clone(),
-                        false,
-                        false,
-                        false,
-                    )
-                    .await?,
-                    None,
-                )
-            }
-        };
+    loop {
+        let (sampled, accepts_draft) = sampling.sample(seq, accepted, &sampling_context).await?;
         let sampled_token = sampled.token;
-        if accepted_by_device.unwrap_or(sampled_token == draft) {
-            accepted += 1;
-            finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, sampled, eos_tok, false)
-                .await?;
-            if matches!(seq.getstate(), SequenceState::Done(_)) {
-                let keep_len = base_len + 1 + accepted;
+        accepted += usize::from(accepts_draft);
+        finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, sampled, eos_tok, false).await?;
+        let done = matches!(seq.getstate(), SequenceState::Done(_));
+        if done || !accepts_draft {
+            if done {
                 seq.clear_staged_speculative_tokens();
-                return Ok(VerificationOutcome {
-                    accepted_drafts: accepted,
-                    proposed_drafts: proposal.len(),
-                    keep_len,
-                    continuation_token: None,
-                });
-            }
-        } else {
-            let keep_len = base_len + 1 + accepted;
-            finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, sampled, eos_tok, false)
-                .await?;
-            if matches!(seq.getstate(), SequenceState::Done(_)) {
-                seq.clear_staged_speculative_tokens();
-                return Ok(VerificationOutcome {
-                    accepted_drafts: accepted,
-                    proposed_drafts: proposal.len(),
-                    keep_len,
-                    continuation_token: None,
-                });
             }
             return Ok(VerificationOutcome {
                 accepted_drafts: accepted,
                 proposed_drafts: proposal.len(),
-                keep_len,
-                continuation_token: Some(sampled_token),
+                keep_len: base_len + 1 + accepted,
+                continuation_token: (!done).then_some(sampled_token),
             });
         }
     }
-
-    let continuation = match &device_verification {
-        Some(DeviceVerification::TargetTokens(tokens)) => device_token_logprobs(tokens[accepted]),
-        Some(DeviceVerification::SparseRejection {
-            continuation_token, ..
-        }) => device_token_logprobs(*continuation_token),
-        Some(DeviceVerification::SparseRejectionCpuFallback(_)) => {
-            unreachable!("sparse CPU fallback returned before continuation sampling")
-        }
-        None => {
-            let row = logit_row(&verify_logits, accepted)?;
-            sample_sequence(
-                row.clone(),
-                seq,
-                return_logprobs,
-                eos_tok,
-                general_metadata.llg_factory.clone(),
-                general_metadata.max_model_len,
-                rng.clone(),
-                false,
-                false,
-                false,
-            )
-            .await?
-        }
-    };
-    let continuation_token = continuation.token;
-    finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, continuation, eos_tok, false).await?;
-
-    let keep_len = base_len + 1 + accepted;
-    let continuation_token = if matches!(seq.getstate(), SequenceState::Done(_)) {
-        seq.clear_staged_speculative_tokens();
-        None
-    } else {
-        Some(continuation_token)
-    };
-
-    Ok(VerificationOutcome {
-        accepted_drafts: accepted,
-        proposed_drafts: proposal.len(),
-        keep_len,
-        continuation_token,
-    })
 }
 
 fn validate_device_verification(
@@ -1231,34 +1249,47 @@ fn normalize_sparse_row(
     Ok(entries)
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn finish_verified_step_stochastic<P: Pipeline>(
-    pipeline: &P,
-    seq: &mut Sequence,
-    verify_logits: Tensor,
-    proposal: Vec<u32>,
-    proposal_distribution: Option<SpeculativeProposalDistribution>,
-    base_len: usize,
-    prefix_cacher: &mut PrefixCacheManagerV2,
-    eos_tok: Option<&[u32]>,
-    return_logprobs: bool,
-    rng: Arc<std::sync::Mutex<Isaac64Rng>>,
-    fallback_uniforms: Option<&SparseRejectionFallbackUniforms>,
-) -> Result<VerificationOutcome> {
-    let proposal_distribution = match proposal_distribution {
-        Some(distribution) => PreparedProposalDistribution::new(distribution, proposal.len())?,
-        None => PreparedProposalDistribution::Deterministic,
-    };
-    let mut accepted = 0usize;
-    for (idx, draft) in proposal.iter().copied().enumerate() {
-        let target_row = logit_row(&verify_logits, idx)?;
+struct StochasticVerification {
+    proposal: PreparedProposalDistribution,
+    fallback_uniforms: Option<SparseRejectionFallbackUniforms>,
+}
+
+impl StochasticVerification {
+    fn new(
+        proposal: Option<SpeculativeProposalDistribution>,
+        positions: usize,
+        fallback_uniforms: Option<SparseRejectionFallbackUniforms>,
+    ) -> Result<Self> {
+        Ok(Self {
+            proposal: match proposal {
+                Some(distribution) => PreparedProposalDistribution::new(distribution, positions)?,
+                None => PreparedProposalDistribution::Deterministic,
+            },
+            fallback_uniforms,
+        })
+    }
+
+    fn sample(
+        &self,
+        seq: &Sequence,
+        target_row: Tensor,
+        idx: usize,
+        draft: Option<u32>,
+        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+    ) -> Result<(Logprobs, bool)> {
         let sampler = seq.sampler();
         let target_probs = sampler.speculative_target_probs(
-            flat_logits(target_row.clone())?,
+            flat_logits(target_row)?,
             seq.get_toks(),
             seq.prompt_tokens(),
         )?;
-        let candidate_probs = proposal_distribution.probability_row(
+        let Some(draft) = draft else {
+            return Ok((
+                self.sample_probs(seq, &target_probs.sampling, &target_probs.reporting, rng)?,
+                false,
+            ));
+        };
+        let candidate_probs = self.proposal.probability_row(
             idx,
             draft,
             &sampler,
@@ -1283,31 +1314,20 @@ async fn finish_verified_step_stochastic<P: Pipeline>(
         } else {
             (p_i / q_i).min(1.0)
         };
-        let draw = match fallback_uniforms {
+        let draw = match &self.fallback_uniforms {
             Some(uniforms) => uniforms.accept[idx],
             None => {
                 let mut rng = rng.lock().expect("could not lock rng mutex");
                 rng.random::<f32>()
             }
         };
-
         if accepts_draft(draw, accept_prob) {
-            accepted += 1;
-            let sampled =
-                sampler.logprobs_from_probs(draft, &target_probs.reporting, return_logprobs)?;
-            finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, sampled, eos_tok, false)
-                .await?;
-            if matches!(seq.getstate(), SequenceState::Done(_)) {
-                let keep_len = base_len + 1 + accepted;
-                seq.clear_staged_speculative_tokens();
-                return Ok(VerificationOutcome {
-                    accepted_drafts: accepted,
-                    proposed_drafts: proposal.len(),
-                    keep_len,
-                    continuation_token: None,
-                });
-            }
-            continue;
+            let sampled = sampler.logprobs_from_probs(
+                draft,
+                &target_probs.reporting,
+                seq.return_logprobs(),
+            )?;
+            return Ok((sampled, true));
         }
 
         let mut adjusted_probs = target_probs.sampling.clone();
@@ -1318,80 +1338,29 @@ async fn finish_verified_step_stochastic<P: Pipeline>(
         if normalize_probs(&mut adjusted_probs).is_err() {
             adjusted_probs = target_probs.sampling;
         }
-        let sampled = match fallback_uniforms {
-            Some(uniforms) => sample_from_probs_with_uniform(
-                &sampler,
-                &adjusted_probs,
-                &target_probs.reporting,
-                return_logprobs,
-                uniforms.sample,
-            )?,
-            None => sampler.sample_from_probs(
-                &adjusted_probs,
-                &target_probs.reporting,
-                return_logprobs,
-                rng.clone(),
-            )?,
-        };
-        let sampled_token = sampled.token;
-        let keep_len = base_len + 1 + accepted;
-        finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, sampled, eos_tok, false).await?;
-        if matches!(seq.getstate(), SequenceState::Done(_)) {
-            seq.clear_staged_speculative_tokens();
-            return Ok(VerificationOutcome {
-                accepted_drafts: accepted,
-                proposed_drafts: proposal.len(),
-                keep_len,
-                continuation_token: None,
-            });
-        }
-        return Ok(VerificationOutcome {
-            accepted_drafts: accepted,
-            proposed_drafts: proposal.len(),
-            keep_len,
-            continuation_token: Some(sampled_token),
-        });
+        let sampled = self.sample_probs(seq, &adjusted_probs, &target_probs.reporting, rng)?;
+        Ok((sampled, false))
     }
 
-    let row = logit_row(&verify_logits, accepted)?;
-    let sampler = seq.sampler();
-    let target_probs = sampler.speculative_target_probs(
-        flat_logits(row.clone())?,
-        seq.get_toks(),
-        seq.prompt_tokens(),
-    )?;
-    let continuation = match fallback_uniforms {
-        Some(uniforms) => sample_from_probs_with_uniform(
-            &sampler,
-            &target_probs.sampling,
-            &target_probs.reporting,
-            return_logprobs,
-            uniforms.sample,
-        )?,
-        None => sampler.sample_from_probs(
-            &target_probs.sampling,
-            &target_probs.reporting,
-            return_logprobs,
-            rng,
-        )?,
-    };
-    let continuation_token = continuation.token;
-    finish_or_add_toks_to_seq(pipeline, prefix_cacher, seq, continuation, eos_tok, false).await?;
-
-    let keep_len = base_len + 1 + accepted;
-    let continuation_token = if matches!(seq.getstate(), SequenceState::Done(_)) {
-        seq.clear_staged_speculative_tokens();
-        None
-    } else {
-        Some(continuation_token)
-    };
-
-    Ok(VerificationOutcome {
-        accepted_drafts: accepted,
-        proposed_drafts: proposal.len(),
-        keep_len,
-        continuation_token,
-    })
+    fn sample_probs(
+        &self,
+        seq: &Sequence,
+        sampling: &[f32],
+        reporting: &[f32],
+        rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+    ) -> Result<Logprobs> {
+        let sampler = seq.sampler();
+        match &self.fallback_uniforms {
+            Some(uniforms) => sample_from_probs_with_uniform(
+                &sampler,
+                sampling,
+                reporting,
+                seq.return_logprobs(),
+                uniforms.sample,
+            ),
+            None => sampler.sample_from_probs(sampling, reporting, seq.return_logprobs(), rng),
+        }
+    }
 }
 
 fn logit_row(logits: &Tensor, row: usize) -> Result<Tensor> {
@@ -1808,3 +1777,7 @@ mod tests {
         assert!(normalize_sparse_row(0, &[2], &[1.0], 2).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "budget_tests.rs"]
+mod budget_tests;

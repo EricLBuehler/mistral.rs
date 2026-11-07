@@ -2686,6 +2686,13 @@
           "output_tokens": {
             "type": "integer",
             "minimum": 0
+          },
+          "reasoning_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
           }
         }
       },
@@ -3410,6 +3417,14 @@
                 "type": "null"
               }
             ]
+          },
+          "reasoning_max_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Maximum reasoning tokens before generation switches to the answer.",
+            "minimum": 0
           },
           "repetition_penalty": {
             "type": [
@@ -6411,6 +6426,14 @@
                 "type": "null"
               }
             ]
+          },
+          "reasoning_max_tokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Maximum reasoning tokens before generation switches to the answer.",
+            "minimum": 0
           },
           "repetition_penalty": {
             "type": [

@@ -397,6 +397,8 @@ pub struct AnthropicUsage {
     pub cache_creation_input_tokens: usize,
     pub cache_read_input_tokens: usize,
     pub output_tokens: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -545,7 +547,12 @@ impl AnthropicMessagesRequest {
             self.output_config.as_ref(),
             self.reasoning_effort.as_deref(),
         )?;
-        mistralrs_core::resolve_reasoning_controls(enable_thinking, reasoning_effort)?;
+        let reasoning_max_tokens = self
+            .thinking
+            .as_ref()
+            .and_then(|thinking| thinking.budget_tokens);
+        mistralrs_core::resolve_reasoning_controls(enable_thinking, reasoning_effort)?
+            .validate_budget(reasoning_max_tokens)?;
         let response_format =
             resolve_anthropic_response_format(self.output_config.as_ref(), self.response_format)?;
         let mut converted_tools = convert_tools_and_agentic(
@@ -638,6 +645,7 @@ impl AnthropicMessagesRequest {
             dry_allowed_length: self.dry_allowed_length,
             dry_sequence_breakers: self.dry_sequence_breakers,
             enable_thinking,
+            reasoning_max_tokens,
             reasoning_effort: reasoning_effort.map(|effort| effort.to_string()),
             chat_template_kwargs: None,
             max_tool_rounds: self.max_tool_rounds,
@@ -1125,6 +1133,10 @@ fn usage_from_openai(usage: &Usage) -> AnthropicUsage {
         cache_creation_input_tokens: 0,
         cache_read_input_tokens,
         output_tokens: usage.completion_tokens,
+        reasoning_tokens: usage
+            .completion_tokens_details
+            .as_ref()
+            .map(|details| details.reasoning_tokens),
     }
 }
 
@@ -2086,6 +2098,7 @@ mod tests {
             total_tokens: prompt_tokens + output_tokens,
             prompt_tokens_details: (cached_tokens > 0)
                 .then_some(PromptTokensDetails { cached_tokens }),
+            completion_tokens_details: None,
             avg_tok_per_sec: 0.0,
             avg_prompt_tok_per_sec: 0.0,
             avg_compl_tok_per_sec: 0.0,
@@ -2684,6 +2697,10 @@ mod tests {
 
     #[test]
     fn serializes_response_blocks_usage_and_stop_sequence() {
+        let mut usage = test_usage(120, 100, 8);
+        usage.completion_tokens_details = Some(mistralrs_core::CompletionTokensDetails {
+            reasoning_tokens: 3,
+        });
         let response = ChatCompletionResponse {
             id: "msg_test".to_string(),
             choices: vec![Choice {
@@ -2711,7 +2728,7 @@ mod tests {
             model: "default".to_string(),
             system_fingerprint: "local".to_string(),
             object: "chat.completion".to_string(),
-            usage: test_usage(120, 100, 8),
+            usage,
             adapter_generation: None,
             agentic_tool_calls: None,
             files: None,
@@ -2724,6 +2741,8 @@ mod tests {
         assert_eq!(value["usage"]["input_tokens"], 20);
         assert_eq!(value["usage"]["cache_creation_input_tokens"], 0);
         assert_eq!(value["usage"]["cache_read_input_tokens"], 100);
+        assert_eq!(value["usage"]["output_tokens"], 8);
+        assert_eq!(value["usage"]["reasoning_tokens"], 3);
         assert_eq!(value["content"][0]["type"], "thinking");
         assert_eq!(value["content"][0]["thinking"], "");
         assert_eq!(value["content"][0]["signature"], "");
@@ -2733,6 +2752,10 @@ mod tests {
 
     #[test]
     fn streams_ordered_thinking_text_tool_and_usage_events() {
+        let mut usage = test_usage(50, 30, 7);
+        usage.completion_tokens_details = Some(mistralrs_core::CompletionTokensDetails {
+            reasoning_tokens: 2,
+        });
         let mut stream = AnthropicStreamState::new(true);
         stream.handle_chunk(stream_chunk(Some("hidden"), None, None, None, None, None));
         stream.handle_chunk(stream_chunk(None, Some("answer"), None, None, None, None));
@@ -2750,7 +2773,7 @@ mod tests {
             }]),
             Some("tool_calls"),
             None,
-            Some(test_usage(50, 30, 7)),
+            Some(usage),
         ));
 
         let done = stream.done;
@@ -2786,6 +2809,7 @@ mod tests {
         assert_eq!(events[10].1["usage"]["input_tokens"], 20);
         assert_eq!(events[10].1["usage"]["cache_read_input_tokens"], 30);
         assert_eq!(events[10].1["usage"]["output_tokens"], 7);
+        assert_eq!(events[10].1["usage"]["reasoning_tokens"], 2);
         assert!(done);
     }
 
@@ -2840,5 +2864,30 @@ mod tests {
         .unwrap();
 
         assert!(req.into_chat_completion_request().is_err());
+    }
+
+    #[test]
+    fn thinking_budget_translates_and_rejects_disabled_thinking() {
+        for (thinking, budget) in [("enabled", 0), ("enabled", 16), ("disabled", 16)] {
+            let req: AnthropicMessagesRequest = serde_json::from_value(json!({
+                "model": "default",
+                "max_tokens": 64,
+                "messages": [{"role": "user", "content": "What is 9 times 7?"}],
+                "thinking": {"type": thinking, "budget_tokens": budget}
+            }))
+            .unwrap();
+
+            let result = req.into_chat_completion_request();
+            if thinking == "disabled" {
+                assert!(result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("thinking.budget_tokens"));
+                continue;
+            }
+            let chat = result.unwrap();
+            assert_eq!(chat.reasoning_max_tokens, Some(budget));
+            assert_eq!(chat.max_tokens, Some(64));
+        }
     }
 }

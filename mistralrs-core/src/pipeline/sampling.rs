@@ -210,6 +210,12 @@ pub(crate) async fn finish_or_add_toks_to_seq(
             .tok_trie()
             .decode_ext(&[logprobs.token], include_special)
     };
+    if !matches!(is_done, Some(StopReason::Eos | StopReason::StopTok(_))) {
+        seq.observe_reasoning_token(
+            &completion_bytes,
+            tok_env.tok_trie().is_special_token(logprobs.token),
+        );
+    }
     if include_special {
         let guard = seq
             .special_text_guard
@@ -515,6 +521,7 @@ pub(crate) async fn finish_or_add_toks_to_seq(
                 let usage = seq.get_mut_group().get_usage();
                 seq.get_mut_group().total_prompt_toks = 0;
                 seq.get_mut_group().total_toks = 0;
+                seq.get_mut_group().reasoning_tokens = None;
                 Some(usage)
             } else {
                 None
@@ -895,7 +902,9 @@ pub(crate) fn can_sample_batch_cuda(seqs: &[&mut Sequence]) -> bool {
     {
         let mut categorical = None;
         for seq in seqs {
-            if !matches!(&seq.recognizer, SequenceRecognizer::None) || seq.tool_call_state.is_some()
+            if seq.has_reasoning_budget()
+                || !matches!(&seq.recognizer, SequenceRecognizer::None)
+                || seq.tool_call_state.is_some()
             {
                 return false;
             }
@@ -976,7 +985,8 @@ struct CudaTokenBatchPlan {
 
 #[cfg(feature = "cuda")]
 fn cuda_token_sampling_plan(seq: &Sequence) -> Option<CudaBatchSamplingPlan> {
-    if !matches!(&seq.recognizer, SequenceRecognizer::None)
+    if seq.has_reasoning_budget()
+        || !matches!(&seq.recognizer, SequenceRecognizer::None)
         || seq.tool_call_state.is_some()
         || seq.sampling_logprob_required()
         || seq.active_staged_speculative_len() != 0
@@ -1311,7 +1321,10 @@ fn try_sample_batch_cuda(
     let mut samplers_and_plans = Vec::with_capacity(seqs.len());
     let mut sampling_logprob_required = false;
     for seq in seqs {
-        if !matches!(&seq.recognizer, SequenceRecognizer::None) || seq.tool_call_state.is_some() {
+        if seq.has_reasoning_budget()
+            || !matches!(&seq.recognizer, SequenceRecognizer::None)
+            || seq.tool_call_state.is_some()
+        {
             return Ok(None);
         }
         let sampler = seq.sampler();
@@ -1446,6 +1459,9 @@ pub async fn sample_sequence(
     sample_speculative: bool,
     multiple_sequences: bool,
 ) -> Result<Logprobs> {
+    if let Some(token) = seq.next_reasoning_token()? {
+        return Ok(token);
+    }
     activate_required_tool_call_grammar(seq, llg_factory.as_ref(), max_model_len, false);
     let rng = seq.sampling_rng(&rng);
 
@@ -1601,7 +1617,7 @@ pub async fn sample_sequence(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use mistralrs_mcp::{Function, Tool, ToolType};
     #[cfg(feature = "cuda")]
     use rand::RngCore;
@@ -1616,7 +1632,7 @@ mod tests {
         sequence::{SeqStepType, SequenceGroup},
     };
 
-    fn terminal_test_sequence(
+    pub(crate) fn terminal_test_sequence(
         stop_tokens: Vec<u32>,
         max_len: Option<usize>,
         ignore_eos: bool,
@@ -1674,7 +1690,7 @@ mod tests {
         )
     }
 
-    fn sampled_test_sequence(seed: u64, top_k: i64, top_p: f64) -> Sequence {
+    pub(crate) fn sampled_test_sequence(seed: u64, top_k: i64, top_p: f64) -> Sequence {
         let (tx, _rx) = channel(1);
         let sampler = Sampler::new(
             Some(1.0),
@@ -1730,6 +1746,91 @@ mod tests {
 
     fn stochastic_test_sequence(seed: u64) -> Sequence {
         sampled_test_sequence(seed, -1, 1.0)
+    }
+
+    pub(crate) fn budget_test_tokenizer(tokens: &[&str]) -> Arc<tokenizers::Tokenizer> {
+        let mut tokenizer =
+            tokenizers::Tokenizer::new(tokenizers::models::wordlevel::WordLevel::default());
+        tokenizer.with_decoder(Some(tokenizers::decoders::fuse::Fuse::default()));
+        tokenizer.add_special_tokens(
+            &tokens
+                .iter()
+                .map(|&text| tokenizers::AddedToken::from(text, true))
+                .collect::<Vec<_>>(),
+        );
+        Arc::new(tokenizer)
+    }
+
+    #[test]
+    fn reasoning_budget_rejects_unknown_format() {
+        let mut seq = terminal_test_sequence(vec![], None, false);
+        assert!(seq
+            .set_reasoning_budget(1, budget_test_tokenizer(&["</think>"]))
+            .unwrap_err()
+            .to_string()
+            .contains("reasoning_max_tokens"));
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn reasoning_budget_disables_unconstrained_cuda_sampling() {
+        let mut seq = terminal_test_sequence(vec![], None, false);
+        assert!(cuda_token_sampling_plan(&seq).is_some());
+        seq.enable_reasoning(crate::reasoning_parsers::TagReasoningContext::new_in_think_block());
+        seq.set_reasoning_budget(1, budget_test_tokenizer(&["</think>"]))
+            .unwrap();
+        assert!(cuda_token_sampling_plan(&seq).is_none());
+    }
+
+    #[test]
+    fn harmony_budget_transition_does_not_end_generation() {
+        use crate::reasoning_parsers::budget::{
+            HARMONY_FINAL_TRANSITION, HARMONY_NONTERMINAL_TOKENS,
+        };
+        const MODEL_LEN: usize = 1024;
+        const RETURN: &str = "<|return|>";
+        let tokenizer = budget_test_tokenizer(
+            &HARMONY_NONTERMINAL_TOKENS
+                .iter()
+                .copied()
+                .chain(["assistant", "analysis", "final", RETURN])
+                .collect::<Vec<_>>(),
+        );
+        let mut seq = terminal_test_sequence(vec![], None, false);
+        seq.enable_harmony_reasoning_budget();
+        seq.set_reasoning_budget(0, tokenizer.clone()).unwrap();
+        let eos = HARMONY_NONTERMINAL_TOKENS
+            .iter()
+            .copied()
+            .chain([RETURN])
+            .map(|text| tokenizer.token_to_id(text).unwrap())
+            .collect::<Vec<_>>();
+        for text in ["<|channel|>", "analysis", "<|message|>"] {
+            let token = tokenizer.token_to_id(text).unwrap();
+            assert_eq!(seq.is_done(token, Some(&eos), MODEL_LEN), None);
+            seq.observe_reasoning_token(text.as_bytes(), text.starts_with("<|"));
+        }
+        let mut forced = Vec::new();
+        while let Some(token) = seq.next_reasoning_token().unwrap() {
+            assert_eq!(seq.is_done(token.token, Some(&eos), MODEL_LEN), None);
+            forced.push(token.token);
+            let bytes = tokenizer.decode(&[token.token], false).unwrap();
+            seq.observe_reasoning_token(bytes.as_bytes(), bytes.starts_with("<|"));
+            seq.add_token(token, bytes.into_bytes(), None);
+        }
+        assert_eq!(
+            tokenizer.decode(&forced, false).unwrap(),
+            HARMONY_FINAL_TRANSITION
+        );
+        assert_eq!(seq.reasoning_tokens(), Some(0));
+        assert_eq!(
+            seq.is_done(
+                tokenizer.token_to_id(RETURN).unwrap(),
+                Some(&eos),
+                MODEL_LEN
+            ),
+            Some(StopReason::Eos)
+        );
     }
 
     async fn sample_test_token(

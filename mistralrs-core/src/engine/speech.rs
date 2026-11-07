@@ -142,6 +142,7 @@ mod tests {
                 prompt_tokens: 2,
                 total_tokens: 3,
                 prompt_tokens_details: None,
+                completion_tokens_details: None,
                 avg_tok_per_sec: 0.0,
                 avg_prompt_tok_per_sec: 0.0,
                 avg_compl_tok_per_sec: 0.0,

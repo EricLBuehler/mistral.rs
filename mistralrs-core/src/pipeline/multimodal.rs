@@ -1858,6 +1858,10 @@ impl CacheManagerMixin for MultimodalPipeline {
 }
 
 impl MetadataMixin for MultimodalPipeline {
+    fn supports_reasoning_budget(&self) -> bool {
+        !self.model.is_block_diffusion()
+    }
+
     fn device(&self) -> Device {
         self.model.device().clone()
     }

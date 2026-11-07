@@ -174,6 +174,22 @@ impl Engine {
             None => None,
         };
         let speech_request = matches!(request.messages, RequestMessage::SpeechGeneration { .. });
+        handle_request_error!(request.validate_reasoning_budget(), request.response);
+        if request.sampling_params.reasoning_max_tokens.is_some() {
+            let supported = {
+                let pipeline = get_mut_arcmutex!(self.pipeline);
+                matches!(
+                    pipeline.category(),
+                    ModelCategory::Text | ModelCategory::Multimodal { .. }
+                ) && pipeline.supports_reasoning_budget()
+            };
+            if !supported {
+                let _ = request.response.send(Response::ValidationError(
+                    "reasoning_max_tokens / thinking.budget_tokens requires autoregressive text generation".into(),
+                )).await;
+                return;
+            }
+        }
         let supports_chat_audio = if speech_request || request.audio_output.is_some() {
             let pipeline = get_mut_arcmutex!(self.pipeline);
             matches!(
@@ -411,6 +427,15 @@ impl Engine {
                 enable_thinking,
                 reasoning_effort,
             } => {
+                let (enable_thinking, reasoning_effort) =
+                    if request.sampling_params.reasoning_max_tokens == Some(0) {
+                        (
+                            Some(false),
+                            reasoning_effort.map(|_| crate::ReasoningEffort::Off),
+                        )
+                    } else {
+                        (enable_thinking, reasoning_effort)
+                    };
                 let enable_thinking = chat_enable_thinking(
                     request.audio_output.is_some(),
                     enable_thinking,
@@ -894,48 +919,29 @@ impl Engine {
                 seq.bind_adapter(adapter_lease.clone());
             }
 
-            {
+            let tokenizer = {
                 let pipeline = get_mut_arcmutex!(self.pipeline);
-                if let Some(chat_template) = pipeline.get_chat_template() {
-                    if chat_template.uses_channel_tags() && !chat_template.is_harmony_format() {
-                        // Gemma 4: <|channel>thought\n...<channel|>
-                        let prompt_activates_thinking =
-                            seq.get_initial_prompt().contains("<|think|>");
-                        seq.enable_reasoning(
-                            crate::reasoning_parsers::ReasoningMode::TagBased,
-                            Box::new(if prompt_activates_thinking {
-                                crate::reasoning_parsers::TagReasoningContext::new_gemma_channel_with_implicit_thinking()
-                            } else {
-                                crate::reasoning_parsers::TagReasoningContext::new_gemma_channel()
-                            }),
-                        );
-                    } else if chat_template.uses_think_tags() {
-                        // DeepSeek, QwQ, SmolLM3: <think>...</think>
-                        let starts_in_block = seq
-                            .get_initial_prompt()
-                            .trim_end()
-                            .ends_with(crate::reasoning_parsers::tag_based::THINK_OPEN_TAG);
-                        let ctx = if starts_in_block {
-                            crate::reasoning_parsers::TagReasoningContext::new_in_think_block()
-                        } else {
-                            crate::reasoning_parsers::TagReasoningContext::new_think_tags()
-                        };
-                        seq.enable_reasoning(
-                            crate::reasoning_parsers::ReasoningMode::TagBased,
-                            Box::new(ctx),
-                        );
-                    } else if chat_template.uses_gemma_turns() {
-                        // Gemma-family thinking convention (MedGemma 1.5 etc):
-                        // <unused94>thought\n...<unused95>. Pass-through for models
-                        // that never emit the tokens.
-                        seq.enable_reasoning(
-                            crate::reasoning_parsers::ReasoningMode::TagBased,
-                            Box::new(
-                                crate::reasoning_parsers::TagReasoningContext::new_gemma_thought(),
-                            ),
-                        );
+                if let Some(format) = pipeline.get_chat_template().and_then(|template| {
+                    crate::reasoning_parsers::format::ReasoningFormat::from_template(&template)
+                }) {
+                    if let Some(parser) = format.tag_parser(seq.get_initial_prompt()) {
+                        seq.enable_reasoning(parser);
+                    } else {
+                        seq.enable_harmony_reasoning_budget();
                     }
                 }
+                pipeline.tokenizer()
+            };
+            if let Some(limit) = request.sampling_params.reasoning_max_tokens {
+                let tokenizer = handle_request_error!(
+                    tokenizer.ok_or_else(|| anyhow::anyhow!(
+                        "reasoning_max_tokens / thinking.budget_tokens requires a tokenizer"
+                    )),
+                    request.response
+                );
+                handle_request_error!(seq.set_reasoning_budget(limit, tokenizer), request.response);
+            } else if let Some(tokenizer) = tokenizer {
+                seq.configure_reasoning_tokenizer(&tokenizer);
             }
 
             // Media expansion and speech output markers must precede prefix matching and scheduler chunk boundaries.

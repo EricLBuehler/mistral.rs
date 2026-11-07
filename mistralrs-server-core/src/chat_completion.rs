@@ -536,9 +536,10 @@ impl IntoResponse for ChatCompletionResponder {
 fn parse_reasoning_controls(
     enable_thinking: Option<bool>,
     effort: Option<&str>,
+    reasoning_max_tokens: Option<usize>,
 ) -> Result<(Option<bool>, Option<ReasoningEffort>)> {
     let effort = effort.map(str::parse).transpose()?;
-    resolve_reasoning_controls(enable_thinking, effort)?;
+    resolve_reasoning_controls(enable_thinking, effort)?.validate_budget(reasoning_max_tokens)?;
     Ok((enable_thinking, effort))
 }
 
@@ -657,8 +658,18 @@ pub async fn parse_request(
             }
         }
     }
-    let (enable_thinking, reasoning_effort) =
-        parse_reasoning_controls(enable_thinking, reasoning_effort.as_deref())?;
+    let (enable_thinking, reasoning_effort) = parse_reasoning_controls(
+        enable_thinking,
+        reasoning_effort.as_deref(),
+        oairequest.reasoning_max_tokens,
+    )?;
+    if oairequest.reasoning_max_tokens.is_some() {
+        let config = state.config(model).map_err(anyhow::Error::msg)?;
+        anyhow::ensure!(
+            config.supports_reasoning_budget,
+            "`reasoning_max_tokens` / `thinking.budget_tokens` requires autoregressive text generation with a supported end-of-thinking marker"
+        );
+    }
 
     let mut normalized_tools = match tool_surface {
         OpenAiToolSurface::ChatCompletions => {
@@ -1095,6 +1106,10 @@ pub async fn parse_request(
             None => Constraint::None,
         },
     };
+    anyhow::ensure!(
+        oairequest.reasoning_max_tokens.is_none() || matches!(constraint, Constraint::None),
+        "`reasoning_max_tokens` / `thinking.budget_tokens` cannot be combined with constrained output (`grammar` or a JSON response format)"
+    );
 
     Ok((
         Request::Normal(Box::new(NormalRequest {
@@ -1112,6 +1127,7 @@ pub async fn parse_request(
                 presence_penalty: oairequest.presence_penalty,
                 repetition_penalty: oairequest.repetition_penalty,
                 max_len: oairequest.max_tokens,
+                reasoning_max_tokens: oairequest.reasoning_max_tokens,
                 stop_toks,
                 ignore_eos: oairequest.ignore_eos,
                 logits_bias: oairequest.logit_bias,
@@ -1443,22 +1459,28 @@ mod tests {
 
     #[test]
     fn reasoning_controls_normalize_http_values() {
-        assert_eq!(parse_reasoning_controls(None, None).unwrap(), (None, None));
         assert_eq!(
-            parse_reasoning_controls(None, Some(" NONE ")).unwrap(),
+            parse_reasoning_controls(None, None, None).unwrap(),
+            (None, None)
+        );
+        assert_eq!(
+            parse_reasoning_controls(None, Some(" NONE "), None).unwrap(),
             (None, Some(ReasoningEffort::Off))
         );
         assert_eq!(
-            parse_reasoning_controls(None, Some("XHIGH")).unwrap(),
+            parse_reasoning_controls(None, Some("XHIGH"), None).unwrap(),
             (None, Some(ReasoningEffort::XHigh))
         );
     }
 
     #[test]
     fn reasoning_controls_validate_http_values() {
-        assert!(parse_reasoning_controls(None, Some("extreme")).is_err());
-        assert!(parse_reasoning_controls(Some(true), Some("off")).is_err());
-        assert!(parse_reasoning_controls(Some(false), Some("high")).is_err());
+        assert!(parse_reasoning_controls(None, Some("extreme"), None).is_err());
+        assert!(parse_reasoning_controls(Some(true), Some("off"), None).is_err());
+        assert!(parse_reasoning_controls(Some(false), Some("high"), None).is_err());
+        assert!(parse_reasoning_controls(Some(false), None, Some(1)).is_err());
+        assert!(parse_reasoning_controls(None, Some("off"), Some(1)).is_err());
+        assert!(parse_reasoning_controls(None, Some("high"), Some(0)).is_ok());
     }
 
     #[test]
