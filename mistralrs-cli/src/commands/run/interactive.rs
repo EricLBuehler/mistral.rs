@@ -711,6 +711,7 @@ fn interactive_fallback_sample_parameters() -> SamplingParams {
         presence_penalty: None,
         repetition_penalty: None,
         max_len: None,
+        reasoning_max_tokens: None,
         stop_toks: None,
         ignore_eos: false,
         logits_bias: None,

@@ -253,6 +253,15 @@ pub struct ResolvedReasoningControls {
     pub reasoning_effort: Option<ReasoningEffort>,
 }
 
+impl ResolvedReasoningControls {
+    pub fn validate_budget(&self, limit: Option<usize>) -> Result<(), ReasoningControlError> {
+        if limit.is_some_and(|limit| limit > 0) && !self.enable_thinking {
+            return Err(ReasoningControlError::BudgetWithThinkingDisabled);
+        }
+        Ok(())
+    }
+}
+
 /// Contradictory reasoning controls supplied by a caller.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ReasoningControlError {
@@ -260,6 +269,10 @@ pub enum ReasoningControlError {
     OffWithThinkingEnabled,
     #[error("reasoning effort `{0}` conflicts with enable_thinking=false")]
     EffortWithThinkingDisabled(ReasoningEffort),
+    #[error(
+        "`reasoning_max_tokens` / `thinking.budget_tokens` must be zero when thinking is disabled"
+    )]
+    BudgetWithThinkingDisabled,
 }
 
 /// Validate reasoning controls and derive the effective thinking toggle.
@@ -575,6 +588,35 @@ pub struct NormalRequest {
 }
 
 impl NormalRequest {
+    pub(crate) fn validate_reasoning_budget(&self) -> anyhow::Result<()> {
+        let Some(limit) = self.sampling_params.reasoning_max_tokens else {
+            return Ok(());
+        };
+        if let RequestMessage::Chat {
+            enable_thinking,
+            reasoning_effort,
+            ..
+        }
+        | RequestMessage::MultimodalChat {
+            enable_thinking,
+            reasoning_effort,
+            ..
+        } = &self.messages
+        {
+            resolve_reasoning_controls(*enable_thinking, *reasoning_effort)?
+                .validate_budget(Some(limit))?;
+        }
+        anyhow::ensure!(
+            matches!(self.constraint, Constraint::None),
+            "`reasoning_max_tokens` / `thinking.budget_tokens` cannot be combined with constrained decoding"
+        );
+        anyhow::ensure!(
+            !self.return_raw_logits,
+            "`reasoning_max_tokens` / `thinking.budget_tokens` requires text generation rather than raw logits"
+        );
+        Ok(())
+    }
+
     pub fn decision(
         input: crate::decision::DecisionRequest,
         response: Sender<Response>,
@@ -836,6 +878,63 @@ mod tests {
                 ReasoningEffort::High
             ))
         );
+    }
+
+    fn budgeted_chat_request(
+        enable_thinking: Option<bool>,
+        reasoning_effort: Option<ReasoningEffort>,
+        limit: usize,
+    ) -> NormalRequest {
+        let (response, _) = tokio::sync::mpsc::channel(1);
+        NormalRequest::new_simple(
+            RequestMessage::Chat {
+                messages: Vec::new(),
+                enable_thinking,
+                reasoning_effort,
+            },
+            SamplingParams {
+                reasoning_max_tokens: Some(limit),
+                ..SamplingParams::neutral()
+            },
+            response,
+            0,
+            None,
+            None,
+        )
+    }
+
+    #[test]
+    fn reasoning_budget_validates_sdk_controls_before_disabling_thinking() {
+        for (enabled, effort, limit) in [
+            (true, Some(ReasoningEffort::Off), 0),
+            (false, Some(ReasoningEffort::High), 0),
+            (false, None, 1),
+        ] {
+            assert!(budgeted_chat_request(Some(enabled), effort, limit)
+                .validate_reasoning_budget()
+                .is_err());
+        }
+        assert!(budgeted_chat_request(Some(false), None, 0)
+            .validate_reasoning_budget()
+            .is_ok());
+    }
+
+    #[test]
+    fn reasoning_budget_rejects_incompatible_output_modes() {
+        let mut request = budgeted_chat_request(None, None, 1);
+        request.constraint = Constraint::JsonSchema(serde_json::json!({"type": "object"}));
+        assert!(request
+            .validate_reasoning_budget()
+            .unwrap_err()
+            .to_string()
+            .contains("constrained decoding"));
+        request.constraint = Constraint::None;
+        request.return_raw_logits = true;
+        assert!(request
+            .validate_reasoning_budget()
+            .unwrap_err()
+            .to_string()
+            .contains("raw logits"));
     }
 
     #[test]

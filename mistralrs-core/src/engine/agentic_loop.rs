@@ -383,17 +383,26 @@ async fn recv_or_client_disconnect<T>(
 struct AgenticUsageAccumulator {
     prompt_tokens: usize,
     completion_tokens: usize,
+    reasoning_tokens: Option<usize>,
     total_prompt_time_sec: f32,
     total_completion_time_sec: f32,
     saw_usage: bool,
 }
 
 impl AgenticUsageAccumulator {
+    fn remaining_reasoning_tokens(&self, limit: Option<usize>) -> Option<usize> {
+        limit.map(|limit| limit.saturating_sub(self.reasoning_tokens.unwrap_or_default()))
+    }
+
     fn add(&mut self, usage: &Usage) {
         self.prompt_tokens = self.prompt_tokens.saturating_add(usage.prompt_tokens);
         self.completion_tokens = self
             .completion_tokens
             .saturating_add(usage.completion_tokens);
+        if let Some(details) = &usage.completion_tokens_details {
+            let reasoning_tokens = self.reasoning_tokens.get_or_insert(0);
+            *reasoning_tokens = reasoning_tokens.saturating_add(details.reasoning_tokens);
+        }
         self.total_prompt_time_sec += usage.total_prompt_time_sec;
         self.total_completion_time_sec += usage.total_completion_time_sec;
         self.saw_usage = true;
@@ -408,6 +417,9 @@ impl AgenticUsageAccumulator {
                 prompt_tokens: self.prompt_tokens,
                 total_tokens,
                 prompt_tokens_details: None,
+                completion_tokens_details: self
+                    .reasoning_tokens
+                    .map(|reasoning_tokens| crate::CompletionTokensDetails { reasoning_tokens }),
                 avg_tok_per_sec: tps(total_tokens, total_time_sec),
                 avg_prompt_tok_per_sec: tps(self.prompt_tokens, self.total_prompt_time_sec),
                 avg_compl_tok_per_sec: tps(self.completion_tokens, self.total_completion_time_sec),
@@ -1404,6 +1416,7 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
         };
 
         let mut current = probe;
+        let reasoning_budget = current.sampling_params.reasoning_max_tokens;
         let max_rounds = current.max_tool_rounds.unwrap_or(DEFAULT_MAX_TOOL_ROUNDS);
         let mut round = 0;
         let mut usage_accumulator = AgenticUsageAccumulator::default();
@@ -1411,6 +1424,8 @@ pub(super) async fn agentic_loop(this: Arc<Engine>, mut request: NormalRequest) 
         loop {
             let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
             current.response = sender;
+            current.sampling_params.reasoning_max_tokens =
+                usage_accumulator.remaining_reasoning_tokens(reasoning_budget);
 
             // Prevent the inner probe from re-entering the agentic loop or being rejected
             // by the files-without-agentic-surface guard in `add_request`.
@@ -1691,6 +1706,30 @@ mod tests {
             "get_weather"
         );
         assert_eq!(last.session_id.as_deref(), Some("session-1"));
+    }
+
+    #[test]
+    fn agentic_rounds_share_reasoning_budget_and_accumulate_usage() {
+        const BUDGET: usize = 5;
+        let mut group = crate::sequence::SequenceGroup::new(1, false, true, None);
+        group.total_prompt_toks = 10;
+        group.total_toks = 16;
+        let mut accumulator = AgenticUsageAccumulator::default();
+        for (reasoning_tokens, remaining) in [(Some(2), 3), (None, 3), (Some(3), 0)] {
+            group.reasoning_tokens = reasoning_tokens;
+            accumulator.add(&group.get_usage());
+            assert_eq!(
+                accumulator.remaining_reasoning_tokens(Some(BUDGET)),
+                Some(remaining)
+            );
+        }
+        assert_eq!(accumulator.remaining_reasoning_tokens(None), None);
+
+        let usage = accumulator.aggregate().unwrap();
+        assert_eq!(usage.prompt_tokens, 30);
+        assert_eq!(usage.completion_tokens, 18);
+        assert_eq!(usage.total_tokens, 48);
+        assert_eq!(usage.completion_tokens_details.unwrap().reasoning_tokens, 5);
     }
 
     #[test]

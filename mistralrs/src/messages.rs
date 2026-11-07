@@ -1109,6 +1109,12 @@ impl RequestBuilder {
         self
     }
 
+    /// Set the maximum reasoning tokens before generation switches to the answer.
+    pub fn set_sampler_reasoning_max_tokens(mut self, reasoning_max_tokens: usize) -> Self {
+        self.sampling_params.reasoning_max_tokens = Some(reasoning_max_tokens);
+        self
+    }
+
     /// Keep generating past the model's EOS tokens; explicit stops and the token limit still apply.
     pub fn set_sampler_ignore_eos(mut self, ignore_eos: bool) -> Self {
         self.sampling_params.ignore_eos = ignore_eos;

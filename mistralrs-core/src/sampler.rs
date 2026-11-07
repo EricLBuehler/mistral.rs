@@ -72,6 +72,9 @@ pub struct SamplingParams {
     #[serde(default)]
     pub ignore_eos: bool,
     pub max_len: Option<usize>,
+    /// Maximum reasoning tokens before generation switches to the answer.
+    #[serde(default)]
+    pub reasoning_max_tokens: Option<usize>,
     pub logits_bias: Option<HashMap<u32, f32>>,
     pub n_choices: usize,
     pub dry_params: Option<DrySamplingParams>,
@@ -97,6 +100,7 @@ impl SamplingParams {
             stop_toks: None,
             ignore_eos: false,
             max_len: None,
+            reasoning_max_tokens: None,
             logits_bias: None,
             n_choices: 1,
             dry_params: None,
@@ -120,6 +124,7 @@ impl SamplingParams {
             stop_toks: None,
             ignore_eos: false,
             max_len: None,
+            reasoning_max_tokens: None,
             logits_bias: None,
             n_choices: 1,
             dry_params: None,

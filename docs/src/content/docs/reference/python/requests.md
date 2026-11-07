@@ -39,6 +39,8 @@ Reasoning controls:
   `max` means `xhigh`. Case and surrounding spaces are ignored.
 - If you set neither control, thinking is on for text output and off for speech output.
 - Contradictory values, such as `enable_thinking=False` with `reasoning_effort="high"`, raise `ValueError`.
+- `reasoning_max_tokens` caps reasoning before the engine closes the reasoning section and continues with the answer. Zero closes reasoning immediately; `None` leaves it uncapped. The budget is shared across automatic tool-call rounds. Reasoning and closing-marker tokens still count toward `max_tokens`.
+- A reasoning budget cannot be combined with an explicit output grammar. Tool calling remains supported.
 
 Audio:
 
@@ -81,6 +83,7 @@ For the agent fields, see [agent permissions](/guides/agents/permissions-and-app
 | `dry_sequence_breakers` | `list[str] \| None` | `None` | Strings that end a repeat for DRY. Defaults to newline, `:`, `"`, and `*`. |
 | `web_search_options` | `WebSearchOptions \| None` | `None` | Turns on web search for this request. |
 | `enable_thinking` | `bool \| None` | `None` | Turn the model's thinking on or off. See the reasoning controls above. |
+| `reasoning_max_tokens` | `int \| None` | `None` | Maximum reasoning tokens before switching to the answer; keyword-only. |
 | `truncate_sequence` | `bool` | `False` | If the prompt is too long for the model, drop tokens from its start instead of failing. |
 | `reasoning_effort` | `Literal['off', 'none', 'low', 'medium', 'high', 'xhigh', 'max'] \| None` | `None` | How much a reasoning model thinks. See the reasoning controls above. |
 | `max_tool_rounds` | `int \| None` | `None` | Most tool-call rounds the server runs by itself. Setting it turns on the agent loop. Defaults to 256. |

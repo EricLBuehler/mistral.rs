@@ -287,6 +287,8 @@ class ChatCompletionRequest:
     """Output types for a speech model: `["text"]`, `["audio"]`, or `["text", "audio"]`."""
     audio: dict[str, str] | None = field(default=None, kw_only=True)
     """Speech output settings: `format`, and optionally `voice`. Requires `"audio"` in `modalities`."""
+    reasoning_max_tokens: int | None = field(default=None, kw_only=True)
+    """Maximum reasoning tokens before generation switches to the answer; zero closes reasoning immediately."""
 
 @dataclass
 class CompletionRequest:
@@ -1504,10 +1506,15 @@ class AnyMoeConfig:
         ...
 
 @dataclass
+class CompletionTokensDetails:
+    reasoning_tokens: int
+
+@dataclass
 class Usage:
     completion_tokens: int
     prompt_tokens: int
     total_tokens: int
+    completion_tokens_details: CompletionTokensDetails | None
     avg_tok_per_sec: float
     avg_prompt_tok_per_sec: float
     avg_compl_tok_per_sec: float

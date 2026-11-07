@@ -1572,6 +1572,9 @@ pub trait MetadataMixin {
     fn generation_defaults(&self) -> Option<crate::ModelGenerationDefaults> {
         None
     }
+    fn supports_reasoning_budget(&self) -> bool {
+        true
+    }
     fn device_mapper(&self) -> Option<&dyn DeviceMapper>;
     fn execution_devices(&self) -> Vec<Device> {
         let primary = self.device();

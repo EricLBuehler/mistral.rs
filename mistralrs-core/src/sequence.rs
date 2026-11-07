@@ -2,13 +2,13 @@ use crate::{
     get_mut_arcmutex, get_mut_group,
     paged_attention::block_hash::{MultiModalFeature, MultimodalAttentionPolicy, MultimodalKind},
     pipeline::{text_models_inputs_processor::PagedAttentionMeta, LayerCaches},
-    reasoning_parsers::{ReasoningMode, ReasoningParser},
+    reasoning_parsers::{budget::ReasoningBudget, ReasoningMode, TagReasoningContext},
     response::{ChatCompletionChunkResponse, Choice, ChunkChoice, Response, SYSTEM_FINGERPRINT},
     sampler::{Logprobs, Sampler},
     special_text::{self, SpecialTextGuard},
     speculative::{SpeculativeProposalDistribution, SpeculativeTokens},
-    AdapterGenerationId, AdapterLease, AudioInput, ChatCompletionResponse, PromptTokensDetails,
-    Usage, VideoInput,
+    AdapterGenerationId, AdapterLease, AudioInput, ChatCompletionResponse, CompletionTokensDetails,
+    PromptTokensDetails, Usage, VideoInput,
 };
 use crate::{
     pipeline::{DiffusionGenerationParams, KvCache},
@@ -843,8 +843,8 @@ pub struct Sequence {
     pub(crate) tool_call_state: Option<ToolCallState>,
 
     // Tag-based reasoning parser.
-    reasoning_parser: Option<Box<dyn ReasoningParser>>,
-    reasoning_mode: Option<ReasoningMode>,
+    reasoning_parser: Option<TagReasoningContext>,
+    reasoning_budget: Option<ReasoningBudget>,
 
     pub(crate) special_text_guard: Option<SpecialTextGuard>,
 }
@@ -982,7 +982,7 @@ impl Sequence {
             step_start_instant: None,
             step_timing_kind: None,
             reasoning_parser: None,
-            reasoning_mode: None,
+            reasoning_budget: None,
             special_text_guard: None,
         }
     }
@@ -1751,6 +1751,10 @@ impl Sequence {
             .as_ref()
             .is_some_and(|state| state.required_tool_call_unsatisfied());
         let is_eos = !self.ignore_eos
+            && !self
+                .reasoning_budget
+                .as_ref()
+                .is_some_and(|budget| budget.ignores_eos(tok))
             && match eos_tok {
                 Some(eos_tok) => eos_tok.contains(&tok),
                 None => false,
@@ -1938,6 +1942,7 @@ impl Sequence {
         group.total_prompt_toks = self.prompt_len;
         group.total_cached_toks = self.prefix_cache_len();
         group.total_toks = self.len();
+        group.reasoning_tokens = self.reasoning_tokens();
     }
 
     pub fn add_image_choice_to_group(&self, choice: ImageChoice) {
@@ -2224,7 +2229,9 @@ impl Sequence {
 
     /// Get the active reasoning mode, if any.
     pub fn reasoning_mode(&self) -> Option<ReasoningMode> {
-        self.reasoning_mode
+        self.reasoning_parser
+            .as_ref()
+            .map(|_| ReasoningMode::TagBased)
     }
 
     /// Whether any reasoning parser needs special tokens in decoded text.
@@ -2236,10 +2243,73 @@ impl Sequence {
                 .is_some_and(|state| state.requires_special_tokens())
     }
 
-    /// Enable reasoning with the given parser and mode.
-    pub fn enable_reasoning(&mut self, mode: ReasoningMode, parser: Box<dyn ReasoningParser>) {
+    pub(crate) fn enable_reasoning(&mut self, parser: TagReasoningContext) {
+        self.reasoning_budget = Some(ReasoningBudget::new_tag(parser.clone()));
         self.reasoning_parser = Some(parser);
-        self.reasoning_mode = Some(mode);
+    }
+
+    pub(crate) fn enable_harmony_reasoning_budget(&mut self) {
+        self.reasoning_budget = Some(ReasoningBudget::new_harmony(self.get_initial_prompt()));
+    }
+
+    pub(crate) fn set_reasoning_budget(
+        &mut self,
+        limit: usize,
+        tokenizer: Arc<tokenizers::Tokenizer>,
+    ) -> anyhow::Result<()> {
+        self.reasoning_budget.as_mut().ok_or_else(|| {
+            anyhow::anyhow!("reasoning_max_tokens / thinking.budget_tokens requires a known end-of-thinking marker")
+        })?.set_limit(limit, tokenizer)
+    }
+
+    #[cfg(feature = "cuda")]
+    pub(crate) fn has_reasoning_budget(&self) -> bool {
+        self.reasoning_budget
+            .as_ref()
+            .is_some_and(ReasoningBudget::has_limit)
+    }
+
+    pub(crate) fn reasoning_tokens(&self) -> Option<usize> {
+        self.reasoning_budget
+            .as_ref()
+            .map(ReasoningBudget::reasoning_tokens)
+    }
+
+    pub(crate) fn configure_reasoning_tokenizer(&mut self, tokenizer: &tokenizers::Tokenizer) {
+        if let Some(budget) = self.reasoning_budget.as_mut() {
+            budget.configure_special_tokens(tokenizer);
+        }
+    }
+
+    pub(crate) fn observe_reasoning_token(&mut self, bytes: &[u8], is_special: bool) {
+        if let Some(budget) = self.reasoning_budget.as_mut() {
+            budget.observe_token(bytes, is_special);
+        }
+    }
+
+    pub(crate) fn next_reasoning_token(&mut self) -> candle_core::Result<Option<Logprobs>> {
+        let Some(budget) = self.reasoning_budget.as_mut() else {
+            return Ok(None);
+        };
+        let Some(token) = budget.next_token()? else {
+            return Ok(None);
+        };
+        let bytes = self
+            .return_logprobs
+            .then(|| budget.decode_token(token))
+            .transpose()?;
+        Ok(Some(Logprobs {
+            token,
+            logprob: 0.0,
+            top_logprobs: self.return_logprobs.then(|| {
+                vec![crate::sampler::TopLogprob {
+                    token,
+                    logprob: 0.0,
+                    bytes: bytes.clone(),
+                }]
+            }),
+            bytes,
+        }))
     }
 
     pub fn has_reasoning_state(&self) -> bool {
@@ -2303,6 +2373,7 @@ pub struct SequenceGroup {
     pub total_prompt_toks: usize,
     pub total_cached_toks: usize,
     pub total_toks: usize,
+    pub reasoning_tokens: Option<usize>,
     pub total_prompt_time: u128,
     pub total_time: u128,
     pub total_completion_time: u128,
@@ -2338,6 +2409,7 @@ impl SequenceGroup {
             total_prompt_toks: 0,
             total_cached_toks: 0,
             total_toks: 0,
+            reasoning_tokens: None,
             total_prompt_time: 0,
             total_time: 0,
             total_completion_time: 0,
@@ -2397,6 +2469,9 @@ impl SequenceGroup {
             } else {
                 None
             },
+            completion_tokens_details: self
+                .reasoning_tokens
+                .map(|reasoning_tokens| CompletionTokensDetails { reasoning_tokens }),
             avg_tok_per_sec: if self.total_time > 0 {
                 (self.total_toks as f32 / self.total_time as f32) * 1000.
             } else {
@@ -2702,6 +2777,7 @@ mod tests {
             prompt_tokens: 0,
             total_tokens: 0,
             prompt_tokens_details: None,
+            completion_tokens_details: None,
             avg_tok_per_sec: 0.0,
             avg_prompt_tok_per_sec: 0.0,
             avg_compl_tok_per_sec: 0.0,
@@ -2949,10 +3025,7 @@ mod tests {
     fn reasoning_parser_only_observes_visible_stop_filtered_bytes() {
         let mut seq = make_test_sequence();
         seq.stop_strings.push("STOP_BOUNDARY".to_string());
-        seq.enable_reasoning(
-            crate::reasoning_parsers::ReasoningMode::TagBased,
-            Box::new(crate::reasoning_parsers::TagReasoningContext::new_think_tags()),
-        );
+        seq.enable_reasoning(crate::reasoning_parsers::TagReasoningContext::new_think_tags());
 
         let reason = seq.add_token(
             test_logprobs(7),
@@ -2964,6 +3037,44 @@ mod tests {
         assert!(matches!(reason, Some(StopReason::StopString { .. })));
         assert_eq!(seq.get_response_content().as_deref(), Some("visible "));
         assert_eq!(seq.get_final_delta(), "visible ");
+    }
+
+    #[test]
+    fn reasoning_usage_distinguishes_untracked_formats_from_zero_tokens() {
+        let mut seq = make_test_sequence();
+        seq.cache.push(None);
+        seq.tool_call_state = Some(
+            ToolCallState::new(
+                crate::tools::ToolChoice::Auto,
+                None,
+                Some(crate::tools::ToolCallFormat::Atem),
+            )
+            .unwrap(),
+        );
+        seq.add_token(
+            test_logprobs(0),
+            b" to=self<|message|>thinking".to_vec(),
+            None,
+        );
+        assert!(seq.has_reasoning_state());
+        seq.update_time_info();
+        assert!(get_mut_group!(seq)
+            .get_usage()
+            .completion_tokens_details
+            .is_none());
+
+        let mut seq = make_test_sequence();
+        seq.enable_reasoning(TagReasoningContext::new_think_tags());
+        seq.cache.push(None);
+        seq.update_time_info();
+        assert_eq!(
+            get_mut_group!(seq)
+                .get_usage()
+                .completion_tokens_details
+                .unwrap()
+                .reasoning_tokens,
+            0,
+        );
     }
 
     #[test]

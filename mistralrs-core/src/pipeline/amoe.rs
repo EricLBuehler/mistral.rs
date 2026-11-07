@@ -293,6 +293,10 @@ impl PreProcessingMixin for AnyMoePipeline {
 }
 
 impl MetadataMixin for AnyMoePipeline {
+    fn supports_reasoning_budget(&self) -> bool {
+        get_mut_arcmutex!(self.target).supports_reasoning_budget()
+    }
+
     fn device(&self) -> Device {
         get_mut_arcmutex!(self.target).device()
     }
