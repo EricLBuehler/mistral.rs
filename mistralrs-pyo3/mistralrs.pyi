@@ -180,6 +180,10 @@ class ChatCompletionRequest:
       `max` means `xhigh`. Case and surrounding spaces are ignored.
     - If you set neither control, thinking is on for text output and off for speech output.
     - Contradictory values, such as `enable_thinking=False` with `reasoning_effort="high"`, raise `ValueError`.
+    - `reasoning_max_tokens` caps reasoning before the engine closes the reasoning section and continues with the answer.
+      Zero closes reasoning immediately; `None` leaves it uncapped. The budget is shared across automatic tool-call rounds.
+      Reasoning and closing-marker tokens count toward `max_tokens`.
+    - A reasoning budget cannot be combined with an explicit output grammar.
 
     Audio:
 
@@ -288,7 +292,7 @@ class ChatCompletionRequest:
     audio: dict[str, str] | None = field(default=None, kw_only=True)
     """Speech output settings: `format`, and optionally `voice`. Requires `"audio"` in `modalities`."""
     reasoning_max_tokens: int | None = field(default=None, kw_only=True)
-    """Maximum reasoning tokens before generation switches to the answer; zero closes reasoning immediately."""
+    """Maximum reasoning tokens before generation switches to the answer."""
 
 @dataclass
 class CompletionRequest:
@@ -1511,6 +1515,7 @@ class AnyMoeConfig:
 @dataclass
 class CompletionTokensDetails:
     reasoning_tokens: int
+    """Reasoning tokens, excluding delimiters; included in `Usage.completion_tokens`."""
 
 @dataclass
 class Usage:

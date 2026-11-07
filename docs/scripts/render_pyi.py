@@ -80,6 +80,7 @@ GROUPS = [
             "CompletionResponse",
             "CompletionChoice",
             "Usage",
+            "CompletionTokensDetails",
             "Logprobs",
             "ResponseLogprob",
             "TopLogprob",
