@@ -577,7 +577,8 @@ mod tests {
         assert!(chat.starts_with("(messages, model, logprobs=False"));
         assert!(chat.contains("reasoning_effort=None"));
         assert!(chat.contains("ignore_eos=False"));
-        assert!(chat.ends_with("*, adapter=None, modalities=None, audio=None)"));
+        assert!(chat
+            .ends_with("*, adapter=None, modalities=None, audio=None, reasoning_max_tokens=None)"));
     }
 
     #[test]
