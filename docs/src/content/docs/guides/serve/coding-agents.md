@@ -1,142 +1,104 @@
 ---
-title: Use Codex and Claude Code
-description: Configure coding agents to use a local mistral.rs server.
+title: Use with coding agents
+description: Run Claude Code, Codex, and other coding agents on a local model.
 ---
 
-mistral.rs can back coding-agent clients through the compatibility APIs those
-clients already speak.
+mistral.rs works with coding agents such as Claude Code and Codex. Serve a model, point your agent at it once, then use the agent in your projects as usual.
 
-| Client | API surface | Base URL to configure |
-|---|---|---|
-| Codex | OpenAI Responses | `http://localhost:1234/v1` |
-| Claude Code | Anthropic Messages | `http://localhost:1234` |
+Agents fill the context window quickly, so use a model that's good at agentic coding and has a long window. The server reports each model's limit as `max_model_len` in `GET /v1/models`; [context length](/guides/perf/context-length/) explains how to raise it.
 
-Use `default` for a single-model server. With multi-model serving, use a model
-id exactly as it appears in `GET /v1/models`.
+## How it works
 
-## Start mistral.rs
+Two programs run on your machine:
 
-Start a model that is tuned for tool use and code:
+1. **mistral.rs** serves the model.
+2. **Your agent** sends prompts to the server, decides what to do, and works on your files.
+
+## Start the server
 
 ```bash
-mistralrs serve -p 1234 -m Qwen/Qwen3-Coder-Next
+mistralrs serve -m Qwen/Qwen3-Coder-Next --quant 4
 ```
 
-Check that the server is reachable:
+Leave it running. The agents below connect to `localhost:1234`. Check that the model is up, and note its `max_model_len`:
 
 ```bash
 curl http://localhost:1234/v1/models
 ```
 
-For Codex and Claude Code, let the coding agent own normal file edits, shell
-commands, and repository inspection. Enable mistral.rs server-side agent tools
-only when you deliberately want web search or Python code execution to happen
-inside the mistral.rs server as well.
+## Claude Code
+
+Install Claude Code:
+
+```bash
+curl -fsSL https://claude.ai/install.sh | bash
+```
+
+Add this to `~/.claude/settings.json`, with `CLAUDE_CODE_MAX_CONTEXT_TOKENS` set to your server's `max_model_len`:
+
+```json
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://localhost:1234",
+    "ANTHROPIC_AUTH_TOKEN": "mistralrs",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "default",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "default",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "default",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "default",
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "131072"
+  }
+}
+```
+
+Run it in your project directory:
+
+```bash
+cd /path/to/project
+claude
+```
+
+Claude Code picks different models for different jobs, such as background tasks and subagents, so the snippet maps all of them to the local model. The base URL has no `/v1`; Claude Code adds the API path itself.
 
 ## Codex
 
-Codex uses the OpenAI Responses wire API for custom providers; `wire_api = "responses"`
-is the only supported value. Put provider configuration in your user-level
-`~/.codex/config.toml`. Per the [Codex configuration reference](https://developers.openai.com/codex/config-reference),
-`model_provider` and `model_providers` are ignored when they appear in
-project-local `.codex/config.toml` files.
+Install Codex:
+
+```bash
+npm install -g @openai/codex
+```
+
+Add this to `~/.codex/config.toml`, with `model_context_window` set to your server's `max_model_len`:
 
 ```toml
 model = "default"
 model_provider = "mistralrs"
-model_context_window = 32768
-model_reasoning_summary = "none"
-model_supports_reasoning_summaries = false
+model_context_window = 131072
 
 [model_providers.mistralrs]
 name = "mistral.rs"
 base_url = "http://localhost:1234/v1"
 wire_api = "responses"
-request_max_retries = 1
-stream_max_retries = 0
-stream_idle_timeout_ms = 300000
 ```
 
-With `model_provider` set at the top level, plain `codex` uses the local server.
-To keep mistral.rs as a switchable alternative instead, move the `model` and
-`model_provider` lines into a profile file (`~/.codex/mistralrs.config.toml`)
-and launch with `codex --profile mistralrs`.
+Run it in your project directory:
 
-If a reverse proxy enforces authentication, add `env_key = "MISTRALRS_API_KEY"`
-under `[model_providers.mistralrs]` and export that variable before launching
-Codex. The local mistral.rs server itself does not validate API keys.
-
-See [Responses compatibility](/reference/openai-compatibility/#responses-api) for supported tools and request fields.
-
-## Claude Code
-
-Claude Code should use the Anthropic-compatible root URL, without `/v1`.
-Claude Code appends `/v1/messages` and `/v1/messages/count_tokens` itself.
-
-For a persistent local setup, add this to `~/.claude/settings.json` or to a
-project-local `.claude/settings.local.json`:
-
-```json
-{
-  "model": "sonnet",
-  "env": {
-    "ANTHROPIC_BASE_URL": "http://localhost:1234",
-    "ANTHROPIC_API_KEY": "not-used",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL": "default",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL": "default",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "default",
-    "ANTHROPIC_CUSTOM_MODEL_OPTION": "default",
-    "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME": "mistral.rs default",
-    "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION": "Local model served by mistral.rs",
-    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "32768",
-    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
-  }
-}
+```bash
+cd /path/to/project
+codex
 ```
 
-Map the Sonnet, Opus, and Haiku defaults to `default` so the `sonnet` setting
-and Claude Code's background and planning calls all use the single loaded
-mistral.rs model. If you serve several models, map each Claude Code default to
-the local model id you want for that role.
+To switch between mistral.rs and OpenAI instead of always using the local model, put the snippet in `~/.codex/mistralrs.config.toml` and run `codex --profile mistralrs`.
 
-Set `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to the loaded model's actual context
-window. This avoids Claude Code guessing from an unfamiliar local model id and
-keeps its compaction threshold within the server limit.
+## Other agents
 
-Every variable above is documented in the
-[Claude Code environment variables reference](https://code.claude.com/docs/en/env-vars).
-`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` turns off auto-update checks,
-telemetry, and error reporting so the client stays local.
-
-For direct client examples, see the [Anthropic Messages guide](/guides/serve/anthropic-messages-api/).
-
-## Server-side agent tools
-
-Coding clients provide their own editing and shell tools. To also let the server execute web search or Python, enable those [agentic capabilities](/guides/agents/agentic-runtime/) at startup and request the corresponding hosted tools. Server-side tools run independently of the coding client's terminal.
-
-## Examples
-
-Copyable config snippets live in `examples/server/`:
-
-| File | What it shows |
-|---|---|
-| `codex_config.toml` | User-level Codex provider config for `/v1/responses`. |
-| `claude_code_settings.json` | Claude Code settings for `/v1/messages`. |
+Point any agent that speaks the OpenAI API at `http://localhost:1234/v1`, or the Anthropic API at `http://localhost:1234`, and use `default` as the model. With [several models loaded](/guides/serve/multiple-models/), use an id from `GET /v1/models` instead.
 
 ## Troubleshooting
 
-| Symptom | Fix |
+| Problem | Fix |
 |---|---|
-| Codex returns 404 | Include `/v1` in the Codex provider `base_url`. |
-| Claude Code returns 404 | Remove `/v1` from `ANTHROPIC_BASE_URL`. |
-| The client requests an Anthropic model id | Use `default`, or map Claude Code default model env vars to your local ids. |
-| Claude Code warns that the model context window is unknown | Set `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to the loaded model's context window. |
-| A remote server accepts any key | Put authentication in a reverse proxy. mistral.rs does not validate compatibility API keys. |
-| Claude Code sends beta fields your proxy rejects | Set `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` in Claude Code. |
-| Long streams time out | Raise Codex `stream_idle_timeout_ms` or Claude Code `API_TIMEOUT_MS`. |
-
-## Upstream references
-
-- [Codex configuration reference](https://developers.openai.com/codex/config-reference)
-- [Claude Code environment variables](https://code.claude.com/docs/en/env-vars)
-- [Claude Code LLM gateway configuration](https://code.claude.com/docs/en/llm-gateway)
+| Claude Code gets 404s | Remove `/v1` from `ANTHROPIC_BASE_URL`. |
+| Codex gets 404s | Keep `/v1` at the end of `base_url`. |
+| The agent reports that the prompt is too long | The conversation outgrew `max_model_len`. Match the agent's context setting to it, or give the server a [longer context](/guides/perf/context-length/). |
+| Long prompts time out | Raise Claude Code's `API_TIMEOUT_MS` or Codex's `stream_idle_timeout_ms`. |
+| The server is behind a proxy that checks keys | Set the key in `ANTHROPIC_AUTH_TOKEN` for Claude Code, or add `env_key = "MY_KEY_VAR"` to the Codex provider. mistral.rs itself doesn't check keys. |

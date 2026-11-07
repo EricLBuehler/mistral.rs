@@ -395,7 +395,7 @@ pub struct DefaultModelOptions {
     #[arg(long)]
     pub hf_overrides: Option<mistralrs_core::HfConfigOverrides>,
 
-    /// Maximum context length, in tokens
+    /// Most tokens (prompt plus output) one request may use; default: what the model and KV cache allow
     #[arg(long, value_parser = crate::args::model::parse_positive_usize)]
     pub max_model_len: Option<usize>,
 

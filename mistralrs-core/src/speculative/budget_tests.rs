@@ -68,7 +68,7 @@ impl Fixture {
             proposal,
             eos_tok: None,
             llg_factory: None,
-            max_seq_len: MODEL_LEN,
+            max_model_len: MODEL_LEN,
             rng: self.rng.clone(),
         }
     }

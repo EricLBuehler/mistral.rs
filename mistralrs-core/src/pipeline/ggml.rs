@@ -407,7 +407,7 @@ impl Loader for GGMLLoader {
                 }
             }),
             metadata: Arc::new(GeneralMetadata {
-                max_seq_len,
+                max_model_len: max_seq_len,
                 llg_factory: Some(llg_factory),
                 no_kv_cache: self.no_kv_cache,
                 no_prefix_cache: false,

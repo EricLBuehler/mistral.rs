@@ -313,7 +313,7 @@ where
             return_logprobs,
             eos_tok,
             general_metadata.llg_factory.clone(),
-            general_metadata.max_seq_len,
+            general_metadata.max_model_len,
             rng.clone(),
             use_async_pool,
             false,

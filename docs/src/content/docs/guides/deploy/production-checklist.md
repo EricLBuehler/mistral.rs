@@ -23,6 +23,7 @@ Work through this list before a `mistralrs serve` deployment receives traffic fr
 - [ ] Run `mistralrs doctor` on the target host to confirm the expected accelerator and compiled features.
 - [ ] Run `mistralrs tune -m <model>` for a starting quantization and memory plan (it estimates from configs; it does not load or benchmark the model).
 - [ ] Set `--max-seqs` to the number of requests you expect at once (default 32). Requests beyond it wait in a queue. See [concurrency](/guides/perf/throughput-tuning/#concurrency).
+- [ ] Set `--max-model-len` so one long request can't fill the whole cache, and check the `Context:` line at startup for what each request actually gets. See [context length](/guides/perf/context-length/).
 - [ ] Send expected load and watch `mistralrs_paged_preemptions_total`. If it keeps climbing, the KV cache is too small: lower `--max-seqs` or give the cache more memory.
 - [ ] Decide whether the cache size may vary. By default it gets whatever memory is free at startup, so another process on the GPU means a smaller cache. Set `--kv-cache` (for example `16GiB` or `131072tokens`) to get the same size every time; loading then fails instead of starting with less. See [memory budget](/guides/perf/paged-attention/#memory-budget).
 

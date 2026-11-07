@@ -784,7 +784,7 @@ impl Engine {
         })
     }
 
-    /// Returns the maximum supported sequence length for the underlying model, if applicable.
+    /// Most tokens (prompt plus output) one request may use, if applicable.
     #[allow(dead_code)]
     pub fn max_sequence_length(&self) -> Option<usize> {
         let pipeline = get_mut_arcmutex!(self.pipeline);
@@ -793,7 +793,7 @@ impl Engine {
         if matches!(category, ModelCategory::Diffusion | ModelCategory::Speech) {
             None
         } else {
-            Some(pipeline.get_metadata().max_seq_len)
+            Some(pipeline.get_metadata().max_model_len)
         }
     }
 

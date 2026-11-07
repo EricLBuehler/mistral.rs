@@ -807,7 +807,7 @@ struct VerificationSamplingContext<'a> {
     proposal: &'a [u32],
     eos_tok: Option<&'a [u32]>,
     llg_factory: Option<Arc<llguidance::ParserFactory>>,
-    max_seq_len: usize,
+    max_model_len: usize,
     rng: Arc<std::sync::Mutex<Isaac64Rng>>,
 }
 
@@ -920,7 +920,7 @@ impl VerificationSampler {
                     return_logprobs,
                     context.eos_tok,
                     context.llg_factory.clone(),
-                    context.max_seq_len,
+                    context.max_model_len,
                     context.rng.clone(),
                     false,
                     false,
@@ -979,7 +979,7 @@ pub(crate) async fn finish_verified_step<P: Pipeline>(
         proposal: &proposal,
         eos_tok,
         llg_factory: general_metadata.llg_factory.clone(),
-        max_seq_len: general_metadata.max_seq_len,
+        max_model_len: general_metadata.max_model_len,
         rng,
     };
     let mut accepted = 0usize;
