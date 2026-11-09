@@ -55,6 +55,8 @@ impl TestServer {
                     }
                     Err(error) => panic!("{error}"),
                 };
+                // macOS inherits the listener's nonblocking mode.
+                stream.set_nonblocking(false).unwrap();
                 stream.set_read_timeout(Some(SOCKET_TIMEOUT)).unwrap();
                 let mut buffer = [0; MAX_REQUEST_BYTES];
                 let mut length = 0;
