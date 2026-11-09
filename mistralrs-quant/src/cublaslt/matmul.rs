@@ -10,10 +10,107 @@ use core::ffi::c_int;
 use core::mem;
 use float8::F8E4M3;
 use half::{bf16, f16};
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 const CUBLASLT_SMALL_WORKSPACE_BYTES: usize = 4_194_304;
 const CUBLASLT_LARGE_WORKSPACE_BYTES: usize = 33_554_432;
+const MAX_CACHED_HEURISTICS: usize = 4096;
+// cuBLASLt's default minimum buffer alignment is 256 bytes
+const MAX_BIAS_ALIGN_LOG2: u32 = 8;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct MatmulTypes {
+    ab: sys::cudaDataType,
+    cd: sys::cudaDataType,
+    compute: sys::cublasComputeType_t,
+    fp8_scales: bool,
+}
+
+/// What the heuristic sees minus buffer addresses; bias is set in the matmul desc, so its alignment is part of the key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct HeuristicKey {
+    types: MatmulTypes,
+    transa: bool,
+    transb: bool,
+    m: u64,
+    n: u64,
+    k: u64,
+    lda: i64,
+    ldb: i64,
+    ldc: i64,
+    batch_size: Option<c_int>,
+    stride_a: Option<i64>,
+    stride_b: Option<i64>,
+    stride_c: Option<i64>,
+    stride_bias: Option<i64>,
+    act: u8,
+    bias_align: u32,
+    workspace_size: usize,
+}
+
+impl HeuristicKey {
+    fn new(
+        types: MatmulTypes,
+        cfg: &MatmulConfig,
+        act: Option<&Activation>,
+        bias_ptr: Option<&CUdeviceptr>,
+        workspace_size: usize,
+    ) -> Self {
+        Self {
+            types,
+            transa: cfg.transa,
+            transb: cfg.transb,
+            m: cfg.m,
+            n: cfg.n,
+            k: cfg.k,
+            lda: cfg.lda,
+            ldb: cfg.ldb,
+            ldc: cfg.ldc,
+            batch_size: cfg.batch_size,
+            stride_a: cfg.stride_a,
+            stride_b: cfg.stride_b,
+            stride_c: cfg.stride_c,
+            stride_bias: bias_ptr.and(cfg.stride_bias),
+            act: match act {
+                None => 0,
+                Some(Activation::Relu) => 1,
+                Some(Activation::Gelu) => 2,
+            },
+            bias_align: bias_ptr.map_or(0, |ptr| {
+                1u32 << ptr.trailing_zeros().min(MAX_BIAS_ALIGN_LOG2)
+            }),
+            workspace_size,
+        }
+    }
+}
+
+/// Per-shape heuristic picks: the stream-less query invalidates CUDA graph capture on a blocking stream (cuBLASLt 13.x).
+pub struct HeuristicCache(Mutex<HashMap<HeuristicKey, sys::cublasLtMatmulHeuristicResult_t>>);
+
+impl HeuristicCache {
+    fn new() -> Self {
+        Self(Mutex::new(HashMap::new()))
+    }
+
+    fn get(&self, key: &HeuristicKey) -> Option<sys::cublasLtMatmulHeuristicResult_t> {
+        self.0.lock().unwrap().get(key).copied()
+    }
+
+    fn insert(&self, key: HeuristicKey, value: sys::cublasLtMatmulHeuristicResult_t) {
+        let mut map = self.0.lock().unwrap();
+        if map.len() >= MAX_CACHED_HEURISTICS {
+            map.clear();
+        }
+        map.insert(key, value);
+    }
+}
+
+impl std::fmt::Debug for HeuristicCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HeuristicCache").finish_non_exhaustive()
+    }
+}
 
 /// Wrapper around [sys::cublasLtHandle_t]
 ///
@@ -28,6 +125,7 @@ pub struct CudaBlasLT {
     handle: sys::cublasLtHandle_t,
     workspace: Workspace,
     stream: Arc<CudaStream>,
+    heuristics: HeuristicCache,
 }
 
 unsafe impl Send for CudaBlasLT {}
@@ -44,6 +142,7 @@ impl CudaBlasLT {
             handle,
             workspace,
             stream,
+            heuristics: HeuristicCache::new(),
         })
     }
 }
@@ -315,6 +414,9 @@ pub trait MatmulShared {
 
     /// Returns a reference to the underlying stream
     fn stream(&self) -> &Arc<CudaStream>;
+
+    /// Returns the heuristic results cached for this handle
+    fn heuristics(&self) -> &HeuristicCache;
 }
 
 /// Configuration for [Matmul]
@@ -476,15 +578,29 @@ pub trait Matmul<T: CublasLTDType>: MatmulShared {
         matmul_pref.set_workspace_size(self.workspace().size)?;
 
         // Get heuristic given Config, bias, act and workspace size
-        let heuristic = result::get_matmul_algo_heuristic(
-            *self.handle(),
-            matmul_desc.handle,
-            a_layout.handle,
-            b_layout.handle,
-            c_layout.handle,
-            d_layout.handle,
-            matmul_pref.handle,
-        )?;
+        let types = MatmulTypes {
+            ab: Self::matrix_type(),
+            cd: out_ty,
+            compute: sys::cublasComputeType_t::CUBLAS_COMPUTE_32F,
+            fp8_scales: true,
+        };
+        let key = HeuristicKey::new(types, &cfg, act, bias_ptr.as_ref(), self.workspace().size);
+        let heuristic = match self.heuristics().get(&key) {
+            Some(heuristic) => heuristic,
+            None => {
+                let heuristic = result::get_matmul_algo_heuristic(
+                    *self.handle(),
+                    matmul_desc.handle,
+                    a_layout.handle,
+                    b_layout.handle,
+                    c_layout.handle,
+                    d_layout.handle,
+                    matmul_pref.handle,
+                )?;
+                self.heuristics().insert(key, heuristic);
+                heuristic
+            }
+        };
 
         let (out_ptr, _out_guard) = out.device_ptr_mut(self.stream());
 
@@ -575,15 +691,29 @@ pub trait Matmul<T: CublasLTDType>: MatmulShared {
         matmul_pref.set_workspace_size(self.workspace().size)?;
 
         // Get heuristic given Config, bias, act and workspace size
-        let heuristic = result::get_matmul_algo_heuristic(
-            *self.handle(),
-            matmul_desc.handle,
-            a_layout.handle,
-            b_layout.handle,
-            c_layout.handle,
-            c_layout.handle,
-            matmul_pref.handle,
-        )?;
+        let types = MatmulTypes {
+            ab: Self::matrix_type(),
+            cd: Self::matrix_type(),
+            compute: Self::compute_type(),
+            fp8_scales: false,
+        };
+        let key = HeuristicKey::new(types, &cfg, act, bias_ptr.as_ref(), self.workspace().size);
+        let heuristic = match self.heuristics().get(&key) {
+            Some(heuristic) => heuristic,
+            None => {
+                let heuristic = result::get_matmul_algo_heuristic(
+                    *self.handle(),
+                    matmul_desc.handle,
+                    a_layout.handle,
+                    b_layout.handle,
+                    c_layout.handle,
+                    c_layout.handle,
+                    matmul_pref.handle,
+                )?;
+                self.heuristics().insert(key, heuristic);
+                heuristic
+            }
+        };
 
         let (a, _a_guard) = a.device_ptr(self.stream());
         let (b, _b_guard) = b.device_ptr(self.stream());
@@ -623,6 +753,10 @@ impl MatmulShared for CudaBlasLT {
 
     fn stream(&self) -> &Arc<CudaStream> {
         &self.stream
+    }
+
+    fn heuristics(&self) -> &HeuristicCache {
+        &self.heuristics
     }
 }
 
