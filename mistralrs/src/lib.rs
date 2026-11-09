@@ -246,6 +246,10 @@ pub use messages::{
 };
 pub use mistralrs_core::PrefixCacheCapacity;
 pub use mistralrs_core::{
+    auto_vulkan_device, new_vulkan_device, reset_vulkan_execution_stats, vulkan_execution_report,
+    VULKAN_DEVICE_ENV, VULKAN_FALLBACK_ENV,
+};
+pub use mistralrs_core::{
     AdapterGenerationId, AdapterSelection, LoraAdapterError, LoraAdapterInfo,
     LoraAdapterLoadPolicy, LoraAdapterRoute, LoraAdapterSpec, LoraResidentGenerationInfo,
     LoraRuntimeConfig, LoraRuntimeStatus, DEFAULT_LORA_MAX_ADAPTERS, DEFAULT_LORA_MAX_BYTES,

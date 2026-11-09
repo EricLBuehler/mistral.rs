@@ -243,6 +243,8 @@ pub fn lfm3_causal_conv1d(
         candle_core::Device::Metal(_) => inputs.metal(),
         #[cfg(feature = "cuda")]
         candle_core::Device::Cuda(_) => inputs.cuda(),
+        #[cfg(feature = "vulkan")]
+        candle_core::Device::Vulkan(_) => inputs.vulkan(),
         #[allow(unreachable_patterns)]
         _ => candle_core::bail!("LFM3 convolution backend is not enabled"),
     }
@@ -252,6 +254,8 @@ pub fn lfm3_causal_conv1d(
 mod cuda;
 #[cfg(feature = "metal")]
 mod metal;
+#[cfg(feature = "vulkan")]
+mod vulkan;
 
 #[cfg(test)]
 mod tests;
