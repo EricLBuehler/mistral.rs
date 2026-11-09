@@ -1,7 +1,14 @@
 //! Self-management commands for `update` and `uninstall`.
 
 use anyhow::{bail, Context, Result};
+#[cfg(unix)]
+use std::path::Path;
 use std::path::PathBuf;
+
+#[cfg(unix)]
+const SHELL_RC_FILE: &str = "shell-rcs";
+#[cfg(unix)]
+const SHELL_SOURCE_LINE: &[u8] = b". \"$HOME/.mistralrs/env\"";
 
 #[cfg(unix)]
 const INSTALL_SH_URL: &str = "https://mistralrs.dev/install.sh";
@@ -90,6 +97,7 @@ pub fn run_uninstall(yes: bool) -> Result<()> {
             println!("Cancelled.");
             return Ok(());
         }
+        remove_shell_setup(&pre)?;
         if let Some(bin) = bin_dir() {
             let mistralrs_link = bin.join("mistralrs");
             let is_symlink = mistralrs_link
@@ -114,6 +122,59 @@ pub fn run_uninstall(yes: bool) -> Result<()> {
         println!("Restart your terminal before reinstalling or switching install methods.");
         Ok(())
     }
+}
+
+#[cfg(unix)]
+fn remove_shell_setup(pre: &Path) -> Result<()> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let home = pre.parent().expect("managed directory has a parent");
+    let mut paths: Vec<PathBuf> = [
+        ".profile",
+        ".bash_profile",
+        ".bash_login",
+        ".bashrc",
+        ".zshenv",
+    ]
+    .into_iter()
+    .map(|name| home.join(name))
+    .collect();
+    if let Some(zdotdir) = std::env::var_os("ZDOTDIR") {
+        paths.push(PathBuf::from(zdotdir).join(".zshenv"));
+    }
+    let manifest = pre.join(SHELL_RC_FILE);
+    match std::fs::read(&manifest) {
+        Ok(contents) => paths.extend(
+            contents
+                .split(|&byte| byte == b'\n')
+                .filter(|line| !line.is_empty())
+                .map(|line| PathBuf::from(std::ffi::OsStr::from_bytes(line))),
+        ),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+        Err(error) => return Err(error).with_context(|| format!("reading {}", manifest.display())),
+    }
+    paths.sort();
+    paths.dedup();
+    for path in paths {
+        let contents = match std::fs::read(&path) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
+        };
+        let mut cleaned = Vec::with_capacity(contents.len());
+        for line in contents.split_inclusive(|&byte| byte == b'\n') {
+            let text = line.strip_suffix(b"\n").unwrap_or(line);
+            let text = text.strip_suffix(b"\r").unwrap_or(text);
+            if text != SHELL_SOURCE_LINE {
+                cleaned.extend_from_slice(line);
+            }
+        }
+        if cleaned != contents {
+            std::fs::write(&path, cleaned)
+                .with_context(|| format!("removing shell setup from {}", path.display()))?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
