@@ -5,7 +5,7 @@ mod interactive;
 use interactive::OneshotInput;
 pub(crate) use interactive::{interactive_mode, InteractiveConfig};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use mistralrs_core::{resolve_reasoning_controls, ReasoningEffort};
 use tracing::info;
 
@@ -22,6 +22,21 @@ use super::serve::{
 #[cfg(feature = "code-execution")]
 use super::serve::{build_code_exec_config, build_shell_config};
 use crate::args::{AgentCliOptions, GlobalOptions, ModelType, RuntimeOptions, SandboxOptions};
+
+/// Conventional stdin placeholder, as used by cat, tar and friends.
+const STDIN_INPUT: &str = "-";
+
+/// Reads the prompt verbatim so piped bytes survive, unlike `-i "$(cat file)"` which drops
+/// trailing newlines and is bounded by ARG_MAX.
+fn read_input_from_stdin() -> Result<String> {
+    use std::io::Read;
+
+    let mut prompt = String::new();
+    std::io::stdin()
+        .read_to_string(&mut prompt)
+        .context("Failed to read the prompt from stdin")?;
+    Ok(prompt)
+}
 
 /// Run the model in interactive or one-shot mode
 #[allow(clippy::too_many_arguments)]
@@ -130,6 +145,11 @@ pub async fn run_interactive(
             anyhow::bail!("LoRA adapter alias `{alias}` is not loaded");
         }
     }
+
+    let input = match input {
+        Some(text) if text == STDIN_INPUT => Some(read_input_from_stdin()?),
+        other => other,
+    };
 
     if let Some(text) = input {
         info!("Model loaded, running one-shot mode...");
