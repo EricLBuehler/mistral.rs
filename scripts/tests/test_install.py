@@ -749,6 +749,26 @@ class InstallerTests(unittest.TestCase):
             (self.home / ".profile").read_text().count('. "$HOME/.mistralrs/env"'), 1
         )
 
+    def test_shell_rc_paths_are_recorded_and_survive_updates(self):
+        for name in (".bashrc", ".bash_profile", ".bash_login"):
+            (self.home / name).write_text("# user settings\n")
+        old_zdotdir = self.root / "old zsh"
+        self.env.update(SHELL="/bin/zsh", ZDOTDIR=str(old_zdotdir))
+        self.assert_installed(self.run_installer("--yes", "--backend", "cpu"))
+        expected = {
+            str(self.home / name)
+            for name in (".profile", ".bashrc", ".bash_profile", ".bash_login")
+        }
+        expected.add(str(old_zdotdir / ".zshenv"))
+        manifest = self.home / ".mistralrs/shell-rcs"
+        self.assertEqual(set(manifest.read_text().splitlines()), expected)
+        self.env["ZDOTDIR"] = str(self.root / "new zsh")
+        self.assert_installed(self.run_installer("--yes"))
+        expected.add(str(self.root / "new zsh/.zshenv"))
+        lines = manifest.read_text().splitlines()
+        self.assertEqual(set(lines), expected)
+        self.assertEqual(len(lines), len(expected))
+
     def test_updater_environment_and_cli_override_saved_release(self):
         config = self.home / ".mistralrs/install.conf"
         config.parent.mkdir()
