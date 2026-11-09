@@ -493,10 +493,8 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
         let mut new_v_cache = Vec::new();
 
         for layer in 0..pipeline.get_metadata().num_hidden_layers {
-            // Preallocate combined k and v caches across all sequences, avoiding Tensor::cat copies
             let batch_len = seqs.len();
-            // Use the first sequence as template
-            let (first_k, first_v) = {
+            let (first_k, first_v, normal_dims) = {
                 let src_cache = if modify_draft_cache {
                     seqs[0].normal_draft_cache()
                 } else {
@@ -508,12 +506,16 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                     continue;
                 };
                 match cache {
-                    KvCache::Normal { k, v } => {
-                        (k.all_data.clone().unwrap(), v.all_data.clone().unwrap())
-                    }
-                    KvCache::Rotating { k, v } => {
-                        (k.all_data.clone().unwrap(), v.all_data.clone().unwrap())
-                    }
+                    KvCache::Normal { k, v } => (
+                        k.all_data.clone().unwrap(),
+                        v.all_data.clone().unwrap(),
+                        Some((k.dim, v.dim)),
+                    ),
+                    KvCache::Rotating { k, v } => (
+                        k.all_data.clone().unwrap(),
+                        v.all_data.clone().unwrap(),
+                        None,
+                    ),
                     KvCache::Shared { .. } => {
                         new_k_cache.push(None);
                         new_v_cache.push(None);
@@ -521,14 +523,26 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                     }
                 }
             };
-            // Build dims for batched cache
             let mut dims_k = first_k.dims().to_vec();
             let mut dims_v = first_v.dims().to_vec();
+            // Scheduler buckets share logical length, but retained capacities can differ.
+            if let Some((k_dim, v_dim)) = normal_dims {
+                for seq in seqs.iter_mut() {
+                    let src_cache = if modify_draft_cache {
+                        seq.normal_draft_cache()
+                    } else {
+                        seq.normal_cache()
+                    };
+                    if let Some(KvCache::Normal { k, v }) = src_cache[layer].as_ref() {
+                        dims_k[k_dim] = dims_k[k_dim].min(k.capacity_seq_len);
+                        dims_v[v_dim] = dims_v[v_dim].min(v.capacity_seq_len);
+                    }
+                }
+            }
             dims_k[0] *= batch_len;
             dims_v[0] *= batch_len;
-            let batch_k = Tensor::zeros(dims_k.clone(), first_k.dtype(), first_k.device()).unwrap();
-            let batch_v = Tensor::zeros(dims_v.clone(), first_v.dtype(), first_v.device()).unwrap();
-            // Fill each sequence's cache slice
+            let batch_k = Tensor::zeros(dims_k.clone(), first_k.dtype(), first_k.device())?;
+            let batch_v = Tensor::zeros(dims_v.clone(), first_v.dtype(), first_v.device())?;
             for (i, seq) in seqs.iter_mut().enumerate() {
                 let src_cache = if modify_draft_cache {
                     seq.normal_draft_cache()
@@ -539,17 +553,26 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                     continue;
                 };
                 let (src_k, src_v) = match cache {
-                    KvCache::Normal { k, v } => {
-                        (k.all_data.clone().unwrap(), v.all_data.clone().unwrap())
-                    }
+                    KvCache::Normal { k, v } => (
+                        k.all_data
+                            .as_ref()
+                            .unwrap()
+                            .narrow(k.dim, 0, dims_k[k.dim])?
+                            .contiguous()?,
+                        v.all_data
+                            .as_ref()
+                            .unwrap()
+                            .narrow(v.dim, 0, dims_v[v.dim])?
+                            .contiguous()?,
+                    ),
                     KvCache::Rotating { k, v } => {
                         (k.all_data.clone().unwrap(), v.all_data.clone().unwrap())
                     }
                     KvCache::Shared { .. } => continue,
                 };
                 let offset = i * first_k.dims()[0];
-                batch_k.slice_set(&src_k, 0, offset).unwrap();
-                batch_v.slice_set(&src_v, 0, offset).unwrap();
+                batch_k.slice_set(&src_k, 0, offset)?;
+                batch_v.slice_set(&src_v, 0, offset)?;
             }
             new_k_cache.push(Some(batch_k));
             new_v_cache.push(Some(batch_v));
@@ -564,7 +587,6 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
         let mut caches = Vec::new();
         for (layer_idx, (k_cache, v_cache)) in new_k_cache.into_iter().zip(new_v_cache).enumerate()
         {
-            // Use this for the various parameters. Assumes all seqs are from one model.
             let Some(cache_ref) = seq0_cache[layer_idx].as_ref() else {
                 let mut cache = pipeline.cache().normal().0[layer_idx].clone();
                 cache.reset();
@@ -572,26 +594,23 @@ impl<T: CacheManagerMixin + MetadataMixin + ?Sized> CacheManager<T> for NormalCa
                 continue;
             };
             match cache_ref {
-                KvCache::Normal { k: old_k, .. } => {
-                    let template_cache_dim = old_k.dim;
-                    let template_cache_csl = old_k.current_seq_len;
-                    let template_cache_msl = old_k.max_seq_len;
-                    let template_cache_capsl = old_k.capacity_seq_len;
-
+                KvCache::Normal { k, v } => {
+                    let k_capacity = k_cache.as_ref().unwrap().dim(k.dim)?;
+                    let v_capacity = v_cache.as_ref().unwrap().dim(v.dim)?;
                     caches.push(KvCache::Normal {
                         k: SingleCache {
-                            all_data: k_cache.map(|x| x.contiguous().unwrap()),
-                            dim: template_cache_dim,
-                            current_seq_len: template_cache_csl,
-                            max_seq_len: template_cache_msl,
-                            capacity_seq_len: template_cache_capsl,
+                            all_data: k_cache,
+                            dim: k.dim,
+                            current_seq_len: k.current_seq_len,
+                            max_seq_len: k.max_seq_len,
+                            capacity_seq_len: k_capacity,
                         },
                         v: SingleCache {
-                            all_data: v_cache.map(|x| x.contiguous().unwrap()),
-                            dim: template_cache_dim,
-                            current_seq_len: template_cache_csl,
-                            max_seq_len: template_cache_msl,
-                            capacity_seq_len: template_cache_capsl,
+                            all_data: v_cache,
+                            dim: v.dim,
+                            current_seq_len: v.current_seq_len,
+                            max_seq_len: v.max_seq_len,
+                            capacity_seq_len: v_capacity,
                         },
                     });
                 }
