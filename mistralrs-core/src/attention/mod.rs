@@ -592,14 +592,24 @@ impl Sdpa {
         let k = repeat_kv(k.clone(), sdpa_params.n_kv_groups)?;
         let v = repeat_kv(v.clone(), sdpa_params.n_kv_groups)?;
 
-        if mask.is_some_and(|x| x.rank() == 2) || mistralrs_quant::distributed::use_nccl() {
-            return naive_sdpa(
+        let naive = |mask: Option<&Tensor>| {
+            // naive_sdpa has no causal flag, so a maskless causal request needs an explicit mask.
+            let causal_mask = if causal && mask.is_none() && seq_len > 1 {
+                eager_attention_mask(seq_len, k.dim(2)?, true, None, q.dtype(), q.device())?
+            } else {
+                None
+            };
+            naive_sdpa(
                 &q.contiguous()?,
                 &k.contiguous()?,
                 &v.contiguous()?,
-                mask,
+                mask.or(causal_mask.as_ref()),
                 sdpa_params,
-            );
+            )
+        };
+
+        if mask.is_some_and(|x| x.rank() == 2) || mistralrs_quant::distributed::use_nccl() {
+            return naive(mask);
         }
 
         // TODO: bench?
@@ -712,7 +722,7 @@ impl Sdpa {
                 candle_core::bail!("`cuda` feature is not enabled")
             }
         } else {
-            naive_sdpa(q, &k, &v, mask, sdpa_params)
+            naive(mask)
         }
     }
 }

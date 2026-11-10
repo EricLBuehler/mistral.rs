@@ -1925,12 +1925,16 @@ impl PagedAttention {
             ctx.dims.head_size,
             device,
         )?;
+        // simple_full_causal dropped the mask, so the eager backend has to be told to stay causal.
+        let causal_fallback =
+            (simple_full_causal && device.is_cuda() && ctx.sdpa_params.sinks.is_none())
+                .then(|| FlashParams::empty(prefix_causal));
         let output = Sdpa.run_attention(
             tensors.query,
             &k_batched,
             &v_batched,
             &adjusted_mask,
-            None,
+            causal_fallback.as_ref(),
             ctx.sdpa_params,
         )?;
         prefix_attention_output_layout(output, tensors.attention_mask).map(Some)
@@ -4328,6 +4332,13 @@ mod mixed_cached_prefix_tests {
     const VALUE_SENTINEL: f32 = -32.0;
     const BF16_ABS_TOLERANCE: f64 = 0.004;
     const F16_ABS_TOLERANCE: f64 = 0.0006;
+    const F32_ABS_TOLERANCE: f64 = 0.0001;
+
+    #[derive(Clone, Copy, PartialEq)]
+    enum ForwardPath {
+        DirectPacked,
+        GatheredDense,
+    }
 
     struct Fixture {
         device: Device,
@@ -4488,7 +4499,9 @@ mod mixed_cached_prefix_tests {
             attention: &PagedAttention,
             cache: &(Tensor, Tensor),
             sequences: Range<usize>,
+            path: ForwardPath,
         ) -> Result<Tensor> {
+            let direct = path == ForwardPath::DirectPacked;
             let query_lens = &QUERY_LENS[sequences.clone()];
             let kv_lens = &self.kv_lens[sequences.clone()];
             let query_offset = QUERY_LENS[..sequences.start].iter().sum::<usize>();
@@ -4544,13 +4557,13 @@ mod mixed_cached_prefix_tests {
             metadata.query_lens = Some(query_lens.to_vec());
             metadata.cu_seqlens_q = Some(HashMap::from([(location, cu_q.clone())]));
             metadata.cu_seqlens_kv = Some(HashMap::from([(location, cu_kv)]));
-            // A successful call must use direct paged attention, not a gathered fallback.
-            metadata.prefix_gather_workspace_limit = Some(0);
+            // A successful direct call must use paged attention, not a gathered fallback.
+            metadata.prefix_gather_workspace_limit = direct.then_some(0);
             metadata.prefill_attention_heads = self.q_heads;
             metadata.prefill_key_value_heads = KV_HEADS;
             metadata.prefill_head_dim = HEAD_DIM;
             let mut flash = FlashParams::empty(true);
-            flash.packed = true;
+            flash.packed = direct;
             flash.max_q = u32::try_from(query_lens.iter().copied().max().unwrap()).unwrap();
             flash.cumulative_seqlens_q = HashMap::from([(location, cu_q.clone())]);
             flash.logical_k = FlashKMeta {
@@ -4569,17 +4582,28 @@ mod mixed_cached_prefix_tests {
                 AttentionBackendKind::from_cache(&cache.0, &cache.1),
                 AttentionBackendKind::FlashInfer
             );
+            let mask = if direct {
+                AttentionMask::None
+            } else {
+                AttentionMask::CausalFlash
+            };
             let output = attention.forward(
                 &query,
                 &key,
                 &value,
-                &AttentionMask::None,
+                &mask,
                 Some(cache.0.clone()),
                 Some(cache.1.clone()),
                 &metadata,
                 &params,
                 Some(&flash),
             )?;
+            // Masked prefill returns heads-first; the reference is tokens-first.
+            let output = if direct {
+                output
+            } else {
+                output.transpose(1, 2)?.contiguous()?
+            };
             assert_eq!(output.dims(), &[1, tokens, self.q_heads, HEAD_DIM]);
             output.squeeze(0)
         }
@@ -4684,6 +4708,7 @@ mod mixed_cached_prefix_tests {
                         &attention,
                         &mixed_cache,
                         0..QUERY_LENS.len(),
+                        ForwardPath::DirectPacked,
                     )?)?;
                     fixture.validate_cache(&mixed_cache)?;
                     let separate_cache = fixture.cache()?;
@@ -4693,6 +4718,7 @@ mod mixed_cached_prefix_tests {
                             &attention,
                             &separate_cache,
                             sequence..sequence + 1,
+                            ForwardPath::DirectPacked,
                         )?)?);
                     }
                     fixture.validate_cache(&separate_cache)?;
@@ -4716,6 +4742,39 @@ mod mixed_cached_prefix_tests {
                 }
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn cuda_f32_cached_prefix_gather_stays_causal() -> Result<()> {
+        let device = Device::new_cuda(0)?;
+        let attention = PagedAttention::new(HEAD_DIM, &device, None)?;
+        let sequence = QUERY_LENS.len() - 1;
+        let cublaslt = &mistralrs_quant::cublaslt::CUBLASLT_CONTROLLER;
+        mistralrs_quant::cublaslt::maybe_init_cublas_lt_wrapper(device.clone());
+        // Inhibited runs the naive backend, otherwise cuBLASLt; both must stay causal.
+        for inhibit_cublaslt in [true, false] {
+            cublaslt.set_inhibit(inhibit_cublaslt);
+            for kv_lens in KV_CASES {
+                let fixture = Fixture::new(&device, DType::F32, 1, kv_lens)?;
+                let cache = fixture.cache()?;
+                let actual = host_f32(&fixture.forward(
+                    &attention,
+                    &cache,
+                    sequence..sequence + 1,
+                    ForwardPath::GatheredDense,
+                )?)?;
+                let reference = fixture.reference();
+                let reference = &reference[reference.len() - actual.len()..];
+                for (index, (&actual, &reference)) in actual.iter().zip(reference).enumerate() {
+                    assert!(
+                        (f64::from(actual) - reference).abs() <= F32_ABS_TOLERANCE,
+                        "inhibit_cublaslt={inhibit_cublaslt} kv={kv_lens:?} index={index}: {actual} vs {reference}"
+                    );
+                }
+            }
+        }
+        cublaslt.set_inhibit(false);
         Ok(())
     }
 }
