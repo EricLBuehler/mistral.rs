@@ -4,6 +4,7 @@ mod auto_map_sizing;
 mod checkpoint_inventory;
 mod diffusion_loaders;
 mod embedding_loaders;
+mod load_stages;
 mod multimodal_loaders;
 mod normal_loaders;
 mod prompt_assets;
@@ -22,6 +23,11 @@ use auto_device_map::NonMappedSubModel;
 pub(crate) use auto_map_sizing::exact_weight_source_sizes;
 pub(crate) use auto_map_sizing::{auto_device_map_sizes, AutoMapSizingInput};
 pub(crate) use checkpoint_inventory::{checkpoint_device_map_sizes, checkpoint_runtime_size};
+pub(crate) use load_stages::{
+    layered_model_config, load_matformer_slice, open_weight_sources, plan_device_map,
+    resolve_device_mapping, resolve_load_devices, DeviceMapPlanRequest, DeviceMappingRequest,
+    LoadDevices, ModelConfigLayers, ResolvedDeviceMapping, SingleCudaDevice,
+};
 pub(crate) use prompt_assets::{load_prompt_assets, PreparedPromptAssets, PromptAssetsRequest};
 pub(crate) use resources::add_resource_bytes;
 #[cfg(any(feature = "cuda", test))]

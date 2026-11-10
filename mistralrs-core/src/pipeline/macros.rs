@@ -708,40 +708,6 @@ macro_rules! normal_model_loader {
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! normal_model_loader_sharded {
-    (
-        $vb:expr,
-        $config:expr,
-        $loader:expr,
-        $mapper:expr,
-        $loading_isq:expr,
-        $real_device:expr,
-        $attention_mechanism:expr,
-        $multi_progress:expr,
-        $matformer_config:expr,
-    ) => {{
-        let tracker = $vb.tracker().clone();
-
-        let model = $loader.load(
-            &$config,
-            $vb,
-            $crate::pipeline::NormalLoadingMetadata {
-                mapper: $mapper,
-                loading_isq: $loading_isq,
-                real_device: $real_device,
-                multi_progress: $multi_progress,
-                matformer_slicing_config: $matformer_config,
-                rope_pairing: None,
-            },
-            $attention_mechanism,
-        )?;
-
-        (model, tracker)
-    }};
-}
-
-#[doc(hidden)]
-#[macro_export]
 macro_rules! multimodal_normal_model_loader {
     (
         $paths:expr,
@@ -803,47 +769,6 @@ macro_rules! multimodal_normal_model_loader {
                 multi_progress: $multi_progress,
                 matformer_slicing_config: $matformer_config,
                 rope_pairing: None,
-            },
-            $attention_mechanism,
-        )?;
-
-        (model, tracker)
-    }};
-}
-
-#[doc(hidden)]
-#[macro_export]
-macro_rules! multimodal_normal_model_loader_sharded {
-    (
-        $vb:expr,
-        $config:expr,
-        $loader:expr,
-        $mapper:expr,
-        $loading_isq:expr,
-        $real_device:expr,
-        $attention_mechanism:expr,
-        $multi_progress:expr,
-        $matformer_config:expr,
-        $uqff_reader:expr,
-        $rope_pairing:expr,
-    ) => {{
-        let vb = if let Some(reader) = $uqff_reader.clone() {
-            $vb.with_uqff_reader(reader)
-        } else {
-            $vb
-        };
-        let tracker = vb.tracker().clone();
-
-        let model = $loader.load(
-            &$config,
-            vb,
-            $crate::pipeline::NormalLoadingMetadata {
-                mapper: $mapper,
-                loading_isq: $loading_isq,
-                real_device: $real_device,
-                multi_progress: $multi_progress,
-                matformer_slicing_config: $matformer_config,
-                rope_pairing: $rope_pairing,
             },
             $attention_mechanism,
         )?;
