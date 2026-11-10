@@ -386,7 +386,6 @@ mod tests {
     use super::{context_keys, pack_taps};
 
     #[test]
-    #[ignore = "requires CUDA"]
     fn packed_taps_match_cuda_reference() -> Result<()> {
         let device = Device::new_cuda(0)?;
         for indices in [vec![2u32, 3, 4], vec![4u32, 1, 5]] {
@@ -411,7 +410,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires CUDA"]
     fn context_keys_match_layerwise_reference() -> Result<()> {
         let device = Device::new_cuda(0)?;
         let layers = 3;

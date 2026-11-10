@@ -969,7 +969,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a CUDA device with cuTile support"]
     fn cutile_qsa_score_matches_reference() -> Result<()> {
         let dev = Device::new_cuda(0)?;
         let Device::Cuda(cuda) = &dev else {
@@ -1044,7 +1043,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a CUDA device with cuTile support"]
     fn cutile_qsa_attention_matches_reference() -> Result<()> {
         let dev = Device::new_cuda(0)?;
         let Device::Cuda(cuda) = &dev else {

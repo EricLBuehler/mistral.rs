@@ -70,7 +70,6 @@ fn capture(device: &Device, call: impl FnOnce() -> Result<Tensor>) -> Result<(Cu
 }
 
 #[test]
-#[ignore = "requires a CUDA device"]
 fn sigmoid_gated_add_preserves_dtype_rounding_and_broadcast_fallbacks() -> Result<()> {
     let device = Device::new_cuda_with_stream(0)?;
     for dtype in [DType::BF16, DType::F16, DType::F32] {
@@ -143,7 +142,6 @@ fn sigmoid_gated_add_preserves_dtype_rounding_and_broadcast_fallbacks() -> Resul
 }
 
 #[test]
-#[ignore = "requires a CUDA device"]
 fn sigmoid_gated_add_replays_offsets_and_strided_fallbacks() -> Result<()> {
     let device = Device::new_cuda_with_stream(0)?;
     let _htod_cache = device.as_cuda_device()?.enable_cuda_graph_htod_cache();

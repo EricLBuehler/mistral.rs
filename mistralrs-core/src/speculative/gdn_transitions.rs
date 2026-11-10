@@ -460,7 +460,6 @@ mod tests {
 
     #[cfg(feature = "cuda")]
     #[test]
-    #[ignore = "requires CUDA"]
     fn recurrent_checkpoint_device_gate_rejects_mixed_placement() -> candle_core::Result<()> {
         let cuda = Device::new_cuda(0)?;
         assert!(recurrent_checkpoint_devices_supported(

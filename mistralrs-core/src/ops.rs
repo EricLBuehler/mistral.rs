@@ -8412,7 +8412,6 @@ mod tests {
 
     #[cfg(feature = "cuda")]
     #[test]
-    #[ignore = "requires CUDA"]
     fn cuda_batched_topk_workspace_reuses_and_grows() -> candle_core::Result<()> {
         const ROWS: usize = 4;
         const VOCAB: usize = 4097;
@@ -8683,7 +8682,6 @@ mod tests {
 
     #[cfg(feature = "cuda")]
     #[test]
-    #[ignore = "requires CUDA"]
     fn cuda_dflash_selector_matches_reference_with_bf16_codebooks() -> candle_core::Result<()> {
         const BATCH: usize = 2;
         const POSITIONS: usize = 3;
@@ -8744,7 +8742,6 @@ mod tests {
 
     #[cfg(feature = "cuda")]
     #[test]
-    #[ignore = "requires CUDA"]
     fn cuda_dflash_selector_supports_max_k_and_stable_ties() -> candle_core::Result<()> {
         const POSITIONS: usize = 2;
         const K: usize = super::CUDA_DFLASH_SELECTOR_MAX_K;
@@ -8781,7 +8778,6 @@ mod tests {
 
     #[cfg(feature = "cuda")]
     #[test]
-    #[ignore = "requires CUDA"]
     fn cuda_dflash_sample_selector_matches_sequential_reference() -> candle_core::Result<()> {
         const BATCH: usize = 2;
         const POSITIONS: usize = 3;
@@ -8870,7 +8866,6 @@ mod tests {
 
     #[cfg(feature = "cuda")]
     #[test]
-    #[ignore = "requires CUDA"]
     fn cuda_dflash_sample_selector_marks_invalid_sampling_params() -> candle_core::Result<()> {
         const K: usize = 2;
         const VOCAB: usize = 2;

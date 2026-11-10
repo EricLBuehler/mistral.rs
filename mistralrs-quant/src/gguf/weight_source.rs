@@ -1894,7 +1894,6 @@ mod tests {
 
     #[cfg(all(feature = "cuda", target_os = "linux"))]
     #[test]
-    #[ignore = "requires a CUDA device"]
     fn shared_binding_cache_release_preserves_uploaded_aliases_and_raw_neighbors() -> Result<()> {
         const ROWS: usize = 128;
         const COLUMNS: usize = 256;

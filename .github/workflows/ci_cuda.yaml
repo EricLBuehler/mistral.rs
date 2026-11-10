@@ -31,7 +31,7 @@ jobs:
             features: cuda,nccl
             cuda: "13.0"
             test_args: ""
-          # cuTile 0.3 selects bytecode for the active toolkit; 13.2 is the minimum lane for this runner's Ampere GPU.
+          # cuTile 0.3 selects bytecode for the active toolkit; 13.2 is the minimum lane for this runner's GB10 (sm_121).
           - name: cuda+cutile
             features: cuda,cutile
             cuda: "13.2"
@@ -40,8 +40,18 @@ jobs:
             features: cuda,cutile
             cuda: "13.4"
             test_args: "--workspace --exclude mistralrs-flash-attn"
-          # - name: cuda+nccl
-          #   features: cuda,nccl
+          # The combination release binaries are built with.
+          - name: cuda+flash-attn+cutile
+            features: cuda,flash-attn,cutile
+            cuda: "13.2"
+            test_args: "--workspace"
+          # The runner cannot execute sm_90 kernels, so this lane only proves the Hopper-gated code still compiles.
+          - name: cuda-sm90-lint
+            features: cuda,flash-attn
+            cuda: "13.2"
+            test_args: "--workspace"
+            compute_cap: "90"
+            lint_only: true
 
     steps:
       - name: Checkout repository
@@ -77,6 +87,10 @@ jobs:
           fi
           echo "LD_LIBRARY_PATH=$LIB_DIRS:${LD_LIBRARY_PATH:-}" >> $GITHUB_ENV
 
+      - name: Override CUDA compute capability
+        if: ${{ matrix.compute_cap }}
+        run: echo "CUDA_COMPUTE_CAP=${{ matrix.compute_cap }}" >> $GITHUB_ENV
+
       - name: CUDA sanity
         run: |
           nvidia-smi || true
@@ -86,5 +100,6 @@ jobs:
         run: cargo clippy ${{ matrix.test_args }} --features ${{ matrix.features }} --tests --examples -- -D warnings
 
       - name: Test
+        if: ${{ !matrix.lint_only }}
         # Tests share the primary CUDA context; context synchronization invalidates concurrent graph captures.
         run: cargo test ${{ matrix.test_args }} --features ${{ matrix.features }} -- --test-threads=1

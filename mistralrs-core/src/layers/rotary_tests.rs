@@ -55,7 +55,6 @@ fn partial_rotary_norm_accepts_leading_batch_dimensions() -> Result<()> {
 
 #[cfg(feature = "cuda")]
 #[test]
-#[ignore = "requires a CUDA device"]
 fn rounded_norm_rope_preserves_rounding_and_offset_views() -> Result<()> {
     const EPSILON: f32 = 1e-6;
     let device = Device::new_cuda_with_stream(0)?;

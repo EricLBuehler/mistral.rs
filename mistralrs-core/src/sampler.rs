@@ -2566,6 +2566,122 @@ mod tests {
     }
 
     #[cfg(feature = "cuda")]
+    fn assert_device_sampling_matches_cpu(device: &candle_core::Device) {
+        use super::Sampler;
+        use candle_core::{Device, Tensor};
+        use rand::SeedableRng;
+        use rand_isaac::Isaac64Rng;
+        use std::sync::{Arc, Mutex};
+
+        const VOCAB: usize = 1031;
+        const PEAK: usize = 613;
+        const TIED: [usize; 2] = [17, 902];
+        const SEED: u64 = 7;
+
+        let spread = (0..VOCAB)
+            .map(|i| ((i * 37 + 11) % 257) as f32 / 64.0 - 2.0)
+            .collect::<Vec<_>>();
+        let mut peaked = spread.clone();
+        peaked[PEAK] = 24.0;
+        let mut tied = spread.clone();
+        for index in TIED {
+            tied[index] = 9.5;
+        }
+        let context = [PEAK as u32, PEAK as u32, 3, TIED[0] as u32];
+
+        let sampler = |temperature: Option<f64>,
+                       penalties: [Option<f32>; 3],
+                       top_k: i64,
+                       top_p: f64,
+                       bias: HashMap<u32, f32>| {
+            Sampler::new(
+                temperature,
+                0,
+                None,
+                penalties[0],
+                penalties[1],
+                penalties[2],
+                None,
+                top_k,
+                top_p,
+                0.0,
+                bias,
+                vec![],
+            )
+            .unwrap()
+        };
+        let no_penalty = [None; 3];
+        let cases = [
+            ("greedy", sampler(None, no_penalty, -1, 1.0, HashMap::new())),
+            (
+                "greedy penalties",
+                sampler(
+                    None,
+                    [Some(6.0), Some(4.0), Some(1.3)],
+                    -1,
+                    1.0,
+                    HashMap::new(),
+                ),
+            ),
+            (
+                "greedy bias",
+                sampler(
+                    None,
+                    no_penalty,
+                    -1,
+                    1.0,
+                    HashMap::from([(PEAK as u32, -1.0e9), (TIED[0] as u32, -1.0e9)]),
+                ),
+            ),
+            (
+                "top-1",
+                sampler(Some(0.7), no_penalty, 1, 1.0, HashMap::new()),
+            ),
+            (
+                "top-1 penalties",
+                sampler(
+                    Some(0.7),
+                    [Some(6.0), Some(4.0), Some(1.3)],
+                    1,
+                    1.0,
+                    HashMap::new(),
+                ),
+            ),
+        ];
+        for (name, sampler) in &cases {
+            for (kind, logits) in [("spread", &spread), ("peaked", &peaked), ("tied", &tied)] {
+                let sample = |device: &Device| {
+                    let logits = Tensor::from_vec(logits.clone(), VOCAB, device).unwrap();
+                    let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(SEED)));
+                    sampler
+                        .sample(logits, &context, 0, false, rng, false, false)
+                        .unwrap()
+                        .token
+                };
+                assert_eq!(sample(device), sample(&Device::Cpu), "{name} on {kind}");
+            }
+        }
+        // top-p keeps only the dominant token, so the draw is deterministic on every backend.
+        let nucleus = sampler(Some(1.0), no_penalty, 40, 0.5, HashMap::new());
+        let sample = |device: &Device| {
+            let logits = Tensor::from_vec(peaked.clone(), VOCAB, device).unwrap();
+            let rng = Arc::new(Mutex::new(Isaac64Rng::seed_from_u64(SEED)));
+            nucleus
+                .sample(logits, &context, 0, false, rng, false, false)
+                .unwrap()
+                .token
+        };
+        assert_eq!(sample(device), PEAK as u32);
+        assert_eq!(sample(&Device::Cpu), PEAK as u32);
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn cuda_sampling_matches_cpu() {
+        assert_device_sampling_matches_cpu(&candle_core::Device::new_cuda(0).unwrap());
+    }
+
+    #[cfg(feature = "cuda")]
     #[test]
     fn cuda_batch_plan_covers_greedy_top_k_and_categorical() {
         use super::{CudaBatchSamplingKind, Sampler};

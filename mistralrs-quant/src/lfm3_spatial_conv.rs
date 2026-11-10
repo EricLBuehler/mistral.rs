@@ -422,7 +422,6 @@ mod tests {
 
     #[cfg(feature = "cuda")]
     #[test]
-    #[ignore = "requires CUDA"]
     fn cuda_spatial_conv_matches_grouped_convolution() -> Result<()> {
         check(Device::new_cuda(0)?)
     }

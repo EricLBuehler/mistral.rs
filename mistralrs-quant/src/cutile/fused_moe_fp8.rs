@@ -1315,7 +1315,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a CUDA device with cuTile support"]
     fn cutile_fused_moe_fp8_matches_dequantized_reference() -> Result<()> {
         const E: usize = 4;
         const TOP_K: usize = 2;

@@ -1597,7 +1597,6 @@ mod tests {
 
     #[cfg(all(feature = "cuda", target_os = "linux"))]
     #[test]
-    #[ignore = "requires a CUDA device"]
     fn mapped_cuda_load_preserves_bytes_after_source_reclaim_and_unlink() -> Result<()> {
         const EXPERTS: usize = 48;
         const ROWS: usize = 640;

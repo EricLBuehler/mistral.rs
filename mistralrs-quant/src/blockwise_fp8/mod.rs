@@ -1769,7 +1769,6 @@ mod tests {
 
     #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels, feature = "cutile"))]
     #[test]
-    #[ignore = "requires a CUDA device with cuTile support"]
     fn cutile_w8a16_preserves_empty_leading_dimensions() -> Result<()> {
         const FEATURES: usize = 256;
 
@@ -1809,7 +1808,6 @@ mod tests {
 
     #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels, feature = "cutile"))]
     #[test]
-    #[ignore = "requires a CUDA device with cuTile support"]
     fn cutile_fused_glu_matches_unfused() -> Result<()> {
         const OUTPUT_FEATURES: usize = 256;
         const SPLIT_SIZE: usize = 512;
@@ -1861,7 +1859,6 @@ mod tests {
 
     #[cfg(all(feature = "cuda", has_blockwise_fp8_kernels, feature = "cutile"))]
     #[test]
-    #[ignore = "requires a CUDA device with cuTile support"]
     fn cutile_consumes_fused_rms_norm_group_major_activation() -> Result<()> {
         const ROWS: usize = 300;
         const FEATURES: usize = 256;

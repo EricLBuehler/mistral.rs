@@ -961,7 +961,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a CUDA device with cuTile support"]
     fn cutile_gdn_prefill_matches_sequential_reference() -> Result<()> {
         const BATCH: usize = 3;
         const HEADS: usize = 2;

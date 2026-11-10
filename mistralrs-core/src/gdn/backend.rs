@@ -1345,19 +1345,30 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "metal")]
-    #[test]
-    fn metal_pooled_decode_from_convolved_matches_cpu() -> CandleResult<()> {
+    #[cfg(any(feature = "metal", feature = "cuda"))]
+    struct RecurrenceParityCase {
+        layout: GdnVHeadLayout,
+        dtype: DType,
+        pooled: bool,
+        tolerance: f32,
+    }
+
+    #[cfg(any(feature = "metal", feature = "cuda"))]
+    fn pooled_decode_from_convolved_matches_cpu(
+        device: &Device,
+        cases: &[RecurrenceParityCase],
+    ) -> CandleResult<()> {
         const POOL_ROWS: usize = 6;
         let cpu = Device::Cpu;
-        let metal = Device::new_metal(0)?;
         let slots = [2u32, 0, 5];
         let batch_size = slots.len();
-        for (layout, dtype, tol) in [
-            (GdnVHeadLayout::Grouped, DType::F32, 1e-4f32),
-            (GdnVHeadLayout::Tiled, DType::F32, 1e-4),
-            (GdnVHeadLayout::Grouped, DType::BF16, 2e-2),
-        ] {
+        for &RecurrenceParityCase {
+            layout,
+            dtype,
+            tolerance: tol,
+            ..
+        } in cases
+        {
             let dims = dims_with_layout(2, 4, 128, 128, layout);
             let mixed = Tensor::from_vec(
                 patterned(batch_size * dims.conv_dim, 1, 0.4, 0.05),
@@ -1434,28 +1445,28 @@ mod tests {
                 DType::F32,
             )?;
 
-            let mut metal_cache = GdnLayerCache {
+            let mut device_cache = GdnLayerCache {
                 conv_state: Tensor::zeros(
                     (POOL_ROWS, dims.conv_dim, dims.conv_kernel_size),
                     DType::F32,
-                    &metal,
+                    device,
                 )?,
-                recurrent_state: pool.to_device(&metal)?,
+                recurrent_state: pool.to_device(device)?,
                 state_layout: RecurrentStateLayout::GdnKeyMajor,
-                slots: Some(Tensor::new(&slots, &metal)?),
+                slots: Some(Tensor::new(&slots, device)?),
                 pending_transitions: None,
                 deferred_state: None,
             };
             let actual = apply_recurrence_from_convolved(
-                &mixed.to_dtype(dtype)?.to_device(&metal)?,
-                &b.to_dtype(dtype)?.to_device(&metal)?,
-                &a.to_dtype(dtype)?.to_device(&metal)?,
-                &a_log.to_device(&metal)?,
-                &dt_bias.to_device(&metal)?,
+                &mixed.to_dtype(dtype)?.to_device(device)?,
+                &b.to_dtype(dtype)?.to_device(device)?,
+                &a.to_dtype(dtype)?.to_device(device)?,
+                &a_log.to_device(device)?,
+                &dt_bias.to_device(device)?,
                 &dims,
                 batch_size,
                 1,
-                &mut metal_cache,
+                &mut device_cache,
                 dtype,
             )?;
             let max_diff = |x: &Tensor, y: &Tensor| -> CandleResult<f32> {
@@ -1467,7 +1478,7 @@ mod tests {
                 .to_scalar::<f32>()
             };
             let out_diff = max_diff(&actual, &expected)?;
-            let pool_after = metal_cache.recurrent_state.to_device(&cpu)?;
+            let pool_after = device_cache.recurrent_state.to_device(&cpu)?;
             let mut state_diff = 0f32;
             for (row, &slot) in slot_rows.iter().enumerate() {
                 state_diff = state_diff.max(max_diff(
@@ -1489,20 +1500,23 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "metal")]
-    #[test]
-    fn metal_multi_token_from_convolved_matches_cpu() -> CandleResult<()> {
+    #[cfg(any(feature = "metal", feature = "cuda"))]
+    fn multi_token_from_convolved_matches_cpu(
+        device: &Device,
+        cases: &[RecurrenceParityCase],
+    ) -> CandleResult<()> {
         const POOL_ROWS: usize = 5;
         const SEQ: usize = 7;
         let cpu = Device::Cpu;
-        let metal = Device::new_metal(0)?;
         let slots = [3u32, 0];
         let batch_size = slots.len();
-        for (layout, dtype, pooled, tol) in [
-            (GdnVHeadLayout::Grouped, DType::F32, false, 1e-4f32),
-            (GdnVHeadLayout::Tiled, DType::F32, false, 1e-4),
-            (GdnVHeadLayout::Grouped, DType::BF16, true, 3e-2),
-        ] {
+        for &RecurrenceParityCase {
+            layout,
+            dtype,
+            pooled,
+            tolerance: tol,
+        } in cases
+        {
             let dims = dims_with_layout(2, 4, 128, 128, layout);
             let round =
                 |t: Tensor| -> CandleResult<Tensor> { t.to_dtype(dtype)?.to_dtype(DType::F32) };
@@ -1576,15 +1590,15 @@ mod tests {
             )?;
 
             let (state, slot_tensor) = if pooled {
-                (pool.to_device(&metal)?, Some(Tensor::new(&slots, &metal)?))
+                (pool.to_device(device)?, Some(Tensor::new(&slots, device)?))
             } else {
-                (gathered.to_device(&metal)?, None)
+                (gathered.to_device(device)?, None)
             };
-            let mut metal_cache = GdnLayerCache {
+            let mut device_cache = GdnLayerCache {
                 conv_state: Tensor::zeros(
                     (1, dims.conv_dim, dims.conv_kernel_size),
                     DType::F32,
-                    &metal,
+                    device,
                 )?,
                 recurrent_state: state,
                 state_layout: RecurrentStateLayout::GdnKeyMajor,
@@ -1593,15 +1607,15 @@ mod tests {
                 deferred_state: None,
             };
             let actual = apply_recurrence_from_convolved(
-                &mixed.to_dtype(dtype)?.to_device(&metal)?,
-                &b.to_dtype(dtype)?.to_device(&metal)?,
-                &a.to_dtype(dtype)?.to_device(&metal)?,
-                &a_log.to_device(&metal)?,
-                &dt_bias.to_device(&metal)?,
+                &mixed.to_dtype(dtype)?.to_device(device)?,
+                &b.to_dtype(dtype)?.to_device(device)?,
+                &a.to_dtype(dtype)?.to_device(device)?,
+                &a_log.to_device(device)?,
+                &dt_bias.to_device(device)?,
                 &dims,
                 batch_size,
                 SEQ,
-                &mut metal_cache,
+                &mut device_cache,
                 dtype,
             )?;
             let max_diff = |x: &Tensor, y: &Tensor| -> CandleResult<f32> {
@@ -1615,7 +1629,7 @@ mod tests {
             let tag = format!("{layout:?} {dtype:?} pooled={pooled}");
             let out_diff = max_diff(&actual, &expected)?;
             assert!(out_diff < tol, "{tag}: output diff {out_diff}");
-            let state_after = metal_cache.recurrent_state.to_device(&cpu)?;
+            let state_after = device_cache.recurrent_state.to_device(&cpu)?;
             for (i, &r) in rows.iter().enumerate() {
                 let got = if pooled {
                     state_after.narrow(0, r, 1)?
@@ -1627,6 +1641,82 @@ mod tests {
             }
         }
         Ok(())
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn metal_pooled_decode_from_convolved_matches_cpu() -> CandleResult<()> {
+        let case = |layout, dtype, tolerance| RecurrenceParityCase {
+            layout,
+            dtype,
+            pooled: true,
+            tolerance,
+        };
+        pooled_decode_from_convolved_matches_cpu(
+            &Device::new_metal(0)?,
+            &[
+                case(GdnVHeadLayout::Grouped, DType::F32, 1e-4),
+                case(GdnVHeadLayout::Tiled, DType::F32, 1e-4),
+                case(GdnVHeadLayout::Grouped, DType::BF16, 2e-2),
+            ],
+        )
+    }
+
+    #[cfg(feature = "metal")]
+    #[test]
+    fn metal_multi_token_from_convolved_matches_cpu() -> CandleResult<()> {
+        let case = |layout, dtype, pooled, tolerance| RecurrenceParityCase {
+            layout,
+            dtype,
+            pooled,
+            tolerance,
+        };
+        multi_token_from_convolved_matches_cpu(
+            &Device::new_metal(0)?,
+            &[
+                case(GdnVHeadLayout::Grouped, DType::F32, false, 1e-4),
+                case(GdnVHeadLayout::Tiled, DType::F32, false, 1e-4),
+                case(GdnVHeadLayout::Grouped, DType::BF16, true, 3e-2),
+            ],
+        )
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn cuda_pooled_decode_from_convolved_matches_cpu() -> CandleResult<()> {
+        let case = |layout, dtype, tolerance| RecurrenceParityCase {
+            layout,
+            dtype,
+            pooled: true,
+            tolerance,
+        };
+        pooled_decode_from_convolved_matches_cpu(
+            &Device::new_cuda(0)?,
+            &[
+                case(GdnVHeadLayout::Grouped, DType::BF16, 2e-2),
+                case(GdnVHeadLayout::Tiled, DType::BF16, 2e-2),
+                case(GdnVHeadLayout::Grouped, DType::F16, 2e-3),
+            ],
+        )
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn cuda_multi_token_from_convolved_matches_cpu() -> CandleResult<()> {
+        let case = |layout, dtype, tolerance| RecurrenceParityCase {
+            layout,
+            dtype,
+            pooled: true,
+            tolerance,
+        };
+        multi_token_from_convolved_matches_cpu(
+            &Device::new_cuda(0)?,
+            &[
+                case(GdnVHeadLayout::Grouped, DType::BF16, 3e-2),
+                case(GdnVHeadLayout::Tiled, DType::BF16, 3e-2),
+                case(GdnVHeadLayout::Grouped, DType::F16, 3e-3),
+            ],
+        )
     }
 
     fn converter_tiled_heads(dims: &GdnDims) -> Vec<usize> {

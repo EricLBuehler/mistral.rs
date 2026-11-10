@@ -4840,7 +4840,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a CUDA device"]
     fn graph_metadata_replay_updates_persistent_cuda_buffers() -> anyhow::Result<()> {
         let device = Device::new_cuda(0)?;
         let rows = |table: Vec<usize>, context_len: usize| -> anyhow::Result<_> {
@@ -4911,7 +4910,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a CUDA device"]
     fn graph_staging_orders_secondary_streams_both_directions() -> anyhow::Result<()> {
         let device = Device::new_cuda(0)?;
         let graph_stream = device.as_cuda_device()?.cuda_stream();
@@ -4934,7 +4932,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a CUDA device"]
     fn graph_memory_pool_scope_restores_release_threshold() -> anyhow::Result<()> {
         let device = Device::new_cuda(0)?;
         let stream = device.as_cuda_device()?.cuda_stream();
@@ -4952,7 +4949,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a CUDA device"]
     fn engine_memory_pool_retention_coordinates_nested_graph_scopes() -> anyhow::Result<()> {
         let device = Device::new_cuda(0)?;
         let alias = Device::new_cuda(0)?;
@@ -5005,7 +5001,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a CUDA device"]
     fn graph_memory_cleanup_returns_allocator_to_baseline() -> anyhow::Result<()> {
         let device = Device::new_cuda(0)?;
         let stream = device.as_cuda_device()?.cuda_stream();
@@ -5051,7 +5046,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a CUDA device"]
     fn unlaunched_graph_cleanup_returns_allocator_to_baseline() -> anyhow::Result<()> {
         let device = Device::new_cuda(0)?;
         let stream = device.as_cuda_device()?.cuda_stream();
@@ -5090,7 +5084,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a CUDA device"]
     fn graph_replay_retains_captured_output_storage() -> anyhow::Result<()> {
         let device = Device::new_cuda(0)?;
         let cuda_device = device.as_cuda_device()?;
@@ -5127,7 +5120,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a CUDA device"]
     fn replayed_graph_output_releases_without_driver_error() -> anyhow::Result<()> {
         let device = Device::new_cuda(0)?;
         let stream = device.as_cuda_device()?.cuda_stream();
@@ -5152,7 +5144,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a CUDA device"]
     fn graph_copy_supports_dense_row_source() -> anyhow::Result<()> {
         let device = Device::new_cuda(0)?;
         let cuda_device = device.as_cuda_device()?;
@@ -5437,7 +5428,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a CUDA device"]
     fn resident_replay_skips_the_host_input_update() -> anyhow::Result<()> {
         let device = Device::new_cuda(0)?;
         let metadata = Arc::new(DecodePagedRows {

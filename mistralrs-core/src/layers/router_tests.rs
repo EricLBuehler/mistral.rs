@@ -45,7 +45,6 @@ fn fixture(rows: usize, columns: usize, dtype: DType, device: &Device) -> Result
 }
 
 #[test]
-#[ignore = "requires CUDA"]
 fn router_linear_matches_independent_logits_and_topk() -> Result<()> {
     let device = Device::new_cuda_with_stream(0)?;
     for dtype in [DType::BF16, DType::F16, DType::F32] {
@@ -78,7 +77,6 @@ fn router_linear_matches_independent_logits_and_topk() -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires CUDA"]
 fn router_linear_preserves_bias_rounding_and_view_fallbacks() -> Result<()> {
     const ROWS: usize = 64;
     const COLUMNS: usize = 64;
@@ -122,7 +120,6 @@ fn router_linear_preserves_bias_rounding_and_view_fallbacks() -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires CUDA"]
 fn router_gemv_orders_cross_stream_weights_and_graph_replay() -> Result<()> {
     const ROWS: usize = 128;
     const COLUMNS: usize = 2048;
