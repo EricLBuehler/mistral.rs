@@ -41,12 +41,13 @@ use crate::pipeline::cuda_graph::{
 };
 
 mod config;
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(cuda_flash_attn, test))]
 mod graph;
+pub(crate) mod host;
 mod selector;
 
 pub use config::*;
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(cuda_flash_attn, test))]
 use graph::*;
 use selector::*;
 
