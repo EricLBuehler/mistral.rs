@@ -37,7 +37,7 @@ use crate::speculative::SpeculativeTargetMixin;
 use crate::utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTensor};
 use crate::{AnyMoeExpertType, DynamicLoraRuntime, Pipeline};
 use anyhow::Result;
-use candle_core::{DType, Device, Tensor, Var};
+use candle_core::{Device, Tensor, Var};
 use mistralrs_quant::IsqType;
 use rand_isaac::Isaac64Rng;
 use regex_automata::meta::Regex;
@@ -259,7 +259,7 @@ struct SpeculativeGraphTensorMetadata {
     shape: Vec<usize>,
     strides: Vec<usize>,
     contiguous: bool,
-    dtype: DType,
+    dtype: candle_core::DType,
     device: candle_core::DeviceLocation,
 }
 
@@ -1359,7 +1359,7 @@ impl<M: CausalModel + ?Sized> Pipeline for CausalPipeline<M> {
                 false,
                 self.metadata.sliding_window.is_some(),
             )
-            && matches!(self.metadata.activation_dtype, DType::F16 | DType::BF16)
+            && crate::attention::flash_dtype_supported(self.metadata.activation_dtype)
     }
 
     fn supports_batched_cuda_sampling(&self) -> bool {

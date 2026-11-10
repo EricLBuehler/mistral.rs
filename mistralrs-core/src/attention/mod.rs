@@ -57,8 +57,9 @@ pub(crate) use backends::cpu::fast_exp;
 #[cfg(feature = "cuda")]
 use backends::naive::maybe_synchronize;
 pub(crate) use backends::{
-    flash_attn, flash_backend_supports, flash_backend_supports_sdpa, naive_sdpa, sinks_attn,
-    sinks_backend_is_available, sinks_backend_supports,
+    cuda_flash_usable, flash_attn, flash_backend_supports, flash_backend_supports_sdpa,
+    flash_dtype_supported, naive_sdpa, sinks_attn, sinks_backend_is_available,
+    sinks_backend_supports,
 };
 pub(crate) use layer::{KvStore, LayerAttention};
 
@@ -281,9 +282,7 @@ fn packed_attention_backend_is_available(q: &Tensor, sdpa_params: &SdpaParams) -
             (q.device().is_cuda() || q.dim(0)? > 1) && sinks_backend_is_available(q, head_dim)
         );
     }
-    Ok(q.device().is_cuda()
-        && crate::using_flash_attn()
-        && matches!(q.dtype(), DType::F16 | DType::BF16)
+    Ok(cuda_flash_usable(q.device(), q.dtype())
         && flash_backend_supports_sdpa(
             head_dim,
             sdpa_params.softcap.is_some(),
@@ -387,29 +386,26 @@ impl Sdpa {
         }
 
         // CausalFlash or None: try flash attention, fall back to eager
-        let can_use_flash = q.device().is_cpu()
-            || q.device().is_cuda() && crate::using_flash_attn() && q.dtype() != DType::F32;
+        let cuda_flash = cuda_flash_usable(q.device(), q.dtype());
+        let can_use_flash = q.device().is_cpu() || cuda_flash;
 
         if can_use_flash {
-            let expanded_kv = if q.device().is_cuda()
-                && crate::using_flash_attn()
-                && q.dtype() != DType::F32
-                && sdpa_params.n_kv_groups > FLASH_ATTN_NATIVE_MAX_GQA_GROUP
-            {
-                Some((
-                    repeat_kv(k.clone(), sdpa_params.n_kv_groups)?,
-                    repeat_kv(v.clone(), sdpa_params.n_kv_groups)?,
-                    SdpaParams {
-                        n_kv_groups: 1,
-                        softcap: sdpa_params.softcap,
-                        softmax_scale: sdpa_params.softmax_scale,
-                        sliding_window: sdpa_params.sliding_window,
-                        sinks: sdpa_params.sinks.clone(),
-                    },
-                ))
-            } else {
-                None
-            };
+            let expanded_kv =
+                if cuda_flash && sdpa_params.n_kv_groups > FLASH_ATTN_NATIVE_MAX_GQA_GROUP {
+                    Some((
+                        repeat_kv(k.clone(), sdpa_params.n_kv_groups)?,
+                        repeat_kv(v.clone(), sdpa_params.n_kv_groups)?,
+                        SdpaParams {
+                            n_kv_groups: 1,
+                            softcap: sdpa_params.softcap,
+                            softmax_scale: sdpa_params.softmax_scale,
+                            sliding_window: sdpa_params.sliding_window,
+                            sinks: sdpa_params.sinks.clone(),
+                        },
+                    ))
+                } else {
+                    None
+                };
             let (k, v, sdpa_params) = match &expanded_kv {
                 Some((k, v, sdpa_params)) => (k, v, sdpa_params),
                 None => (k, v, sdpa_params),

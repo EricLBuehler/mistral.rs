@@ -1036,3 +1036,11 @@ fn flashinfer_sliding_decode_keeps_device_context_lengths() {
     .unwrap();
     assert!(matches!(plan, DecodePlan::FlashInfer(_)));
 }
+
+#[test]
+fn paged_mm_prefix_requires_range_metadata() {
+    assert!(!select_paged_mm_prefix_path(true, true, true, false, false).unwrap());
+    assert!(select_paged_mm_prefix_path(true, true, true, true, false).is_err());
+    assert!(select_paged_mm_prefix_path(true, true, true, true, true).unwrap());
+    assert!(!select_paged_mm_prefix_path(false, true, true, true, false).unwrap());
+}

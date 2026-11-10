@@ -85,7 +85,7 @@ impl PrefixPrefillPlan {
 
         #[cfg(cuda_flash_attn)]
         if input.device_is_cuda
-            && matches!(input.dtype, DType::F16 | DType::BF16)
+            && crate::attention::flash_dtype_supported(input.dtype)
             && input.cache_dtype == input.dtype
             && !input.has_alibi
             && !input.has_sinks
@@ -996,7 +996,7 @@ fn gather_prefill_uses_packed_varlen_with_backend(
 ) -> bool {
     input.device_is_cuda
         && flash_enabled
-        && matches!(input.dtype, DType::F16 | DType::BF16)
+        && crate::attention::flash_dtype_supported(input.dtype)
         && !input.has_alibi
         && !input.has_sinks
         && !input.has_custom_mask
@@ -1031,7 +1031,21 @@ fn cuda_gather_workspace_is_complete(plan: PrefixPrefillPlanInput, value_head_di
             plan.has_softcap,
             plan.has_sliding_window,
         )
-        && matches!(plan.dtype, DType::F16 | DType::BF16)
+        && crate::attention::flash_dtype_supported(plan.dtype)
+}
+
+/// Noncausal multimodal spans need range metadata; a packed batch without it cannot fall back.
+pub(crate) fn select_paged_mm_prefix_path(
+    requires_noncausal: bool,
+    is_paged: bool,
+    supported_backend: bool,
+    packed: bool,
+    has_range_metadata: bool,
+) -> Result<bool> {
+    if requires_noncausal && packed && !has_range_metadata {
+        candle_core::bail!("packed multimodal prefill is missing noncausal range metadata");
+    }
+    Ok(requires_noncausal && is_paged && supported_backend && has_range_metadata)
 }
 
 pub(crate) fn paged_flash_prefill_workspace(

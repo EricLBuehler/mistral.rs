@@ -794,7 +794,7 @@ fn packed_varlen_flash_is_usable(
 ) -> bool {
     device_is_cuda
         && flash_attn_enabled
-        && matches!(dtype, DType::F16 | DType::BF16)
+        && crate::attention::flash_dtype_supported(dtype)
         && crate::attention::flash_backend_supports_sdpa(head_size, has_softcap, has_sliding_window)
 }
 
@@ -2749,9 +2749,7 @@ impl PagedAttention {
                 || flash_params.sliding_k.is_some()
                 || sdpa_params.sliding_window.is_some()
                 || !matches!(attention_mask, AttentionMask::CausalFlash)
-                || !query.device().is_cuda()
-                || !crate::using_flash_attn()
-                || query.dtype() == DType::F32
+                || !crate::attention::cuda_flash_usable(query.device(), query.dtype())
                 || ctx.dims.batch_size != 1
                 || ctx.dims.seq_len != token_count
                 || key.dim(0)? != 1

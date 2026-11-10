@@ -42,19 +42,6 @@ fn attention_layers_support_packed_prefill(
         .all(|(head_dim, has_softcap)| flash_backend_supports(head_dim, has_softcap))
 }
 
-fn select_paged_mm_prefix_path(
-    requires_noncausal: bool,
-    is_paged: bool,
-    supported_backend: bool,
-    packed: bool,
-    has_range_metadata: bool,
-) -> Result<bool> {
-    if requires_noncausal && packed && !has_range_metadata {
-        candle_core::bail!("packed Gemma 3 multimodal prefill is missing noncausal range metadata");
-    }
-    Ok(requires_noncausal && is_paged && supported_backend && has_range_metadata)
-}
-
 struct Attention {
     q_proj: Arc<dyn QuantMethod>,
     k_proj: Arc<dyn QuantMethod>,
@@ -618,7 +605,7 @@ impl TextModel {
         let has_range_metadata = ctx
             .paged_input_metadata()
             .is_some_and(|metadata| metadata.has_noncausal_mm_context);
-        let use_paged_mm_prefix_path = select_paged_mm_prefix_path(
+        let use_paged_mm_prefix_path = crate::paged_attention::plan::select_paged_mm_prefix_path(
             requires_noncausal,
             ctx.is_paged(),
             crate::attention::supports_compact_paged_prefill(xs.device()),
@@ -1025,7 +1012,7 @@ impl AnyMoeBaseModelMixin for TextModel {
 mod tests {
     use candle_core::{Device, Tensor};
 
-    use super::{attention_layers_support_packed_prefill, select_paged_mm_prefix_path, TextModel};
+    use super::{attention_layers_support_packed_prefill, TextModel};
 
     #[test]
     fn packed_softcap_requires_flash_v2_support() {
@@ -1034,14 +1021,6 @@ mod tests {
             cfg!(feature = "flash-attn")
         );
         assert!(!attention_layers_support_packed_prefill([(512, true)]));
-    }
-
-    #[test]
-    fn paged_mm_prefix_requires_range_metadata() {
-        assert!(!select_paged_mm_prefix_path(true, true, true, false, false).unwrap());
-        assert!(select_paged_mm_prefix_path(true, true, true, true, false).is_err());
-        assert!(select_paged_mm_prefix_path(true, true, true, true, true).unwrap());
-        assert!(!select_paged_mm_prefix_path(false, true, true, true, false).unwrap());
     }
 
     #[test]

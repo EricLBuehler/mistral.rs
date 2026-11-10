@@ -1,10 +1,19 @@
-use candle_core::{Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 
 #[cfg(any(feature = "flash-attn", feature = "flash-attn-v3"))]
 use crate::attention::sliding_window_left;
 #[cfg(any(feature = "flash-attn", feature = "flash-attn-v3"))]
 use crate::pipeline::text_models_inputs_processor::FlashKMeta;
 use crate::{attention::SdpaParams, pipeline::text_models_inputs_processor::FlashParams};
+
+/// The CUDA flash kernels only take half-precision activations.
+pub(crate) const fn flash_dtype_supported(dtype: DType) -> bool {
+    matches!(dtype, DType::F16 | DType::BF16)
+}
+
+pub(crate) fn cuda_flash_usable(device: &Device, dtype: DType) -> bool {
+    device.is_cuda() && crate::using_flash_attn() && flash_dtype_supported(dtype)
+}
 
 pub(crate) fn flash_backend_supports(head_dim: usize, has_softcap: bool) -> bool {
     let head_dim_supported = if cfg!(feature = "flash-attn") {
