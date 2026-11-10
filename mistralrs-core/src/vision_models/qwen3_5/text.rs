@@ -1,5 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
+use crate::attention::LayerAttention;
 use std::{
     collections::HashMap,
     sync::{
@@ -361,34 +362,15 @@ impl FullAttention {
 
         // Standard attention
         let mut y = match &self.paged_attn {
-            Some(paged_attn) => match metadata {
-                Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
-                    &q,
-                    &k,
-                    &v,
-                    attention_mask,
-                    Some(key_cache),
-                    Some(value_cache),
-                    input_metadata,
-                    &self.sdpa_params,
-                    Some(flash_params),
-                )?,
-                None => {
-                    let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
-                    assert!(!matches!(attention_mask, AttentionMask::None));
-                    paged_attn.forward(
-                        &q,
-                        &k,
-                        &v,
-                        attention_mask,
-                        None,
-                        None,
-                        &input_metadata,
-                        &self.sdpa_params,
-                        Some(flash_params),
-                    )?
-                }
-            },
+            Some(paged_attn) => LayerAttention {
+                q: &q,
+                k: &k,
+                v: &v,
+                mask: attention_mask,
+                sdpa_params: &self.sdpa_params,
+                flash_params,
+            }
+            .run_paged(paged_attn, metadata)?,
             None => {
                 let kv_cache = kv_cache.ok_or_else(|| {
                     candle_core::Error::msg("full attention without paged cache needs a KV cache")

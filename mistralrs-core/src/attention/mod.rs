@@ -50,6 +50,7 @@ impl AttentionMask {
 }
 
 mod backends;
+mod layer;
 
 #[allow(unused)]
 pub(crate) use backends::cpu::fast_exp;
@@ -59,6 +60,7 @@ pub(crate) use backends::{
     flash_attn, flash_backend_supports, flash_backend_supports_sdpa, naive_sdpa, sinks_attn,
     sinks_backend_is_available, sinks_backend_supports,
 };
+pub(crate) use layer::{KvStore, LayerAttention};
 
 /// Chunk size for attention computation to avoid OOM on long sequences
 pub(crate) const ATTENTION_CHUNK_SIZE: usize = 1024;

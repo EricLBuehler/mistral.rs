@@ -1,6 +1,7 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 /// Mistral LLM, https://github.com/mistralai/mistral-src
+use crate::attention::{KvStore, LayerAttention};
 use crate::layers_masker::CausalMaskConfig;
 use candle_core::{DType, Device, Module, Result, Tensor};
 use mistralrs_quant::{
@@ -17,13 +18,12 @@ use crate::{
     get_delta_from_lora_ab,
     layers::{
         embedding_with_legacy_tied_uqff, Activation, CausalMasker, MatMul, Mlp, RmsNorm,
-        RotaryEmbedding, Sdpa, YarnRopeConfig,
+        RotaryEmbedding, YarnRopeConfig,
     },
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        EitherCache, IsqModel, KvCache, ModelForwardContext, NormalCache, NormalLoadingMetadata,
-        NormalModel,
+        text_models_inputs_processor::FlashParams, EitherCache, IsqModel, KvCache,
+        ModelForwardContext, NormalCache, NormalLoadingMetadata, NormalModel,
     },
     serde_default_fn,
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
@@ -241,57 +241,15 @@ impl Attention {
         }
         let metadata = ctx.paged_layer(layer_idx);
 
-        let mut attn_output = match &self.paged_attn {
-            Some(paged_attn) => match metadata {
-                Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
-                    &q,
-                    &k,
-                    &v,
-                    attention_mask,
-                    Some(key_cache),
-                    Some(value_cache),
-                    input_metadata,
-                    &self.sdpa_params,
-                    Some(ctx.flash_params()),
-                )?,
-                None => {
-                    // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
-                    // Generating the dummy metadata with the assumption that we are not generating text (only processing prompts).
-                    let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
-                    // Sanity check.
-                    assert!(!matches!(attention_mask, AttentionMask::None));
-                    paged_attn.forward(
-                        &q,
-                        &k,
-                        &v,
-                        attention_mask,
-                        None,
-                        None,
-                        &input_metadata,
-                        &self.sdpa_params,
-                        Some(ctx.flash_params()),
-                    )?
-                }
-            },
-            None => {
-                let (k, v) = kv_cache.append(&k, &v)?;
-
-                Sdpa.run_attention(
-                    &q,
-                    &k,
-                    &v,
-                    attention_mask,
-                    Some(ctx.flash_params()),
-                    &self.sdpa_params,
-                )?
-            }
-        };
-
-        attn_output = if !matches!(attention_mask, AttentionMask::None) {
-            attn_output.transpose(1, 2)?.reshape((b_sz, q_len, ()))?
-        } else {
-            attn_output.reshape((b_sz, q_len, ()))?
-        };
+        let attn_output = LayerAttention {
+            q: &q,
+            k: &k,
+            v: &v,
+            mask: attention_mask,
+            sdpa_params: &self.sdpa_params,
+            flash_params: ctx.flash_params(),
+        }
+        .run(KvStore::new(self.paged_attn.as_ref(), metadata, kv_cache))?;
         let res = self.o_proj.forward(&attn_output)?;
         Ok(res)
     }

@@ -5,6 +5,7 @@
     clippy::too_many_arguments
 )]
 
+use crate::attention::LayerAttention;
 use crate::layers_masker::CausalMaskConfig;
 use std::sync::Arc;
 
@@ -24,8 +25,8 @@ use crate::{
     models::llama::Config,
     paged_attention::{AttentionImplementation, ModelConfigMetadata, PagedAttention},
     pipeline::{
-        text_models_inputs_processor::{FlashParams, PagedAttentionInputMetadata},
-        IsqModel, ModelForwardContext, NormalLoadingMetadata, NormalModel,
+        text_models_inputs_processor::FlashParams, IsqModel, ModelForwardContext,
+        NormalLoadingMetadata, NormalModel,
     },
     utils::{progress::NiceProgressBar, unvarbuilder::UnVarBuilder},
     AnyMoeConfig, AnyMoeExpertType,
@@ -76,37 +77,15 @@ impl CausalSelfAttention {
             .transpose(1, 2)?;
 
         let mut y = match &self.paged_attn {
-            Some(paged_attn) => match ctx.paged_layer(block_idx) {
-                Some(((key_cache, value_cache), input_metadata)) => paged_attn.forward(
-                    &q,
-                    &k,
-                    &v,
-                    attention_mask,
-                    Some(key_cache),
-                    Some(value_cache),
-                    input_metadata,
-                    &self.sdpa_params,
-                    Some(ctx.flash_params()),
-                )?,
-                None => {
-                    // If we don't have metadata, we are most likely generating an imatrix so we don't want to populate that.
-                    // Generating the dummy metadata with the assumption that we are not generating text (only processing prompts).
-                    let input_metadata = PagedAttentionInputMetadata::dummy(q.device())?;
-                    // Sanity check.
-                    assert!(!matches!(attention_mask, AttentionMask::None));
-                    paged_attn.forward(
-                        &q,
-                        &k,
-                        &v,
-                        attention_mask,
-                        None,
-                        None,
-                        &input_metadata,
-                        &self.sdpa_params,
-                        Some(ctx.flash_params()),
-                    )?
-                }
-            },
+            Some(paged_attn) => LayerAttention {
+                q: &q,
+                k: &k,
+                v: &v,
+                mask: attention_mask,
+                sdpa_params: &self.sdpa_params,
+                flash_params: ctx.flash_params(),
+            }
+            .run_paged(paged_attn, ctx.paged_layer(block_idx))?,
             None => {
                 let (k, v) =
                     crate::pipeline::Cache::update_kv_cache(&mut kv_cache[block_idx], k, v)?;
