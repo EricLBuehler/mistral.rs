@@ -6696,10 +6696,11 @@ impl TopKLastDimOp for Tensor {
         // Sorted descending
         let TopKOutput { values, indices } = self.topk(topk)?;
         // Reorder the indices ascending
-        #[cfg(feature = "cuda")]
-        let reorder_indices = indices.arg_sort(true)?;
-        #[cfg(not(feature = "cuda"))]
-        let reorder_indices = indices.arg_sort_last_dim(true)?;
+        let reorder_indices = if indices.device().is_cuda() {
+            indices.arg_sort(true)?
+        } else {
+            indices.arg_sort_last_dim(true)?
+        };
         let topk_indices_unsorted = indices
             .to_dtype(DType::F32)?
             .gather(&reorder_indices, D::Minus1)?
@@ -7892,6 +7893,17 @@ mod tests {
             indices.to_vec2::<u32>().unwrap(),
             vec![vec![2u32, 1u32], vec![2u32, 1u32]]
         );
+    }
+
+    #[test]
+    fn test_topk_unsorted_cpu() -> candle_core::Result<()> {
+        use crate::ops::{TopKLastDimOp, TopKOutput};
+        use candle_core::Tensor;
+        let x = Tensor::new(&[[1f32, 3., 5.], [6., 2., 4.]], &candle_core::Device::Cpu)?;
+        let TopKOutput { values, indices } = x.topk_unsorted(2)?;
+        assert_eq!(values.to_vec2::<f32>()?, vec![vec![3f32, 5.], vec![6., 4.]]);
+        assert_eq!(indices.to_vec2::<u32>()?, vec![vec![1u32, 2], vec![0, 2]]);
+        Ok(())
     }
 
     #[test]
