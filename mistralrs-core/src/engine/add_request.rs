@@ -887,44 +887,43 @@ impl Engine {
             } else {
                 None
             };
-            let mut seq = Sequence::new_waiting(
-                prompt_tokens.clone(),
-                prompt_text.clone(),
-                *get_mut_arcmutex!(self.id).deref(),
-                now.as_millis(),
-                num_hidden_layers,
-                request.response.clone(),
-                sampler.clone(),
-                stop_toks.clone(),
-                stop_strings.clone(),
-                request.sampling_params.max_len,
-                request.return_logprobs,
-                get_mut_arcmutex!(self.pipeline).get_metadata().is_xlora,
-                group.clone(),
+            let mut seq = Sequence::new_waiting(crate::sequence::SequenceInit {
+                tokens: prompt_tokens.clone(),
+                prompt: prompt_text.clone(),
+                id: *get_mut_arcmutex!(self.id).deref(),
+                timestamp: now.as_millis(),
+                layers: num_hidden_layers,
+                responder: request.response.clone(),
+                sampler: sampler.clone(),
+                stop_tokens: stop_toks.clone(),
+                stop_strings: stop_strings.clone(),
+                max_len: request.sampling_params.max_len,
+                return_logprobs: request.return_logprobs,
+                is_xlora: get_mut_arcmutex!(self.pipeline).get_metadata().is_xlora,
+                group: group.clone(),
                 response_index,
-                now.as_secs(),
+                creation_time: now.as_secs(),
                 recognizer,
-                request.suffix.clone(),
-                if echo_prompt {
+                suffix: request.suffix.clone(),
+                prefix: if echo_prompt {
                     Some(prompt_text.clone())
                 } else {
                     None
                 },
-                images.clone(),
-                audios.clone(),
-                videos.clone(),
-                block_size,
+                input_images: images.clone(),
+                input_audios: audios.clone(),
+                input_videos: videos.clone(),
                 tool_call_state,
-                image_generation_format,
-                seq_step_type,
-                diffusion_params.clone(),
-                image_gen_save_file.clone(),
+                image_gen_response_format: image_generation_format,
+                sequence_stepping_type: seq_step_type,
+                diffusion_params: diffusion_params.clone(),
+                image_gen_save_file: image_gen_save_file.clone(),
                 seq_preallocated_cache,
-                request.return_raw_logits,
-                request.sampling_params.ignore_eos,
-                eos_toks,
-                choice_seed(request.seed, response_index),
-            );
+                return_raw_logits: request.return_raw_logits,
+                ignore_eos: request.sampling_params.ignore_eos,
+                eos_tokens: eos_toks,
+                sampling_seed: choice_seed(request.seed, response_index),
+            });
             seq.set_audio_output(request.audio_output);
             seq.decision = decision.clone();
             if let Some(adapter_lease) = &adapter_lease {

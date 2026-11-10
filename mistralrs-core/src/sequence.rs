@@ -855,48 +855,77 @@ enum StepTimingKind {
     Completion,
 }
 
+/// Everything a new waiting sequence is built from.
+pub(crate) struct SequenceInit {
+    pub tokens: Vec<u32>,
+    pub prompt: String,
+    pub id: usize,
+    pub timestamp: u128,
+    pub layers: usize,
+    pub responder: Sender<Response>,
+    pub sampler: Sampler,
+    pub stop_tokens: Vec<u32>,
+    pub stop_strings: Vec<String>,
+    pub max_len: Option<usize>,
+    pub return_logprobs: bool,
+    pub is_xlora: bool,
+    pub group: Arc<Mutex<SequenceGroup>>,
+    pub response_index: usize,
+    pub creation_time: u64,
+    pub recognizer: SequenceRecognizer,
+    pub suffix: Option<String>,
+    pub prefix: Option<String>,
+    pub input_images: Option<Vec<image::DynamicImage>>,
+    pub input_audios: Option<Vec<AudioInput>>,
+    pub input_videos: Option<Vec<VideoInput>>,
+    pub tool_call_state: Option<ToolCallState>,
+    pub image_gen_response_format: Option<ImageGenerationResponseFormat>,
+    pub sequence_stepping_type: SeqStepType,
+    pub diffusion_params: Option<DiffusionGenerationParams>,
+    pub image_gen_save_file: Option<PathBuf>,
+    pub seq_preallocated_cache: Option<SeqPreallocatedCache>,
+    pub return_raw_logits: bool,
+    pub ignore_eos: bool,
+    pub eos_tokens: Vec<u32>,
+    pub sampling_seed: Option<u64>,
+}
+
 impl Sequence {
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new_waiting(
-        tokens: Vec<u32>,
-        prompt: String,
-        id: usize,
-        timestamp: u128,
-        layers: usize,
-        responder: Sender<Response>,
-        sampler: Sampler,
-        stop_tokens: Vec<u32>,
-        stop_strings: Vec<String>,
-        max_len: Option<usize>,
-        return_logprobs: bool,
-        is_xlora: bool,
-        group: Arc<Mutex<SequenceGroup>>,
-        response_index: usize,
-        creation_time: u64,
-        recognizer: SequenceRecognizer,
-        suffix: Option<String>,
-        prefix: Option<String>,
-        input_images: Option<Vec<image::DynamicImage>>,
-        input_audios: Option<Vec<AudioInput>>,
-        input_videos: Option<Vec<VideoInput>>,
-        // Paged attention
-        block_size: Option<usize>,
-        //
-        tool_call_state: Option<ToolCallState>,
-        image_gen_response_format: Option<ImageGenerationResponseFormat>,
-        sequence_stepping_type: SeqStepType,
-        diffusion_params: Option<DiffusionGenerationParams>,
-        image_gen_save_file: Option<PathBuf>,
-        // Preallocated KV cache templates, keyed by layer.
-        seq_preallocated_cache: Option<SeqPreallocatedCache>,
-        //
-        return_raw_logits: bool,
-        ignore_eos: bool,
-        eos_tokens: Vec<u32>,
-        sampling_seed: Option<u64>,
-    ) -> Self {
+    pub(crate) fn new_waiting(init: SequenceInit) -> Self {
+        let SequenceInit {
+            tokens,
+            prompt,
+            id,
+            timestamp,
+            layers,
+            responder,
+            sampler,
+            stop_tokens,
+            stop_strings,
+            max_len,
+            return_logprobs,
+            is_xlora,
+            group,
+            response_index,
+            creation_time,
+            recognizer,
+            suffix,
+            prefix,
+            input_images,
+            input_audios,
+            input_videos,
+            tool_call_state,
+            image_gen_response_format,
+            sequence_stepping_type,
+            diffusion_params,
+            image_gen_save_file,
+            seq_preallocated_cache,
+            return_raw_logits,
+            ignore_eos,
+            eos_tokens,
+            sampling_seed,
+        } = init;
         let prompt_len = tokens.len();
-        let _ = block_size; // Block management handled by KVCacheManager
         let stream_logprobs = return_logprobs
             && group
                 .try_lock()
