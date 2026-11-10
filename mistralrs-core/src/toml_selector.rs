@@ -1,7 +1,8 @@
-use std::{fs::File, path::PathBuf, str::FromStr};
+use std::path::PathBuf;
 
 use serde::{de, Deserialize, Deserializer};
 
+use crate::model_loader::{read_ordering, split_gguf_files, split_uqff_files};
 use crate::{
     amoe::AnyMoeConfig,
     pipeline::{EmbeddingLoaderType, IsqOrganization},
@@ -9,7 +10,7 @@ use crate::{
     GGMLLoaderBuilder, GGMLSpecificConfig, GGUFLoaderBuilder, GGUFSpecificConfig, Loader,
     LoraAdapterSpec, LoraRuntimeConfig, ModelDType, MultimodalLoaderBuilder, MultimodalLoaderType,
     MultimodalSpecificConfig, NormalLoaderBuilder, NormalLoaderType, NormalSpecificConfig,
-    Topology, UqffWriteConfig, GGUF_MULTI_FILE_DELIMITER, UQFF_MULTI_FILE_DELIMITER,
+    Topology, UqffWriteConfig,
 };
 
 fn default_one() -> usize {
@@ -849,12 +850,7 @@ fn loader_from_selected(
                 topology: Topology::from_option_path(topology)?,
                 organization: organization.unwrap_or_default(),
                 write_uqff,
-                from_uqff: from_uqff.map(|x| {
-                    x.split(UQFF_MULTI_FILE_DELIMITER)
-                        .map(PathBuf::from_str)
-                        .map(|x| x.unwrap())
-                        .collect::<Vec<_>>()
-                }),
+                from_uqff: split_uqff_files(from_uqff),
                 imatrix,
                 calibration_file,
                 hf_cache_path,
@@ -888,12 +884,7 @@ fn loader_from_selected(
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
                 write_uqff,
-                from_uqff: from_uqff.map(|x| {
-                    x.split(UQFF_MULTI_FILE_DELIMITER)
-                        .map(PathBuf::from_str)
-                        .map(|x| x.unwrap())
-                        .collect::<Vec<_>>()
-                }),
+                from_uqff: split_uqff_files(from_uqff),
                 imatrix: None,
                 calibration_file: None,
                 hf_cache_path,
@@ -910,10 +901,7 @@ fn loader_from_selected(
         )
         .with_xlora(
             xlora_model_id,
-            serde_json::from_reader(
-                File::open(order.clone())
-                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-            )?,
+            read_ordering(&order)?,
             args.no_kv_cache,
             tgt_non_granular_index,
         )
@@ -935,12 +923,7 @@ fn loader_from_selected(
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
                 write_uqff,
-                from_uqff: from_uqff.map(|x| {
-                    x.split(UQFF_MULTI_FILE_DELIMITER)
-                        .map(PathBuf::from_str)
-                        .map(|x| x.unwrap())
-                        .collect::<Vec<_>>()
-                }),
+                from_uqff: split_uqff_files(from_uqff),
                 imatrix: None,
                 calibration_file: None,
                 hf_cache_path,
@@ -981,10 +964,7 @@ fn loader_from_selected(
                 args.chat_template,
                 tok_model_id,
                 quantized_model_id,
-                quantized_filename
-                    .split(GGUF_MULTI_FILE_DELIMITER)
-                    .map(ToOwned::to_owned)
-                    .collect::<Vec<_>>(),
+                split_gguf_files(&quantized_filename),
                 GGUFSpecificConfig {
                     topology: Topology::from_option_path(topology)?,
                     organization: organization.unwrap_or_default(),
@@ -1002,12 +982,7 @@ fn loader_from_selected(
             )
             .with_encoder_cache_memory_bytes(args.encoder_cache_memory_bytes);
             if let Some(mmproj_filename) = mmproj_filename {
-                builder = builder.with_mmproj_files(
-                    mmproj_filename
-                        .split(GGUF_MULTI_FILE_DELIMITER)
-                        .map(ToOwned::to_owned)
-                        .collect(),
-                );
+                builder = builder.with_mmproj_files(split_gguf_files(&mmproj_filename));
             }
             if let Some(tokenizer_json) = args.tokenizer_json {
                 builder = builder.with_tokenizer_json(tokenizer_json);
@@ -1029,10 +1004,7 @@ fn loader_from_selected(
             args.chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename
-                .split(GGUF_MULTI_FILE_DELIMITER)
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>(),
+            split_gguf_files(&quantized_filename),
             GGUFSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
                 ..Default::default()
@@ -1043,10 +1015,7 @@ fn loader_from_selected(
         .with_encoder_cache_memory_bytes(args.encoder_cache_memory_bytes)
         .with_xlora(
             xlora_model_id,
-            serde_json::from_reader(
-                File::open(order.clone())
-                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-            )?,
+            read_ordering(&order)?,
             args.no_kv_cache,
             tgt_non_granular_index,
         )
@@ -1063,10 +1032,7 @@ fn loader_from_selected(
             args.chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename
-                .split(GGUF_MULTI_FILE_DELIMITER)
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>(),
+            split_gguf_files(&quantized_filename),
             GGUFSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
                 ..Default::default()
@@ -1075,13 +1041,7 @@ fn loader_from_selected(
             args.jinja_explicit,
         )
         .with_encoder_cache_memory_bytes(args.encoder_cache_memory_bytes)
-        .with_lora(
-            adapters_model_id,
-            serde_json::from_reader(
-                File::open(order.clone())
-                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-            )?,
-        )
+        .with_lora(adapters_model_id, read_ordering(&order)?)
         .build(),
         TomlModelSelected::GGML {
             tok_model_id,
@@ -1133,10 +1093,7 @@ fn loader_from_selected(
         )
         .with_xlora(
             xlora_model_id,
-            serde_json::from_reader(
-                File::open(order.clone())
-                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-            )?,
+            read_ordering(&order)?,
             args.no_kv_cache,
             tgt_non_granular_index,
         )
@@ -1165,13 +1122,7 @@ fn loader_from_selected(
             args.no_kv_cache,
             args.jinja_explicit,
         )
-        .with_lora(
-            adapters_model_id,
-            serde_json::from_reader(
-                File::open(order.clone())
-                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-            )?,
-        )
+        .with_lora(adapters_model_id, read_ordering(&order)?)
         .build(),
         TomlModelSelected::MultimodalPlain {
             model_id,
@@ -1193,12 +1144,7 @@ fn loader_from_selected(
             MultimodalSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
                 write_uqff,
-                from_uqff: from_uqff.map(|x| {
-                    x.split(UQFF_MULTI_FILE_DELIMITER)
-                        .map(PathBuf::from_str)
-                        .map(|x| x.unwrap())
-                        .collect::<Vec<_>>()
-                }),
+                from_uqff: split_uqff_files(from_uqff),
                 max_edge,
                 max_model_len: args.max_model_len,
                 hf_config_overrides: args.hf_config_overrides.clone(),
@@ -1229,12 +1175,7 @@ fn loader_from_selected(
             EmbeddingSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
                 write_uqff,
-                from_uqff: from_uqff.map(|x| {
-                    x.split(UQFF_MULTI_FILE_DELIMITER)
-                        .map(PathBuf::from_str)
-                        .map(|x| x.unwrap())
-                        .collect::<Vec<_>>()
-                }),
+                from_uqff: split_uqff_files(from_uqff),
                 imatrix: None,
                 calibration_file: None,
                 hf_cache_path,
