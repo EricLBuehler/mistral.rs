@@ -52,7 +52,7 @@ use tokio::{
 
 use crate::{
     get_mut_arcmutex, handle_pipeline_forward_error,
-    pipeline::{ModelCategory, Pipeline},
+    pipeline::Pipeline,
     request::Request,
     response::{
         ChatCompletionResponse, Choice, CompletionChoice, CompletionResponse, ResponseMessage,
@@ -782,19 +782,6 @@ impl Engine {
             #[cfg(feature = "cuda")]
             cuda_decode_enabled,
         })
-    }
-
-    /// Most tokens (prompt plus output) one request may use, if applicable.
-    #[allow(dead_code)]
-    pub fn max_sequence_length(&self) -> Option<usize> {
-        let pipeline = get_mut_arcmutex!(self.pipeline);
-        let category = pipeline.category();
-
-        if matches!(category, ModelCategory::Diffusion | ModelCategory::Speech) {
-            None
-        } else {
-            Some(pipeline.get_metadata().max_model_len)
-        }
     }
 
     fn free_finished_scheduler_sequences(&self, scheduler: &mut dyn Scheduler) {

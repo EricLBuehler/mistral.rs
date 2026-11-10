@@ -27,8 +27,6 @@ pub(crate) use ops::fused_glu_quantized_bf16;
 pub(crate) use ops::fused_split_glu_quantized_bf16;
 #[cfg(feature = "cuda")]
 pub use ops::gptoss_swiglu_fused;
-#[cfg(feature = "cuda")]
-pub use ops::gptoss_swiglu_interleaved;
 pub use ops::softcap;
 pub use ops::softmax_with_sinks;
 pub use ops::{fused_glu, fused_split_glu, GluActivationType};

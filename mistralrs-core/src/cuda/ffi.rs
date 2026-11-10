@@ -675,22 +675,6 @@ extern "C" {
         stream: i64,
     );
 
-    pub(crate) fn topk_large_f32(
-        input: *const f32,
-        block_values: *mut f32,
-        block_indices: *mut u32,
-        block_maxes: *mut f32,
-        block_sums: *mut f32,
-        values_out: *mut f32,
-        indices_out: *mut u32,
-        softmax_info_out: *mut f32,
-        ncols: i32,
-        k: i32,
-        chunk_size: i32,
-        nblocks: i32,
-        inv_temperature: f32,
-        stream: i64,
-    );
     pub(crate) fn topk_large_f32_packed(
         input: *const f32,
         block_values: *mut f32,

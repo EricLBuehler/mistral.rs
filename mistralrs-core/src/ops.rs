@@ -547,169 +547,6 @@ pub fn cuda_moe_router_topk(
 }
 
 #[cfg(feature = "cuda")]
-#[allow(dead_code)]
-#[allow(clippy::cast_possible_truncation)]
-pub fn cuda_topk_logits_f32(
-    input: &Tensor,
-    k: usize,
-    temperature: f64,
-) -> Result<TopKLogitsOutput> {
-    use candle_core::backend::BackendStorage;
-    use candle_core::cuda_backend::cudarc::driver::{DevicePtr, DevicePtrMut};
-    use candle_core::cuda_backend::CudaStorageSlice;
-
-    if temperature <= 0.0 || !temperature.is_finite() {
-        candle_core::bail!("cuda_topk_logits_f32 requires a positive finite temperature");
-    }
-
-    let input = input.contiguous()?;
-    if input.dtype() != DType::F32 {
-        candle_core::bail!("cuda_topk_logits_f32 requires F32 logits");
-    }
-
-    let ncols = input.elem_count();
-    if ncols == 0 {
-        candle_core::bail!("cuda_topk_logits_f32 got empty logits");
-    }
-    let k = k.min(ncols);
-    if k == 0 || k > CUDA_TOPK_MAX_K {
-        candle_core::bail!(
-            "cuda_topk_logits_f32 k={} must be in [1, {}]",
-            k,
-            CUDA_TOPK_MAX_K
-        );
-    }
-
-    let nblocks = ncols.div_ceil(CUDA_TOPK_CHUNK_SIZE);
-    let stage2_candidates = nblocks * k;
-    if stage2_candidates > CUDA_TOPK_MAX_STAGE2_CANDIDATES {
-        candle_core::bail!(
-            "cuda_topk_logits_f32 workspace too large: {} candidates",
-            stage2_candidates
-        );
-    }
-
-    let (storage, layout) = input.storage_and_layout();
-    let storage = match &*storage {
-        candle_core::Storage::Cuda(s) => s,
-        _ => candle_core::bail!("cuda_topk_logits_f32 requires CUDA tensor"),
-    };
-
-    let dev = storage.device();
-    let stream = dev.cuda_stream();
-    let stream_raw = stream.cu_stream() as i64;
-
-    let (src_ptr, _src_guard) = match &storage.slice {
-        CudaStorageSlice::F32(inp) => inp.device_ptr(&stream),
-        _ => candle_core::bail!("cuda_topk_logits_f32 only supports F32"),
-    };
-    let src_ptr = unsafe { (src_ptr as *const f32).add(layout.start_offset()) };
-
-    let workspace_elems = nblocks * k;
-    let mut block_values = unsafe { dev.alloc::<f32>(workspace_elems) }?;
-    let mut block_indices = unsafe { dev.alloc::<u32>(workspace_elems) }?;
-    let mut block_maxes = unsafe { dev.alloc::<f32>(nblocks) }?;
-    let mut block_sums = unsafe { dev.alloc::<f32>(nblocks) }?;
-    let mut values_dst = unsafe { dev.alloc::<f32>(k) }?;
-    let mut indices_dst = unsafe { dev.alloc::<u32>(k) }?;
-    let mut softmax_info_dst = unsafe { dev.alloc::<f32>(2) }?;
-
-    let (block_values_ptr, block_values_guard) = block_values.device_ptr_mut(&stream);
-    let (block_indices_ptr, block_indices_guard) = block_indices.device_ptr_mut(&stream);
-    let (block_maxes_ptr, block_maxes_guard) = block_maxes.device_ptr_mut(&stream);
-    let (block_sums_ptr, block_sums_guard) = block_sums.device_ptr_mut(&stream);
-    let (values_ptr, values_guard) = values_dst.device_ptr_mut(&stream);
-    let (indices_ptr, indices_guard) = indices_dst.device_ptr_mut(&stream);
-    let (softmax_info_ptr, softmax_info_guard) = softmax_info_dst.device_ptr_mut(&stream);
-
-    unsafe {
-        ffi::topk_large_f32(
-            src_ptr,
-            block_values_ptr as *mut f32,
-            block_indices_ptr as *mut u32,
-            block_maxes_ptr as *mut f32,
-            block_sums_ptr as *mut f32,
-            values_ptr as *mut f32,
-            indices_ptr as *mut u32,
-            softmax_info_ptr as *mut f32,
-            ncols as i32,
-            k as i32,
-            CUDA_TOPK_CHUNK_SIZE as i32,
-            nblocks as i32,
-            (1.0 / temperature) as f32,
-            stream_raw,
-        );
-    }
-
-    drop(block_values_guard);
-    drop(block_indices_guard);
-    drop(block_maxes_guard);
-    drop(block_sums_guard);
-    drop(values_guard);
-    drop(indices_guard);
-    drop(softmax_info_guard);
-
-    let values_storage = candle_core::cuda_backend::CudaStorage {
-        slice: CudaStorageSlice::F32(values_dst),
-        device: dev.clone(),
-    };
-    let indices_storage = candle_core::cuda_backend::CudaStorage {
-        slice: CudaStorageSlice::U32(indices_dst),
-        device: dev.clone(),
-    };
-    let softmax_info_storage = candle_core::cuda_backend::CudaStorage {
-        slice: CudaStorageSlice::F32(softmax_info_dst),
-        device: dev.clone(),
-    };
-    let workspace = vec![
-        Tensor::from((
-            candle_core::Storage::Cuda(candle_core::cuda_backend::CudaStorage {
-                slice: CudaStorageSlice::F32(block_values),
-                device: dev.clone(),
-            }),
-            Shape::from_dims(&[workspace_elems]),
-        )),
-        Tensor::from((
-            candle_core::Storage::Cuda(candle_core::cuda_backend::CudaStorage {
-                slice: CudaStorageSlice::U32(block_indices),
-                device: dev.clone(),
-            }),
-            Shape::from_dims(&[workspace_elems]),
-        )),
-        Tensor::from((
-            candle_core::Storage::Cuda(candle_core::cuda_backend::CudaStorage {
-                slice: CudaStorageSlice::F32(block_maxes),
-                device: dev.clone(),
-            }),
-            Shape::from_dims(&[nblocks]),
-        )),
-        Tensor::from((
-            candle_core::Storage::Cuda(candle_core::cuda_backend::CudaStorage {
-                slice: CudaStorageSlice::F32(block_sums),
-                device: dev.clone(),
-            }),
-            Shape::from_dims(&[nblocks]),
-        )),
-    ];
-
-    Ok(TopKLogitsOutput {
-        values: Tensor::from((
-            candle_core::Storage::Cuda(values_storage),
-            Shape::from_dims(&[k]),
-        )),
-        indices: Tensor::from((
-            candle_core::Storage::Cuda(indices_storage),
-            Shape::from_dims(&[k]),
-        )),
-        softmax_info: Tensor::from((
-            candle_core::Storage::Cuda(softmax_info_storage),
-            Shape::from_dims(&[2]),
-        )),
-        _workspace: workspace,
-    })
-}
-
-#[cfg(feature = "cuda")]
 #[allow(clippy::cast_possible_truncation)]
 pub fn cuda_topk_logits_f32_packed(
     input: &Tensor,
@@ -2001,8 +1838,7 @@ pub(crate) fn cuda_dflash_sample_select(
     })
 }
 
-#[cfg(feature = "cuda")]
-#[allow(dead_code)]
+#[cfg(all(feature = "cuda", test))]
 pub(crate) fn cuda_top1_logits_f32_packed_batched(
     input: &Tensor,
 ) -> Result<Top1LogitsPackedOutput> {
@@ -3802,16 +3638,6 @@ pub struct TopKOutput {
 }
 
 #[allow(dead_code)]
-pub struct TopKLogitsOutput {
-    pub values: Tensor,
-    pub indices: Tensor,
-    /// `[softmax_denominator, global_max]` for the full-vocabulary softmax at
-    /// the temperature used for top-k selection.
-    pub softmax_info: Tensor,
-    _workspace: Vec<Tensor>,
-}
-
-#[allow(dead_code)]
 pub struct TopKLogitsPackedOutput {
     /// Each row is packed as `[values; indices_as_f32; softmax_denominator; global_max]`.
     pub packed: Tensor,
@@ -3834,8 +3660,7 @@ pub(crate) struct CategoricalLogitsPackedOutput {
     _workspace: Vec<Tensor>,
 }
 
-#[cfg(feature = "cuda")]
-#[allow(dead_code)]
+#[cfg(all(feature = "cuda", test))]
 pub(crate) struct Top1LogitsPackedOutput {
     pub(crate) packed: Tensor,
     _workspace: Vec<Tensor>,
@@ -6768,81 +6593,6 @@ impl SplitOp for Tensor {
             index += *split;
         }
         Ok(split_res)
-    }
-}
-
-#[allow(dead_code)]
-pub trait BincountOp {
-    fn bincount(&self, minlength: u32) -> Result<Vec<u32>>;
-}
-
-#[allow(dead_code)]
-fn bincount(values: &[u32], minlength: u32) -> Vec<u32> {
-    // let max_val = values.iter().max().copied().unwrap_or(0);
-    // let result_len = (max_val + 1).max(minlength);
-    // values.iter().fold(
-    //     // Start with a histogram vector of zeros.
-    //     vec![0u32; result_len as usize],
-    //     // For each value, update the histogram.
-    //     |mut histogram, &value| {
-    //         histogram[value as usize] += 1;
-    //         histogram
-    //     },
-    // )
-
-    use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
-
-    // Early return if there are no values.
-    if values.is_empty() {
-        return vec![0u32; minlength as usize];
-    }
-
-    // Compute the maximum value in parallel.
-    // SAFETY: We just checked that values is nonempty above, so max() will return Some.
-    // Using expect() for clearer error message if this invariant is somehow violated.
-    let max_val = *values
-        .par_iter()
-        .max()
-        .expect("values should be non-empty after empty check");
-
-    // The histogram length must cover all observed values as well as `minlength`.
-    let result_len = (max_val + 1).max(minlength) as usize;
-
-    // Build per-thread histograms in parallel.
-    // We use unsafe indexing to eliminate bounds checks in the inner loop.
-    values
-        .par_iter()
-        .fold(
-            || vec![0u32; result_len],
-            |mut local_hist, &v| {
-                // SAFETY: v is guaranteed to be <= max_val, so it is in bounds.
-                unsafe {
-                    *local_hist.get_unchecked_mut(v as usize) += 1;
-                }
-                local_hist
-            },
-        )
-        // Merge the per-thread histograms in parallel.
-        .reduce(
-            || vec![0u32; result_len],
-            |mut global_hist, local_hist| {
-                for i in 0..result_len {
-                    // SAFETY: we know local histogram is at least result_len, as is global_hist
-                    unsafe {
-                        *global_hist.get_unchecked_mut(i) += local_hist.get_unchecked(i);
-                    }
-                }
-                global_hist
-            },
-        )
-}
-
-#[allow(dead_code)]
-impl BincountOp for Tensor {
-    fn bincount(&self, minlength: u32) -> Result<Vec<u32>> {
-        let values = self.to_vec1::<u32>()?;
-
-        Ok(bincount(&values, minlength))
     }
 }
 

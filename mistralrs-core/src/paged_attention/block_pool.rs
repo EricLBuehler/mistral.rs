@@ -304,12 +304,6 @@ impl KVCacheBlock {
         }
     }
 
-    /// Check if this block is currently in the free list.
-    #[allow(dead_code)]
-    fn is_in_free_list(&self) -> bool {
-        self.prev_free != NO_LINK || self.next_free != NO_LINK
-    }
-
     /// Reset the hash when the block is evicted (reallocated).
     fn reset_hash(&mut self) {
         self.block_hashes.clear();

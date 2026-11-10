@@ -293,8 +293,6 @@ pub use utils::flash_attn_sinks_metal;
 pub use utils::flash_attn_sinks_varlen_metal;
 #[cfg(feature = "cuda")]
 pub use utils::gptoss_swiglu_fused;
-#[cfg(feature = "cuda")]
-pub use utils::gptoss_swiglu_interleaved;
 pub use utils::isq::{
     apply_immediate_isq, apply_immediate_isq_sharded, apply_immediate_isq_with_key,
     quantize_expert_stack, quantize_expert_stack_with_bias, requantize_tracked, RequantizeHandles,
@@ -446,29 +444,6 @@ unsafe fn set_isq_thread_affinity() {
 
 #[cfg(not(target_os = "macos"))]
 unsafe fn set_isq_thread_affinity() {}
-
-/// Legacy Rayon pool helper for callers that still need raw pool semantics.
-/// New ISQ scheduling should use `create_isq_executor`.
-pub fn create_isq_thread_pool(ty: Option<IsqType>) -> (rayon::ThreadPool, usize) {
-    let num_threads = if std::env::var("MISTRALRS_ISQ_SINGLETHREAD").is_ok() {
-        1
-    } else if let Some(ty) = ty {
-        ty.get_max_isq_cpu_threads()
-            .map(usize::from)
-            .unwrap_or_else(rayon::current_num_threads)
-    } else {
-        rayon::current_num_threads()
-    };
-
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(num_threads)
-        .start_handler(|_| unsafe {
-            set_isq_thread_affinity();
-        })
-        .build()
-        .expect("Failed to create ISQ thread pool");
-    (pool, num_threads)
-}
 
 pub fn create_isq_executor(config: IsqExecutorConfig) -> (IsqExecutor, usize) {
     let executor = IsqExecutor::new(config);
@@ -971,13 +946,6 @@ impl MatMul {
                 a.matmul(b)
             }
         }
-    }
-
-    /// Compute matrix-matrix product.
-    /// The result will be divided by the `scale` parameter in an affine division.
-    pub fn matmul_affine_div(&self, a: &Tensor, b: &Tensor, scale: f64) -> Result<Tensor> {
-        // TODO(EricLBuehler): Optimize this by using the gemm parameter?
-        self.matmul(a, b)? / scale
     }
 
     /// Compute matrix-matrix product.
