@@ -789,89 +789,6 @@ pub(crate) fn metadata_rope_positions<'a>(
         .and_then(|positions| positions.get(&device.location()))
 }
 
-#[allow(dead_code)]
-pub(crate) enum ForwardCache<'a> {
-    Normal(&'a mut [KvCache]),
-    Paged {
-        kv_cache: &'a [(Tensor, Tensor)],
-        metadata: &'a PagedAttentionInputMetadata,
-    },
-    None,
-}
-
-#[allow(dead_code)]
-impl<'a> ForwardCache<'a> {
-    pub(crate) fn from_paged(
-        metadata: Option<(&'a [(Tensor, Tensor)], &'a PagedAttentionInputMetadata)>,
-    ) -> Self {
-        match metadata {
-            Some((kv_cache, metadata)) => Self::Paged { kv_cache, metadata },
-            None => Self::None,
-        }
-    }
-
-    pub(crate) fn paged_metadata(
-        &self,
-    ) -> Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)> {
-        match self {
-            Self::Paged { kv_cache, metadata } => Some((kv_cache.to_vec(), metadata)),
-            Self::Normal(_) | Self::None => None,
-        }
-    }
-
-    pub(crate) fn paged_layer(
-        &self,
-        layer_idx: usize,
-    ) -> Option<((Tensor, Tensor), &PagedAttentionInputMetadata)> {
-        match self {
-            Self::Paged { kv_cache, metadata } => Some((kv_cache[layer_idx].clone(), metadata)),
-            Self::Normal(_) | Self::None => None,
-        }
-    }
-
-    pub(crate) fn rope_positions(&self, device: &Device) -> Option<&Tensor> {
-        match self {
-            Self::Paged { metadata, .. } => metadata_rope_positions(metadata, device),
-            Self::Normal(_) | Self::None => None,
-        }
-    }
-
-    pub(crate) fn is_final_prompt_chunk(&self) -> bool {
-        match self {
-            Self::Paged { metadata, .. } => metadata.is_final_prompt_chunk,
-            Self::Normal(_) | Self::None => true,
-        }
-    }
-
-    pub(crate) fn is_first_prompt_chunk(&self) -> bool {
-        match self {
-            Self::Paged { metadata, .. } => metadata.is_first_prompt_chunk,
-            Self::Normal(_) | Self::None => true,
-        }
-    }
-
-    pub(crate) fn needs_logits(&self) -> bool {
-        match self {
-            Self::Paged { metadata, .. } => metadata.needs_logits,
-            Self::Normal(_) | Self::None => true,
-        }
-    }
-
-    pub(crate) fn normal_mut(&mut self) -> Option<&mut [KvCache]> {
-        match self {
-            Self::Normal(cache) => Some(cache),
-            Self::Paged { .. } | Self::None => None,
-        }
-    }
-}
-
-#[allow(dead_code)]
-pub(crate) enum ForwardPositions<'a> {
-    Text { seqlen_offsets: &'a [usize] },
-    Mrope { position_ids: &'a Tensor },
-    None,
-}
-
 pub(crate) enum ForwardMaskCache<'a> {
     Normal(&'a [KvCache]),
     Paged(&'a [usize]),
@@ -944,9 +861,9 @@ impl PastKvLenCache for ForwardMaskCache<'_> {
 }
 
 pub(crate) struct ModelForwardContext<'a> {
-    cache: ForwardCache<'a>,
-    positions: ForwardPositions<'a>,
-    rope_positions: HashMap<(DeviceLocation, usize), Tensor>,
+    paged: Option<(&'a [(Tensor, Tensor)], &'a PagedAttentionInputMetadata)>,
+    seqlen_offsets: &'a [usize],
+    text_position_cache: HashMap<(DeviceLocation, usize), Tensor>,
     context_lens: &'a [(usize, usize)],
     position_ids: &'a [usize],
     flash_params: &'a FlashParams,
@@ -955,7 +872,6 @@ pub(crate) struct ModelForwardContext<'a> {
     requires_full_prefill_queries: bool,
 }
 
-#[allow(dead_code)]
 impl<'a> ModelForwardContext<'a> {
     pub(crate) fn new(
         seqlen_offsets: &'a [usize],
@@ -965,29 +881,9 @@ impl<'a> ModelForwardContext<'a> {
         flash_params: &'a FlashParams,
     ) -> Self {
         Self {
-            cache: ForwardCache::from_paged(metadata),
-            positions: ForwardPositions::Text { seqlen_offsets },
-            rope_positions: HashMap::new(),
-            context_lens,
-            position_ids,
-            flash_params,
-            recurrent_metadata: None,
-            recurrent_batch_kind: None,
-            requires_full_prefill_queries: false,
-        }
-    }
-
-    pub(crate) fn with_cache(
-        cache: ForwardCache<'a>,
-        seqlen_offsets: &'a [usize],
-        context_lens: &'a [(usize, usize)],
-        position_ids: &'a [usize],
-        flash_params: &'a FlashParams,
-    ) -> Self {
-        Self {
-            cache,
-            positions: ForwardPositions::Text { seqlen_offsets },
-            rope_positions: HashMap::new(),
+            paged: metadata,
+            seqlen_offsets,
+            text_position_cache: HashMap::new(),
             context_lens,
             position_ids,
             flash_params,
@@ -1024,31 +920,21 @@ impl<'a> ModelForwardContext<'a> {
         self.requires_full_prefill_queries
     }
 
-    pub(crate) fn cache(&self) -> &ForwardCache<'a> {
-        &self.cache
-    }
-
-    pub(crate) fn cache_mut(&mut self) -> &mut ForwardCache<'a> {
-        &mut self.cache
+    pub(crate) fn rope_positions(&self, device: &Device) -> Option<&'a Tensor> {
+        self.paged
+            .and_then(|(_, metadata)| metadata_rope_positions(metadata, device))
     }
 
     pub(crate) fn is_paged(&self) -> bool {
-        matches!(self.cache, ForwardCache::Paged { .. })
+        self.paged.is_some()
     }
 
     pub(crate) fn seqlen_offsets(&self) -> &[usize] {
-        match self.positions {
-            ForwardPositions::Text { seqlen_offsets } => seqlen_offsets,
-            ForwardPositions::Mrope { .. } | ForwardPositions::None => &[],
-        }
+        self.seqlen_offsets
     }
 
     pub(crate) fn context_lens(&self) -> &[(usize, usize)] {
         self.context_lens
-    }
-
-    pub(crate) fn context_lens_vec(&self) -> Vec<(usize, usize)> {
-        self.context_lens.to_vec()
     }
 
     pub(crate) fn position_ids(&self) -> &[usize] {
@@ -1078,24 +964,16 @@ impl<'a> ModelForwardContext<'a> {
             })
     }
 
-    pub(crate) fn paged_metadata(
-        &self,
-    ) -> Option<(Vec<(Tensor, Tensor)>, &PagedAttentionInputMetadata)> {
-        self.cache.paged_metadata()
-    }
-
     pub(crate) fn paged_input_metadata(&self) -> Option<&PagedAttentionInputMetadata> {
-        match &self.cache {
-            ForwardCache::Paged { metadata, .. } => Some(*metadata),
-            ForwardCache::Normal(_) | ForwardCache::None => None,
-        }
+        self.paged.map(|(_, metadata)| metadata)
     }
 
     pub(crate) fn paged_layer(
         &self,
         layer_idx: usize,
     ) -> Option<((Tensor, Tensor), &PagedAttentionInputMetadata)> {
-        self.cache.paged_layer(layer_idx)
+        self.paged
+            .map(|(kv_cache, metadata)| (kv_cache[layer_idx].clone(), metadata))
     }
 
     pub(crate) fn text_positions(
@@ -1104,23 +982,23 @@ impl<'a> ModelForwardContext<'a> {
         seq_len: usize,
     ) -> candle_core::Result<Option<&Tensor>> {
         if self.flash_params.packed {
-            let positions = self.cache.rope_positions(device).ok_or_else(|| {
+            let positions = self.rope_positions(device).ok_or_else(|| {
                 candle_core::Error::msg("packed prefill is missing RoPE positions")
             })?;
             return Ok(Some(positions));
         }
-        if self.cache.rope_positions(device).is_some() {
-            return Ok(self.cache.rope_positions(device));
+        if self.rope_positions(device).is_some() {
+            return Ok(self.rope_positions(device));
         }
-        let ForwardPositions::Text { seqlen_offsets } = self.positions else {
-            return Ok(None);
-        };
+        let seqlen_offsets = self.seqlen_offsets;
         let location = device.location();
         let key = (location, seq_len);
-        if let std::collections::hash_map::Entry::Vacant(entry) = self.rope_positions.entry(key) {
+        if let std::collections::hash_map::Entry::Vacant(entry) =
+            self.text_position_cache.entry(key)
+        {
             entry.insert(text_positions_tensor(seqlen_offsets, seq_len, device)?);
         }
-        Ok(self.rope_positions.get(&key))
+        Ok(self.text_position_cache.get(&key))
     }
 
     pub(crate) fn text_positions_from_offsets(
@@ -1133,15 +1011,17 @@ impl<'a> ModelForwardContext<'a> {
     }
 
     pub(crate) fn is_first_prompt_chunk(&self) -> bool {
-        self.cache.is_first_prompt_chunk()
+        self.paged
+            .is_none_or(|(_, metadata)| metadata.is_first_prompt_chunk)
     }
 
     pub(crate) fn is_final_prompt_chunk(&self) -> bool {
-        self.cache.is_final_prompt_chunk()
+        self.paged
+            .is_none_or(|(_, metadata)| metadata.is_final_prompt_chunk)
     }
 
     pub(crate) fn needs_logits(&self) -> bool {
-        self.cache.needs_logits()
+        self.paged.is_none_or(|(_, metadata)| metadata.needs_logits)
     }
 
     /// Runs `head` on the selected rows, or returns a rank-preserving placeholder when the pipeline
@@ -1162,9 +1042,10 @@ impl<'a> ModelForwardContext<'a> {
     }
 
     pub(crate) fn mask_cache<'b>(&'b self, normal_cache: &'b [KvCache]) -> ForwardMaskCache<'b> {
-        match self.cache {
-            ForwardCache::Paged { .. } => ForwardMaskCache::Paged(self.seqlen_offsets()),
-            ForwardCache::Normal(_) | ForwardCache::None => ForwardMaskCache::Normal(normal_cache),
+        if self.paged.is_some() {
+            ForwardMaskCache::Paged(self.seqlen_offsets)
+        } else {
+            ForwardMaskCache::Normal(normal_cache)
         }
     }
 

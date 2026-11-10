@@ -9,9 +9,8 @@ use super::{
     effective_recurrent_checkpoint_lanes, next_pipeline_prompt_chunk_group,
     paged_attention_memory_reservations, prompt_chunk_is_final, recurrent_batch_kind_for_input,
     recurrent_kv_floor_bytes, reserve_recurrent_serving_capacity, resolve_lora_execution,
-    should_sample_step, should_try_speculative_sampling, CacheMemoryReservations, ForwardCache,
-    LogitsSelection, ModelForwardContext, RecurrentBatchKind, RecurrentCheckpointBudget,
-    RecurrentPrefixBudget,
+    should_sample_step, should_try_speculative_sampling, CacheMemoryReservations, LogitsSelection,
+    ModelForwardContext, RecurrentBatchKind, RecurrentCheckpointBudget, RecurrentPrefixBudget,
 };
 use crate::{
     kv_cache::{
@@ -580,11 +579,11 @@ fn packed_positions_require_explicit_metadata() {
     let seqlen_offsets = [0];
     let context_lens = [(0, 1)];
     let position_ids = [1];
-    let mut context = ModelForwardContext::with_cache(
-        ForwardCache::None,
+    let mut context = ModelForwardContext::new(
         &seqlen_offsets,
         &context_lens,
         &position_ids,
+        None,
         &flash_params,
     );
 
