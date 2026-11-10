@@ -5,6 +5,7 @@ __pycache__/
 *.a
 .DS_Store
 .idea
+.dirge/
 mistral.rs/
 
 mistralrs-cli/webui/node_modules/

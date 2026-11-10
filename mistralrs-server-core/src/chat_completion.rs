@@ -549,6 +549,28 @@ fn insert_reasoning_content(output: &mut IndexMap<String, MessageContent>, messa
     }
 }
 
+enum ContentPart {
+    Text { text: String },
+    Image { image_url: String },
+    Audio { audio_url: String },
+    Video { video_url: String },
+    File { spec: InputFileSpec },
+}
+
+/// OpenAI allows text parts on any role; only media parts must arrive in user messages.
+fn validate_content_role(items: &[ContentPart], role: &str) -> Result<()> {
+    let has_media = items
+        .iter()
+        .any(|item| !matches!(item, ContentPart::Text { .. }));
+    if has_media && role != "user" {
+        anyhow::bail!(
+            "Role for a message with media content must be `user`, but it is {}",
+            role
+        );
+    }
+    Ok(())
+}
+
 pub struct ChatCompletionParseContext {
     pub state: SharedMistralRsState,
     pub tx: Sender<Response>,
@@ -726,20 +748,6 @@ pub async fn parse_request(
                             messages.push(message_map);
                             continue;
                         }
-                        if message.role != "user" {
-                            anyhow::bail!(
-                                "Role for an image message must be `user`, but it is {}",
-                                message.role
-                            );
-                        }
-
-                        enum ContentPart {
-                            Text { text: String },
-                            Image { image_url: String },
-                            Audio { audio_url: String },
-                            Video { video_url: String },
-                            File { spec: InputFileSpec },
-                        }
 
                         let mut items = Vec::new();
                         for image_message in image_messages {
@@ -820,6 +828,8 @@ pub async fn parse_request(
                                 _ => anyhow::bail!("Expected array content sub-content to be one of `text`, `image_url`, `audio_url`, `video_url`, or `file`.")
                             }
                         }
+
+                        validate_content_role(&items, &message.role)?;
 
                         let text_content = items
                             .iter()
@@ -1410,5 +1420,31 @@ mod tests {
             output.get("reasoning_content"),
             Some(&Either::Left("Need weather".to_string()))
         );
+    }
+
+    #[test]
+    fn text_only_content_array_is_allowed_on_non_user_roles() {
+        let items = vec![ContentPart::Text {
+            text: "Answer the user's question concisely.".to_string(),
+        }];
+        assert!(validate_content_role(&items, "system").is_ok());
+        assert!(validate_content_role(&items, "assistant").is_ok());
+        assert!(validate_content_role(&items, "user").is_ok());
+    }
+
+    #[test]
+    fn media_content_requires_user_role() {
+        let items = vec![
+            ContentPart::Text {
+                text: "look at this".to_string(),
+            },
+            ContentPart::Image {
+                image_url: "https://example.com/image.png".to_string(),
+            },
+        ];
+        assert!(validate_content_role(&items, "user").is_ok());
+        let err = validate_content_role(&items, "system").unwrap_err();
+        assert!(err.to_string().contains("must be `user`"));
+        assert!(err.to_string().contains("system"));
     }
 }
