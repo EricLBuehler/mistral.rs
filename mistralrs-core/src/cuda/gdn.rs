@@ -1436,11 +1436,7 @@ fn launch_recurrence(
                     stream,
                 )
             };
-            if status != 0 {
-                candle::bail!(
-                    "vmajor_grouped_warp_gated_delta_rule_recurrence failed with status {status}"
-                );
-            }
+            crate::cuda::check_launch("vmajor_grouped_warp_gated_delta_rule_recurrence", status)?;
             return Ok(());
         }
         if matches!(kernel, RecurrenceKernel::ValueMajorChunked) {
@@ -1463,11 +1459,7 @@ fn launch_recurrence(
                     stream,
                 )
             };
-            if status != 0 {
-                candle::bail!(
-                    "vmajor_chunked_gated_delta_rule_recurrence failed with status {status}"
-                );
-            }
+            crate::cuda::check_launch("vmajor_chunked_gated_delta_rule_recurrence", status)?;
             return Ok(());
         }
         let launcher = match kernel {
@@ -1942,7 +1934,7 @@ pub fn prepare_recurrence_inputs_cuda_typed(
                 let q_buf = alloc_rows!($out, bh * token_stride * head_k_dim);
                 let k_buf = alloc_rows!($out, bh * token_stride * head_k_dim);
                 let v_buf = alloc_rows!($out, bh * token_stride * head_v_dim);
-                unsafe {
+                crate::cuda::check_launch("gdn_prepare_recurrence", unsafe {
                     crate::cuda::ffi::gdn_prepare_recurrence(
                         &crate::cuda::abi::GdnPrepareRecurrenceParams {
                             mixed_qkv: mixed_s.slice(mixed_offset..).device_ptr(mixed_s.stream()).0
@@ -1970,8 +1962,8 @@ pub fn prepare_recurrence_inputs_cuda_typed(
                             out_bf16: i32::from(out_bf16),
                             stream,
                         },
-                    );
-                }
+                    )
+                })?;
                 let wrap = |buf, last_dim| {
                     Tensor::from((
                         candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(
@@ -3130,7 +3122,7 @@ fn fused_decode_recurrence_cuda_impl(launch: GdnDecodeLaunch<'_>) -> Result<Tens
         let stream = dev.cuda_stream().cu_stream() as i64;
 
         with_slot_indices(slots, |slot_ptr, _| {
-            unsafe {
+            crate::cuda::check_launch("gdn_decode_recurrence", unsafe {
                 crate::cuda::ffi::gdn_decode_recurrence(
                     &crate::cuda::abi::GdnDecodeRecurrenceParams {
                         mixed_qkv: mixed_ptr,
@@ -3158,8 +3150,8 @@ fn fused_decode_recurrence_cuda_impl(launch: GdnDecodeLaunch<'_>) -> Result<Tens
                         state_dtype,
                         stream,
                     },
-                );
-            }
+                )
+            })?;
             Ok(())
         })?;
 
@@ -3339,7 +3331,7 @@ pub fn speculative_state_commit_cuda(commit: GdnSpeculativeStateCommit<'_>) -> R
         let dev = mixed_qkv.device().as_cuda_device()?;
         let stream = dev.cuda_stream().cu_stream() as i64;
 
-        unsafe {
+        crate::cuda::check_launch("gdn_speculative_state_commit", unsafe {
             crate::cuda::ffi::gdn_speculative_state_commit(
                 &crate::cuda::abi::GdnSpeculativeStateCommitParams {
                     mixed_qkv: mixed_ptr,
@@ -3367,8 +3359,8 @@ pub fn speculative_state_commit_cuda(commit: GdnSpeculativeStateCommit<'_>) -> R
                     state_dtype,
                     stream,
                 },
-            );
-        }
+            )
+        })?;
         Ok(())
     }
 
@@ -3581,7 +3573,7 @@ pub fn speculative_conv_checkpoints_cuda(
             )
         };
 
-        unsafe {
+        crate::cuda::check_launch("gdn_speculative_conv_checkpoints", unsafe {
             crate::cuda::ffi::gdn_speculative_conv_checkpoints(
                 &crate::cuda::abi::GdnSpeculativeConvCheckpointsParams {
                     x: x_storage
@@ -3620,8 +3612,8 @@ pub fn speculative_conv_checkpoints_cuda(
                     dtype: dtype_code,
                     stream,
                 },
-            );
-        }
+            )
+        })?;
 
         Ok(Tensor::from((
             candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(output, dev.clone())),
@@ -4082,7 +4074,7 @@ pub fn speculative_recurrence_checkpoints_cuda(
                 scales.device_ptr(scales.stream()).0 as *mut f32
             });
 
-        unsafe {
+        crate::cuda::check_launch("gdn_speculative_recurrence_checkpoints", unsafe {
             crate::cuda::ffi::gdn_speculative_recurrence_checkpoints(
                 &crate::cuda::abi::GdnSpeculativeRecurrenceCheckpointsParams {
                     mixed_qkv: mixed_ptr,
@@ -4138,8 +4130,8 @@ pub fn speculative_recurrence_checkpoints_cuda(
                     state_dtype,
                     stream,
                 },
-            );
-        }
+            )
+        })?;
 
         let output = if let (Some(spec), Some(layout)) = (fp8_spec, fp8_layout) {
             let quantized_output = Tensor::from((
@@ -4528,8 +4520,10 @@ pub fn deferred_recurrence_rmsnorm_gate_cuda(
                     &stream,
                     "deferred_cursor",
                     |cursor_ptr| {
-                        unsafe {
-                            crate::cuda::ffi::gdn_deferred_recurrence_rmsnorm_gate_value_major_128(
+                        crate::cuda::check_launch(
+                            "gdn_deferred_recurrence_rmsnorm_gate_value_major_128",
+                            unsafe {
+                                crate::cuda::ffi::gdn_deferred_recurrence_rmsnorm_gate_value_major_128(
                                 &crate::cuda::abi::GdnDeferredRecurrenceParams {
                                     mixed_qkv: mixed_qkv_ptr as *const c_void,
                                     b: b_ptr as *const c_void,
@@ -4569,8 +4563,9 @@ pub fn deferred_recurrence_rmsnorm_gate_cuda(
                                     sigmoid_gate: gate_activation.sigmoid_flag(),
                                     stream: stream.cu_stream() as i64,
                                 },
-                            );
-                        }
+                            )
+                            },
+                        )?;
                         Ok(())
                     },
                 )
@@ -5852,7 +5847,7 @@ pub fn rmsnorm_gated_cuda(
         let output_buf = unsafe { dev.alloc::<T>(rows * hidden_dim) }?;
         let stream = dev.cuda_stream().cu_stream() as i64;
 
-        unsafe {
+        crate::cuda::check_launch("gdn_rmsnorm_gated", unsafe {
             crate::cuda::ffi::gdn_rmsnorm_gated(&crate::cuda::abi::GdnRmsNormGatedParams {
                 x: x_s.slice(x_offset..).device_ptr(x_s.stream()).0 as *const c_void,
                 gate: gate_s.slice(gate_offset..).device_ptr(gate_s.stream()).0 as *const c_void,
@@ -5877,8 +5872,8 @@ pub fn rmsnorm_gated_cuda(
                 sigmoid_gate: activation.sigmoid_flag(),
                 dtype: dtype_code,
                 stream,
-            });
-        }
+            })
+        })?;
 
         let output_storage = candle::CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
         Ok(Tensor::from((
@@ -5965,7 +5960,7 @@ pub(crate) fn rmsnorm_gated_quantized_cuda(
     let scales = unsafe { dev.alloc::<f32>(layout.scale_elements) }?;
     let stream = dev.cuda_stream().cu_stream() as i64;
 
-    unsafe {
+    crate::cuda::check_launch("gdn_rmsnorm_gated_quantized_bf16", unsafe {
         crate::cuda::ffi::gdn_rmsnorm_gated_quantized_bf16(
             &crate::cuda::abi::GdnRmsNormGatedQuantizedParams {
                 x: x_storage
@@ -6000,8 +5995,8 @@ pub(crate) fn rmsnorm_gated_quantized_cuda(
                 sigmoid_gate: activation.sigmoid_flag(),
                 stream,
             },
-        );
-    }
+        )
+    })?;
 
     let output = Tensor::from((
         Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),

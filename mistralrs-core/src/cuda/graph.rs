@@ -8,9 +8,7 @@ fn launch(
     stream: i64,
 ) -> Result<()> {
     let status = unsafe { crate::cuda::ffi::cuda_graph_copy_bytes(src, dst, n as i64, stream) };
-    if status != 0 {
-        candle_core::bail!("cuda_graph_copy_bytes failed with status {status}");
-    }
+    crate::cuda::check_launch("cuda_graph_copy_bytes", status)?;
     Ok(())
 }
 
@@ -34,9 +32,7 @@ fn launch_2d(
             stream,
         )
     };
-    if status != 0 {
-        candle_core::bail!("cuda_graph_copy_2d_bytes failed with status {status}");
-    }
+    crate::cuda::check_launch("cuda_graph_copy_2d_bytes", status)?;
     Ok(())
 }
 

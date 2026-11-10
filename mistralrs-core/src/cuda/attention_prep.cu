@@ -481,7 +481,7 @@ void launch_qkv_rms_norm_rope_positions(
           k_heads, seq_len, head_dim, rot_dim, q_eps, k_eps, v_eps);
 }
 
-extern "C" void qk_rms_norm_rope(const QkRmsNormRopeParams *p) {
+extern "C" int qk_rms_norm_rope(const QkRmsNormRopeParams *p) {
   if (p->is_neox) {
     if (p->dtype == 0) {
       launch_qk_rms_norm_rope<__half, true>(
@@ -535,9 +535,10 @@ extern "C" void qk_rms_norm_rope(const QkRmsNormRopeParams *p) {
           p->stream);
     }
   }
+  return static_cast<int>(cudaGetLastError());
 }
 
-extern "C" void
+extern "C" int
 qk_rms_norm_rope_positions(const QkRmsNormRopePositionsParams *p) {
   if (p->is_neox) {
     if (p->dtype == 0) {
@@ -592,6 +593,7 @@ qk_rms_norm_rope_positions(const QkRmsNormRopePositionsParams *p) {
           p->output_token_major != 0, p->stream);
     }
   }
+  return static_cast<int>(cudaGetLastError());
 }
 
 extern "C" void rope_sincos_positions(const void *positions,
@@ -611,7 +613,7 @@ extern "C" void rope_sincos_positions(const void *positions,
   }
 }
 
-extern "C" void
+extern "C" int
 qkv_rms_norm_rope_positions(const QkvRmsNormRopePositionsParams *p) {
   if (p->is_neox) {
     if (p->dtype == 0) {
@@ -672,4 +674,5 @@ qkv_rms_norm_rope_positions(const QkvRmsNormRopePositionsParams *p) {
           p->v_eps, p->stream);
     }
   }
+  return static_cast<int>(cudaGetLastError());
 }

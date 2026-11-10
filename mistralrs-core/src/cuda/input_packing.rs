@@ -91,9 +91,7 @@ impl CustomOp1 for CompletionInputPackOp {
         drop(output_guard);
         drop(staged_guards);
         drop(host_guard);
-        if status != 0 {
-            candle_core::bail!("pack_completion_input_u32 failed with status {status}")
-        }
+        crate::cuda::check_launch("pack_completion_input_u32", status)?;
         Ok((
             CudaStorage::wrap_cuda_slice(output, device.clone()),
             (self.batch, row_width).into(),
@@ -152,9 +150,7 @@ impl CustomOp1 for DecodeInputPadOp {
         };
         drop(output_guard);
         drop(input_guard);
-        if status != 0 {
-            candle_core::bail!("pad_decode_input_u32 failed with status {status}")
-        }
+        crate::cuda::check_launch("pad_decode_input_u32", status)?;
         Ok((
             CudaStorage::wrap_cuda_slice(output, device.clone()),
             (self.output_rows, self.width).into(),

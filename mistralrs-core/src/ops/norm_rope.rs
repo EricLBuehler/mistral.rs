@@ -1470,7 +1470,7 @@ pub(crate) fn try_cuda_qk_rms_norm_rope(
                 std::ptr::null_mut()
             };
 
-            unsafe {
+            crate::cuda::check_launch("qk_rms_norm_rope", unsafe {
                 ffi::qk_rms_norm_rope(&crate::cuda::abi::QkRmsNormRopeParams {
                     q: q_ptr as *const c_void,
                     k: k_ptr as *const c_void,
@@ -1501,8 +1501,8 @@ pub(crate) fn try_cuda_qk_rms_norm_rope(
                     dtype: $dtype_id,
                     output_token_major: i32::from(output_layout == QkRopeOutputLayout::TokensFirst),
                     stream: stream_ptr,
-                });
-            }
+                })
+            })?;
 
             drop(q_guard);
             drop(q_weight_guard);
@@ -1906,7 +1906,7 @@ pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
                 std::ptr::null_mut()
             };
 
-            unsafe {
+            crate::cuda::check_launch("qk_rms_norm_rope_positions", unsafe {
                 ffi::qk_rms_norm_rope_positions(&crate::cuda::abi::QkRmsNormRopePositionsParams {
                     q: q_ptr as *const c_void,
                     k: k_ptr as *const c_void,
@@ -1937,8 +1937,8 @@ pub(crate) fn try_cuda_qk_rms_norm_rope_positions(
                     dtype: $dtype_id,
                     output_token_major: i32::from(output_token_major),
                     stream: stream_ptr,
-                });
-            }
+                })
+            })?;
 
             drop(q_guard);
             drop(q_weight_guard);
@@ -2225,48 +2225,46 @@ pub(crate) fn try_cuda_qkv_rms_norm_rope_positions(
             let (k_out_ptr, k_out_guard) = k_out_buf.device_ptr_mut(&stream);
             let (v_out_ptr, v_out_guard) = v_out_buf.device_ptr_mut(&stream);
 
-            unsafe {
-                ffi::qkv_rms_norm_rope_positions(
-                    &crate::cuda::abi::QkvRmsNormRopePositionsParams {
-                        q: q_ptr as *const c_void,
-                        k: k_ptr as *const c_void,
-                        v: v_ptr as *const c_void,
-                        q_weight: q_weight_ptr as *const c_void,
-                        k_weight: k_weight_ptr as *const c_void,
-                        v_weight: v_weight_ptr as *const c_void,
-                        cos: cos_ptr as *const c_void,
-                        sin: sin_ptr as *const c_void,
-                        positions: positions_ptr as *const c_void,
-                        q_out: q_out_ptr as *mut c_void,
-                        k_out: k_out_ptr as *mut c_void,
-                        v_out: v_out_ptr as *mut c_void,
-                        q_stride_b: q_stride[0] as i64,
-                        q_stride_h: q_stride[1] as i64,
-                        q_stride_s: q_stride[2] as i64,
-                        q_stride_d: q_stride[3] as i64,
-                        k_stride_b: k_stride[0] as i64,
-                        k_stride_h: k_stride[1] as i64,
-                        k_stride_s: k_stride[2] as i64,
-                        k_stride_d: k_stride[3] as i64,
-                        v_stride_b: v_stride[0] as i64,
-                        v_stride_h: v_stride[1] as i64,
-                        v_stride_s: v_stride[2] as i64,
-                        v_stride_d: v_stride[3] as i64,
-                        batch: batch_i32,
-                        q_heads: q_heads_i32,
-                        k_heads: k_heads_i32,
-                        seq_len: seq_len_i32,
-                        head_dim: head_dim_i32,
-                        rot_dim: rot_dim_i32,
-                        q_eps,
-                        k_eps,
-                        v_eps,
-                        is_neox: i32::from(is_neox),
-                        dtype: $dtype_id,
-                        stream: stream_ptr,
-                    },
-                );
-            }
+            crate::cuda::check_launch("qkv_rms_norm_rope_positions", unsafe {
+                ffi::qkv_rms_norm_rope_positions(&crate::cuda::abi::QkvRmsNormRopePositionsParams {
+                    q: q_ptr as *const c_void,
+                    k: k_ptr as *const c_void,
+                    v: v_ptr as *const c_void,
+                    q_weight: q_weight_ptr as *const c_void,
+                    k_weight: k_weight_ptr as *const c_void,
+                    v_weight: v_weight_ptr as *const c_void,
+                    cos: cos_ptr as *const c_void,
+                    sin: sin_ptr as *const c_void,
+                    positions: positions_ptr as *const c_void,
+                    q_out: q_out_ptr as *mut c_void,
+                    k_out: k_out_ptr as *mut c_void,
+                    v_out: v_out_ptr as *mut c_void,
+                    q_stride_b: q_stride[0] as i64,
+                    q_stride_h: q_stride[1] as i64,
+                    q_stride_s: q_stride[2] as i64,
+                    q_stride_d: q_stride[3] as i64,
+                    k_stride_b: k_stride[0] as i64,
+                    k_stride_h: k_stride[1] as i64,
+                    k_stride_s: k_stride[2] as i64,
+                    k_stride_d: k_stride[3] as i64,
+                    v_stride_b: v_stride[0] as i64,
+                    v_stride_h: v_stride[1] as i64,
+                    v_stride_s: v_stride[2] as i64,
+                    v_stride_d: v_stride[3] as i64,
+                    batch: batch_i32,
+                    q_heads: q_heads_i32,
+                    k_heads: k_heads_i32,
+                    seq_len: seq_len_i32,
+                    head_dim: head_dim_i32,
+                    rot_dim: rot_dim_i32,
+                    q_eps,
+                    k_eps,
+                    v_eps,
+                    is_neox: i32::from(is_neox),
+                    dtype: $dtype_id,
+                    stream: stream_ptr,
+                })
+            })?;
 
             drop(q_guard);
             drop(k_guard);

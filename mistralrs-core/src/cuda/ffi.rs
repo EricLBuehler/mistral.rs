@@ -309,11 +309,11 @@ extern "C" {
         eps: f32,
         stream: i64,
     );
-    pub(crate) fn qk_rms_norm_rope(params: *const super::abi::QkRmsNormRopeParams);
+    pub(crate) fn qk_rms_norm_rope(params: *const super::abi::QkRmsNormRopeParams) -> i32;
 
     pub(crate) fn qk_rms_norm_rope_positions(
         params: *const super::abi::QkRmsNormRopePositionsParams,
-    );
+    ) -> i32;
 
     pub(crate) fn rope_sincos_positions(
         positions: *const c_void,
@@ -328,7 +328,7 @@ extern "C" {
 
     pub(crate) fn qkv_rms_norm_rope_positions(
         params: *const super::abi::QkvRmsNormRopePositionsParams,
-    );
+    ) -> i32;
 
     pub(crate) fn asort_asc_f32(
         x: *const c_void,
@@ -707,7 +707,7 @@ extern "C" {
         successor_dtype: i32,
         stream: i64,
     );
-    pub(crate) fn dflash_sample_select(params: *const super::abi::DFlashSampleSelectParams);
+    pub(crate) fn dflash_sample_select(params: *const super::abi::DFlashSampleSelectParams) -> i32;
     pub(crate) fn sparse_rejection_categorical_f32(
         target_logits: *const f32,
         draft_tokens: *const u32,
@@ -1036,10 +1036,10 @@ extern "C" {
         dtype: i32,
         stream: i64,
     );
-    pub(crate) fn gdn_rmsnorm_gated(params: *const super::abi::GdnRmsNormGatedParams);
+    pub(crate) fn gdn_rmsnorm_gated(params: *const super::abi::GdnRmsNormGatedParams) -> i32;
     pub(crate) fn gdn_rmsnorm_gated_quantized_bf16(
         params: *const super::abi::GdnRmsNormGatedQuantizedParams,
-    );
+    ) -> i32;
     pub(crate) fn fused_gdn_gating(
         b: *const c_void,
         a: *const c_void,
@@ -1052,21 +1052,25 @@ extern "C" {
         dtype: i32,
         stream: i64,
     );
-    pub(crate) fn gdn_prepare_recurrence(params: *const super::abi::GdnPrepareRecurrenceParams);
+    pub(crate) fn gdn_prepare_recurrence(
+        params: *const super::abi::GdnPrepareRecurrenceParams,
+    ) -> i32;
 
-    pub(crate) fn gdn_decode_recurrence(params: *const super::abi::GdnDecodeRecurrenceParams);
+    pub(crate) fn gdn_decode_recurrence(
+        params: *const super::abi::GdnDecodeRecurrenceParams,
+    ) -> i32;
     pub(crate) fn gdn_speculative_state_commit(
         params: *const super::abi::GdnSpeculativeStateCommitParams,
-    );
+    ) -> i32;
     pub(crate) fn gdn_speculative_conv_checkpoints(
         params: *const super::abi::GdnSpeculativeConvCheckpointsParams,
-    );
+    ) -> i32;
     pub(crate) fn gdn_speculative_recurrence_checkpoints(
         params: *const super::abi::GdnSpeculativeRecurrenceCheckpointsParams,
-    );
+    ) -> i32;
     pub(crate) fn gdn_deferred_recurrence_rmsnorm_gate_value_major_128(
         params: *const super::abi::GdnDeferredRecurrenceParams,
-    );
+    ) -> i32;
     pub(crate) fn gdn_flush_deferred_state_value_major_128(
         state_pool: *mut f32,
         active_slots: *const u32,

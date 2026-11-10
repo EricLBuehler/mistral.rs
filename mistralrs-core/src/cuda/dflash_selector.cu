@@ -278,7 +278,7 @@ extern "C" void dflash_greedy_select(
       hidden_dtype, predecessor_dtype, successor_dtype);
 }
 
-extern "C" void dflash_sample_select(const DFlashSampleSelectParams *p) {
+extern "C" int dflash_sample_select(const DFlashSampleSelectParams *p) {
   const cudaStream_t cuda_stream = reinterpret_cast<cudaStream_t>(p->stream);
   dflash_sample_select_kernel<<<p->batch, DFLASH_SELECTOR_BLOCK_SIZE, 0,
                                 cuda_stream>>>(
@@ -286,4 +286,5 @@ extern "C" void dflash_sample_select(const DFlashSampleSelectParams *p) {
       p->anchors, p->inverse_temperatures, p->uniforms, p->selected, p->candidate_ids,
       p->candidate_probs, p->batch, p->positions, p->rank, p->vocab, p->k, p->packed_width,
       p->hidden_dtype, p->predecessor_dtype, p->successor_dtype);
+  return static_cast<int>(cudaGetLastError());
 }

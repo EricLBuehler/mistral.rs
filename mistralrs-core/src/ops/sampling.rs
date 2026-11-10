@@ -1441,7 +1441,7 @@ pub(crate) fn cuda_dflash_sample_select(
     let (selected_ptr, selected_guard) = selected.device_ptr_mut(&stream);
     let (candidate_ids_ptr, candidate_ids_guard) = candidate_ids.device_ptr_mut(&stream);
     let (candidate_probs_ptr, candidate_probs_guard) = candidate_probs.device_ptr_mut(&stream);
-    unsafe {
+    crate::cuda::check_launch("dflash_sample_select", unsafe {
         ffi::dflash_sample_select(&crate::cuda::abi::DFlashSampleSelectParams {
             packed_topk: packed_ptr,
             projected_hidden: hidden_ptr,
@@ -1463,8 +1463,8 @@ pub(crate) fn cuda_dflash_sample_select(
             predecessor_dtype,
             successor_dtype,
             stream: stream.cu_stream() as i64,
-        });
-    }
+        })
+    })?;
 
     drop(packed_guard);
     drop(hidden_guard);

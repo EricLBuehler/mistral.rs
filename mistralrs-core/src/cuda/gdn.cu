@@ -1707,7 +1707,7 @@ static void launch_gdn_prepare_recurrence(
       tiled_v_heads);
 }
 
-extern "C" void gdn_prepare_recurrence(const GdnPrepareRecurrenceParams *p) {
+extern "C" int gdn_prepare_recurrence(const GdnPrepareRecurrenceParams *p) {
   const cudaStream_t custream = (cudaStream_t)p->stream;
   if (p->dtype == 0 && p->out_bf16) {
     launch_gdn_prepare_recurrence<__half, __nv_bfloat16>(
@@ -1730,6 +1730,7 @@ extern "C" void gdn_prepare_recurrence(const GdnPrepareRecurrenceParams *p) {
         p->batch_size, p->seq_len, p->token_stride, p->num_k_heads, p->num_v_heads,
         p->head_k_dim, p->head_v_dim, p->tiled_v_heads, custream);
   }
+  return static_cast<int>(cudaGetLastError());
 }
 
 __device__ __forceinline__ float gdn_warp_sum(float value) {
@@ -2641,7 +2642,7 @@ void dispatch_gdn_decode_recurrence(
   }
 }
 
-extern "C" void gdn_decode_recurrence(const GdnDecodeRecurrenceParams *p) {
+extern "C" int gdn_decode_recurrence(const GdnDecodeRecurrenceParams *p) {
   const cudaStream_t custream = (cudaStream_t)p->stream;
   if (p->dtype == 0) {
     dispatch_gdn_decode_recurrence(
@@ -2659,6 +2660,7 @@ extern "C" void gdn_decode_recurrence(const GdnDecodeRecurrenceParams *p) {
         p->a_batch_stride, p->a_head_stride, p->slot_indices, p->kernel_kind, p->state_dtype,
         custream);
   }
+  return static_cast<int>(cudaGetLastError());
 }
 
 __device__ __forceinline__ float gdn_silu(float x) {
@@ -3093,7 +3095,7 @@ __host__ __forceinline__ bool gdn_rmsnorm_dense_rows(
           stride_0 == (int64_t)outer_plane * GDN_RMSNORM_FAST_HIDDEN);
 }
 
-extern "C" void gdn_rmsnorm_gated(const GdnRmsNormGatedParams *p) {
+extern "C" int gdn_rmsnorm_gated(const GdnRmsNormGatedParams *p) {
   const cudaStream_t custream = (cudaStream_t)p->stream;
   const bool use_warp_kernel =
       p->hidden_dim == GDN_RMSNORM_FAST_HIDDEN && p->x_stride_3 == 1 &&
@@ -3116,7 +3118,7 @@ extern "C" void gdn_rmsnorm_gated(const GdnRmsNormGatedParams *p) {
       gdn_rmsnorm_gated_rows4_kernel<<<rows4_grid, rows4_block, 0, custream>>>(
           (const __half *)p->x, (const __half *)p->gate, (const __half *)p->weight,
           (__half *)p->output, p->rows, p->eps, p->sigmoid_gate);
-      return;
+      return 0;
     }
     if (p->dtype != 0 && use_rows4_kernel &&
         gdn_rmsnorm_vec8_aligned<__nv_bfloat16>(p->x) &&
@@ -3130,7 +3132,7 @@ extern "C" void gdn_rmsnorm_gated(const GdnRmsNormGatedParams *p) {
           (const __nv_bfloat16 *)p->x, (const __nv_bfloat16 *)p->gate,
           (const __nv_bfloat16 *)p->weight, (__nv_bfloat16 *)p->output, p->rows, p->eps,
           p->sigmoid_gate);
-      return;
+      return 0;
     }
 
     const dim3 warp_block(32, GDN_RMSNORM_ROWS_PER_BLOCK);
@@ -3154,7 +3156,7 @@ extern "C" void gdn_rmsnorm_gated(const GdnRmsNormGatedParams *p) {
               p->outer_dim_1, p->outer_dim_2, p->x_stride_0, p->x_stride_1, p->x_stride_2,
               p->gate_stride_0, p->gate_stride_1, p->gate_stride_2, p->eps, p->sigmoid_gate);
     }
-    return;
+    return 0;
   }
 
   dim3 block(128);
@@ -3174,9 +3176,10 @@ extern "C" void gdn_rmsnorm_gated(const GdnRmsNormGatedParams *p) {
         p->x_stride_2, p->x_stride_3, p->gate_stride_0, p->gate_stride_1, p->gate_stride_2,
         p->gate_stride_3, p->eps, p->sigmoid_gate);
   }
+  return static_cast<int>(cudaGetLastError());
 }
 
-extern "C" void gdn_rmsnorm_gated_quantized_bf16(const GdnRmsNormGatedQuantizedParams *p) {
+extern "C" int gdn_rmsnorm_gated_quantized_bf16(const GdnRmsNormGatedQuantizedParams *p) {
   const cudaStream_t custream = (cudaStream_t)p->stream;
   const bool use_rows4_kernel =
       p->rows >= GDN_RMSNORM_TILED_MIN_ROWS &&
@@ -3196,7 +3199,7 @@ extern "C" void gdn_rmsnorm_gated_quantized_bf16(const GdnRmsNormGatedQuantizedP
         (const __nv_bfloat16 *)p->x, (const __nv_bfloat16 *)p->gate,
         (const __nv_bfloat16 *)p->weight, (gdn_fp8_e4m3 *)p->output, p->scales, p->rows,
         p->groups, p->scale_stride_m, p->scale_layout, p->eps, p->sigmoid_gate);
-    return;
+    return 0;
   }
 
   const dim3 block(32, GDN_RMSNORM_ROWS_PER_BLOCK);
@@ -3210,6 +3213,7 @@ extern "C" void gdn_rmsnorm_gated_quantized_bf16(const GdnRmsNormGatedQuantizedP
           p->outer_dim_2, p->x_stride_0, p->x_stride_1, p->x_stride_2, p->x_stride_3,
           p->gate_stride_0, p->gate_stride_1, p->gate_stride_2, p->gate_stride_3, p->eps,
           p->sigmoid_gate);
+  return static_cast<int>(cudaGetLastError());
 }
 
 // ============================================================================
@@ -3531,7 +3535,7 @@ void dispatch_gdn_speculative_state_commit(
   }
 }
 
-extern "C" void gdn_speculative_state_commit(const GdnSpeculativeStateCommitParams *p) {
+extern "C" int gdn_speculative_state_commit(const GdnSpeculativeStateCommitParams *p) {
   const cudaStream_t custream = (cudaStream_t)p->stream;
   if (p->dtype == 0) {
     dispatch_gdn_speculative_state_commit(
@@ -3553,6 +3557,7 @@ extern "C" void gdn_speculative_state_commit(const GdnSpeculativeStateCommitPara
         p->num_k_heads, p->num_v_heads, p->head_k_dim, p->head_v_dim, p->kernel_size,
         p->tiled_v_heads, p->value_major, p->state_dtype, custream);
   }
+  return static_cast<int>(cudaGetLastError());
 }
 
 constexpr int GDN_SPEC_CHECKPOINT_VALUE_TILE = 32;
@@ -3831,7 +3836,7 @@ void launch_gdn_speculative_conv_checkpoints(
   }
 }
 
-extern "C" void gdn_speculative_conv_checkpoints(const GdnSpeculativeConvCheckpointsParams *p) {
+extern "C" int gdn_speculative_conv_checkpoints(const GdnSpeculativeConvCheckpointsParams *p) {
   const cudaStream_t custream = (cudaStream_t)p->stream;
   if (p->dtype == 0) {
     launch_gdn_speculative_conv_checkpoints(
@@ -3852,6 +3857,7 @@ extern "C" void gdn_speculative_conv_checkpoints(const GdnSpeculativeConvCheckpo
         p->pending_capacity, p->conv_blocks, p->x_stride_b, p->x_stride_s, p->x_stride_c,
         custream);
   }
+  return static_cast<int>(cudaGetLastError());
 }
 
 __device__ __forceinline__ float gdn_spec_softplus(float value) {
@@ -4934,7 +4940,7 @@ __global__ void gdn_deferred_cursor_clear_kernel(
   }
 }
 
-extern "C" void gdn_deferred_recurrence_rmsnorm_gate_value_major_128(const GdnDeferredRecurrenceParams *p) {
+extern "C" int gdn_deferred_recurrence_rmsnorm_gate_value_major_128(const GdnDeferredRecurrenceParams *p) {
   const cudaStream_t custream = (cudaStream_t)p->stream;
   dim3 recurrence_grid(p->batch_size, p->num_v_heads);
   gdn_deferred_recurrence_rmsnorm_gate_value_major_128_kernel
@@ -4954,6 +4960,7 @@ extern "C" void gdn_deferred_recurrence_rmsnorm_gate_value_major_128(const GdnDe
       <<<(p->batch_size + FINALIZE_THREADS - 1) / FINALIZE_THREADS,
          FINALIZE_THREADS, 0, custream>>>(p->deferred_cursor, p->active_slots,
                                           p->batch_size, p->capacity);
+  return static_cast<int>(cudaGetLastError());
 }
 
 extern "C" void gdn_flush_deferred_state_value_major_128(
@@ -5414,7 +5421,7 @@ void dispatch_gdn_speculative_recurrence_checkpoints(
   }
 }
 
-extern "C" void gdn_speculative_recurrence_checkpoints(const GdnSpeculativeRecurrenceCheckpointsParams *p) {
+extern "C" int gdn_speculative_recurrence_checkpoints(const GdnSpeculativeRecurrenceCheckpointsParams *p) {
   const cudaStream_t custream = (cudaStream_t)p->stream;
   if (p->dtype == 0) {
     dispatch_gdn_speculative_recurrence_checkpoints(
@@ -5449,6 +5456,7 @@ extern "C" void gdn_speculative_recurrence_checkpoints(const GdnSpeculativeRecur
         p->head_k_dim, p->head_v_dim, p->checkpoint_lanes, p->tiled_v_heads, p->value_major,
         p->norm_eps, p->sigmoid_gate, p->state_dtype, custream);
   }
+  return static_cast<int>(cudaGetLastError());
 }
 
 constexpr int GDN_TRANSITION_CONV_INPUT = 0;
