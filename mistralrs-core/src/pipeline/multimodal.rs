@@ -1,8 +1,5 @@
 use super::causal::{CausalModel, CausalPipeline, CausalStepInputs};
-use super::isq::{
-    write_uqff_artifacts, UqffFullSer, UqffWriteConfig, UqffWriteRequest, WeightLoadingMode,
-    WeightLoadingState,
-};
+use super::isq::{UqffWriteConfig, WeightLoadingMode, WeightLoadingState};
 use super::loaders::ModelDownload;
 use super::{
     get_model_paths, paged_attention_memory_reservations, reserve_recurrent_serving_capacity,
@@ -35,9 +32,7 @@ use crate::pipeline::loaders::auto_device_map;
 use crate::pipeline::text_models_inputs_processor::FlashParams;
 use crate::pipeline::text_models_inputs_processor::InputMetadata;
 use crate::pipeline::text_models_inputs_processor::PagedAttentionInputMetadata;
-use crate::pipeline::{
-    get_chat_template, IsqOrganization, LocalModelPaths, ModelForwardContext, RecurrentBatchKind,
-};
+use crate::pipeline::{IsqOrganization, LocalModelPaths, ModelForwardContext, RecurrentBatchKind};
 use crate::sequence::Sequence;
 use crate::utils::tokenizer::get_tokenizer;
 use crate::utils::{
@@ -969,52 +964,28 @@ impl Loader for MultimodalLoader {
             }
         }
 
-        let gen_conf: Option<GenerationConfig> = match self.prepared_source.as_ref() {
-            Some(source) => source.generation_config.clone(),
-            None => paths
-                .get_gen_conf_filename()
-                .map(|f| serde_json::from_str(&fs::read_to_string(f).unwrap()).unwrap()),
-        };
-        let gen_conf = gen_conf.or_else(|| GenerationConfig::from_model_config(&config));
+        let (gen_conf, mut chat_template) =
+            super::loaders::load_prompt_assets(super::loaders::PromptAssetsRequest {
+                paths,
+                config: &config,
+                prepared: self.prepared_source.as_ref().map(|source| {
+                    super::loaders::PreparedPromptAssets {
+                        generation_config: source.generation_config.as_ref(),
+                        chat_template: source.chat_template.as_ref(),
+                        bos_token: source.bos_token.as_ref(),
+                        eos_token: source.eos_token.as_ref(),
+                        unk_token: source.unk_token.as_ref(),
+                    }
+                }),
+                jinja_explicit: self.jinja_explicit.as_ref(),
+                chat_template: self.chat_template.as_ref(),
+            });
         if model.is_block_diffusion() {
             if let Some(raw) = paths
                 .get_gen_conf_filename()
                 .and_then(|f| fs::read_to_string(f).ok())
             {
                 model.configure_block_diffusion(&raw);
-            }
-        }
-        let chat_template_explicit = paths
-            .get_chat_template_explicit()
-            .as_ref()
-            .map(|x| x.to_string_lossy().to_string());
-        let mut chat_template = get_chat_template(
-            paths,
-            self.jinja_explicit.as_ref(),
-            chat_template_explicit.as_ref(),
-            self.chat_template.as_ref(),
-            self.prepared_source
-                .as_ref()
-                .and_then(|source| source.chat_template.clone()),
-        );
-        if let Some(source) = self.prepared_source.as_ref() {
-            if chat_template.bos_token.is_none() {
-                chat_template.bos_token = source
-                    .bos_token
-                    .clone()
-                    .map(|token| BeginEndUnkPadTok(Either::Left(token)));
-            }
-            if chat_template.eos_token.is_none() {
-                chat_template.eos_token = source
-                    .eos_token
-                    .clone()
-                    .map(|token| BeginEndUnkPadTok(Either::Left(token)));
-            }
-            if chat_template.unk_token.is_none() {
-                chat_template.unk_token = source
-                    .unk_token
-                    .clone()
-                    .map(|token| BeginEndUnkPadTok(Either::Left(token)));
             }
         }
 
@@ -1037,79 +1008,29 @@ impl Loader for MultimodalLoader {
             }
         }
 
-        plan.validate_tracked_selection(&tracker.get())?;
-
-        let imatrix_map = if plan.wants_imatrix {
-            let drive = super::isq_flow::MultimodalCalibrationDrive(&*model);
-            Some(super::isq_flow::resolve_imatrix_map(
-                &drive,
-                &tracker.get().clone(),
-                self.config.imatrix.as_ref(),
-                self.config.calibration_file.as_ref(),
-                &super::isq_flow::CalibrationCtx {
-                    tokenizer: &tokenizer,
-                    bos_tok_id: chat_template
-                        .bos_tok()
-                        .as_deref()
-                        .and_then(|tok| tokenizer.token_to_id(tok)),
-                    load_device: &load_device,
-                    mapper: Some(pipeline_mapper.as_ref()),
-                },
-            )?)
-        } else {
-            None
-        };
-
-        if plan.capture == mistralrs_quant::IsqCaptureMode::CaptureMatches {
-            let ty = in_situ_quant.context("imatrix quantization requires an ISQ type")?;
-            super::isq_flow::complete_isq_capture(
-                &tracker.get().clone(),
-                ty,
-                imatrix_map
-                    .as_ref()
-                    .expect("CaptureMatches requires imatrix data"),
-            )?;
-        }
-
-        if let Some(write_uqff) = &self.config.write_uqff {
-            let layers = tracker.get().clone();
-            let uqff_types = plan
-                .write_types
-                .clone()
-                .filter(|types| !types.is_empty())
-                .context("UQFF serialization requires at least one ISQ type.")?;
-            let residual = match self.config.organization {
-                IsqOrganization::Default => model.residual_tensors(),
-                IsqOrganization::MoeExpertsOnly => model
-                    .residual_tensors_moe_experts_only()
-                    .unwrap_or(model.residual_tensors()),
-            };
-            let full_ser = UqffFullSer {
-                tokenizer: &tokenizer,
-                template_filename: paths.get_template_filename(),
-                effective_chat_template: Some(&chat_template),
-                generation_config: match self.prepared_source.as_ref() {
-                    Some(source) if source.generation_config.is_none() => None,
-                    _ => paths.get_gen_conf_filename(),
-                },
-                config: config.clone(),
-                processor_filename: paths.get_processor_config(),
-                preprocessor_filename: paths.get_preprocessor_config(),
-                modules: None,
-                module_paths: None,
-            };
-            write_uqff_artifacts(UqffWriteRequest {
-                output: write_uqff.output.clone(),
-                types: uqff_types,
-                base_model: write_uqff.base_model.clone(),
-                repo_id: write_uqff.repo_id.clone(),
-                layers,
-                quantize_predicates: plan.uqff_quantize_predicates.clone(),
-                residual,
-                full_ser,
-                imatrix: imatrix_map.unwrap_or_default(),
-            })?;
-        }
+        super::isq_flow::finish_isq(super::isq_flow::IsqFinish {
+            plan: &plan,
+            modules: tracker.get().clone(),
+            drive: &super::isq_flow::MultimodalCalibrationDrive(&*model),
+            model: &*model,
+            in_situ_quant,
+            imatrix: self.config.imatrix.as_ref(),
+            calibration_file: self.config.calibration_file.as_ref(),
+            tokenizer: &tokenizer,
+            chat_template: &chat_template,
+            load_device: &load_device,
+            mapper: pipeline_mapper.as_ref(),
+            write_uqff: self.config.write_uqff.as_ref(),
+            organization: self.config.organization,
+            paths,
+            omit_generation_config: self
+                .prepared_source
+                .as_ref()
+                .is_some_and(|source| source.generation_config.is_none()),
+            config: &config,
+            processor_filename: paths.get_processor_config(),
+            preprocessor_filename: paths.get_preprocessor_config(),
+        })?;
 
         if plan.immediate_isq_installed {
             for module in tracker.get().clone() {

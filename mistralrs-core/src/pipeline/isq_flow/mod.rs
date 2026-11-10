@@ -4,6 +4,7 @@
 //! plus runtime re-ISQ.
 
 mod drive;
+mod finish;
 mod online;
 mod plan;
 
@@ -11,6 +12,7 @@ pub(crate) use drive::{
     resolve_imatrix_map, CalibrationCtx, EmbeddingCalibrationDrive, MultimodalCalibrationDrive,
     NormalCalibrationDrive,
 };
+pub(crate) use finish::{finish_isq, IsqFinish};
 pub use online::CalibrationStatus;
 pub(crate) use online::{apply_calibration, begin_calibration, calibration_status};
 pub(crate) use plan::{
