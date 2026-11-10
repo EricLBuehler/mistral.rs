@@ -1,3 +1,4 @@
+pub(crate) mod abi;
 #[cfg(feature = "cuda")]
 pub(crate) mod dflash_context;
 #[cfg(feature = "cuda")]

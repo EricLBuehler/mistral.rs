@@ -1442,28 +1442,28 @@ pub(crate) fn cuda_dflash_sample_select(
     let (candidate_ids_ptr, candidate_ids_guard) = candidate_ids.device_ptr_mut(&stream);
     let (candidate_probs_ptr, candidate_probs_guard) = candidate_probs.device_ptr_mut(&stream);
     unsafe {
-        ffi::dflash_sample_select(
-            packed_ptr,
-            hidden_ptr,
-            predecessor_ptr,
-            successor_ptr,
-            anchor_ptr,
-            temperature_ptr,
-            uniform_ptr,
-            selected_ptr as *mut u32,
-            candidate_ids_ptr as *mut u32,
-            candidate_probs_ptr as *mut f32,
-            batch_i32,
-            positions_i32,
-            rank_i32,
-            vocab_i32,
-            k_i32,
-            packed_width_i32,
+        ffi::dflash_sample_select(&crate::cuda::abi::DFlashSampleSelectParams {
+            packed_topk: packed_ptr,
+            projected_hidden: hidden_ptr,
+            predecessor_codebook: predecessor_ptr,
+            successor_codebook: successor_ptr,
+            anchors: anchor_ptr,
+            inverse_temperatures: temperature_ptr,
+            uniforms: uniform_ptr,
+            selected: selected_ptr as *mut u32,
+            candidate_ids: candidate_ids_ptr as *mut u32,
+            candidate_probs: candidate_probs_ptr as *mut f32,
+            batch: batch_i32,
+            positions: positions_i32,
+            rank: rank_i32,
+            vocab: vocab_i32,
+            k: k_i32,
+            packed_width: packed_width_i32,
             hidden_dtype,
             predecessor_dtype,
             successor_dtype,
-            stream.cu_stream() as i64,
-        );
+            stream: stream.cu_stream() as i64,
+        });
     }
 
     drop(packed_guard);
