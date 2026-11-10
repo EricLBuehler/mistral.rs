@@ -1,5 +1,6 @@
 mod amoe;
 mod auto;
+mod causal;
 pub mod chat_template;
 #[cfg(feature = "cuda")]
 pub(crate) mod cuda_graph;
