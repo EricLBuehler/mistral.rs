@@ -8,7 +8,7 @@ pub enum AttentionBackendKind {
 
 impl AttentionBackendKind {
     pub fn from_cache(key_cache: &Tensor, value_cache: &Tensor) -> Self {
-        #[cfg(all(feature = "cuda", target_family = "unix"))]
+        #[cfg(cuda_unix)]
         {
             if !key_cache.device().is_metal()
                 && mistralrs_paged_attn::is_flashinfer_cache(key_cache, value_cache)
@@ -16,7 +16,7 @@ impl AttentionBackendKind {
                 return Self::FlashInfer;
             }
         }
-        #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+        #[cfg(not(cuda_unix))]
         let _ = (key_cache, value_cache);
 
         Self::Standard

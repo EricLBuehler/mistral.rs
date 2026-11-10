@@ -928,7 +928,7 @@ impl DeepSeekV2 {
                 } else {
                     cfg.v_head_dim
                 },
-                #[cfg(all(feature = "cuda", target_family = "unix"))]
+                #[cfg(cuda_unix)]
                 kv_cache_layout: if matches!(
                     attention_mechanism,
                     AttentionImplementation::PagedAttention
@@ -940,7 +940,7 @@ impl DeepSeekV2 {
                 } else {
                     crate::paged_attention::KvCacheLayout::Standard
                 },
-                #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+                #[cfg(not(cuda_unix))]
                 kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
             },
             mapper,

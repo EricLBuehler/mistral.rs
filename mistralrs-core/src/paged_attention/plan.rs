@@ -4,12 +4,12 @@ use super::{
     attention_backend::AttentionBackendKind, config::PrefixPrefillAttentionFeatures,
     ModelConfigLike,
 };
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 use crate::attention::flash_backend_supports_sdpa;
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 use crate::flashinfer::{self, FlashInferDecodePlan, FlashInferDecodePlanInput};
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 // Matches the instantiated head sizes in pagedattention.cuh.
 const CUDA_PAGED_ATTENTION_HEAD_DIMS: [usize; 8] = [64, 80, 96, 112, 128, 192, 256, 512];
 const METAL_SDPA_HEAD_DIMS: [usize; 7] = [32, 64, 72, 80, 96, 128, 256];
@@ -45,16 +45,16 @@ pub(crate) struct PrefixPrefillPlanInput {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum PrefixPrefillPlan {
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     Fa3Fp8Paged,
-    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    #[cfg(cuda_flash_attn)]
     FlashAttentionPaged,
     GatherSdpa,
 }
 
 impl PrefixPrefillPlan {
     pub fn choose(input: PrefixPrefillPlanInput) -> Self {
-        #[cfg(not(all(feature = "cuda", feature = "flash-attn", target_family = "unix")))]
+        #[cfg(not(cuda_flash_attn))]
         let _ = (
             input.device_is_cuda,
             input.dtype,
@@ -78,12 +78,12 @@ impl PrefixPrefillPlan {
             input.attention_backend,
         );
 
-        #[cfg(all(feature = "cuda", target_family = "unix"))]
+        #[cfg(cuda_unix)]
         if mistralrs_paged_attn::USE_FA3_FP8_PAGED && fa3_paged_prefill_supported(input) {
             return Self::Fa3Fp8Paged;
         }
 
-        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        #[cfg(cuda_flash_attn)]
         if input.device_is_cuda
             && matches!(input.dtype, DType::F16 | DType::BF16)
             && input.cache_dtype == input.dtype
@@ -107,7 +107,7 @@ impl PrefixPrefillPlan {
     }
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 pub(crate) fn fa3_paged_prefill_supported(input: PrefixPrefillPlanInput) -> bool {
     input.fa3_supported
         && input.device_is_cuda
@@ -1133,7 +1133,7 @@ pub(crate) fn prompt_prefill_workspace(
         .iter()
         .try_fold(0usize, |total, &len| total.checked_add(len))
         .ok_or_else(|| candle_core::Error::msg("prompt query length sum overflow"))?;
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     let mut fa3_pool = crate::flashinfer::Fa3PrefillPoolBytes::default();
     let mut max_layer_transient = 0usize;
     let mut gather_workspace_bytes = 0usize;
@@ -1204,7 +1204,7 @@ pub(crate) fn prompt_prefill_workspace(
         } else {
             PrefixPrefillPlan::GatherSdpa
         };
-        #[cfg(all(feature = "cuda", target_family = "unix"))]
+        #[cfg(cuda_unix)]
         if matches!(plan, PrefixPrefillPlan::Fa3Fp8Paged) {
             let fa3_workspace = crate::flashinfer::fa3_prefill_workspace_components(
                 input.query_lens.len(),
@@ -1295,9 +1295,9 @@ pub(crate) fn prompt_prefill_workspace(
             },
         )?);
     }
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     let fa3_pool_bytes = fa3_pool.bytes()?;
-    #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+    #[cfg(not(cuda_unix))]
     let fa3_pool_bytes = 0usize;
     #[cfg(feature = "metal")]
     let retained_mask_bytes = if retained_mask_keys.len() > 1 {
@@ -1398,14 +1398,14 @@ fn prompt_plan_input(
     }
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 fn fa3_group_size_is_supported(q_heads: usize, kv_heads: usize) -> bool {
     kv_heads > 0
         && q_heads.is_multiple_of(kv_heads)
         && matches!(q_heads / kv_heads, 1 | 2 | 3 | 4 | 6 | 8 | 16)
 }
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 fn paged_flash_attention_supports(
     head_size: usize,
     block_size: usize,
@@ -1429,7 +1429,7 @@ pub(crate) struct DecodePlanInput {
 #[cfg(any(feature = "cuda", feature = "metal", test))]
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum DecodePlan {
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     FlashInfer(FlashInferDecodePlan),
     GatherSdpa,
     PagedAttention,
@@ -1442,7 +1442,7 @@ impl DecodePlan {
         head_size: usize,
         has_sliding_window: bool,
     ) -> bool {
-        #[cfg(all(feature = "cuda", target_family = "unix"))]
+        #[cfg(cuda_unix)]
         {
             let _ = has_sliding_window;
             match attention_backend {
@@ -1454,7 +1454,7 @@ impl DecodePlan {
                 }
             }
         }
-        #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+        #[cfg(not(cuda_unix))]
         {
             let _ = head_size;
             matches!(attention_backend, AttentionBackendKind::FlashInfer) || has_sliding_window
@@ -1470,7 +1470,7 @@ impl DecodePlan {
             return Ok(Self::GatherSdpa);
         }
         match input.attention_backend {
-            #[cfg(all(feature = "cuda", target_family = "unix"))]
+            #[cfg(cuda_unix)]
             AttentionBackendKind::FlashInfer => {
                 flashinfer::decode_plan(FlashInferDecodePlanInput {
                     head_size: input.head_size,
@@ -1479,7 +1479,7 @@ impl DecodePlan {
                 })
                 .map(Self::FlashInfer)
             }
-            #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+            #[cfg(not(cuda_unix))]
             AttentionBackendKind::FlashInfer => Ok(Self::GatherSdpa),
             AttentionBackendKind::Standard => Ok(Self::PagedAttention),
         }

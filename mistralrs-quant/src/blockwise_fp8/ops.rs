@@ -511,7 +511,7 @@ pub fn fp8_blockwise_quantize(
     }
 }
 
-#[cfg(all(feature = "cuda", feature = "cutile"))]
+#[cfg(cuda_cutile)]
 pub(crate) fn fp8_quantize_activation_rowwise(input: &Tensor) -> Result<(Tensor, Tensor)> {
     use candle_core::{CudaStorage, Device, Shape, Storage};
     use half::{bf16, f16};
@@ -626,7 +626,7 @@ pub(crate) fn fp8_quantize_activation_rowwise(input: &Tensor) -> Result<(Tensor,
     Ok((quantized, scales))
 }
 
-#[cfg(all(feature = "cuda", feature = "cutile"))]
+#[cfg(cuda_cutile)]
 pub(crate) fn fp8_quantize_activation_static(input: &Tensor, scale: &Tensor) -> Result<Tensor> {
     use candle_core::{CudaStorage, Device, Storage};
     use half::{bf16, f16};

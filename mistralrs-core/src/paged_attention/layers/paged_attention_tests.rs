@@ -19,7 +19,7 @@ fn checked_sequence_token_count_rejects_invalid_kernel_sizes() {
     assert!(checked_sequence_token_count(&[usize::MAX, 1]).is_err());
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 fn supported_fa3_decode_candidate() -> Fa3DecodeCandidate {
     Fa3DecodeCandidate {
         key: Fa3PagedScheduleShape {
@@ -49,7 +49,7 @@ fn supported_fa3_decode_candidate() -> Fa3DecodeCandidate {
     }
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 #[test]
 fn fa3_decode_candidate_requires_supported_full_decode() {
     let supported = supported_fa3_decode_candidate();
@@ -85,7 +85,7 @@ fn fa3_decode_candidate_requires_supported_full_decode() {
     assert_eq!(speculative.schedule_key(), Some(speculative.key));
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 #[test]
 fn fa3_decode_schedule_lookup_is_exact() {
     let candidate = supported_fa3_decode_candidate();
@@ -121,7 +121,7 @@ fn owns_validated_fp8_attention_scales() -> Result<()> {
     assert_eq!(q_scale.to_scalar::<f32>()?, scales.q);
     assert_eq!(k_scale.to_scalar::<f32>()?, scales.k);
     assert_eq!(v_scale.to_scalar::<f32>()?, scales.v);
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     {
         let fp8_cache = Tensor::zeros((1,), DType::F8E4M3, &Device::Cpu)?;
         let flashinfer_scales = attention.cache_scales(&fp8_cache).flashinfer(&fp8_cache);
@@ -156,7 +156,7 @@ fn cache_write_accepts_row_strided_dense_heads() -> Result<()> {
     assert_eq!(cache_input_shape(&row_strided)?, (6, 2, 4));
     assert_eq!(
         cache_input_can_write_directly(&row_strided)?,
-        cfg!(all(feature = "cuda", target_family = "unix"))
+        cfg!(cuda_unix)
     );
 
     let row_strided = packed

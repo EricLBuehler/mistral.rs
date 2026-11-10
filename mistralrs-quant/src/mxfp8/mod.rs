@@ -36,7 +36,7 @@ pub(crate) struct Mxfp8Linear {
     scales: Tensor,
     bias: Option<Tensor>,
     dtype: DType,
-    #[cfg(all(feature = "cuda", feature = "cutile"))]
+    #[cfg(cuda_cutile)]
     native_mma: bool,
 }
 
@@ -69,10 +69,10 @@ impl Mxfp8Linear {
         }
         let weight = weight.contiguous()?;
         let scales = scales.contiguous()?;
-        #[cfg(all(feature = "cuda", feature = "cutile"))]
+        #[cfg(cuda_cutile)]
         let native_mma = crate::cutile::register_mxfp8_shape(&weight, &scales, dtype);
         Ok(Self {
-            #[cfg(all(feature = "cuda", feature = "cutile"))]
+            #[cfg(cuda_cutile)]
             native_mma,
             weight,
             scales,
@@ -316,7 +316,7 @@ impl QuantMethod for Mxfp8Linear {
         &self,
         input: &Tensor,
     ) -> Option<crate::ActivationQuantizationScheme> {
-        #[cfg(all(feature = "cuda", feature = "cutile"))]
+        #[cfg(cuda_cutile)]
         if self.native_mma
             && input.rank() >= 2
             && input.dtype() == self.dtype
@@ -341,7 +341,7 @@ impl QuantMethod for Mxfp8Linear {
     }
 
     fn forward_quantized(&self, activation: &QuantizedActivation) -> Result<Tensor> {
-        #[cfg(all(feature = "cuda", feature = "cutile"))]
+        #[cfg(cuda_cutile)]
         if self.native_mma {
             if activation.source_dtype() != self.dtype {
                 candle_core::bail!(

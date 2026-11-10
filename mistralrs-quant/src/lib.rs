@@ -31,7 +31,7 @@ pub mod cuda_policy;
 #[cfg(test)]
 #[path = "build_support/cuda_toolkit.rs"]
 mod cuda_toolkit;
-#[cfg(all(feature = "cuda", feature = "cutile"))]
+#[cfg(cuda_cutile)]
 pub mod cutile;
 pub mod distributed;
 mod dummy;

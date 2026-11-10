@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Once};
 
 use candle_core::{DType, Device, DeviceLocation, Result, Tensor};
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 use mistralrs_paged_attn::{
     fa3_fp8_decode, flashinfer_decode, gather_kv_cache_flashinfer, reshape_and_cache_flashinfer,
     Fa3DecodeParams, FlashInferDecodeScratch, KvCacheScales as FlashInferKvCacheScales,
@@ -11,12 +11,12 @@ use mistralrs_paged_attn::{
 use mistralrs_paged_attn::{metal_paged_prefill, MetalPagedPrefillRequest, MetalPagedPrefillShape};
 use mistralrs_paged_attn::{paged_attention, reshape_and_cache};
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 use crate::paged_attention::plan::gather_prefill_uses_sinks;
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 use crate::attention::sliding_window_left;
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 use crate::flashinfer::{
     fa3_device_num_sm, fa3_prefill_cache_num_sm, with_fa3_prefill_workspace, Fa3DecodeScheduleKey,
     Fa3DecodeView, Fa3PagedScheduleShape,
@@ -44,7 +44,7 @@ use crate::{
 static UNCALIBRATED_FP8_ATTENTION_WARNING: Once = Once::new();
 const METAL_DONOR_DECODE_HEAD_SIZES: [usize; 2] = [256, 512];
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 #[derive(Clone, Copy)]
 struct Fa3DecodeCandidate {
     key: Fa3DecodeScheduleKey,
@@ -61,7 +61,7 @@ struct Fa3DecodeCandidate {
     has_noncausal_mm_context: bool,
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 impl Fa3DecodeCandidate {
     fn schedule_key(self) -> Option<Fa3DecodeScheduleKey> {
         (self.query_dtype == DType::BF16
@@ -80,7 +80,7 @@ impl Fa3DecodeCandidate {
     }
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 #[derive(Clone, Copy)]
 struct FlashInferDecodeCall<'call, 'ctx> {
     ctx: &'call PagedForwardCtx<'ctx>,
@@ -93,14 +93,14 @@ struct FlashInferDecodeCall<'call, 'ctx> {
 
 #[derive(Clone, Copy)]
 struct CacheScales<'a> {
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     attention: Fp8AttentionScales,
     k: Option<&'a Tensor>,
     v: Option<&'a Tensor>,
 }
 
 impl CacheScales<'_> {
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     fn flashinfer(self, key_cache: &Tensor) -> FlashInferKvCacheScales {
         if key_cache.dtype() == DType::F8E4M3 {
             FlashInferKvCacheScales {
@@ -215,7 +215,7 @@ fn cache_input_can_write_directly(tensor: &Tensor) -> Result<bool> {
     let row_stride = match *dims {
         [_, _, _] => stride[0],
         [batch, seq_len, _, _] => {
-            if tensor.device().is_metal() || !cfg!(all(feature = "cuda", target_family = "unix")) {
+            if tensor.device().is_metal() || !cfg!(cuda_unix) {
                 return Ok(false);
             }
             let row_stride = if seq_len == 1 { stride[0] } else { stride[1] };
@@ -299,7 +299,7 @@ fn write_kv_cache(
     };
     match AttentionBackendKind::from_cache(key_cache, value_cache) {
         AttentionBackendKind::FlashInfer => {
-            #[cfg(all(feature = "cuda", target_family = "unix"))]
+            #[cfg(cuda_unix)]
             {
                 reshape_and_cache_flashinfer(
                     key,
@@ -310,7 +310,7 @@ fn write_kv_cache(
                     scales.flashinfer(key_cache),
                 )
             }
-            #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+            #[cfg(not(cuda_unix))]
             {
                 unreachable!("FlashInfer cache is only available with CUDA")
             }
@@ -338,7 +338,7 @@ fn gather_kv_cache_for_layout(
 ) -> Result<(Tensor, Tensor)> {
     match AttentionBackendKind::from_cache(key_cache, value_cache) {
         AttentionBackendKind::FlashInfer => {
-            #[cfg(all(feature = "cuda", target_family = "unix"))]
+            #[cfg(cuda_unix)]
             {
                 gather_kv_cache_flashinfer(
                     key_cache,
@@ -350,7 +350,7 @@ fn gather_kv_cache_for_layout(
                     scales.flashinfer(key_cache),
                 )
             }
-            #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+            #[cfg(not(cuda_unix))]
             {
                 unreachable!("FlashInfer cache is only available with CUDA")
             }
@@ -996,7 +996,7 @@ impl PagedAttention {
             (None, None)
         };
         CacheScales {
-            #[cfg(all(feature = "cuda", target_family = "unix"))]
+            #[cfg(cuda_unix)]
             attention: self.fp8_attention_scales,
             k,
             v,
@@ -1538,7 +1538,7 @@ impl PagedAttention {
             key_cache.as_ref().unwrap(),
             value_cache.as_ref().unwrap(),
         );
-        #[cfg(all(feature = "cuda", target_family = "unix"))]
+        #[cfg(cuda_unix)]
         let fa3_supported = fa3_prefill_cache_num_sm(
             key_cache.as_ref().unwrap(),
             value_cache.as_ref().unwrap(),
@@ -1548,7 +1548,7 @@ impl PagedAttention {
             block_size,
         )?
         .is_some();
-        #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+        #[cfg(not(cuda_unix))]
         let fa3_supported = false;
         let prefill_plan_input = PrefixPrefillPlanInput {
             device_is_cuda: tensors.query.device().is_cuda(),
@@ -1625,7 +1625,7 @@ impl PagedAttention {
             }
         }
         match prefill_plan {
-            #[cfg(all(feature = "cuda", target_family = "unix"))]
+            #[cfg(cuda_unix)]
             PrefixPrefillPlan::Fa3Fp8Paged => {
                 let output = self.run_fa3_paged_prefill(
                     ctx,
@@ -1636,7 +1636,7 @@ impl PagedAttention {
                 )?;
                 return prefix_attention_output_layout(output, tensors.attention_mask).map(Some);
             }
-            #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+            #[cfg(cuda_flash_attn)]
             PrefixPrefillPlan::FlashAttentionPaged => {
                 let output = self.run_flash_attention_paged_prefill(
                     ctx,
@@ -1666,7 +1666,7 @@ impl PagedAttention {
             num_kv_tokens,
             tensors.query.dtype(),
         )?;
-        #[cfg(all(feature = "cuda", target_family = "unix"))]
+        #[cfg(cuda_unix)]
         if gather_prefill_uses_sinks(prefill_plan_input) && v_gathered.dim(2)? == ctx.dims.head_size
         {
             let cu_q = match ctx.input_metadata.cu_seqlens_q.as_ref() {
@@ -1940,7 +1940,7 @@ impl PagedAttention {
         prefix_attention_output_layout(output, tensors.attention_mask).map(Some)
     }
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     fn run_fa3_paged_prefill(
         &self,
         ctx: &PagedForwardCtx<'_>,
@@ -2021,7 +2021,7 @@ impl PagedAttention {
             .transpose(1, 2)
     }
 
-    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    #[cfg(cuda_flash_attn)]
     #[allow(clippy::too_many_arguments)]
     fn run_flash_attention_paged_prefill(
         &self,
@@ -2228,7 +2228,7 @@ impl PagedAttention {
                 &dev,
                 tensors.attention_mask,
             ),
-            #[cfg(all(feature = "cuda", target_family = "unix"))]
+            #[cfg(cuda_unix)]
             DecodePlan::FlashInfer(_) => self.run_flashinfer_decode(FlashInferDecodeCall {
                 ctx,
                 query: &query,
@@ -2444,7 +2444,7 @@ impl PagedAttention {
         )
     }
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     fn try_run_fa3_decode(&self, call: FlashInferDecodeCall<'_, '_>) -> Result<Option<Tensor>> {
         let FlashInferDecodeCall {
             ctx,
@@ -2532,7 +2532,7 @@ impl PagedAttention {
         Ok(Some(output))
     }
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     fn run_flashinfer_decode(&self, call: FlashInferDecodeCall<'_, '_>) -> Result<Tensor> {
         if let Some(output) = self.try_run_fa3_decode(call)? {
             return Ok(output);

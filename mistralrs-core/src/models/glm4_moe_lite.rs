@@ -942,11 +942,11 @@ impl Glm4MoeLite {
                     attention_mechanism,
                     AttentionImplementation::PagedAttention
                 ) && {
-                    #[cfg(all(feature = "cuda", target_family = "unix"))]
+                    #[cfg(cuda_unix)]
                     {
                         matches!(normal_loading_metadata.real_device, Device::Cuda(_))
                     }
-                    #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+                    #[cfg(not(cuda_unix))]
                     {
                         false
                     }

@@ -31,7 +31,7 @@ pub(crate) fn sinks_attn(
         (k, v)
     };
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     if let Some(flash_params) = flash_params.filter(|params| params.packed && q.device().is_cuda())
     {
         return sinks_attn_varlen(q, k, v, sinks, flash_params, sdpa_params, window_size);
@@ -78,7 +78,7 @@ pub(crate) fn sinks_backend_supports(
     }
 
     match location {
-        #[cfg(all(feature = "cuda", target_family = "unix"))]
+        #[cfg(cuda_unix)]
         DeviceLocation::Cuda { .. } => true,
         #[cfg(feature = "metal")]
         DeviceLocation::Metal { .. } => true,
@@ -110,7 +110,7 @@ fn sinks_attn_regular(
         return sinks_attn_cpu(q, k, v, sinks, mask, sdpa_params);
     }
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     if q.device().is_cuda() {
         return mistralrs_paged_attn::flash_attn_sinks(
             q,
@@ -174,7 +174,7 @@ fn sinks_attn_varlen(
         .get(&location)
         .ok_or_else(|| candle_core::Error::msg("sinks varlen attention is missing key metadata"))?;
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     if device.is_cuda() && flash_params.packed && q.dim(0)? == 1 {
         let query = q.squeeze(0)?.transpose(0, 1)?;
         return mistralrs_paged_attn::flash_attn_sinks_varlen_packed(
@@ -196,7 +196,7 @@ fn sinks_attn_varlen(
         candle_core::bail!("sinks varlen metadata does not match the query batch");
     }
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     if device.is_cuda() {
         return mistralrs_paged_attn::flash_attn_sinks_varlen(
             q,
@@ -406,7 +406,7 @@ mod tests {
         assert!(!sinks_backend_supports(DType::F16, DeviceLocation::Cpu, 64));
         assert_eq!(
             sinks_backend_supports(DType::BF16, DeviceLocation::Cuda { gpu_id: 0 }, 128),
-            cfg!(all(feature = "cuda", target_family = "unix"))
+            cfg!(cuda_unix)
         );
         assert_eq!(
             sinks_backend_supports(DType::F32, DeviceLocation::Metal { gpu_id: 0 }, 256),

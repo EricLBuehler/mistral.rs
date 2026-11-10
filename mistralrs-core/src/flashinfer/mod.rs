@@ -6,7 +6,7 @@ use std::sync::{
     Arc,
 };
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 use candle_core::Result;
 use candle_core::{DeviceLocation, Tensor};
 
@@ -22,7 +22,7 @@ pub(crate) use metadata::{
     flashinfer_tile_plan, flashinfer_view, make_paged_kv_decode_tensors,
     make_paged_kv_decode_tensors_from_lens, make_paged_kv_tensors,
 };
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 pub(crate) use metadata::{
     fa3_device_num_sm, fa3_prefill_cache_num_sm, register_fa3_prefill_caches,
     with_fa3_prefill_workspace, Fa3PrefillWorkspaceRegistration,
@@ -31,24 +31,24 @@ pub(crate) use metadata::{
 // Metadata is copied per CUDA device; graph replay may substitute graph-owned tensors.
 pub type DeviceTensorMap = HashMap<DeviceLocation, Tensor>;
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 pub(crate) const FA3_DECODE_NUM_SPLITS: usize = 32;
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 const FA3_PAGED_MIN_SPLITS: usize = 2;
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 const FA3_DECODE_HEAD_DIM: usize = 256;
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 const FA3_SCHEDULER_BATCH_ALIGNMENT: usize = 4;
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 pub(crate) const FA3_DECODE_MAX_QUERY_LEN: usize = mistralrs_paged_attn::FA3_DECODE_MAX_QUERY_LEN;
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub(crate) enum Fa3DecodeView {
     Logical,
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub(crate) struct Fa3DecodeScheduleKey {
     pub device: DeviceLocation,
@@ -63,7 +63,7 @@ pub(crate) struct Fa3DecodeScheduleKey {
     pub num_splits: usize,
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Fa3PagedScheduleShape {
     pub device: DeviceLocation,
@@ -77,7 +77,7 @@ pub(crate) struct Fa3PagedScheduleShape {
     pub page_size: usize,
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 impl Fa3PagedScheduleShape {
     pub(crate) fn prefill_schedule_key(self, num_sm: usize) -> Option<Fa3DecodeScheduleKey> {
         let num_splits = fa3_prefill_num_splits(
@@ -111,7 +111,7 @@ impl Fa3PagedScheduleShape {
     }
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 impl Fa3DecodeScheduleKey {
     pub(crate) fn total_q(&self) -> Option<usize> {
         self.batch.checked_mul(self.query_len)
@@ -131,7 +131,7 @@ impl Fa3DecodeScheduleKey {
     }
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 pub(crate) fn fa3_prefill_num_splits(
     batch: usize,
     query_len: usize,
@@ -159,7 +159,7 @@ pub(crate) fn fa3_prefill_num_splits(
     )
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Fa3PrefillPoolBytes {
     quantized_query: usize,
@@ -172,7 +172,7 @@ pub(crate) struct Fa3PrefillPoolBytes {
     seqused_k: usize,
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 impl Fa3PrefillPoolBytes {
     pub(crate) fn component_max(self, other: Self) -> Self {
         Self {
@@ -202,14 +202,14 @@ impl Fa3PrefillPoolBytes {
     }
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Fa3PrefillWorkspaceBytes {
     pool: Fa3PrefillPoolBytes,
     transient: usize,
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 impl Fa3PrefillWorkspaceBytes {
     pub(crate) fn pool(self) -> Fa3PrefillPoolBytes {
         self.pool
@@ -227,7 +227,7 @@ impl Fa3PrefillWorkspaceBytes {
     }
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 pub(crate) fn fa3_prefill_workspace_components(
     batch: usize,
     query_len: usize,
@@ -298,7 +298,7 @@ pub(crate) fn fa3_prefill_workspace_components(
     })
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 #[allow(dead_code)]
 pub(crate) fn fa3_prefill_workspace_bytes(
     batch: usize,
@@ -321,7 +321,7 @@ pub(crate) fn fa3_prefill_workspace_bytes(
     .bytes()
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 fn checked_workspace_sum(bytes: &[usize]) -> candle_core::Result<usize> {
     bytes
         .iter()
@@ -329,7 +329,7 @@ fn checked_workspace_sum(bytes: &[usize]) -> candle_core::Result<usize> {
         .ok_or_else(|| candle_core::Error::msg("FA3 prefill workspace size overflow"))
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 fn checked_workspace_bytes(parts: &[usize], element_size: usize) -> candle_core::Result<usize> {
     parts
         .iter()
@@ -337,7 +337,7 @@ fn checked_workspace_bytes(parts: &[usize], element_size: usize) -> candle_core:
         .ok_or_else(|| candle_core::Error::msg("FA3 prefill workspace size overflow"))
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 #[derive(Clone, Debug)]
 pub(crate) struct Fa3DecodeBuffers {
     pub query: Tensor,
@@ -352,7 +352,7 @@ pub(crate) struct Fa3DecodeBuffers {
     pub num_sm: usize,
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 impl Fa3DecodeBuffers {
     pub(crate) fn schedule(
         &self,
@@ -384,13 +384,13 @@ impl Fa3DecodeBuffers {
     }
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Fa3DecodeState {
     schedules: HashMap<Fa3DecodeScheduleKey, Fa3DecodeBuffers>,
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 impl Fa3DecodeState {
     pub(crate) fn insert(&mut self, key: Fa3DecodeScheduleKey, buffers: Fa3DecodeBuffers) {
         self.schedules.insert(key, buffers);
@@ -411,11 +411,11 @@ impl Fa3DecodeState {
     }
 }
 
-#[cfg(not(all(feature = "cuda", target_family = "unix")))]
+#[cfg(not(cuda_unix))]
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Fa3DecodeState;
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 pub(crate) struct Fa3DecodePrepare<'a> {
     pub key: Fa3DecodeScheduleKey,
     pub paged_kv_indptr: &'a Tensor,
@@ -424,9 +424,9 @@ pub(crate) struct Fa3DecodePrepare<'a> {
     pub buffers: &'a Fa3DecodeBuffers,
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 pub const STANDARD_PAGED_ATTENTION_MAX_HEAD_SIZE: usize = 512;
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 pub const FLASHINFER_DECODE_MAX_HEAD_SIZE: usize = 512;
 
 #[derive(Clone, Debug)]
@@ -469,13 +469,13 @@ pub struct FlashInferMetadata {
     pub views: FlashInferPagedAttentionViews,
     pub decode_tmp_v: Option<DeviceTensorMap>,
     pub decode_tmp_s: Option<DeviceTensorMap>,
-    #[cfg_attr(not(all(feature = "cuda", target_family = "unix")), allow(dead_code))]
+    #[cfg_attr(not(cuda_unix), allow(dead_code))]
     pub(crate) fa3_decode: Option<Fa3DecodeState>,
     #[cfg(feature = "cuda")]
     pub(crate) decode_tile_plan_used: Option<Arc<AtomicBool>>,
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 pub(crate) struct FlashInferDecodeMetadata<'a> {
     pub paged_kv_indptr: &'a Tensor,
     pub paged_kv_indices: &'a Tensor,
@@ -489,11 +489,11 @@ pub(crate) struct FlashInferDecodeMetadata<'a> {
     pub tmp_s: Option<&'a Tensor>,
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct FlashInferDecodePlan;
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 impl FlashInferDecodePlan {
     pub fn head_size_limit(kind: AttentionBackendKind) -> usize {
         match kind {
@@ -503,14 +503,14 @@ impl FlashInferDecodePlan {
     }
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 pub(crate) struct FlashInferDecodePlanInput {
     pub head_size: usize,
     pub has_alibi: bool,
     pub has_sinks: bool,
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 pub(crate) fn decode_plan(input: FlashInferDecodePlanInput) -> Result<FlashInferDecodePlan> {
     // Decode can fall back for size limits, but unsupported attention features are hard errors.
     if input.has_alibi || input.has_sinks {
@@ -559,7 +559,7 @@ impl FlashInferPagedAttentionViews {
         }
     }
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     pub(crate) fn fa3_view(&self, view: Fa3DecodeView) -> &FlashInferPagedAttentionView {
         match view {
             Fa3DecodeView::Logical => &self.logical,
@@ -581,7 +581,7 @@ impl FlashInferMetadata {
             .is_some_and(|used| used.load(Ordering::Relaxed))
     }
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     pub(crate) fn fa3_decode_buffers(
         &self,
         key: &Fa3DecodeScheduleKey,
@@ -589,7 +589,7 @@ impl FlashInferMetadata {
         self.fa3_decode.as_ref()?.get(key)
     }
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     pub(crate) fn for_each_fa3_decode_schedule(
         &self,
         mut f: impl FnMut(Fa3DecodePrepare<'_>) -> Result<()>,
@@ -622,7 +622,7 @@ impl FlashInferMetadata {
         Ok(())
     }
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     pub(crate) fn decode_metadata(
         &self,
         device: &DeviceLocation,
@@ -673,7 +673,7 @@ impl FlashInferMetadata {
     }
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 fn metadata_tensor<'a>(
     map: &'a DeviceTensorMap,
     device: &DeviceLocation,
@@ -686,13 +686,13 @@ fn metadata_tensor<'a>(
 #[cfg(test)]
 mod tests {
     use super::supports_flashinfer_group_size;
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     use super::{
         fa3_prefill_num_splits, fa3_prefill_workspace_bytes, fa3_prefill_workspace_components,
         Fa3DecodeScheduleKey, Fa3DecodeView, Fa3PagedScheduleShape, Fa3PrefillPoolBytes,
         Fa3PrefillWorkspaceBytes, FA3_DECODE_MAX_QUERY_LEN, FA3_DECODE_NUM_SPLITS,
     };
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     use candle_core::DeviceLocation;
 
     #[test]
@@ -708,7 +708,7 @@ mod tests {
         assert!(!supports_flashinfer_group_size(15, 2));
     }
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     #[test]
     fn fa3_schedule_capability_is_shape_based() {
         let key = Fa3DecodeScheduleKey {
@@ -744,7 +744,7 @@ mod tests {
         .supported());
     }
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     #[test]
     fn fa3_prefill_split_cap_tracks_query_occupancy() {
         assert_eq!(fa3_prefill_num_splits(1, 8, 24, 4, 132), Some(32));
@@ -763,7 +763,7 @@ mod tests {
         assert_eq!(fa3_prefill_num_splits(usize::MAX, 128, 24, 4, 132), None);
     }
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     #[test]
     fn fa3_decode_schedule_preserves_long_row_split_capacity() {
         for (batch, prefill_splits) in [(3, 11), (16, 3)] {
@@ -791,7 +791,7 @@ mod tests {
         }
     }
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     #[test]
     fn fa3_prefill_pool_uses_component_wise_maxima() {
         let query_heavy = Fa3PrefillPoolBytes {
@@ -819,7 +819,7 @@ mod tests {
         assert!(combined.bytes().unwrap() > metadata_heavy.bytes().unwrap());
     }
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     #[test]
     fn fa3_prefill_workspace_adds_pool_and_transient_bytes() {
         let components = fa3_prefill_workspace_components(2, 8, 24, 4, 256, 17, 132).unwrap();
@@ -847,7 +847,7 @@ mod tests {
         .is_err());
     }
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     #[test]
     fn fa3_prefill_workspace_covers_every_transient_allocation() {
         assert_eq!(
@@ -860,7 +860,7 @@ mod tests {
         );
     }
 
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     #[test]
     fn fa3_prefill_workspace_rejects_invalid_or_overflowing_shapes() {
         assert!(fa3_prefill_workspace_bytes(0, 1, 24, 4, 256, 1, 132).is_err());

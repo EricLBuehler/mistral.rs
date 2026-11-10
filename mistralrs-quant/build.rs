@@ -108,7 +108,25 @@ fn cutile_supported_for_build_cuda(major: usize, minor: usize, compute_cap: usiz
         || (compute_cap >= 100 && cuda_code >= 1302)
 }
 
+// Short names for feature combinations that gate large amounts of code.
+fn emit_cfg_aliases() {
+    let aliases = [
+        (
+            "cuda_cutile",
+            cfg!(all(feature = "cuda", feature = "cutile")),
+        ),
+        ("cuda_nccl", cfg!(all(feature = "cuda", feature = "nccl"))),
+    ];
+    for (name, enabled) in aliases {
+        println!("cargo::rustc-check-cfg=cfg({name})");
+        if enabled {
+            println!("cargo:rustc-cfg={name}");
+        }
+    }
+}
+
 fn main() -> Result<(), String> {
+    emit_cfg_aliases();
     // Declare expected cfg values for check-cfg lint
     println!("cargo::rustc-check-cfg=cfg(has_marlin_kernels)");
     println!("cargo::rustc-check-cfg=cfg(has_blockwise_fp8_kernels)");

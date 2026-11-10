@@ -420,7 +420,7 @@ fn native_metal_prefill_workspace(
 #[derive(Default)]
 struct PrefixAttentionWorkspace {
     transient_bytes: usize,
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     fa3_pool: crate::flashinfer::Fa3PrefillPoolBytes,
 }
 
@@ -443,12 +443,12 @@ fn prefix_prefill_workspace(
         .paged
         .block_size
         .unwrap_or(DEFAULT_PAGED_ATTENTION_BLOCK_SIZE);
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     let fa3_num_sm = crate::flashinfer::fa3_device_num_sm(ctx.device);
-    #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+    #[cfg(not(cuda_unix))]
     let fa3_num_sm: Option<usize> = None;
     let lengths = prefix_query_lengths(max_query, capacity);
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     let lengths = if fa3_num_sm.is_some() && mistralrs_paged_attn::USE_FA3_FP8_PAGED {
         let mut lengths = lengths;
         lengths.extend(
@@ -496,7 +496,7 @@ fn prefix_prefill_workspace(
             attention_backend: cfg.model.attention_backend_kind_for_layer(layer_idx),
         };
         let bytes = match PrefixPrefillPlan::choose(plan_input) {
-            #[cfg(all(feature = "cuda", target_family = "unix"))]
+            #[cfg(cuda_unix)]
             PrefixPrefillPlan::Fa3Fp8Paged => {
                 let native = crate::flashinfer::fa3_prefill_workspace_components(
                     1,
@@ -510,7 +510,7 @@ fn prefix_prefill_workspace(
                 workspace.fa3_pool = workspace.fa3_pool.component_max(native.pool());
                 native.transient_bytes()
             }
-            #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+            #[cfg(cuda_flash_attn)]
             PrefixPrefillPlan::FlashAttentionPaged => {
                 crate::paged_attention::plan::paged_flash_prefill_workspace(
                     query_len,
@@ -575,7 +575,7 @@ fn model_activation_memory(
     let mut mapped_non_attention_bytes = sum(&[hidden, extra_hidden, mlp])?;
     let mut prefill_attention_bytes = 0;
     let mut prefix_attention_bytes = 0;
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     let mut fa3_pool = crate::flashinfer::Fa3PrefillPoolBytes::default();
     let mut decode_attention_bytes = 0;
     let mut cold_mask_variants = std::collections::HashSet::new();
@@ -671,7 +671,7 @@ fn model_activation_memory(
         if let Some(capacity) = prefix_context_capacity {
             let workspace = prefix_prefill_workspace(ctx, &cfg, layer_idx, capacity, max_query)?;
             prefix_attention_bytes = prefix_attention_bytes.max(workspace.transient_bytes);
-            #[cfg(all(feature = "cuda", target_family = "unix"))]
+            #[cfg(cuda_unix)]
             {
                 fa3_pool = fa3_pool.component_max(workspace.fa3_pool);
             }
@@ -756,7 +756,7 @@ fn model_activation_memory(
     let attention_bytes = prefill_attention_bytes
         .max(prefix_attention_bytes)
         .max(decode_attention_bytes);
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     let attention_bytes = sum(&[attention_bytes, fa3_pool.bytes()?])?;
     let logits = product(&[
         ctx.limits.max_num_seqs,

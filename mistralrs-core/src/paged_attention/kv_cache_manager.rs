@@ -176,9 +176,8 @@ impl KVCacheManager {
     /// Walks the request's block hashes and checks for cached blocks.
     /// Returns cached block IDs and the number of computed tokens.
     ///
-    /// **Important**: When all tokens hit the cache, we must recompute the
-    /// last block to produce logits. So `max_length` should be
-    /// `num_tokens - 1` (the caller is responsible for this).
+    /// Pass the full `num_tokens`: the hit is capped at `num_tokens - 1` here so the last token is
+    /// always recomputed to produce logits.
     pub fn get_computed_blocks(
         &self,
         block_hashes: &[BlockHash],

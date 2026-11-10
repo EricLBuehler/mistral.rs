@@ -12,7 +12,7 @@ use super::{
     update_dormant_sequences, DFlashConfig, DFlashGraphHostInput, DFlashSamplingInputs,
     DFlashSequenceEviction, ADAPT_FULL_DEPTH_MAX_BATCH,
 };
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 use super::{release_dflash_cuda_graph_resources, windowed_kv_checkpoint_capacity};
 #[cfg(feature = "cuda")]
 use super::{validate_candidate_selector_cuda, CandidateSelectorCudaSpec};
@@ -24,7 +24,7 @@ use crate::pipeline::cuda_graph::{
 use crate::speculative::MtpDraftSamplingMethod;
 use crate::speculative::{SpeculativeGraphPlan, SpeculativePrefixReplay};
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 #[test]
 fn prefix_checkpoint_capacity_includes_transactional_staging() -> Result<()> {
     assert_eq!(windowed_kv_checkpoint_capacity(0)?, 0);
@@ -402,7 +402,7 @@ fn graph_outputs_do_not_alias_reclaimable_buffers() -> Result<()> {
     Ok(())
 }
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 #[test]
 fn graph_release_waits_for_detached_output_copies() -> anyhow::Result<()> {
     use candle_core::{cuda_backend::cudarc::driver::sys, Var};
@@ -606,7 +606,7 @@ fn graph_rope_applies_yarn_attention_scaling() -> Result<()> {
     Ok(())
 }
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 #[test]
 fn graph_rope_replays_mixed_long_positions_on_cuda() -> anyhow::Result<()> {
     use candle_core::{cuda_backend::cudarc::driver::sys, Var};

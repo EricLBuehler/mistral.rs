@@ -44,7 +44,7 @@ pub struct BlockwiseFP8Linear {
 #[derive(Clone, Debug)]
 enum BlockwiseFp8Provider {
     Legacy,
-    #[cfg(all(feature = "cuda", feature = "cutile"))]
+    #[cfg(cuda_cutile)]
     CutileW8A16,
     #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
     CutlassSm90,
@@ -90,7 +90,7 @@ impl BlockwiseFp8Provider {
     fn supports_shared_activation(&self) -> bool {
         match self {
             Self::Legacy => false,
-            #[cfg(all(feature = "cuda", feature = "cutile"))]
+            #[cfg(cuda_cutile)]
             Self::CutileW8A16 => false,
             #[cfg(all(feature = "cuda", has_cutlass_fp8_sm90_kernels))]
             Self::CutlassSm90 => true,
@@ -116,7 +116,7 @@ impl BlockwiseFP8Linear {
 
     fn prepare_provider(&mut self) -> Result<()> {
         self.provider = BlockwiseFp8Provider::Legacy;
-        #[cfg(all(feature = "cuda", feature = "cutile"))]
+        #[cfg(cuda_cutile)]
         if self.activation_scheme.is_none()
             && self.weight_block_size == [128, 128]
             && matches!(self.dequant_dtype, DType::BF16 | DType::F16)
@@ -568,7 +568,7 @@ impl QuantMethod for BlockwiseFP8Linear {
             }
         }
 
-        #[cfg(all(feature = "cuda", feature = "cutile"))]
+        #[cfg(cuda_cutile)]
         if matches!(self.provider, BlockwiseFp8Provider::CutileW8A16)
             && matches!(x.dtype(), DType::BF16 | DType::F16)
         {

@@ -76,7 +76,31 @@ fn cuda_header_hash(dir: &std::path::Path) -> std::io::Result<u64> {
     Ok(hash)
 }
 
+// Short names for feature combinations that gate large amounts of code.
+fn emit_cfg_aliases() {
+    let unix = std::env::var("CARGO_CFG_TARGET_FAMILY")
+        .is_ok_and(|family| family.split(',').any(|name| name == "unix"));
+    let aliases = [
+        ("cuda_unix", cfg!(feature = "cuda") && unix),
+        (
+            "cuda_flash_attn",
+            cfg!(all(feature = "cuda", feature = "flash-attn")) && unix,
+        ),
+        (
+            "cuda_cutile",
+            cfg!(all(feature = "cuda", feature = "cutile")),
+        ),
+    ];
+    for (name, enabled) in aliases {
+        println!("cargo::rustc-check-cfg=cfg({name})");
+        if enabled {
+            println!("cargo:rustc-cfg={name}");
+        }
+    }
+}
+
 fn main() {
+    emit_cfg_aliases();
     set_git_revision();
 
     #[cfg(feature = "metal")]

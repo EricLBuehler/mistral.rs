@@ -202,7 +202,7 @@ fn qwen4_exp_activation_metadata_counts_hybrid_residual_and_indexer_work() -> Re
     assert_eq!(metadata.extra_hidden_elements_per_token, 400);
     assert_eq!(
         AutoMultimodalLoader.supports_paged_attention(&config.to_string()),
-        cfg!(all(feature = "cuda", target_family = "unix"))
+        cfg!(cuda_unix)
     );
     Ok(())
 }

@@ -5,7 +5,7 @@ use std::sync::{atomic::Ordering, Arc};
 use candle_core::{DType, Device, IndexOp, Result, Tensor};
 use rand::Rng;
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 use crate::pipeline::cuda_graph::{CudaGraphComponent, CudaGraphEvent, CudaGraphEventGuard};
 use crate::speculative::{
     dflash::{
@@ -54,7 +54,7 @@ fn dflash_speculative_batch(batch: DFlashProposalBatch) -> Result<SpeculativePro
         DFlashProposalBatch::Tokens(tokens) => {
             tokens.into_iter().map(SpeculativeProposal::new).collect()
         }
-        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        #[cfg(cuda_flash_attn)]
         DFlashProposalBatch::DeviceTokens(tokens) => {
             let batch = tokens.dim(0)?;
             (0..batch)
@@ -474,7 +474,7 @@ impl Qwen3_5Model {
         if let Some(proposals) = graph_proposals {
             return dflash_speculative_batch(proposals).map(Some);
         }
-        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        #[cfg(cuda_flash_attn)]
         let graph_event =
             CudaGraphEventGuard::new(CudaGraphComponent::DFlash, CudaGraphEvent::EagerFallback);
         let fallback_result = (|| {
@@ -488,7 +488,7 @@ impl Qwen3_5Model {
             )?)
             .map(Some)
         })();
-        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        #[cfg(cuda_flash_attn)]
         if fallback_result.is_ok() {
             graph_event.success();
         }
@@ -790,7 +790,7 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
         auto_depth_graph_plans(&AUTO_DEPTHS, self.mtp_default_depth())
     }
 
-    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    #[cfg(cuda_flash_attn)]
     fn precapture_speculative_cuda_graphs(&self) -> Result<()> {
         let Some(drafter) = self.dflash.lock().expect("dflash poisoned").clone() else {
             return Ok(());

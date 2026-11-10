@@ -1,9 +1,6 @@
 use super::*;
 
-#[cfg(any(
-    all(feature = "cuda", feature = "flash-attn", target_family = "unix"),
-    test
-))]
+#[cfg(any(cuda_flash_attn, test))]
 pub(super) struct DFlashGraphHostRows {
     pub(super) token_ids: Vec<u32>,
     pub(super) rope_indices: Vec<u32>,
@@ -12,10 +9,7 @@ pub(super) struct DFlashGraphHostRows {
     pub(super) selector_uniforms: Option<Vec<f32>>,
 }
 
-#[cfg(any(
-    all(feature = "cuda", feature = "flash-attn", target_family = "unix"),
-    test
-))]
+#[cfg(any(cuda_flash_attn, test))]
 #[derive(Clone, Copy)]
 pub(super) struct DFlashGraphHostInput<'a> {
     pub(super) anchors: &'a [u32],
@@ -26,10 +20,7 @@ pub(super) struct DFlashGraphHostInput<'a> {
     pub(super) sampling: Option<DFlashSamplingInputs<'a>>,
 }
 
-#[cfg(any(
-    all(feature = "cuda", feature = "flash-attn", target_family = "unix"),
-    test
-))]
+#[cfg(any(cuda_flash_attn, test))]
 impl DFlashGraphHostRows {
     pub(super) fn update(&mut self, input: DFlashGraphHostInput<'_>) -> Result<()> {
         let DFlashGraphHostInput {
@@ -104,10 +95,7 @@ impl DFlashGraphHostRows {
     }
 }
 
-#[cfg(any(
-    all(feature = "cuda", feature = "flash-attn", target_family = "unix"),
-    test
-))]
+#[cfg(any(cuda_flash_attn, test))]
 pub(super) fn dflash_graph_host_rows(
     input: DFlashGraphHostInput<'_>,
 ) -> Result<DFlashGraphHostRows> {
@@ -128,7 +116,7 @@ pub(super) fn dflash_graph_host_rows(
     Ok(rows)
 }
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) struct DFlashCudaGraphKey {
     pub(super) batch_bucket: usize,
@@ -136,7 +124,7 @@ pub(super) struct DFlashCudaGraphKey {
     pub(super) selector_mode: DFlashSelectorMode,
 }
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(super) enum DFlashSelectorMode {
     Disabled,
@@ -144,7 +132,7 @@ pub(super) enum DFlashSelectorMode {
     Sampling,
 }
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 pub(super) struct DFlashCudaGraphBuffers {
     pub(super) token_ids: Var,
     pub(super) rope_indices: Var,
@@ -160,7 +148,7 @@ pub(super) struct DFlashCudaGraphBuffers {
     pub(super) output_candidate_probs: Option<Var>,
 }
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 pub(super) struct DFlashCudaGraphEntry {
     pub(super) key: DFlashCudaGraphKey,
     pub(super) staging: crate::pipeline::cuda_graph::CudaGraphHostStaging,
@@ -172,7 +160,7 @@ pub(super) struct DFlashCudaGraphEntry {
     pub(super) graph: crate::pipeline::cuda_graph::CudaGraphHandle,
 }
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 pub(super) struct DFlashCudaGraphState {
     pub(super) entries: Vec<DFlashCudaGraphEntry>,
     pub(super) warmed: HashSet<DFlashCudaGraphKey>,
@@ -180,7 +168,7 @@ pub(super) struct DFlashCudaGraphState {
     pub(super) capacity: usize,
 }
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 impl Default for DFlashCudaGraphState {
     fn default() -> Self {
         Self {
@@ -192,7 +180,7 @@ impl Default for DFlashCudaGraphState {
     }
 }
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 pub(super) struct DFlashCudaGraphRun<'a> {
     pub(super) model: &'a DFlashDraftModel,
     pub(super) key: DFlashCudaGraphKey,
@@ -205,13 +193,13 @@ pub(super) struct DFlashCudaGraphRun<'a> {
     pub(super) real_batch: usize,
 }
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 pub(super) struct DFlashGraphTemporarySequences<'a> {
     pub(super) pool: &'a Mutex<WindowedKvPool>,
     pub(super) seq_ids: Vec<usize>,
 }
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 impl<'a> DFlashGraphTemporarySequences<'a> {
     pub(super) fn acquire(pool: &'a Mutex<WindowedKvPool>, count: usize) -> Result<Self> {
         let mut locked = pool.lock().expect("dflash windowed pool poisoned");
@@ -249,7 +237,7 @@ impl<'a> DFlashGraphTemporarySequences<'a> {
     }
 }
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 impl Drop for DFlashGraphTemporarySequences<'_> {
     fn drop(&mut self) {
         let mut pool = self.pool.lock().expect("dflash windowed pool poisoned");
@@ -259,22 +247,19 @@ impl Drop for DFlashGraphTemporarySequences<'_> {
     }
 }
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 pub(super) struct DFlashCudaGraphOutput {
     pub(super) tokens: Tensor,
     pub(super) candidate_ids: Option<Tensor>,
     pub(super) candidate_probs: Option<Tensor>,
 }
 
-#[cfg(any(
-    all(feature = "cuda", feature = "flash-attn", target_family = "unix"),
-    test
-))]
+#[cfg(any(cuda_flash_attn, test))]
 pub(super) fn copy_dflash_graph_output_rows(output: &Tensor, real_batch: usize) -> Result<Tensor> {
     output.narrow(0, 0, real_batch)?.copy()
 }
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 impl DFlashCudaGraphOutput {
     pub(super) fn finish(self, real_batch: usize) -> Result<DFlashProposalBatch> {
         let tokens = copy_dflash_graph_output_rows(&self.tokens, real_batch)?;
@@ -290,7 +275,7 @@ impl DFlashCudaGraphOutput {
     }
 }
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 impl DFlashCudaGraphBuffers {
     pub(super) fn new(
         key: DFlashCudaGraphKey,
@@ -479,7 +464,7 @@ impl DFlashCudaGraphBuffers {
     }
 }
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 impl DFlashCudaGraphEntry {
     pub(super) fn matches_dependencies(
         &self,
@@ -560,7 +545,7 @@ impl DFlashCudaGraphEntry {
     }
 }
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 pub(super) fn release_dflash_cuda_graph_resources<T>(
     graph: crate::pipeline::cuda_graph::CudaGraphHandle,
     resources: T,
@@ -588,7 +573,7 @@ pub(super) fn release_dflash_cuda_graph_resources<T>(
     (stream, release_result)
 }
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 pub(super) fn release_dflash_cuda_graphs(entries: Vec<DFlashCudaGraphEntry>) {
     let mut streams = Vec::new();
     for entry in entries {
@@ -609,12 +594,12 @@ pub(super) fn release_dflash_cuda_graphs(entries: Vec<DFlashCudaGraphEntry>) {
     }
 }
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 pub(super) fn release_dflash_cuda_graph(entry: DFlashCudaGraphEntry) {
     release_dflash_cuda_graphs(vec![entry]);
 }
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 impl Drop for DFlashCudaGraphState {
     fn drop(&mut self) {
         let entries = std::mem::take(&mut self.entries);
@@ -623,7 +608,7 @@ impl Drop for DFlashCudaGraphState {
     }
 }
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 impl DFlashCudaGraphState {
     pub(super) fn evict_lru_for_memory_pressure(&mut self, max_entries: usize) -> usize {
         let entries = drain_dflash_lru_entries(&mut self.entries, max_entries);

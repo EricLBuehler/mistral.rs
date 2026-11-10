@@ -171,7 +171,7 @@ fn paged_prefix_gathers_mixed_dtype_cache() {
     assert!(matches!(plan, PrefixPrefillPlan::GatherSdpa));
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 #[test]
 fn fp8_dense_short_prefix_uses_fa3_when_available() {
     let input = PrefixPrefillPlanInput {
@@ -857,7 +857,7 @@ fn metal_fallback_workspace_retains_distinct_full_and_window_masks() -> Result<(
     Ok(())
 }
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 #[test]
 fn prompt_workspace_falls_back_for_ineligible_known_attention() {
     let model = workspace_model(Some(PrefixPrefillAttentionFeatures::default()));
@@ -884,7 +884,7 @@ fn prompt_workspace_falls_back_for_ineligible_known_attention() {
     );
 }
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 #[test]
 fn prompt_workspace_matches_direct_fa3_availability() {
     let model = workspace_model(Some(PrefixPrefillAttentionFeatures::default()));
@@ -911,7 +911,7 @@ fn prompt_workspace_matches_direct_fa3_availability() {
     );
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 #[test]
 fn prompt_workspace_tracks_fa3_support_per_layer() {
     let model = workspace_model(Some(PrefixPrefillAttentionFeatures::default()));
@@ -935,7 +935,7 @@ fn prompt_workspace_tracks_fa3_support_per_layer() {
     assert_eq!(workspace.gather_workspace_bytes, gather_bytes);
 }
 
-#[cfg(not(all(feature = "cuda", target_family = "unix")))]
+#[cfg(not(cuda_unix))]
 #[test]
 fn standard_sliding_decode_uses_exact_gather_path() {
     assert!(DecodePlan::requires_host_context_lengths(
@@ -955,7 +955,7 @@ fn standard_sliding_decode_uses_exact_gather_path() {
     assert!(matches!(plan, DecodePlan::GatherSdpa));
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 #[test]
 fn standard_sliding_decode_keeps_device_context_lengths() {
     for head_size in [64, 80, 96, 112, 128, 192, 256, 512] {
@@ -978,7 +978,7 @@ fn standard_sliding_decode_keeps_device_context_lengths() {
     }
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 #[test]
 fn standard_sliding_decode_gathers_unsupported_paged_head_sizes() {
     for head_size in [160, 384] {
@@ -1018,7 +1018,7 @@ fn standard_full_decode_keeps_paged_kernel() {
     assert!(matches!(plan, DecodePlan::PagedAttention));
 }
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 #[test]
 fn flashinfer_sliding_decode_keeps_device_context_lengths() {
     assert!(!DecodePlan::requires_host_context_lengths(

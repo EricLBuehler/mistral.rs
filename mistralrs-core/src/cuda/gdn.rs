@@ -2839,10 +2839,10 @@ fn mma_fused_prefill(launch: FusedPrefillRecurrence<'_>) -> Result<FusedPrefillO
     .map(FusedPrefillOutput::TokenMajor)
 }
 
-#[cfg(all(feature = "cuda", feature = "cutile"))]
+#[cfg(cuda_cutile)]
 const CUTILE_GDN_MIN_SEQ_LEN: usize = 64;
 
-#[cfg(all(feature = "cuda", feature = "cutile"))]
+#[cfg(cuda_cutile)]
 fn describe_prefill_launch(launch: &FusedPrefillRecurrence<'_>) -> String {
     let describe = |tensor: &Tensor| {
         format!(
@@ -2875,7 +2875,7 @@ fn describe_prefill_launch(launch: &FusedPrefillRecurrence<'_>) -> String {
     )
 }
 
-#[cfg(all(feature = "cuda", feature = "cutile"))]
+#[cfg(cuda_cutile)]
 fn cutile_prefill_supported(launch: &FusedPrefillRecurrence<'_>) -> Result<bool> {
     if launch.batch_size == 0
         || launch.num_k_heads == 0
@@ -2907,7 +2907,7 @@ fn cutile_prefill_supported(launch: &FusedPrefillRecurrence<'_>) -> Result<bool>
     ))
 }
 
-#[cfg(all(feature = "cuda", feature = "cutile"))]
+#[cfg(cuda_cutile)]
 fn cutile_prefill(launch: FusedPrefillRecurrence<'_>) -> Result<FusedPrefillOutput> {
     let (_, seq_len, _) = launch.mixed_qkv.dims3()?;
     // whole chunks keep every cuTile shape and stride in one divisibility class (one JIT variant)

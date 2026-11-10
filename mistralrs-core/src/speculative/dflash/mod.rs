@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::sync::{Arc, Mutex};
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 use candle_core::{
     cuda_backend::cudarc::driver::{sys, CudaStream},
     Var,
@@ -27,12 +27,12 @@ use crate::prefix_cacher::PagedAuxiliaryPrefixState;
 use crate::speculative::{MtpConfig, MtpDraftSamplingMethod, SpeculativePrefixReplay};
 use crate::utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTensor};
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 use crate::paged_attention::windowed_pool::{
     WindowedKvBatch, WindowedKvBatchTensors, WindowedKvCheckpoint, WindowedKvPool,
     WindowedKvPoolConfig, WindowedKvQuery,
 };
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 use crate::pipeline::cuda_graph::{
     record_cuda_graph_dispatch, record_cuda_graph_evictions, record_cuda_graph_resident_entries,
     take_cuda_graph_capacity_eviction, CudaGraphComponent, CudaGraphDispatchMode,
@@ -57,7 +57,7 @@ pub const AUTO_DEPTHS: [usize; 3] = [3, 5, 7];
 // Eager forwards use this cache; CUDA graphs derive RoPE from their replayed position inputs.
 const ROPE_CACHE_LEN: usize = 65536;
 const MASK_CACHE_CAP: usize = 64;
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 const DFLASH_CUDA_GRAPH_DEFAULT_CACHE_CAPACITY: usize = 40;
 const ADAPT_FULL_DEPTH_MAX_BATCH: usize = 8;
 const ADAPT_BATCH_DEPTH: usize = 3;
@@ -79,10 +79,7 @@ fn dflash_adaptive_supported(max_n: usize, max_live_sequences: usize) -> bool {
     max_n > ADAPT_BATCH_DEPTH && max_live_sequences > ADAPT_FULL_DEPTH_MAX_BATCH
 }
 
-#[cfg(any(
-    all(feature = "cuda", feature = "flash-attn", target_family = "unix"),
-    test
-))]
+#[cfg(any(cuda_flash_attn, test))]
 fn dflash_graph_positions_fit(start_positions: &[usize], block: usize) -> bool {
     block > 0
         && start_positions.iter().all(|start| {
@@ -92,10 +89,7 @@ fn dflash_graph_positions_fit(start_positions: &[usize], block: usize) -> bool {
         })
 }
 
-#[cfg(any(
-    all(feature = "cuda", feature = "flash-attn", target_family = "unix"),
-    test
-))]
+#[cfg(any(cuda_flash_attn, test))]
 fn dflash_rope_from_positions(
     positions: &Tensor,
     inv_freq: &Tensor,
@@ -155,10 +149,7 @@ fn dflash_graph_plans(adaptive: bool, max_n: usize) -> Vec<super::SpeculativeGra
     ]
 }
 
-#[cfg(any(
-    all(feature = "cuda", feature = "flash-attn", target_family = "unix"),
-    test
-))]
+#[cfg(any(cuda_flash_attn, test))]
 fn dflash_graph_precapture_shapes(
     plans: &[super::SpeculativeGraphPlan],
     batches: impl IntoIterator<Item = usize>,
@@ -180,10 +171,7 @@ fn dflash_graph_precapture_shapes(
     shapes
 }
 
-#[cfg(any(
-    all(feature = "cuda", feature = "flash-attn", target_family = "unix"),
-    test
-))]
+#[cfg(any(cuda_flash_attn, test))]
 fn drain_dflash_lru_entries<T>(entries: &mut Vec<T>, max_entries: usize) -> Vec<T> {
     let count = max_entries.min(entries.len());
     entries.drain(..count).collect()
@@ -224,7 +212,7 @@ struct DFlashLayer {
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum DraftAttentionLayout {
     HeadsFirst,
-    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    #[cfg(cuda_flash_attn)]
     TokensFirst,
 }
 
@@ -346,7 +334,7 @@ pub(crate) struct DFlashSamplingInputs<'a> {
 
 pub(crate) enum DFlashProposalBatch {
     Tokens(Vec<Vec<u32>>),
-    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    #[cfg(cuda_flash_attn)]
     DeviceTokens(Tensor),
     #[cfg(feature = "cuda")]
     DeviceSparse {
@@ -371,7 +359,7 @@ fn update_dormant_sequences(
     }
 }
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 struct DFlashWindowedForward<'a> {
     noise_embedding: &'a Tensor,
     q_cos: &'a Tensor,
@@ -383,7 +371,7 @@ struct DFlashWindowedForward<'a> {
 }
 
 pub struct DFlashDraftModel {
-    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    #[cfg(cuda_flash_attn)]
     cuda_graphs: Mutex<DFlashCudaGraphState>,
     layers: Vec<DFlashLayer>,
     fc: Arc<dyn QuantMethod>,
@@ -408,7 +396,7 @@ pub struct DFlashDraftModel {
     dtype: DType,
     device: Device,
     ctx_cache: Mutex<HashMap<usize, SeqCtxCache>>,
-    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    #[cfg(cuda_flash_attn)]
     windowed_pool: Option<Mutex<WindowedKvPool>>,
     dormant_seqs: Mutex<HashSet<usize>>,
     // cos/sin for positions 0..ROPE_CACHE_LEN, [len, head_dim/2]
@@ -417,12 +405,12 @@ pub struct DFlashDraftModel {
     adaptive: Mutex<Option<AdaptiveState>>,
 }
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 struct DFlashPagedPrefixState {
     checkpoint: WindowedKvCheckpoint,
 }
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 impl PagedAuxiliaryPrefixState for DFlashPagedPrefixState {
     fn as_any(&self) -> &dyn std::any::Any {
         self
@@ -488,7 +476,7 @@ pub fn peek_config(config: &MtpConfig) -> Result<Option<DFlashConfig>> {
         .map_err(candle_core::Error::msg)
 }
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 pub(crate) fn windowed_kv_checkpoint_capacity(retained_prefixes: usize) -> Result<usize> {
     if retained_prefixes == 0 {
         return Ok(0);
@@ -498,7 +486,7 @@ pub(crate) fn windowed_kv_checkpoint_capacity(retained_prefixes: usize) -> Resul
         .ok_or_else(|| candle_core::Error::msg("DFlash prefix checkpoint capacity overflow"))
 }
 
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 pub(crate) fn windowed_kv_cache_size_in_bytes(
     config: &MtpConfig,
     live_sequence_capacity: usize,
@@ -570,14 +558,14 @@ pub(crate) struct DFlashGraphProposalInputs<'a> {
 
 impl DFlashDraftModel {
     pub(crate) fn evict_cuda_graphs_lru(&self, max_entries: usize) -> usize {
-        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        #[cfg(cuda_flash_attn)]
         {
             self.cuda_graphs
                 .lock()
                 .expect("dflash CUDA graph cache poisoned")
                 .evict_lru_for_memory_pressure(max_entries)
         }
-        #[cfg(not(all(feature = "cuda", feature = "flash-attn", target_family = "unix")))]
+        #[cfg(not(cuda_flash_attn))]
         {
             let _ = max_entries;
             0
@@ -780,7 +768,7 @@ impl DFlashDraftModel {
         };
 
         Ok(Self {
-            #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+            #[cfg(cuda_flash_attn)]
             cuda_graphs: Mutex::new(DFlashCudaGraphState::default()),
             layers,
             fc,
@@ -805,7 +793,7 @@ impl DFlashDraftModel {
             dtype,
             device: device.clone(),
             ctx_cache: Mutex::new(HashMap::new()),
-            #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+            #[cfg(cuda_flash_attn)]
             windowed_pool: None,
             dormant_seqs: Mutex::new(HashSet::new()),
             rope_table,
@@ -819,7 +807,7 @@ impl DFlashDraftModel {
         live_sequence_capacity: usize,
         retained_prefixes: usize,
     ) -> Result<bool> {
-        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        #[cfg(cuda_flash_attn)]
         {
             if self.dtype != DType::BF16 || !self.device.is_cuda() {
                 return Ok(false);
@@ -857,14 +845,14 @@ impl DFlashDraftModel {
             );
             Ok(true)
         }
-        #[cfg(not(all(feature = "cuda", feature = "flash-attn", target_family = "unix")))]
+        #[cfg(not(cuda_flash_attn))]
         {
             let _ = (live_sequence_capacity, retained_prefixes);
             Ok(false)
         }
     }
 
-    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    #[cfg(cuda_flash_attn)]
     pub(crate) fn precapture_cuda_graphs(
         &self,
         max_n: usize,
@@ -1011,7 +999,7 @@ impl DFlashDraftModel {
             token_embedding,
             lm_head,
         } = *inputs;
-        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        #[cfg(cuda_flash_attn)]
         {
             if !crate::pipeline::cuda_graph::cuda_decode_graphs_enabled()
                 || self.windowed_pool.is_none()
@@ -1100,7 +1088,7 @@ impl DFlashDraftModel {
                     real_batch: seq_ids.len(),
                 });
         }
-        #[cfg(not(all(feature = "cuda", feature = "flash-attn", target_family = "unix")))]
+        #[cfg(not(cuda_flash_attn))]
         {
             let _ = (
                 seq_ids,
@@ -1143,7 +1131,7 @@ impl DFlashDraftModel {
     }
 
     fn live_sequence_count(&self) -> usize {
-        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        #[cfg(cuda_flash_attn)]
         if let Some(pool) = &self.windowed_pool {
             return pool
                 .lock()
@@ -1162,7 +1150,7 @@ impl DFlashDraftModel {
     }
 
     pub fn supports_paged_auxiliary_prefix_state(&self) -> bool {
-        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        #[cfg(cuda_flash_attn)]
         {
             self.windowed_pool.as_ref().is_some_and(|pool| {
                 pool.lock()
@@ -1172,7 +1160,7 @@ impl DFlashDraftModel {
                     > 0
             })
         }
-        #[cfg(not(all(feature = "cuda", feature = "flash-attn", target_family = "unix")))]
+        #[cfg(not(cuda_flash_attn))]
         {
             false
         }
@@ -1183,7 +1171,7 @@ impl DFlashDraftModel {
         sequence_id: usize,
         cached_tokens: usize,
     ) -> Result<Option<Arc<dyn PagedAuxiliaryPrefixState>>> {
-        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        #[cfg(cuda_flash_attn)]
         {
             let Some(pool) = &self.windowed_pool else {
                 return Ok(None);
@@ -1209,7 +1197,7 @@ impl DFlashDraftModel {
             metrics::counter!("mistralrs_speculative_prefix_cache_captures_total").increment(1);
             Ok(Some(Arc::new(DFlashPagedPrefixState { checkpoint })))
         }
-        #[cfg(not(all(feature = "cuda", feature = "flash-attn", target_family = "unix")))]
+        #[cfg(not(cuda_flash_attn))]
         {
             let _ = (sequence_id, cached_tokens);
             Ok(None)
@@ -1222,7 +1210,7 @@ impl DFlashDraftModel {
         cached_tokens: usize,
         state: &dyn PagedAuxiliaryPrefixState,
     ) -> Result<()> {
-        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        #[cfg(cuda_flash_attn)]
         {
             let state = state
                 .as_any()
@@ -1248,7 +1236,7 @@ impl DFlashDraftModel {
                 .record(started.elapsed().as_secs_f64());
             Ok(())
         }
-        #[cfg(not(all(feature = "cuda", feature = "flash-attn", target_family = "unix")))]
+        #[cfg(not(cuda_flash_attn))]
         {
             let _ = (sequence_id, cached_tokens, state);
             candle_core::bail!("DFlash auxiliary prefix restore requires CUDA FlashAttention")
@@ -1273,7 +1261,7 @@ impl DFlashDraftModel {
 
     /// Absolute position of the next context token a sequence expects, or None if unseen.
     pub fn ctx_next_pos(&self, seq_id: usize) -> Option<usize> {
-        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        #[cfg(cuda_flash_attn)]
         if let Some(pool) = &self.windowed_pool {
             return pool
                 .lock()
@@ -1289,7 +1277,7 @@ impl DFlashDraftModel {
     }
 
     pub fn contexts_ready_for_draft(&self, seq_ids: &[usize]) -> bool {
-        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        #[cfg(cuda_flash_attn)]
         if let Some(pool) = &self.windowed_pool {
             let pool = pool.lock().expect("dflash windowed pool poisoned");
             return seq_ids
@@ -1301,7 +1289,7 @@ impl DFlashDraftModel {
     }
 
     fn release_seq_storage(&self, seq_ids: &[usize]) {
-        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        #[cfg(cuda_flash_attn)]
         if let Some(pool) = &self.windowed_pool {
             let mut pool = pool.lock().expect("dflash windowed pool poisoned");
             for seq_id in seq_ids {
@@ -1348,7 +1336,7 @@ impl DFlashDraftModel {
     }
 
     pub fn clear(&self) {
-        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        #[cfg(cuda_flash_attn)]
         if let Some(pool) = &self.windowed_pool {
             pool.lock().expect("dflash windowed pool poisoned").clear();
         }
@@ -1531,7 +1519,7 @@ impl DFlashDraftModel {
         k_all: &Tensor,
         v_all: &Tensor,
     ) -> Result<()> {
-        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        #[cfg(cuda_flash_attn)]
         if self.windowed_pool.is_some() {
             return self.append_ctx_windowed(entries, rows, k_all, v_all);
         }
@@ -1597,7 +1585,7 @@ impl DFlashDraftModel {
         Ok(())
     }
 
-    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    #[cfg(cuda_flash_attn)]
     fn append_ctx_windowed(
         &self,
         entries: &[CtxAppend],
@@ -1670,7 +1658,7 @@ impl DFlashDraftModel {
         start_positions: &[usize],
     ) -> Result<Tensor> {
         let (b, block, _) = noise_embedding.dims3()?;
-        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        #[cfg(cuda_flash_attn)]
         if self.windowed_pool.is_some() {
             return self.draft_hidden_windowed(seq_ids, noise_embedding, start_positions, b, block);
         }
@@ -1825,7 +1813,7 @@ impl DFlashDraftModel {
                 let sin = q_sin.reshape((batch * block, ()))?;
                 let output_layout = match attention_layout {
                     DraftAttentionLayout::HeadsFirst => crate::ops::QkRopeOutputLayout::HeadsFirst,
-                    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+                    #[cfg(cuda_flash_attn)]
                     DraftAttentionLayout::TokensFirst => {
                         crate::ops::QkRopeOutputLayout::TokensFirst
                     }
@@ -1881,7 +1869,7 @@ impl DFlashDraftModel {
             ))?;
             let v_noise = match attention_layout {
                 DraftAttentionLayout::HeadsFirst => v_tokens.transpose(1, 2)?.contiguous()?,
-                #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+                #[cfg(cuda_flash_attn)]
                 DraftAttentionLayout::TokensFirst => v_tokens,
             };
             let out = attention(layer_idx, layer, &q, &k_noise, &v_noise)?;
@@ -1925,7 +1913,7 @@ impl DFlashDraftModel {
         Ok(hs)
     }
 
-    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    #[cfg(cuda_flash_attn)]
     fn draft_hidden_windowed(
         &self,
         seq_ids: &[usize],
@@ -1986,7 +1974,7 @@ impl DFlashDraftModel {
         })
     }
 
-    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    #[cfg(cuda_flash_attn)]
     fn draft_hidden_windowed_tensors(&self, forward: DFlashWindowedForward<'_>) -> Result<Tensor> {
         let DFlashWindowedForward {
             noise_embedding,
@@ -2053,7 +2041,7 @@ impl DFlashDraftModel {
         hs.narrow(1, 1, block - 1)
     }
 
-    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    #[cfg(cuda_flash_attn)]
     fn cuda_graph_output(
         &self,
         key: DFlashCudaGraphKey,
