@@ -214,242 +214,103 @@ pub trait NormalModelLoader: IsqModelLoader + Send + Sync + DeviceMappedModelLoa
     }
 }
 
-#[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
-#[derive(Clone, Debug, Deserialize, serde::Serialize, PartialEq, strum::EnumIter)]
-/// The architecture to load the normal model as.
-pub enum NormalLoaderType {
-    #[serde(rename = "mistral")]
-    Mistral,
-    #[serde(rename = "gemma")]
-    Gemma,
-    #[serde(rename = "mixtral")]
-    Mixtral,
-    #[serde(rename = "llama")]
-    Llama,
-    #[serde(rename = "phi2")]
-    Phi2,
-    #[serde(rename = "phi3")]
-    Phi3,
-    #[serde(rename = "qwen2")]
-    Qwen2,
-    #[serde(rename = "gemma2")]
-    Gemma2,
-    #[serde(rename = "starcoder2")]
-    Starcoder2,
-    #[serde(rename = "phi3.5moe")]
-    Phi3_5MoE,
-    #[serde(rename = "deepseekv2")]
-    DeepSeekV2,
-    #[serde(rename = "deepseekv3")]
-    DeepSeekV3,
-    #[serde(rename = "qwen3")]
-    Qwen3,
-    #[serde(rename = "glm4")]
-    GLM4,
-    #[serde(rename = "glm4moelite")]
-    GLM4MoeLite,
-    #[serde(rename = "glm4moe")]
-    GLM4Moe,
-    #[serde(rename = "qwen3moe")]
-    Qwen3Moe,
-    #[serde(rename = "flint")]
-    Flint,
-    #[serde(rename = "smollm3")]
-    SmolLm3,
-    #[serde(rename = "granitemoehybrid")]
-    GraniteMoeHybrid,
-    #[serde(rename = "gpt_oss")]
-    GptOss,
-    #[serde(rename = "hunyuanv1dense")]
-    HunYuanDenseV1,
-    #[serde(rename = "hunyuanv1moe")]
-    HunYuanMoEV1,
-    #[serde(rename = "qwen3next")]
-    Qwen3Next,
-    #[serde(rename = "qwen3_5")]
-    Qwen3_5,
-    #[serde(rename = "lfm2")]
-    Lfm2,
-    #[serde(rename = "lfm3")]
-    Lfm3,
-    #[serde(rename = "lfm2_moe")]
-    Lfm2Moe,
+// One row per architecture: variant, CLI/serde name, HF -CausalLM class, HF model_type, loader.
+macro_rules! normal_architectures {
+    ($($variant:ident: $name:literal, $class:literal, $model_type:literal, $loader:expr;)*) => {
+        #[cfg_attr(feature = "pyo3_macros", pyclass(eq, eq_int))]
+        #[derive(Clone, Debug, Deserialize, serde::Serialize, PartialEq, strum::EnumIter)]
+        /// The architecture to load the normal model as.
+        pub enum NormalLoaderType {
+            $(#[serde(rename = $name)] $variant,)*
+        }
+
+        impl NormalLoaderType {
+            const NAMES: &[&str] = &[$($name),*];
+
+            fn name(&self) -> &'static str {
+                match self {
+                    $(Self::$variant => $name,)*
+                }
+            }
+
+            pub(crate) fn causal_lm_name(&self) -> &'static str {
+                match self {
+                    $(Self::$variant => $class,)*
+                }
+            }
+
+            pub(crate) fn model_type_name(&self) -> &'static str {
+                match self {
+                    $(Self::$variant => $model_type,)*
+                }
+            }
+
+            pub fn from_causal_lm_name(name: &str) -> Result<Self> {
+                match name {
+                    $($class => Ok(Self::$variant),)*
+                    other => anyhow::bail!(
+                        "Unsupported Hugging Face Transformers -CausalLM model class `{other}`. Please raise an issue."
+                    ),
+                }
+            }
+
+            pub(crate) fn loader(&self) -> Box<dyn NormalModelLoader> {
+                match self {
+                    $(Self::$variant => Box::new($loader),)*
+                }
+            }
+        }
+
+        impl FromStr for NormalLoaderType {
+            type Err = String;
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                match s {
+                    $($name => Ok(Self::$variant),)*
+                    a => Err(format!(
+                        "Unknown architecture `{a}`. Possible architectures: `{}`.",
+                        Self::NAMES.join("`, `")
+                    )),
+                }
+            }
+        }
+    };
 }
 
 // https://github.com/huggingface/transformers/blob/cff06aac6fad28019930be03f5d467055bf62177/src/transformers/models/auto/modeling_auto.py#L448
-impl NormalLoaderType {
-    pub(crate) fn causal_lm_name(&self) -> &'static str {
-        match self {
-            Self::Mistral => "MistralForCausalLM",
-            Self::Gemma => "GemmaForCausalLM",
-            Self::Mixtral => "MixtralForCausalLM",
-            Self::Llama => "LlamaForCausalLM",
-            Self::Phi2 => "PhiForCausalLM",
-            Self::Phi3 => "Phi3ForCausalLM",
-            Self::Qwen2 => "Qwen2ForCausalLM",
-            Self::Gemma2 => "Gemma2ForCausalLM",
-            Self::Starcoder2 => "Starcoder2ForCausalLM",
-            Self::Phi3_5MoE => "PhiMoEForCausalLM",
-            Self::DeepSeekV2 => "DeepseekV2ForCausalLM",
-            Self::DeepSeekV3 => "DeepseekV3ForCausalLM",
-            Self::Qwen3 => "Qwen3ForCausalLM",
-            Self::GLM4 => "Glm4ForCausalLM",
-            Self::GLM4MoeLite => "Glm4MoeLiteForCausalLM",
-            Self::GLM4Moe => "Glm4MoeForCausalLM",
-            Self::Qwen3Moe => "Qwen3MoeForCausalLM",
-            Self::Flint => "FlintForCausalLM",
-            Self::SmolLm3 => "SmolLM3ForCausalLM",
-            Self::GraniteMoeHybrid => "GraniteMoeHybridForCausalLM",
-            Self::GptOss => "GptOssForCausalLM",
-            Self::HunYuanDenseV1 => "HunYuanDenseV1ForCausalLM",
-            Self::HunYuanMoEV1 => "HunYuanMoEV1ForCausalLM",
-            Self::Qwen3Next => "Qwen3NextForCausalLM",
-            Self::Qwen3_5 => "Qwen3_5ForCausalLM",
-            Self::Lfm2 => "Lfm2ForCausalLM",
-            Self::Lfm3 => "Lfm3ForCausalLM",
-            Self::Lfm2Moe => "Lfm2MoeForCausalLM",
-        }
-    }
-
-    pub(crate) fn model_type_name(&self) -> &'static str {
-        match self {
-            Self::Mistral => "mistral",
-            Self::Gemma => "gemma",
-            Self::Mixtral => "mixtral",
-            Self::Llama => "llama",
-            Self::Phi2 => "phi",
-            Self::Phi3 => "phi3",
-            Self::Qwen2 => "qwen2",
-            Self::Gemma2 => "gemma2",
-            Self::Starcoder2 => "starcoder2",
-            Self::Phi3_5MoE => "phimoe",
-            Self::DeepSeekV2 => "deepseek_v2",
-            Self::DeepSeekV3 => "deepseek_v3",
-            Self::Qwen3 => "qwen3",
-            Self::GLM4 => "glm4",
-            Self::GLM4MoeLite => "glm4_moe_lite",
-            Self::GLM4Moe => "glm4_moe",
-            Self::Qwen3Moe => "qwen3_moe",
-            Self::Flint => "flint",
-            Self::SmolLm3 => "smollm3",
-            Self::GraniteMoeHybrid => "granitemoehybrid",
-            Self::GptOss => "gpt_oss",
-            Self::HunYuanDenseV1 => "hunyuan_v1_dense",
-            Self::HunYuanMoEV1 => "hunyuan_v1_moe",
-            Self::Qwen3Next => "qwen3_next",
-            Self::Qwen3_5 => "qwen3_5_text",
-            Self::Lfm2 => "lfm2",
-            Self::Lfm3 => "lfm3",
-            Self::Lfm2Moe => "lfm2_moe",
-        }
-    }
-
-    pub fn from_causal_lm_name(name: &str) -> Result<Self> {
-        match name {
-            "MistralForCausalLM" => Ok(Self::Mistral),
-            "MixtralForCausalLM" => Ok(Self::Mixtral),
-            "GemmaForCausalLM" => Ok(Self::Gemma),
-            "Gemma2ForCausalLM" => Ok(Self::Gemma2),
-            "PhiForCausalLM" => Ok(Self::Phi2),
-            "Phi3ForCausalLM" => Ok(Self::Phi3),
-            "LlamaForCausalLM" => Ok(Self::Llama),
-            "Qwen2ForCausalLM" => Ok(Self::Qwen2),
-            "Starcoder2ForCausalLM" => Ok(Self::Starcoder2),
-            "PhiMoEForCausalLM" => Ok(Self::Phi3_5MoE),
-            "DeepseekV2ForCausalLM" => Ok(Self::DeepSeekV2),
-            "DeepseekV3ForCausalLM" => Ok(Self::DeepSeekV3),
-            "Qwen3ForCausalLM" => Ok(Self::Qwen3),
-            "Glm4ForCausalLM" => Ok(Self::GLM4),
-            "Glm4MoeLiteForCausalLM" => Ok(Self::GLM4MoeLite),
-            "Glm4MoeForCausalLM" => Ok(Self::GLM4Moe),
-            "Qwen3MoeForCausalLM" => Ok(Self::Qwen3Moe),
-            "FlintForCausalLM" => Ok(Self::Flint),
-            "SmolLM3ForCausalLM" => Ok(Self::SmolLm3),
-            "GraniteMoeHybridForCausalLM" => Ok(Self::GraniteMoeHybrid),
-            "GptOssForCausalLM" => Ok(Self::GptOss),
-            "HunYuanDenseV1ForCausalLM" => Ok(Self::HunYuanDenseV1),
-            "HunYuanMoEV1ForCausalLM" => Ok(Self::HunYuanMoEV1),
-            "Qwen3NextForCausalLM" => Ok(Self::Qwen3Next),
-            "Qwen3_5ForCausalLM" => Ok(Self::Qwen3_5),
-            "Lfm2ForCausalLM" => Ok(Self::Lfm2),
-            "Lfm3ForCausalLM" => Ok(Self::Lfm3),
-            "Lfm2MoeForCausalLM" => Ok(Self::Lfm2Moe),
-            other => anyhow::bail!(
-                "Unsupported Hugging Face Transformers -CausalLM model class `{other}`. Please raise an issue."
-            ),
-        }
-    }
-}
-
-impl FromStr for NormalLoaderType {
-    type Err = String;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "mistral" => Ok(Self::Mistral),
-            "gemma" => Ok(Self::Gemma),
-            "mixtral" => Ok(Self::Mixtral),
-            "llama" => Ok(Self::Llama),
-            "phi2" => Ok(Self::Phi2),
-            "phi3" => Ok(Self::Phi3),
-            "qwen2" => Ok(Self::Qwen2),
-            "gemma2" => Ok(Self::Gemma2),
-            "starcoder2" => Ok(Self::Starcoder2),
-            "phi3.5moe" => Ok(Self::Phi3_5MoE),
-            "deepseekv2" => Ok(Self::DeepSeekV2),
-            "deepseekv3" => Ok(Self::DeepSeekV3),
-            "qwen3" => Ok(Self::Qwen3),
-            "glm4" => Ok(Self::GLM4),
-            "glm4moelite" => Ok(Self::GLM4MoeLite),
-            "glm4moe" => Ok(Self::GLM4Moe),
-            "qwen3moe" => Ok(Self::Qwen3Moe),
-            "flint" => Ok(Self::Flint),
-            "smollm3" => Ok(Self::SmolLm3),
-            "granitemoehybrid" => Ok(Self::GraniteMoeHybrid),
-            "gpt_oss" => Ok(Self::GptOss),
-            "hunyuanv1dense" => Ok(Self::HunYuanDenseV1),
-            "hunyuanv1moe" => Ok(Self::HunYuanMoEV1),
-            "qwen3next" => Ok(Self::Qwen3Next),
-            "qwen3_5" => Ok(Self::Qwen3_5),
-            "lfm2" => Ok(Self::Lfm2),
-            "lfm3" => Ok(Self::Lfm3),
-            "lfm2_moe" => Ok(Self::Lfm2Moe),
-            a => Err(format!("Unknown architecture `{a}`. Possible architectures: `mistral`, `gemma`, `mixtral`, `llama`, `phi2`, `phi3`, `qwen2`, `gemma2`, `starcoder2`, `phi3.5moe`, `deepseekv2`, `deepseekv3`, `qwen3`, `glm4`, `glm4moelite`, `glm4moe`, `qwen3moe`, `flint`, `smollm3`, `granitemoehybrid`, `gpt_oss`, `hunyuanv1dense`, `hunyuanv1moe`, `qwen3next`, `qwen3_5`, `lfm2`, `lfm2_moe`, `lfm3`.")),
-        }
-    }
+normal_architectures! {
+    Mistral: "mistral", "MistralForCausalLM", "mistral", MistralLoader;
+    Gemma: "gemma", "GemmaForCausalLM", "gemma", GemmaLoader;
+    Mixtral: "mixtral", "MixtralForCausalLM", "mixtral", MixtralLoader;
+    Llama: "llama", "LlamaForCausalLM", "llama", LlamaLoader;
+    Phi2: "phi2", "PhiForCausalLM", "phi", Phi2Loader;
+    Phi3: "phi3", "Phi3ForCausalLM", "phi3", Phi3Loader;
+    Qwen2: "qwen2", "Qwen2ForCausalLM", "qwen2", Qwen2Loader;
+    Gemma2: "gemma2", "Gemma2ForCausalLM", "gemma2", Gemma2Loader;
+    Starcoder2: "starcoder2", "Starcoder2ForCausalLM", "starcoder2", Starcoder2Loader;
+    Phi3_5MoE: "phi3.5moe", "PhiMoEForCausalLM", "phimoe", Phi3_5MoELoader;
+    DeepSeekV2: "deepseekv2", "DeepseekV2ForCausalLM", "deepseek_v2", DeepSeekV2Loader;
+    DeepSeekV3: "deepseekv3", "DeepseekV3ForCausalLM", "deepseek_v3", DeepSeekV3Loader;
+    Qwen3: "qwen3", "Qwen3ForCausalLM", "qwen3", Qwen3Loader;
+    GLM4: "glm4", "Glm4ForCausalLM", "glm4", GLM4Loader;
+    GLM4MoeLite: "glm4moelite", "Glm4MoeLiteForCausalLM", "glm4_moe_lite", GLM4MoeLiteLoader;
+    GLM4Moe: "glm4moe", "Glm4MoeForCausalLM", "glm4_moe", GLM4MoeLoader;
+    Qwen3Moe: "qwen3moe", "Qwen3MoeForCausalLM", "qwen3_moe", Qwen3MoELoader;
+    Flint: "flint", "FlintForCausalLM", "flint", FlintLoader;
+    SmolLm3: "smollm3", "SmolLM3ForCausalLM", "smollm3", SmolLm3Loader;
+    GraniteMoeHybrid: "granitemoehybrid", "GraniteMoeHybridForCausalLM", "granitemoehybrid", GraniteMoeHybridLoader;
+    GptOss: "gpt_oss", "GptOssForCausalLM", "gpt_oss", GptOssLoader;
+    HunYuanDenseV1: "hunyuanv1dense", "HunYuanDenseV1ForCausalLM", "hunyuan_v1_dense", HunYuanDenseV1Loader;
+    HunYuanMoEV1: "hunyuanv1moe", "HunYuanMoEV1ForCausalLM", "hunyuan_v1_moe", HunYuanMoEV1Loader;
+    Qwen3Next: "qwen3next", "Qwen3NextForCausalLM", "qwen3_next", Qwen3NextLoader;
+    Qwen3_5: "qwen3_5", "Qwen3_5ForCausalLM", "qwen3_5_text", Qwen3_5TextLoader;
+    Lfm2: "lfm2", "Lfm2ForCausalLM", "lfm2", Lfm2Loader;
+    Lfm3: "lfm3", "Lfm3ForCausalLM", "lfm3", Lfm3Loader;
+    Lfm2Moe: "lfm2_moe", "Lfm2MoeForCausalLM", "lfm2_moe", Lfm2Loader;
 }
 
 impl Display for NormalLoaderType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Gemma => write!(f, "gemma"),
-            Self::Gemma2 => write!(f, "gemma2"),
-            Self::Llama => write!(f, "llama"),
-            Self::Mistral => write!(f, "mistral"),
-            Self::Mixtral => write!(f, "mixtral"),
-            Self::Phi2 => write!(f, "phi2"),
-            Self::Phi3 => write!(f, "phi3"),
-            Self::Phi3_5MoE => write!(f, "phi3.5moe"),
-            Self::Qwen2 => write!(f, "qwen2"),
-            Self::Starcoder2 => write!(f, "starcoder2"),
-            Self::DeepSeekV2 => write!(f, "deepseekv2"),
-            Self::DeepSeekV3 => write!(f, "deepseekv3"),
-            Self::Qwen3 => write!(f, "qwen3"),
-            Self::GLM4 => write!(f, "glm4"),
-            Self::GLM4MoeLite => write!(f, "glm4moelite"),
-            Self::GLM4Moe => write!(f, "glm4moe"),
-            Self::Qwen3Moe => write!(f, "qwen3moe"),
-            Self::Flint => write!(f, "flint"),
-            Self::SmolLm3 => write!(f, "smollm3"),
-            Self::GraniteMoeHybrid => write!(f, "granitemoehybrid"),
-            Self::GptOss => write!(f, "gpt_oss"),
-            Self::HunYuanDenseV1 => write!(f, "hunyuanv1dense"),
-            Self::HunYuanMoEV1 => write!(f, "hunyuanv1moe"),
-            Self::Qwen3Next => write!(f, "qwen3next"),
-            Self::Qwen3_5 => write!(f, "qwen3_5"),
-            Self::Lfm2 => write!(f, "lfm2"),
-            Self::Lfm3 => write!(f, "lfm3"),
-            Self::Lfm2Moe => write!(f, "lfm2_moe"),
-        }
+        f.write_str(self.name())
     }
 }
 
@@ -484,36 +345,7 @@ impl AutoNormalLoader {
 
         once_log_debug(format!("Automatic loader type determined to be `{tp}`"));
 
-        match tp {
-            NormalLoaderType::Mistral => Ok(Box::new(MistralLoader)),
-            NormalLoaderType::Gemma => Ok(Box::new(GemmaLoader)),
-            NormalLoaderType::Llama => Ok(Box::new(LlamaLoader)),
-            NormalLoaderType::Mixtral => Ok(Box::new(MixtralLoader)),
-            NormalLoaderType::Phi2 => Ok(Box::new(Phi2Loader)),
-            NormalLoaderType::Phi3 => Ok(Box::new(Phi3Loader)),
-            NormalLoaderType::Qwen2 => Ok(Box::new(Qwen2Loader)),
-            NormalLoaderType::Gemma2 => Ok(Box::new(Gemma2Loader)),
-            NormalLoaderType::Starcoder2 => Ok(Box::new(Starcoder2Loader)),
-            NormalLoaderType::Phi3_5MoE => Ok(Box::new(Phi3_5MoELoader)),
-            NormalLoaderType::DeepSeekV2 => Ok(Box::new(DeepSeekV2Loader)),
-            NormalLoaderType::DeepSeekV3 => Ok(Box::new(DeepSeekV3Loader)),
-            NormalLoaderType::Qwen3 => Ok(Box::new(Qwen3Loader)),
-            NormalLoaderType::GLM4 => Ok(Box::new(GLM4Loader)),
-            NormalLoaderType::GLM4MoeLite => Ok(Box::new(GLM4MoeLiteLoader)),
-            NormalLoaderType::GLM4Moe => Ok(Box::new(GLM4MoeLoader)),
-            NormalLoaderType::Qwen3Moe => Ok(Box::new(Qwen3MoELoader)),
-            NormalLoaderType::Flint => Ok(Box::new(FlintLoader)),
-            NormalLoaderType::SmolLm3 => Ok(Box::new(SmolLm3Loader)),
-            NormalLoaderType::GraniteMoeHybrid => Ok(Box::new(GraniteMoeHybridLoader)),
-            NormalLoaderType::GptOss => Ok(Box::new(GptOssLoader)),
-            NormalLoaderType::HunYuanDenseV1 => Ok(Box::new(HunYuanDenseV1Loader)),
-            NormalLoaderType::HunYuanMoEV1 => Ok(Box::new(HunYuanMoEV1Loader)),
-            NormalLoaderType::Qwen3Next => Ok(Box::new(Qwen3NextLoader)),
-            NormalLoaderType::Qwen3_5 => Ok(Box::new(Qwen3_5TextLoader)),
-            NormalLoaderType::Lfm2 => Ok(Box::new(Lfm2Loader)),
-            NormalLoaderType::Lfm3 => Ok(Box::new(Lfm3Loader)),
-            NormalLoaderType::Lfm2Moe => Ok(Box::new(Lfm2Loader)),
-        }
+        Ok(tp.loader())
     }
 }
 

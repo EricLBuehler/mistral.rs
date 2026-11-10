@@ -29,6 +29,12 @@ pub(crate) use load_stages::{
     DeviceMappingRequest, LoadDevices, MappedWeightsRequest, ModelConfigLayers,
     ResolvedDeviceMapping, SingleCudaDevice,
 };
+#[cfg(test)]
+pub(crate) use multimodal_loaders::Gemma4Loader;
+#[cfg(test)]
+pub(crate) use normal_loaders::{
+    GraniteMoeHybridLoader, Qwen3Loader, Qwen3NextLoader, Qwen3_5TextLoader,
+};
 pub(crate) use prompt_assets::{load_prompt_assets, PreparedPromptAssets, PromptAssetsRequest};
 pub(crate) use resources::add_resource_bytes;
 #[cfg(any(feature = "cuda", test))]
@@ -50,21 +56,14 @@ use serde::Deserialize;
 use tokio::sync::Mutex;
 
 pub use normal_loaders::{
-    AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader, FlintLoader, GLM4Loader,
-    GLM4MoeLiteLoader, GLM4MoeLoader, Gemma2Loader, GemmaLoader, GptOssLoader,
-    GraniteMoeHybridLoader, HunYuanDenseV1Loader, HunYuanMoEV1Loader, Lfm2Loader, LlamaLoader,
-    MistralLoader, MixtralLoader, NormalLoaderType, NormalLoadingMetadata, NormalModel,
-    NormalModelLoader, Phi2Loader, Phi3Loader, Phi3_5MoELoader, Qwen2Loader, Qwen3Loader,
-    Qwen3MoELoader, Qwen3NextLoader, Qwen3_5TextLoader, SmolLm3Loader, Starcoder2Loader,
+    AutoNormalLoader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
+    NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Qwen2Loader,
+    Starcoder2Loader,
 };
 
 pub use multimodal_loaders::{
-    AutoMultimodalLoader, DiffusionGemmaLoader, Gemma3Loader, Gemma3nLoader, Gemma4Loader,
-    Idefics2Loader, Idefics3Loader, LLaVALoader, LLaVANextLoader, Lfm2VlLoader, MiniCpmOLoader,
-    Mistral3Loader, MultimodalLoaderType, MultimodalModel, MultimodalModelLoader,
-    MuseGlimmerLoader, Phi3VLoader, Phi4MMLoader, Qwen2VLLoader, Qwen2_5VLLoader, Qwen3VLLoader,
-    Qwen3VLMoELoader, Qwen3_5Loader, Qwen3_5MoeLoader, Qwen4ExpLoader, VLlama4Loader, VLlamaLoader,
-    VoxtralLoader,
+    AutoMultimodalLoader, Idefics2Loader, LLaVALoader, LLaVANextLoader, MultimodalLoaderType,
+    MultimodalModel, MultimodalModelLoader, Phi3VLoader,
 };
 
 pub use embedding_loaders::{

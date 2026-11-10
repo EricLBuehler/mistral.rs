@@ -6,14 +6,7 @@ use super::{
     text_models_inputs_processor::ModelInputs, AdapterKind, GeneralMetadata, Loader, ModelKind,
     ModelPaths, NormalModel, NormalModelLoader, TokenSource,
 };
-use super::{
-    AutoNormalLoader, DeepSeekV2Loader, DeepSeekV3Loader, FlintLoader, GLM4Loader,
-    GLM4MoeLiteLoader, GLM4MoeLoader, Gemma2Loader, GemmaLoader, GptOssLoader,
-    GraniteMoeHybridLoader, HunYuanDenseV1Loader, HunYuanMoEV1Loader, Lfm2Loader, Lfm3Loader,
-    LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType, Phi2Loader, Phi3Loader,
-    Phi3_5MoELoader, Qwen2Loader, Qwen3Loader, Qwen3MoELoader, Qwen3NextLoader, Qwen3_5TextLoader,
-    SmolLm3Loader, Starcoder2Loader,
-};
+use super::{AutoNormalLoader, NormalLoaderType};
 use super::{EitherCache, IsqOrganization, ModelCategory};
 use crate::attention::ATTENTION_CHUNK_SIZE;
 use crate::device_map::DeviceMapper;
@@ -470,34 +463,7 @@ impl NormalLoaderBuilder {
             self.lora_runtime_config,
         )?;
         let loader: Box<dyn NormalModelLoader> = match loader_tp {
-            Some(NormalLoaderType::Mistral) => Box::new(MistralLoader),
-            Some(NormalLoaderType::Gemma) => Box::new(GemmaLoader),
-            Some(NormalLoaderType::Llama) => Box::new(LlamaLoader),
-            Some(NormalLoaderType::Mixtral) => Box::new(MixtralLoader),
-            Some(NormalLoaderType::Phi2) => Box::new(Phi2Loader),
-            Some(NormalLoaderType::Phi3) => Box::new(Phi3Loader),
-            Some(NormalLoaderType::Qwen2) => Box::new(Qwen2Loader),
-            Some(NormalLoaderType::Gemma2) => Box::new(Gemma2Loader),
-            Some(NormalLoaderType::Starcoder2) => Box::new(Starcoder2Loader),
-            Some(NormalLoaderType::Phi3_5MoE) => Box::new(Phi3_5MoELoader),
-            Some(NormalLoaderType::DeepSeekV2) => Box::new(DeepSeekV2Loader),
-            Some(NormalLoaderType::DeepSeekV3) => Box::new(DeepSeekV3Loader),
-            Some(NormalLoaderType::Qwen3) => Box::new(Qwen3Loader),
-            Some(NormalLoaderType::GLM4) => Box::new(GLM4Loader),
-            Some(NormalLoaderType::GLM4MoeLite) => Box::new(GLM4MoeLiteLoader),
-            Some(NormalLoaderType::GLM4Moe) => Box::new(GLM4MoeLoader),
-            Some(NormalLoaderType::Qwen3Moe) => Box::new(Qwen3MoELoader),
-            Some(NormalLoaderType::Flint) => Box::new(FlintLoader),
-            Some(NormalLoaderType::SmolLm3) => Box::new(SmolLm3Loader),
-            Some(NormalLoaderType::GraniteMoeHybrid) => Box::new(GraniteMoeHybridLoader),
-            Some(NormalLoaderType::GptOss) => Box::new(GptOssLoader),
-            Some(NormalLoaderType::HunYuanDenseV1) => Box::new(HunYuanDenseV1Loader),
-            Some(NormalLoaderType::HunYuanMoEV1) => Box::new(HunYuanMoEV1Loader),
-            Some(NormalLoaderType::Qwen3Next) => Box::new(Qwen3NextLoader),
-            Some(NormalLoaderType::Qwen3_5) => Box::new(Qwen3_5TextLoader),
-            Some(NormalLoaderType::Lfm2) => Box::new(Lfm2Loader),
-            Some(NormalLoaderType::Lfm3) => Box::new(Lfm3Loader),
-            Some(NormalLoaderType::Lfm2Moe) => Box::new(Lfm2Loader),
+            Some(arch) => arch.loader(),
             None => Box::new(AutoNormalLoader),
         };
         Ok(NormalLoader {
