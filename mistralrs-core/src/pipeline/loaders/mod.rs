@@ -1,5 +1,6 @@
 pub(crate) mod activation_memory;
 pub(crate) mod auto_device_map;
+mod auto_map_sizing;
 mod checkpoint_inventory;
 mod diffusion_loaders;
 mod embedding_loaders;
@@ -16,6 +17,9 @@ pub use activation_memory::{
 };
 pub use auto_device_map::AutoDeviceMapParams;
 use auto_device_map::NonMappedSubModel;
+#[cfg(test)]
+pub(crate) use auto_map_sizing::exact_weight_source_sizes;
+pub(crate) use auto_map_sizing::{auto_device_map_sizes, AutoMapSizingInput};
 pub(crate) use checkpoint_inventory::{checkpoint_device_map_sizes, checkpoint_runtime_size};
 pub(crate) use resources::add_resource_bytes;
 #[cfg(any(feature = "cuda", test))]

@@ -30,7 +30,6 @@ use crate::pipeline::isq::{
     WeightLoadingState,
 };
 use crate::pipeline::loaders::auto_device_map;
-use crate::pipeline::loaders::{AutoDeviceMapQuantization, QuantizationConfigShim};
 use crate::pipeline::text_models_inputs_processor::FlashParams;
 use crate::pipeline::text_models_inputs_processor::InputMetadata;
 use crate::pipeline::{
@@ -684,7 +683,6 @@ impl Loader for NormalLoader {
             .prepared_source
             .as_ref()
             .and_then(|source| source.weights.weight_source().cloned());
-        let has_prepared_weight_source = prepared_weight_source.is_some();
         let weight_source: Option<Arc<dyn mistralrs_quant::QuantizedWeightSource>> = uqff_reader
             .clone()
             .map(|reader| reader as Arc<dyn mistralrs_quant::QuantizedWeightSource>)
@@ -705,214 +703,28 @@ impl Loader for NormalLoader {
                 paths: paths.get_weight_filenames(),
             };
             let checkpoint = sizing_source.checkpoint_tensors()?;
-            let source_quantization = QuantizationConfigShim::get_quantization_config(&config)?;
 
             // ISQ or UQFF: quantized path
             // Match logic below where UQFF has priority
             let (mut layer_sizes_in_bytes, non_mapped_size_in_bytes, total_model_size_in_bytes) =
-                match super::isq_flow::resolve_auto_device_map_sizing(
-                    uqff_reader.is_some(),
-                    has_prepared_weight_source,
-                    in_situ_quant,
-                ) {
-                    sizing @ (super::isq_flow::AutoDeviceMapSizing::Uqff
-                    | super::isq_flow::AutoDeviceMapSizing::PreparedWeightSource) => {
-                        let source = weight_source
-                            .as_ref()
-                            .expect("selected weight-source sizing requires a weight source");
-                        let exact = if self.config.topology.is_none() {
-                            exact_weight_source_sizes(
-                                source.as_ref(),
-                                dtype,
-                                self.inner.num_layers(&config)?,
-                            )?
-                        } else {
-                            None
-                        };
-                        if let Some(sizes) = exact {
-                            info!(
-                                model_mib = sizes.2 / (1024 * 1024),
-                                "Using quantized weight-source inventory for automatic device mapping"
-                            );
-                            sizes
-                        } else {
-                            let quantization =
-                                if matches!(sizing, super::isq_flow::AutoDeviceMapSizing::Uqff) {
-                                    AutoDeviceMapQuantization::weight_source(source.as_ref())
-                                } else {
-                                    AutoDeviceMapQuantization::weight_source_with_topology(
-                                        source.as_ref(),
-                                        self.config.topology.as_ref(),
-                                    )
-                                };
-                            let quantization = quantization
-                                .with_checkpoint(&checkpoint)
-                                .with_source_quantization(source_quantization.as_ref());
-                            let weight_pack_factor = quantization
-                                .conservative_pack_factor(dtype, source.pack_factor(dtype)?);
-                            let layer_sizes_in_bytes =
-                                self.inner.layer_sizes_in_bytes_with_quantization(
-                                    &config,
-                                    dtype,
-                                    weight_pack_factor,
-                                    Some(&quantization),
-                                    None,
-                                )?;
-                            let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
-                                &config,
-                                dtype,
-                                weight_pack_factor,
-                                Some(&quantization),
-                                None,
-                            )?;
-                            let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
-                            (
-                                layer_sizes_in_bytes,
-                                non_mapped_size_in_bytes,
-                                layer_sizes_sum + non_mapped_size_in_bytes,
-                            )
-                        }
-                    }
-                    super::isq_flow::AutoDeviceMapSizing::Isq(isq) => {
-                        let moqe =
-                            matches!(self.config.organization, IsqOrganization::MoeExpertsOnly);
-                        let source_pack_factor = if let Some(source) = &prepared_weight_source {
-                            source.pack_factor(dtype)?
-                        } else {
-                            QuantizationConfigShim::get_quant_config_pack_factor(&config, dtype)?
-                        };
-                        let target_pack_factor = isq.pack_factor(dtype);
-                        let (weight_pack_factor, non_mapped_pack_factor, quantization) = if moqe {
-                            let quantization = prepared_weight_source.as_ref().map_or_else(
-                                || {
-                                    AutoDeviceMapQuantization::isq(
-                                        None,
-                                        self.config.topology.as_ref(),
-                                    )
-                                },
-                                |source| {
-                                    AutoDeviceMapQuantization::weight_source_with_topology(
-                                        source.as_ref(),
-                                        self.config.topology.as_ref(),
-                                    )
-                                },
-                            );
-                            (
-                                quantization.conservative_moqe_pack_factor(
-                                    dtype,
-                                    source_pack_factor,
-                                    isq,
-                                ),
-                                source_pack_factor,
-                                quantization,
-                            )
-                        } else {
-                            let quantization = AutoDeviceMapQuantization::isq(
-                                Some(isq),
-                                self.config.topology.as_ref(),
-                            );
-                            (
-                                quantization.conservative_pack_factor(dtype, target_pack_factor),
-                                target_pack_factor,
-                                quantization,
-                            )
-                        };
-                        let quantization = quantization
-                            .with_checkpoint(&checkpoint)
-                            .with_source_quantization(source_quantization.as_ref());
-                        let layer_sizes_in_bytes =
-                            self.inner.layer_sizes_in_bytes_with_quantization(
-                                &config,
-                                dtype,
-                                weight_pack_factor,
-                                (!moqe).then_some(&quantization),
-                                None,
-                            )?;
-                        let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
-                            &config,
-                            dtype,
-                            non_mapped_pack_factor,
-                            Some(&quantization),
-                            None,
-                        )?;
-                        let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
-                        (
-                            layer_sizes_in_bytes,
-                            non_mapped_size_in_bytes,
-                            layer_sizes_sum + non_mapped_size_in_bytes,
-                        )
-                    }
-                    super::isq_flow::AutoDeviceMapSizing::Checkpoint => {
-                        let inventory =
-                            if self.config.topology.is_none() && self.lora_adapters.is_none() {
-                                let num_layers = self.inner.num_layers(&config)?;
-                                crate::pipeline::loaders::checkpoint_device_map_sizes(
-                                    paths.get_weight_filenames(),
-                                    num_layers,
-                                    dtype,
-                                    |name| self.inner.checkpoint_layer_index(&config, name),
-                                )?
-                            } else {
-                                None
-                            };
-                        if let Some(inventory) = inventory {
-                            info!(
-                                model_mib = inventory.total_model_size_in_bytes / (1024 * 1024),
-                                "Using checkpoint tensor inventory for automatic device mapping"
-                            );
-                            (
-                                inventory.layer_sizes_in_bytes,
-                                inventory.non_mapped_size_in_bytes,
-                                inventory.total_model_size_in_bytes,
-                            )
-                        } else {
-                            // Be sure to get the weight pack factor here; we might be loading a prequantized model.
-                            let weight_pack_factor =
-                                QuantizationConfigShim::get_quant_config_pack_factor(
-                                    &config, dtype,
-                                )?;
-                            let checkpoint_quantization =
-                                QuantizationConfigShim::get_quantization_config(&config)?;
-                            let quantization = AutoDeviceMapQuantization::checkpoint(
-                                checkpoint_quantization.as_ref(),
-                                self.config.topology.as_ref(),
-                            )
-                            .map(|quantization| {
-                                quantization
-                                    .with_checkpoint(&checkpoint)
-                                    .with_source_quantization(source_quantization.as_ref())
-                            });
-                            let weight_pack_factor =
-                                quantization
-                                    .as_ref()
-                                    .map_or(weight_pack_factor, |quantization| {
-                                        quantization
-                                            .conservative_pack_factor(dtype, weight_pack_factor)
-                                    });
-                            let layer_sizes_in_bytes =
-                                self.inner.layer_sizes_in_bytes_with_quantization(
-                                    &config,
-                                    dtype,
-                                    weight_pack_factor,
-                                    quantization.as_ref(),
-                                    None,
-                                )?;
-                            let non_mapped_size_in_bytes = self.inner.non_mapped_size_in_bytes(
-                                &config,
-                                dtype,
-                                weight_pack_factor,
-                                quantization.as_ref(),
-                                None,
-                            )?;
-                            let layer_sizes_sum = layer_sizes_in_bytes.iter().sum::<usize>();
-                            (
-                                layer_sizes_in_bytes,
-                                non_mapped_size_in_bytes,
-                                layer_sizes_sum + non_mapped_size_in_bytes,
-                            )
-                        }
-                    }
-                };
+                super::loaders::auto_device_map_sizes(
+                    &*self.inner,
+                    super::loaders::AutoMapSizingInput {
+                        config: &config,
+                        dtype,
+                        weight_files: paths.get_weight_filenames(),
+                        checkpoint: &checkpoint,
+                        uqff: uqff_reader.is_some(),
+                        weight_source: weight_source.as_ref(),
+                        prepared_weight_source: prepared_weight_source.as_ref(),
+                        in_situ_quant,
+                        topology: self.config.topology.as_ref(),
+                        organization: self.config.organization,
+                        has_lora_adapters: self.lora_adapters.is_some(),
+                        matformer: None,
+                        packed_non_mapped: true,
+                    },
+                )?;
 
             let resources = self.inner.layer_resources(&config, sizing_source)?;
             let total_model_size_in_bytes = super::loaders::add_resource_bytes(
@@ -1536,21 +1348,6 @@ impl Loader for NormalLoader {
     }
 }
 
-fn exact_weight_source_sizes(
-    source: &dyn mistralrs_quant::QuantizedWeightSource,
-    dtype: DType,
-    num_layers: usize,
-) -> Result<Option<(Vec<usize>, usize, usize)>> {
-    let Some(exact) = source.resident_layer_bytes(dtype)? else {
-        return Ok(None);
-    };
-    let layers = (0..num_layers)
-        .map(|layer| exact.layers.get(&layer).copied().unwrap_or(0))
-        .collect::<Vec<_>>();
-    let total = layers.iter().sum::<usize>() + exact.outside;
-    Ok(Some((layers, exact.outside, total)))
-}
-
 pub(crate) struct NormalFlavor {
     no_kv_cache: bool,
     non_granular_state: Option<NonGranularState>,
@@ -1754,8 +1551,9 @@ mod tests {
         Ok(())
     }
 
-    use super::{exact_weight_source_sizes, normal_model_requires_uniform_prompt_batch};
+    use super::normal_model_requires_uniform_prompt_batch;
     use crate::pipeline::finish_dynamic_lora_runtime;
+    use crate::pipeline::loaders::exact_weight_source_sizes;
     use crate::pipeline::{
         AdapterPaths, AutoNormalLoader, LocalModelPaths, NormalModelLoader, Qwen3NextLoader,
         Qwen3_5TextLoader,
