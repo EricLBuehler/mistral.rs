@@ -294,123 +294,21 @@ pub(super) async fn submit_paged_step<P: Pipeline + ?Sized>(
     let mut batched_cuda_decode = None;
     let (mut logits, batched_causal_logits, raw_out_logits, embedding_logits, mut exec_duration) = {
         let inputs_iter = if let (Some(chunk_plans), true) = (chunk_plans, should_chunk) {
-            let originals = input_seqs
-                .iter()
-                .map(|seq| (seq.get_toks().to_vec(), seq.prefix_cache_len()))
-                .collect::<Vec<_>>();
-            let recurrent_checkpoint_boundaries = input_seqs
-                .iter()
-                .zip(&originals)
-                .map(|(seq, (tokens, prefix_len))| {
-                    recurrent_checkpoint_boundary(
-                        tokens.len(),
-                        *prefix_len,
-                        hybrid_recurrent.then_some(block_size),
-                        prefix_policy.replay_for(crate::scheduler::modality_signature(seq)),
-                        seq.mm_features(),
-                    )
-                })
-                .collect::<Vec<_>>();
-            let mut plan_indices = vec![0usize; chunk_plans.len()];
-            let requires_uniform_prompt_batch = this.requires_uniform_prompt_batch();
-            let supports_packed_prefill = this.supports_packed_prefill();
-            let mut inputs = Vec::new();
-            while plan_indices
-                .iter()
-                .zip(chunk_plans.iter())
-                .any(|(plan_idx, plan)| *plan_idx < plan.len())
-            {
-                let (active_indices, attention_policy, planned_final_prompt_chunk) =
-                    next_pipeline_prompt_chunk_group(
-                        &plan_indices,
-                        &chunk_plans,
-                        requires_uniform_prompt_batch,
-                        supports_packed_prefill,
-                        hybrid_recurrent,
-                    )
-                    .expect("at least one chunk plan is active");
-                let is_final_prompt_chunk = prompt_chunk_is_final(
+            chunked_prompt_inputs(
+                this,
+                input_seqs,
+                ChunkedPromptCtx {
+                    chunk_plans,
+                    metadata: &metadata,
+                    is_prompt,
+                    return_raw_logits,
                     scheduler_visible_prompt_step,
                     scheduler_visible_prompt_is_final,
-                    planned_final_prompt_chunk,
-                );
-
-                let mut recurrent_boundaries = Vec::new();
-                let mut prompt_chunk = SpeculativePromptChunk {
-                    rows: Vec::with_capacity(active_indices.len()),
-                    is_final_prompt_chunk,
-                };
-                for &seq_idx in &active_indices {
-                    let chunk = chunk_plans[seq_idx][plan_indices[seq_idx]];
-                    let seq = &mut input_seqs[seq_idx];
-                    seq.set_prefix_cache_len(chunk.start);
-                    seq.set_prefill_toks(originals[seq_idx].0[..chunk.end].to_vec());
-                    if recurrent_checkpoint_boundaries[seq_idx] == Some(chunk.end) {
-                        recurrent_boundaries.push((seq_idx, chunk.end));
-                    }
-                    prompt_chunk.rows.push(SpeculativePromptRow {
-                        seq_idx,
-                        range: (chunk.start, chunk.end),
-                        tokens: originals[seq_idx].0.clone(),
-                    });
-                }
-
-                let mut chunk_metadata = metadata.clone();
-                chunk_metadata.prompt_chunk_attention_policy = attention_policy;
-                chunk_metadata.is_final_prompt_chunk = is_final_prompt_chunk;
-                chunk_metadata.needs_logits = is_final_prompt_chunk || return_raw_logits;
-                let mut active_input_seqs = input_seqs
-                    .iter_mut()
-                    .enumerate()
-                    .filter_map(|(idx, seq)| active_indices.contains(&idx).then_some(&mut **seq))
-                    .collect::<Vec<_>>();
-                chunk_metadata.set_noncausal_mm_context(active_input_seqs.as_slice());
-                let mut processed = this.get_processor().inputs_processor().process_inputs(
-                    this.tokenizer(),
-                    active_input_seqs.as_mut_slice(),
-                    is_prompt,
-                    this.get_metadata().is_xlora,
-                    &this.device(),
-                    this.get_metadata().no_kv_cache,
-                    None,
-                    return_raw_logits,
-                    this.get_metadata().sliding_window,
-                    this.get_input_processor_config(),
-                    Some(chunk_metadata),
-                    this.device_mapper(),
-                );
-                drop(active_input_seqs);
-                if let Ok(processed) = &mut processed {
-                    for seq_idx in &mut processed.seq_indices {
-                        *seq_idx = active_indices[*seq_idx];
-                    }
-                }
-                let computed_updates = if scheduler_visible_prompt_step {
-                    active_indices
-                        .iter()
-                        .map(|&seq_idx| {
-                            let chunk = chunk_plans[seq_idx][plan_indices[seq_idx]];
-                            (seq_idx, chunk.end)
-                        })
-                        .collect::<Vec<_>>()
-                } else {
-                    Vec::new()
-                };
-                inputs.push((
-                    processed,
-                    recurrent_boundaries,
-                    Some(prompt_chunk),
-                    computed_updates,
-                ));
-                for &seq_idx in &active_indices {
-                    plan_indices[seq_idx] += 1;
-                }
-            }
-            for (seq, (tokens, prefix_len)) in input_seqs.iter_mut().zip(originals.iter()) {
-                seq.set_prefix_cache_len(*prefix_len);
-                seq.set_prefill_toks(tokens.clone());
-            }
-            inputs
+                    hybrid_recurrent,
+                    block_size,
+                    prefix_policy,
+                },
+            )
         } else {
             metadata.set_noncausal_mm_context(input_seqs);
             let prompt_chunk = is_prompt.then(|| SpeculativePromptChunk {
@@ -425,8 +323,8 @@ pub(super) async fn submit_paged_step<P: Pipeline + ?Sized>(
                     .collect(),
                 is_final_prompt_chunk: true,
             });
-            vec![(
-                this.get_processor().inputs_processor().process_inputs(
+            vec![PagedStepInput {
+                processed: this.get_processor().inputs_processor().process_inputs(
                     this.tokenizer(),
                     input_seqs,
                     is_prompt,
@@ -440,10 +338,10 @@ pub(super) async fn submit_paged_step<P: Pipeline + ?Sized>(
                     Some(metadata),
                     this.device_mapper(),
                 ),
-                Vec::new(),
+                recurrent_boundaries: Vec::new(),
                 prompt_chunk,
-                Vec::new(),
-            )]
+                computed_updates: Vec::new(),
+            }]
         };
 
         let mut logits = vec![None; input_seqs.len()];
@@ -453,9 +351,13 @@ pub(super) async fn submit_paged_step<P: Pipeline + ?Sized>(
         let mut embedding_logits = vec![None; input_seqs.len()];
 
         let mut exec_duration = Duration::ZERO;
-        for (i, (inputs, recurrent_boundaries, prompt_chunk, computed_updates)) in
-            inputs_iter.into_iter().enumerate()
-        {
+        for (i, step_input) in inputs_iter.into_iter().enumerate() {
+            let PagedStepInput {
+                processed: inputs,
+                recurrent_boundaries,
+                prompt_chunk,
+                computed_updates,
+            } = step_input;
             let InputProcessorOutput {
                 inputs,
                 seq_indices,
@@ -468,26 +370,7 @@ pub(super) async fn submit_paged_step<P: Pipeline + ?Sized>(
                     && sampling::can_sample_batch_cuda(input_seqs))
                     || crate::speculative::verifier::can_batch_device_verify(input_seqs));
             if this.cache().is_hybrid() {
-                let mut hybrid_cache = this.cache().hybrid();
-                let sequence_slots = seq_indices
-                    .iter()
-                    .map(|&seq_idx| {
-                        let seq = input_seqs.get(seq_idx).ok_or_else(|| {
-                            candle_core::Error::msg(format!(
-                                "processed sequence index {seq_idx} exceeds batch size {}",
-                                input_seqs.len()
-                            ))
-                        })?;
-                        let slot_idx = seq.recurrent_state_idx().ok_or_else(|| {
-                            candle_core::Error::msg(format!(
-                                "sequence {} has no recurrent state slot",
-                                seq.id()
-                            ))
-                        })?;
-                        Ok((*seq.id(), slot_idx))
-                    })
-                    .collect::<candle_core::Result<Vec<_>>>()?;
-                hybrid_cache.install_sequence_state_indices(&sequence_slots)?;
+                install_recurrent_state_slots(this, input_seqs, &seq_indices)?;
             }
             let start = Instant::now();
             #[cfg(feature = "cuda")]
@@ -560,18 +443,7 @@ pub(super) async fn submit_paged_step<P: Pipeline + ?Sized>(
                 .is_some_and(|chunk| !chunk.is_final_prompt_chunk)
             {
                 let start = Instant::now();
-                let primary = this.device();
-                let mut devices = this
-                    .device_mapper()
-                    .map(|mapper| mapper.get_unique_devices())
-                    .unwrap_or_default();
-                if !devices.iter().any(|device| device.same_device(&primary)) {
-                    devices.push(primary);
-                }
-                // Partial chunks skip sampling readback, which otherwise releases pooled uploads.
-                for device in devices.into_iter().filter(Device::is_metal) {
-                    device.synchronize()?;
-                }
+                synchronize_metal_devices(this)?;
                 exec_duration += start.elapsed();
             }
         }
@@ -637,13 +509,7 @@ pub(super) async fn submit_paged_step<P: Pipeline + ?Sized>(
             .await?
         {
             if scheduler_visible_prompt_step {
-                for seq in input_seqs.iter_mut() {
-                    if !seq.is_finished_paged_attn()
-                        && matches!(seq.sequence_stepping_type(), SeqStepType::PromptAndDecode)
-                    {
-                        seq.set_state(SequenceState::RunningCompletion);
-                    }
-                }
+                promote_prompt_and_decode(input_seqs);
             }
             exec_duration += start.elapsed();
             return Ok(StepSubmission::ready(exec_duration));
@@ -683,18 +549,222 @@ pub(super) async fn submit_paged_step<P: Pipeline + ?Sized>(
     )
     .await?;
     if scheduler_visible_prompt_step {
-        for seq in input_seqs.iter_mut() {
-            if !seq.is_finished_paged_attn()
-                && matches!(seq.sequence_stepping_type(), SeqStepType::PromptAndDecode)
-            {
-                seq.set_state(SequenceState::RunningCompletion);
-            }
-        }
+        promote_prompt_and_decode(input_seqs);
     }
     let end = Instant::now();
     exec_duration += end.duration_since(start);
 
     Ok(StepSubmission::ready(exec_duration))
+}
+
+/// One forward of a paged step plus the bookkeeping to apply once it has run.
+struct PagedStepInput {
+    processed: anyhow::Result<InputProcessorOutput>,
+    recurrent_boundaries: Vec<(usize, usize)>,
+    prompt_chunk: Option<SpeculativePromptChunk>,
+    computed_updates: Vec<(usize, usize)>,
+}
+
+struct ChunkedPromptCtx<'a> {
+    chunk_plans: Vec<Vec<PromptChunkPlan>>,
+    metadata: &'a PagedAttentionMeta,
+    is_prompt: bool,
+    return_raw_logits: bool,
+    scheduler_visible_prompt_step: bool,
+    scheduler_visible_prompt_is_final: bool,
+    hybrid_recurrent: bool,
+    block_size: usize,
+    prefix_policy: crate::speculative::SpeculativePrefixCheckpointPolicy,
+}
+
+/// Processes each prompt chunk group in plan order, then restores the sequences' full prompts.
+fn chunked_prompt_inputs<P: Pipeline + ?Sized>(
+    this: &P,
+    input_seqs: &mut [&mut Sequence],
+    ctx: ChunkedPromptCtx<'_>,
+) -> Vec<PagedStepInput> {
+    let ChunkedPromptCtx {
+        chunk_plans,
+        metadata,
+        is_prompt,
+        return_raw_logits,
+        scheduler_visible_prompt_step,
+        scheduler_visible_prompt_is_final,
+        hybrid_recurrent,
+        block_size,
+        prefix_policy,
+    } = ctx;
+    let originals = input_seqs
+        .iter()
+        .map(|seq| (seq.get_toks().to_vec(), seq.prefix_cache_len()))
+        .collect::<Vec<_>>();
+    let recurrent_checkpoint_boundaries = input_seqs
+        .iter()
+        .zip(&originals)
+        .map(|(seq, (tokens, prefix_len))| {
+            recurrent_checkpoint_boundary(
+                tokens.len(),
+                *prefix_len,
+                hybrid_recurrent.then_some(block_size),
+                prefix_policy.replay_for(crate::scheduler::modality_signature(seq)),
+                seq.mm_features(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut plan_indices = vec![0usize; chunk_plans.len()];
+    let requires_uniform_prompt_batch = this.requires_uniform_prompt_batch();
+    let supports_packed_prefill = this.supports_packed_prefill();
+    let mut inputs = Vec::new();
+    while plan_indices
+        .iter()
+        .zip(chunk_plans.iter())
+        .any(|(plan_idx, plan)| *plan_idx < plan.len())
+    {
+        let (active_indices, attention_policy, planned_final_prompt_chunk) =
+            next_pipeline_prompt_chunk_group(
+                &plan_indices,
+                &chunk_plans,
+                requires_uniform_prompt_batch,
+                supports_packed_prefill,
+                hybrid_recurrent,
+            )
+            .expect("at least one chunk plan is active");
+        let is_final_prompt_chunk = prompt_chunk_is_final(
+            scheduler_visible_prompt_step,
+            scheduler_visible_prompt_is_final,
+            planned_final_prompt_chunk,
+        );
+
+        let mut recurrent_boundaries = Vec::new();
+        let mut prompt_chunk = SpeculativePromptChunk {
+            rows: Vec::with_capacity(active_indices.len()),
+            is_final_prompt_chunk,
+        };
+        for &seq_idx in &active_indices {
+            let chunk = chunk_plans[seq_idx][plan_indices[seq_idx]];
+            let seq = &mut input_seqs[seq_idx];
+            seq.set_prefix_cache_len(chunk.start);
+            seq.set_prefill_toks(originals[seq_idx].0[..chunk.end].to_vec());
+            if recurrent_checkpoint_boundaries[seq_idx] == Some(chunk.end) {
+                recurrent_boundaries.push((seq_idx, chunk.end));
+            }
+            prompt_chunk.rows.push(SpeculativePromptRow {
+                seq_idx,
+                range: (chunk.start, chunk.end),
+                tokens: originals[seq_idx].0.clone(),
+            });
+        }
+
+        let mut chunk_metadata = metadata.clone();
+        chunk_metadata.prompt_chunk_attention_policy = attention_policy;
+        chunk_metadata.is_final_prompt_chunk = is_final_prompt_chunk;
+        chunk_metadata.needs_logits = is_final_prompt_chunk || return_raw_logits;
+        let mut active_input_seqs = input_seqs
+            .iter_mut()
+            .enumerate()
+            .filter_map(|(idx, seq)| active_indices.contains(&idx).then_some(&mut **seq))
+            .collect::<Vec<_>>();
+        chunk_metadata.set_noncausal_mm_context(active_input_seqs.as_slice());
+        let mut processed = this.get_processor().inputs_processor().process_inputs(
+            this.tokenizer(),
+            active_input_seqs.as_mut_slice(),
+            is_prompt,
+            this.get_metadata().is_xlora,
+            &this.device(),
+            this.get_metadata().no_kv_cache,
+            None,
+            return_raw_logits,
+            this.get_metadata().sliding_window,
+            this.get_input_processor_config(),
+            Some(chunk_metadata),
+            this.device_mapper(),
+        );
+        drop(active_input_seqs);
+        if let Ok(processed) = &mut processed {
+            for seq_idx in &mut processed.seq_indices {
+                *seq_idx = active_indices[*seq_idx];
+            }
+        }
+        let computed_updates = if scheduler_visible_prompt_step {
+            active_indices
+                .iter()
+                .map(|&seq_idx| {
+                    let chunk = chunk_plans[seq_idx][plan_indices[seq_idx]];
+                    (seq_idx, chunk.end)
+                })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        inputs.push(PagedStepInput {
+            processed,
+            recurrent_boundaries,
+            prompt_chunk: Some(prompt_chunk),
+            computed_updates,
+        });
+        for &seq_idx in &active_indices {
+            plan_indices[seq_idx] += 1;
+        }
+    }
+    for (seq, (tokens, prefix_len)) in input_seqs.iter_mut().zip(originals.iter()) {
+        seq.set_prefix_cache_len(*prefix_len);
+        seq.set_prefill_toks(tokens.clone());
+    }
+    inputs
+}
+
+fn install_recurrent_state_slots<P: Pipeline + ?Sized>(
+    this: &P,
+    input_seqs: &[&mut Sequence],
+    seq_indices: &[usize],
+) -> candle_core::Result<()> {
+    let mut hybrid_cache = this.cache().hybrid();
+    let sequence_slots = seq_indices
+        .iter()
+        .map(|&seq_idx| {
+            let seq = input_seqs.get(seq_idx).ok_or_else(|| {
+                candle_core::Error::msg(format!(
+                    "processed sequence index {seq_idx} exceeds batch size {}",
+                    input_seqs.len()
+                ))
+            })?;
+            let slot_idx = seq.recurrent_state_idx().ok_or_else(|| {
+                candle_core::Error::msg(format!(
+                    "sequence {} has no recurrent state slot",
+                    seq.id()
+                ))
+            })?;
+            Ok((*seq.id(), slot_idx))
+        })
+        .collect::<candle_core::Result<Vec<_>>>()?;
+    hybrid_cache.install_sequence_state_indices(&sequence_slots)
+}
+
+// Partial chunks skip sampling readback, which otherwise releases pooled uploads.
+#[cfg(feature = "metal")]
+fn synchronize_metal_devices<P: Pipeline + ?Sized>(this: &P) -> candle_core::Result<()> {
+    let primary = this.device();
+    let mut devices = this
+        .device_mapper()
+        .map(|mapper| mapper.get_unique_devices())
+        .unwrap_or_default();
+    if !devices.iter().any(|device| device.same_device(&primary)) {
+        devices.push(primary);
+    }
+    for device in devices.into_iter().filter(Device::is_metal) {
+        device.synchronize()?;
+    }
+    Ok(())
+}
+
+fn promote_prompt_and_decode(input_seqs: &mut [&mut Sequence]) {
+    for seq in input_seqs.iter_mut() {
+        if !seq.is_finished_paged_attn()
+            && matches!(seq.sequence_stepping_type(), SeqStepType::PromptAndDecode)
+        {
+            seq.set_state(SequenceState::RunningCompletion);
+        }
+    }
 }
 
 /// How the causal arm of a step hands its logits to a speculative proposer.
