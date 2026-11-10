@@ -14,7 +14,10 @@ use crate::{
     distributed::{self, TensorParallelism, WorkerTransferData},
     matformer::{MatformerConfig, MatformerSliceConfig},
     paged_attention::ModelConfigLike,
-    pipeline::{isq::sanitize_quantized_weight_source_config, HfConfigOverrides, ModelPaths},
+    pipeline::{
+        isq::sanitize_quantized_weight_source_config, HfConfigOverrides, IsqModelLoader, ModelPaths,
+    },
+    utils::varbuilder_utils::{from_mmaped_safetensors, DeviceForLoadTensor},
     DeviceMapSetting, IsqOrganization, PagedAttentionConfig, Topology, TryIntoDType,
 };
 
@@ -297,5 +300,50 @@ pub(crate) fn resolve_device_mapping(
         mapper,
         layer_devices,
         dtype,
+    })
+}
+
+pub(crate) struct MappedWeightsRequest<'a> {
+    pub paths: &'a dyn ModelPaths,
+    pub dtype: DType,
+    pub load_device: &'a Device,
+    pub layer_devices: Vec<Option<Device>>,
+    pub silent: bool,
+    pub config: &'a str,
+    /// UQFF supplies the quantized layers, so their safetensors entries load as placeholders.
+    pub dummy_isq_layers: bool,
+    pub moe_experts_only: bool,
+    pub device_for_tensor: Arc<dyn Fn(String) -> DeviceForLoadTensor + Send + Sync>,
+    pub uqff_reader: Option<Arc<UqffReader>>,
+}
+
+/// Opens the checkpoint in `paths` as a device-mapped builder.
+pub(crate) fn open_mapped_weights(
+    loader: &dyn IsqModelLoader,
+    request: MappedWeightsRequest<'_>,
+) -> Result<ShardedVarBuilder> {
+    let dummy_regexes = if request.dummy_isq_layers {
+        Some(Arc::new(if request.moe_experts_only {
+            loader.isq_layer_regexes_moqe(request.config)?
+        } else {
+            loader.isq_layer_regexes(request.config)?
+        }))
+    } else {
+        None
+    };
+    let vb = from_mmaped_safetensors(
+        request.paths.get_weight_filenames().to_vec(),
+        Vec::new(),
+        Some(request.dtype),
+        request.load_device,
+        request.layer_devices,
+        request.silent,
+        dummy_regexes,
+        |_| true,
+        request.device_for_tensor,
+    )?;
+    Ok(match request.uqff_reader {
+        Some(reader) => vb.with_uqff_reader(reader),
+        None => vb,
     })
 }

@@ -13,8 +13,6 @@ use crate::device_map::DeviceMapper;
 use crate::distributed;
 use crate::embedding_models::inputs_processor::{EmbeddingProcessor, ModelInputs};
 use crate::embedding_models::{Dense, DenseActivation, Normalize, Pooling};
-use crate::embedding_normal_model_loader;
-use crate::embedding_normal_model_loader_sharded;
 use crate::get_embedding_paths;
 use crate::paged_attention::AttentionImplementation;
 use crate::pipeline::loaders::auto_device_map;
@@ -28,11 +26,8 @@ use crate::pipeline::{ChatTemplate, EmbeddingModelPaths, IsqOrganization, Proces
 use crate::pipeline::{EmbeddingGemmaLoader, Qwen3EmbeddingLoader};
 use crate::prefix_cacher::PrefixCacheManagerV2;
 use crate::sequence::Sequence;
+use crate::utils::progress::{new_multi_progress, ProgressScopeGuard};
 use crate::utils::tokenizer::get_tokenizer;
-use crate::utils::{
-    progress::{new_multi_progress, ProgressScopeGuard},
-    varbuilder_utils::from_mmaped_safetensors,
-};
 use crate::Modalities;
 use crate::SupportedModality;
 use crate::{
@@ -532,7 +527,7 @@ impl Loader for EmbeddingLoader {
             .message(self.load_context.weight_target())
         );
 
-        let (model, tracker) = if use_distributed {
+        let (mapper, distributed_vb) = if use_distributed {
             let (mapper, sharded_vb) =
                 distributed::prepare_distributed_mapper(distributed::DistributedMapperConfig {
                     dtype,
@@ -554,42 +549,46 @@ impl Loader for EmbeddingLoader {
                 sharded_vb
             };
 
-            // Special case for where things can be more optimially loaded.
-            match self.kind {
-                ModelKind::Normal => embedding_normal_model_loader_sharded!(
-                    sharded_vb,
-                    config,
-                    self.inner,
-                    mapper,
-                    loading_isq,
-                    device.clone(),
-                    attention_mechanism,
-                    multi_progress.clone(),
-                    uqff_reader.clone(),
-                ),
-                _ => unreachable!(),
-            }
+            (mapper, Some(sharded_vb))
         } else {
-            match self.kind {
-                ModelKind::Normal => embedding_normal_model_loader!(
-                    paths,
-                    Some(dtype),
-                    &load_device,
-                    layer_devices.clone(),
-                    config,
-                    self.inner,
-                    silent,
-                    mapper,
-                    loading_isq,
-                    self.config.from_uqff.is_some(),
-                    device.clone(),
-                    attention_mechanism,
-                    multi_progress,
-                    uqff_reader.clone(),
-                ),
-                _ => unreachable!(),
-            }
+            (mapper, None)
         };
+        let vb = match distributed_vb {
+            Some(vb) => vb,
+            None => super::loaders::open_mapped_weights(
+                &*self.inner,
+                super::loaders::MappedWeightsRequest {
+                    paths,
+                    dtype,
+                    load_device: &load_device,
+                    layer_devices: layer_devices.clone(),
+                    silent,
+                    config: &config,
+                    dummy_isq_layers: loading_isq && self.config.from_uqff.is_some(),
+                    moe_experts_only: false,
+                    device_for_tensor: self.inner.get_device_for_tensor(
+                        &config,
+                        mapper.as_ref(),
+                        loading_isq,
+                    )?,
+                    uqff_reader: uqff_reader.clone(),
+                },
+            )?,
+        };
+        let tracker = vb.tracker().clone();
+        let model = self.inner.load(
+            &config,
+            vb,
+            crate::pipeline::NormalLoadingMetadata {
+                mapper,
+                loading_isq,
+                real_device: device.clone(),
+                multi_progress,
+                matformer_slicing_config: None,
+                rope_pairing: None,
+            },
+            attention_mechanism,
+        )?;
 
         let tokenizer = get_tokenizer(paths.get_tokenizer_filename(), None)?;
 

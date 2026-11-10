@@ -37,9 +37,9 @@ use crate::utils::{
 };
 use crate::xlora_models::NonGranularState;
 use crate::{
-    get_mut_arcmutex, get_paths, get_uqff_paths, lora_model_loader, normal_model_loader,
-    xlora_model_loader, DeviceMapSetting, DynamicLoraRuntime, LoraAdapterSpec, LoraRuntimeConfig,
-    PagedAttentionConfig, Pipeline, Topology, TryIntoDType, GLOBAL_HF_CACHE,
+    get_mut_arcmutex, get_paths, get_uqff_paths, xlora_model_loader, DeviceMapSetting,
+    DynamicLoraRuntime, LoraAdapterSpec, LoraRuntimeConfig, PagedAttentionConfig, Pipeline,
+    Topology, TryIntoDType, GLOBAL_HF_CACHE,
 };
 use anyhow::Result;
 use candle_core::{DType, Device, Tensor};
@@ -795,45 +795,50 @@ impl Loader for NormalLoader {
             .prepared_source
             .as_ref()
             .map(|source| source.rope_pairing);
+        // LoRA without a prepared source reads from `paths` even when a shard is open.
+        let open_weights = |mapper: &dyn DeviceMapper, reuse_open: bool| match open_vb {
+            Some(vb) if reuse_open => Ok(vb),
+            _ => super::loaders::open_mapped_weights(
+                &*self.inner,
+                super::loaders::MappedWeightsRequest {
+                    paths,
+                    dtype,
+                    load_device: &load_device,
+                    layer_devices: layer_devices.clone(),
+                    silent,
+                    config: &config,
+                    dummy_isq_layers: loading_isq && self.config.from_uqff.is_some(),
+                    moe_experts_only: matches!(
+                        self.config.organization,
+                        IsqOrganization::MoeExpertsOnly
+                    ),
+                    device_for_tensor: self.inner.get_device_for_tensor(
+                        &config,
+                        mapper,
+                        loading_isq,
+                    )?,
+                    uqff_reader: uqff_reader.clone(),
+                },
+            ),
+        };
 
         let (model, tracker, dynamic_lora) = match self.kind {
             ModelKind::Normal | ModelKind::GgufQuantized { .. } => {
-                let (model, tracker) = if let Some(vb) = open_vb {
-                    let tracker = vb.tracker().clone();
-                    let model = self.inner.load(
-                        &config,
-                        vb,
-                        crate::pipeline::NormalLoadingMetadata {
-                            mapper,
-                            loading_isq,
-                            real_device: device.clone(),
-                            multi_progress: multi_progress.clone(),
-                            matformer_slicing_config: matformer_slicing_config.clone(),
-                            rope_pairing,
-                        },
-                        attention_mechanism,
-                    )?;
-                    (model, tracker)
-                } else {
-                    normal_model_loader!(
-                        paths,
-                        Some(dtype),
-                        &load_device,
-                        layer_devices.clone(),
-                        config,
-                        self.inner,
-                        silent,
+                let vb = open_weights(mapper.as_ref(), true)?;
+                let tracker = vb.tracker().clone();
+                let model = self.inner.load(
+                    &config,
+                    vb,
+                    crate::pipeline::NormalLoadingMetadata {
                         mapper,
                         loading_isq,
-                        self.config.from_uqff.is_some(),
-                        device.clone(),
-                        attention_mechanism,
-                        matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
-                        multi_progress.clone(),
-                        matformer_slicing_config.clone(),
-                        uqff_reader.clone(),
-                    )
-                };
+                        real_device: device.clone(),
+                        multi_progress: multi_progress.clone(),
+                        matformer_slicing_config: matformer_slicing_config.clone(),
+                        rope_pairing,
+                    },
+                    attention_mechanism,
+                )?;
                 (model, tracker, None)
             }
             ModelKind::Adapter {
@@ -867,54 +872,31 @@ impl Loader for NormalLoader {
                 adapter: AdapterKind::Lora,
                 ..
             } => {
-                if let (Some(vb), Some(rope_pairing)) = (open_vb, rope_pairing) {
-                    let layers = Arc::new(self.inner.new_lora_registry(&config)?);
-                    let vb = vb.with_lora_registry(layers.clone());
-                    let tracker = vb.tracker().clone();
-                    let model = self.inner.load(
-                        &config,
-                        vb,
-                        crate::pipeline::NormalLoadingMetadata {
-                            mapper,
-                            loading_isq,
-                            real_device: device.clone(),
-                            multi_progress: multi_progress.clone(),
-                            matformer_slicing_config: matformer_slicing_config.clone(),
-                            rope_pairing: Some(rope_pairing),
-                        },
-                        attention_mechanism,
-                    )?;
-                    let dynamic_lora = super::finish_dynamic_lora_runtime(
-                        paths,
-                        layers,
-                        self.lora_runtime_config
-                            .expect("LoRA loaders have a runtime config"),
-                        live_updates,
-                    )?;
-                    (model, tracker, Some(dynamic_lora))
-                } else {
-                    lora_model_loader!(
-                        paths,
-                        Some(dtype),
-                        &load_device,
-                        layer_devices.clone(),
-                        config,
-                        self.inner,
-                        silent,
+                let layers = Arc::new(self.inner.new_lora_registry(&config)?);
+                let vb = open_weights(mapper.as_ref(), rope_pairing.is_some())?
+                    .with_lora_registry(layers.clone());
+                let tracker = vb.tracker().clone();
+                let model = self.inner.load(
+                    &config,
+                    vb,
+                    crate::pipeline::NormalLoadingMetadata {
                         mapper,
                         loading_isq,
-                        self.config.from_uqff.is_some(),
-                        device.clone(),
-                        attention_mechanism,
-                        matches!(self.config.organization, IsqOrganization::MoeExpertsOnly),
-                        multi_progress.clone(),
-                        matformer_slicing_config.clone(),
-                        uqff_reader.clone(),
-                        self.lora_runtime_config
-                            .expect("LoRA loaders have a runtime config"),
-                        live_updates,
-                    )
-                }
+                        real_device: device.clone(),
+                        multi_progress: multi_progress.clone(),
+                        matformer_slicing_config: matformer_slicing_config.clone(),
+                        rope_pairing,
+                    },
+                    attention_mechanism,
+                )?;
+                let dynamic_lora = super::finish_dynamic_lora_runtime(
+                    paths,
+                    layers,
+                    self.lora_runtime_config
+                        .expect("LoRA loaders have a runtime config"),
+                    live_updates,
+                )?;
+                (model, tracker, Some(dynamic_lora))
             }
             _ => unreachable!(),
         };
