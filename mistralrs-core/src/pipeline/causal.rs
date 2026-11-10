@@ -557,6 +557,25 @@ impl<M: CausalModel + ?Sized> crate::speculative::driver::SpeculativePipelineExt
 }
 
 impl<M: CausalModel + ?Sized> CausalPipeline<M> {
+    fn describe_weights(&self) -> String {
+        let mut by_type: Vec<(IsqType, usize)> = Vec::new();
+        for ty in self.tracked_modules.iter().filter_map(|module| module.ty) {
+            match by_type.iter_mut().find(|(seen, _)| *seen == ty) {
+                Some((_, count)) => *count += 1,
+                None => by_type.push((ty, 1)),
+            }
+        }
+        if by_type.is_empty() {
+            return self.metadata.kind.to_string();
+        }
+        let isq = by_type
+            .iter()
+            .map(|(ty, count)| format!("{ty:?} x{count}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("{}, ISQ {isq}", self.metadata.kind)
+    }
+
     fn recurrent_metadata(&self, batch_kind: RecurrentBatchKind) -> Option<RecurrentMetadata> {
         if !self.model.cache().is_hybrid() {
             return None;
@@ -1364,6 +1383,42 @@ impl<M: CausalModel + ?Sized> Pipeline for CausalPipeline<M> {
 
     fn supports_batched_cuda_sampling(&self) -> bool {
         !self.model.has_speculative_proposer()
+    }
+
+    fn log_runtime_plan(&self) {
+        if self.metadata.loaded_for_uqff_write {
+            return;
+        }
+        let device = self.model.device();
+        #[cfg(feature = "cuda")]
+        let decode_graphs = device.is_cuda().then(|| {
+            cuda_decode_graphs_enabled()
+                && self
+                    .model
+                    .supports_cuda_decode_graphs_for(None)
+                    .unwrap_or(false)
+                && cuda_decode_graph_supported_for_model(self.metadata.model_metadata.as_deref())
+        });
+        #[cfg(not(feature = "cuda"))]
+        let decode_graphs = None;
+        let plan = super::plan_log::RuntimePlan::resolve(&super::plan_log::RuntimePlanInput {
+            device,
+            activation_dtype: self.metadata.activation_dtype,
+            weights: self.describe_weights(),
+            model: self
+                .metadata
+                .model_metadata
+                .as_deref()
+                .map(|model| model as &dyn crate::paged_attention::ModelConfigLike),
+            cache: self.metadata.cache_config.as_ref(),
+            head_dim: self.model.config().k_head_dim,
+            has_sliding_window: self.metadata.sliding_window.is_some(),
+            packed_prefill: self.supports_packed_prefill(),
+            batched_sampling: self.supports_batched_cuda_sampling(),
+            has_proposer: self.model.has_speculative_proposer(),
+            decode_graphs,
+        });
+        info!("{}", plan.render());
     }
 
     fn supports_speculative_prompt_bootstrap(&self) -> bool {

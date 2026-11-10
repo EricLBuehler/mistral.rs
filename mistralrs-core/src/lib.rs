@@ -1225,6 +1225,7 @@ impl MistralRs {
                 .is_some_and(|(format, tokenizer)| format.supports_tokenizer(&tokenizer));
         let encoder_cache_counters = pipeline_guard.encoder_cache_counters();
         let adapter_runtime = pipeline_guard.adapter_runtime();
+        pipeline_guard.log_runtime_plan();
         drop(pipeline_guard);
 
         // Warm cuTile before the engine starts capturing and serving CUDA work.

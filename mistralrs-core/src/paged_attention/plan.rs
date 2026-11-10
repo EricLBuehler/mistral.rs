@@ -4,8 +4,6 @@ use super::{
     attention_backend::AttentionBackendKind, config::PrefixPrefillAttentionFeatures,
     ModelConfigLike,
 };
-#[cfg(cuda_flash_attn)]
-use crate::attention::flash_backend_supports_sdpa;
 #[cfg(cuda_unix)]
 use crate::flashinfer::{self, FlashInferDecodePlan, FlashInferDecodePlanInput};
 
@@ -84,26 +82,64 @@ impl PrefixPrefillPlan {
         }
 
         #[cfg(cuda_flash_attn)]
-        if input.device_is_cuda
-            && crate::attention::flash_dtype_supported(input.dtype)
-            && input.cache_dtype == input.dtype
-            && !input.has_alibi
-            && !input.has_sinks
-            && !input.has_custom_mask
-            && input.causality_known
-            && input.query_layout_is_dense
-            && paged_flash_attention_supports(
-                input.head_size,
-                input.block_size,
-                input.has_softcap,
-                input.has_sliding_window,
-            )
-            && matches!(input.attention_backend, AttentionBackendKind::FlashInfer)
-        {
+        if Self::flash_paged_blocker(input).is_none() {
             return Self::FlashAttentionPaged;
         }
 
         Self::GatherSdpa
+    }
+
+    /// Why the paged flash kernel cannot take this prefill, if anything stops it.
+    pub(crate) fn flash_paged_blocker(input: PrefixPrefillPlanInput) -> Option<&'static str> {
+        if !cfg!(cuda_flash_attn) {
+            return Some("built without flash-attn");
+        }
+        if !input.device_is_cuda {
+            return Some("not on CUDA");
+        }
+        if !crate::attention::flash_dtype_supported(input.dtype) {
+            return Some("activations are not F16/BF16");
+        }
+        if input.cache_dtype != input.dtype {
+            return Some("KV cache dtype differs from the activations");
+        }
+        if input.has_alibi {
+            return Some("ALiBi bias");
+        }
+        if input.has_sinks {
+            return Some("attention sinks");
+        }
+        if input.has_custom_mask {
+            return Some("explicit attention mask");
+        }
+        if !input.causality_known {
+            return Some("causality is not known ahead of the forward");
+        }
+        if !input.query_layout_is_dense {
+            return Some("sparse query layout");
+        }
+        if !paged_flash_attention_supports(
+            input.head_size,
+            input.block_size,
+            input.has_softcap,
+            input.has_sliding_window,
+        ) {
+            return Some("head dim, softcap, sliding window or block size outside flash-attn");
+        }
+        if !matches!(input.attention_backend, AttentionBackendKind::FlashInfer) {
+            return Some("KV cache is not in the FlashInfer layout");
+        }
+        None
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            #[cfg(cuda_unix)]
+            Self::Fa3Fp8Paged => "FA3 FP8 paged",
+            #[cfg(cuda_flash_attn)]
+            Self::FlashAttentionPaged => "flash-attn paged",
+            Self::GatherSdpa => "gather + SDPA",
+        }
     }
 }
 
@@ -1419,14 +1455,13 @@ fn fa3_group_size_is_supported(q_heads: usize, kv_heads: usize) -> bool {
         && matches!(q_heads / kv_heads, 1 | 2 | 3 | 4 | 6 | 8 | 16)
 }
 
-#[cfg(cuda_flash_attn)]
 fn paged_flash_attention_supports(
     head_size: usize,
     block_size: usize,
     has_softcap: bool,
     has_sliding_window: bool,
 ) -> bool {
-    flash_backend_supports_sdpa(head_size, has_softcap, has_sliding_window)
+    crate::attention::flash_backend_supports_sdpa(head_size, has_softcap, has_sliding_window)
         && block_size.is_multiple_of(32)
 }
 

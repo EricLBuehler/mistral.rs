@@ -28,6 +28,7 @@ mod macros;
 mod multimodal;
 mod normal;
 mod paths;
+mod plan_log;
 mod processing;
 pub(crate) mod prompt_chunks;
 mod response;
@@ -1898,6 +1899,9 @@ pub trait Pipeline:
     fn supports_batched_cuda_sampling(&self) -> bool {
         false
     }
+
+    /// Logs the attention, sampling and speculation paths this pipeline resolved to.
+    fn log_runtime_plan(&self) {}
 
     fn supports_packed_prefill(&self) -> bool {
         false
