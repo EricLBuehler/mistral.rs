@@ -1608,6 +1608,12 @@ impl CausalModel for dyn MultimodalModel + Send + Sync {
     #[cfg(feature = "cuda")]
     const SPECULATIVE_CUDA_GRAPHS: bool = true;
 
+    fn as_speculative_target(&self) -> &dyn crate::speculative::SpeculativeTargetMixin {
+        self
+    }
+    fn as_speculative_target_mut(&mut self) -> &mut dyn crate::speculative::SpeculativeTargetMixin {
+        self
+    }
     fn device(&self) -> &Device {
         MultimodalModel::device(self)
     }

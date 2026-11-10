@@ -1570,6 +1570,12 @@ impl CausalModel for dyn NormalModel + Send + Sync {
     #[cfg(feature = "cuda")]
     const SPECULATIVE_CUDA_GRAPHS: bool = false;
 
+    fn as_speculative_target(&self) -> &dyn crate::speculative::SpeculativeTargetMixin {
+        self
+    }
+    fn as_speculative_target_mut(&mut self) -> &mut dyn crate::speculative::SpeculativeTargetMixin {
+        self
+    }
     fn device(&self) -> &Device {
         NormalModel::device(self)
     }

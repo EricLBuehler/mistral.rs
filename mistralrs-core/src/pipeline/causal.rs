@@ -70,6 +70,8 @@ pub(crate) trait CausalModel:
     #[cfg(feature = "cuda")]
     const SPECULATIVE_CUDA_GRAPHS: bool;
 
+    fn as_speculative_target(&self) -> &dyn SpeculativeTargetMixin;
+    fn as_speculative_target_mut(&mut self) -> &mut dyn SpeculativeTargetMixin;
     fn device(&self) -> &Device;
     fn cache(&self) -> &EitherCache;
     fn config(&self) -> &ModelConfigMetadata;
@@ -525,62 +527,18 @@ impl<M: CausalModel + ?Sized> MetadataMixin for CausalPipeline<M> {
 impl<M: CausalModel + ?Sized> crate::speculative::driver::SpeculativePipelineExt
     for CausalPipeline<M>
 {
-    fn has_speculative_proposer(&self) -> bool {
-        self.model.has_speculative_proposer()
+    fn speculative_model(&self) -> &dyn SpeculativeTargetMixin {
+        self.model.as_speculative_target()
     }
 
-    fn speculative_plan(
-        &self,
-        batch_size: usize,
-    ) -> Option<crate::speculative::SpeculativeBatchPlan> {
-        self.model.speculative_plan(batch_size)
-    }
-
-    fn speculative_depth_candidates(&self) -> Vec<usize> {
-        self.model.speculative_depth_candidates()
+    fn speculative_model_mut(&mut self) -> &mut dyn SpeculativeTargetMixin {
+        self.model.as_speculative_target_mut()
     }
 
     fn speculative_autotuner(
         &self,
     ) -> &StdMutex<crate::speculative::autotuner::SpeculativeAutotuner> {
         &self.speculative_autotuner
-    }
-
-    fn speculative_observe(&self, observation: crate::speculative::SpeculativeBatchObservation) {
-        self.model.speculative_observe(observation);
-    }
-
-    fn speculative_bypass(&mut self, seq_ids: &[usize]) -> candle_core::Result<()> {
-        self.model.speculative_bypass(seq_ids)
-    }
-
-    fn speculative_target_hiddens(
-        &self,
-        rows: &[(usize, usize)],
-    ) -> candle_core::Result<Option<Tensor>> {
-        self.model.speculative_target_hiddens(rows)
-    }
-
-    fn speculative_propose(
-        &mut self,
-        ctx: crate::speculative::SpeculativeProposeBatchCtx<'_>,
-    ) -> candle_core::Result<Option<crate::speculative::SpeculativeProposalBatch>> {
-        self.model.speculative_propose(ctx)
-    }
-
-    fn speculative_prepare_propose(
-        &mut self,
-        ctx: crate::speculative::SpeculativeProposePrepareCtx<'_>,
-    ) -> candle_core::Result<Option<Box<dyn crate::speculative::SpeculativeProposePreparation>>>
-    {
-        self.model.speculative_prepare_propose(ctx)
-    }
-
-    fn speculative_commit(
-        &mut self,
-        rows: &[crate::speculative::SpeculativeCommitRow],
-    ) -> candle_core::Result<()> {
-        self.model.speculative_commit(rows)
     }
 
     fn build_speculative_verify_inputs(

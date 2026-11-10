@@ -15,10 +15,11 @@ use crate::IntervalLogger;
 
 use super::autotuner::{DraftOutcome, SpeculativeAutotuner};
 use super::cache::{SpeculativeCacheAccess, SpeculativeCacheGuard, SpeculativeCacheOutcome};
+#[cfg(feature = "cuda")]
+use super::proposer::SpeculativeProposePrepareCtx;
 use super::proposer::{
-    SpeculativeCommitRow, SpeculativeProposalBatch, SpeculativeProposalDistribution,
-    SpeculativeProposeBatchCtx, SpeculativeProposePreparation, SpeculativeProposePrepareCtx,
-    SpeculativeTokens,
+    SpeculativeCommitRow, SpeculativeProposalDistribution, SpeculativeProposeBatchCtx,
+    SpeculativeProposePreparation, SpeculativeTokens,
 };
 use super::staging::{staged_batch_state, StagedBatchState};
 #[cfg(feature = "cuda")]
@@ -30,7 +31,7 @@ use super::verifier::{
 use super::verifier::{
     finish_verified_step, DeviceVerification, VerificationInput, VerificationOutcome,
 };
-use super::{SpeculativeBatchObservation, SpeculativeBatchPlan};
+use super::{SpeculativeBatchObservation, SpeculativeBatchPlan, SpeculativeTargetMixin};
 
 struct PreparedVerification {
     base_len: usize,
@@ -97,31 +98,11 @@ fn commit_then_publish_verified_batch<T>(
 }
 
 pub trait SpeculativePipelineExt: Pipeline {
-    fn has_speculative_proposer(&self) -> bool;
+    fn speculative_model(&self) -> &dyn SpeculativeTargetMixin;
 
-    fn speculative_plan(&self, batch_size: usize) -> Option<SpeculativeBatchPlan>;
-
-    fn speculative_depth_candidates(&self) -> Vec<usize>;
+    fn speculative_model_mut(&mut self) -> &mut dyn SpeculativeTargetMixin;
 
     fn speculative_autotuner(&self) -> &std::sync::Mutex<SpeculativeAutotuner>;
-
-    fn speculative_observe(&self, observation: SpeculativeBatchObservation);
-
-    fn speculative_bypass(&mut self, seq_ids: &[usize]) -> Result<()>;
-
-    fn speculative_target_hiddens(&self, rows: &[(usize, usize)]) -> Result<Option<Tensor>>;
-
-    fn speculative_propose(
-        &mut self,
-        ctx: SpeculativeProposeBatchCtx<'_>,
-    ) -> Result<Option<SpeculativeProposalBatch>>;
-
-    fn speculative_prepare_propose(
-        &mut self,
-        ctx: SpeculativeProposePrepareCtx<'_>,
-    ) -> Result<Option<Box<dyn SpeculativeProposePreparation>>>;
-
-    fn speculative_commit(&mut self, rows: &[SpeculativeCommitRow]) -> Result<()>;
 
     fn build_speculative_verify_inputs(&self, input_meta: InputMetadata) -> Result<Box<dyn Any>>;
 
@@ -140,8 +121,8 @@ fn plan_speculative_step<P>(
 where
     P: SpeculativePipelineExt,
 {
-    let mut plan = target.speculative_plan(seq_ids.len())?;
-    let candidates = target.speculative_depth_candidates();
+    let mut plan = target.speculative_model().speculative_plan(seq_ids.len())?;
+    let candidates = target.speculative_model().speculative_depth_candidates();
     let mut tuner = target
         .speculative_autotuner()
         .lock()
@@ -187,7 +168,10 @@ where
     #[cfg(not(feature = "cuda"))]
     let _ = batched_logits;
 
-    if !target.has_speculative_proposer() || seqs.is_empty() || logits.len() != seqs.len() {
+    if !target.speculative_model().has_speculative_proposer()
+        || seqs.is_empty()
+        || logits.len() != seqs.len()
+    {
         clear_staged_speculative_tokens(seqs);
         return Ok(false);
     }
@@ -477,11 +461,13 @@ where
                     .iter()
                     .map(|idx| (*idx, staged_len + 1))
                     .collect::<Vec<_>>();
-                target.speculative_prepare_propose(SpeculativeProposePrepareCtx {
-                    seq_ids: &seq_ids,
-                    base_lens: &base_lens,
-                    target_rows: &target_rows,
-                })
+                target.speculative_model_mut().speculative_prepare_propose(
+                    SpeculativeProposePrepareCtx {
+                        seq_ids: &seq_ids,
+                        base_lens: &base_lens,
+                        target_rows: &target_rows,
+                    },
+                )
             } else {
                 Ok(None)
             };
@@ -577,7 +563,11 @@ where
         .collect::<Vec<_>>();
     commit_then_publish_verified_batch(
         target,
-        |target| target.speculative_commit(&commit_rows),
+        |target| {
+            target
+                .speculative_model_mut()
+                .speculative_commit(&commit_rows)
+        },
         |target| {
             for (seq, outcome) in seqs.iter_mut().zip(outcomes.iter()) {
                 if let Some(outcome) = outcome {
@@ -649,13 +639,15 @@ where
         }
     }
     if num_drafts > 0 {
-        target.speculative_observe(SpeculativeBatchObservation {
-            batch_size: seqs.len(),
-            proposal_len: staged_len,
-            accepted_drafts: num_accepted_tokens,
-            sequences: num_drafts,
-            proposed_drafts: num_draft_tokens,
-        });
+        target
+            .speculative_model()
+            .speculative_observe(SpeculativeBatchObservation {
+                batch_size: seqs.len(),
+                proposal_len: staged_len,
+                accepted_drafts: num_accepted_tokens,
+                sequences: num_drafts,
+                proposed_drafts: num_draft_tokens,
+            });
     }
     for (idx, outcome) in outcomes.iter().enumerate() {
         let Some(outcome) = outcome else {
@@ -724,13 +716,17 @@ where
         .collect::<Vec<_>>();
     let depth_hint = seqs[active_indices[0]].speculative_depth_hint();
     let Some(plan) = plan.or_else(|| plan_speculative_step(target, &seq_ids, depth_hint)) else {
-        target.speculative_bypass(&seq_ids)?;
+        target
+            .speculative_model_mut()
+            .speculative_bypass(&seq_ids)?;
         clear_active_staged(seqs, active_indices);
         return Ok(());
     };
     let proposal_len = plan.proposal_len;
     if proposal_len == 0 {
-        target.speculative_bypass(&seq_ids)?;
+        target
+            .speculative_model_mut()
+            .speculative_bypass(&seq_ids)?;
         clear_active_staged(seqs, active_indices);
         return Ok(());
     }
@@ -743,16 +739,23 @@ where
         cache.can_stage_proposal(&sequences, base_lens, proposal_len)
     };
     if !can_stage {
-        target.speculative_bypass(&seq_ids)?;
+        target
+            .speculative_model_mut()
+            .speculative_bypass(&seq_ids)?;
         clear_active_staged(seqs, active_indices);
         return Ok(());
     }
 
     let target_hiddens = if plan.needs_target_hiddens {
-        match target.speculative_target_hiddens(hidden_rows)? {
+        match target
+            .speculative_model()
+            .speculative_target_hiddens(hidden_rows)?
+        {
             Some(hidden) => Some(hidden),
             None => {
-                target.speculative_bypass(&seq_ids)?;
+                target
+                    .speculative_model_mut()
+                    .speculative_bypass(&seq_ids)?;
                 clear_active_staged(seqs, active_indices);
                 return Ok(());
             }
@@ -776,19 +779,21 @@ where
             .lock()
             .expect("speculative autotuner poisoned")
             .begin_step(&seq_ids, proposal_len, started);
-        target.speculative_propose(SpeculativeProposeBatchCtx {
-            proposal_len,
-            sampled_tokens,
-            sampled_tokens_emitted: true,
-            seq_ids: &seq_ids,
-            base_lens,
-            sequences: &sequences,
-            cache: cache.proposer_cache(&sequences)?,
-            target_hiddens,
-            target_rows: &target_rows,
-            preparation,
-            rng: rng.clone(),
-        })?
+        target
+            .speculative_model_mut()
+            .speculative_propose(SpeculativeProposeBatchCtx {
+                proposal_len,
+                sampled_tokens,
+                sampled_tokens_emitted: true,
+                seq_ids: &seq_ids,
+                base_lens,
+                sequences: &sequences,
+                cache: cache.proposer_cache(&sequences)?,
+                target_hiddens,
+                target_rows: &target_rows,
+                preparation,
+                rng: rng.clone(),
+            })?
     };
 
     let Some(proposal_batch) = proposal_batch else {
@@ -797,7 +802,9 @@ where
             .lock()
             .expect("speculative autotuner poisoned")
             .cancel_step();
-        target.speculative_bypass(&seq_ids)?;
+        target
+            .speculative_model_mut()
+            .speculative_bypass(&seq_ids)?;
         clear_active_staged(seqs, active_indices);
         return Ok(());
     };
@@ -824,7 +831,9 @@ where
             .lock()
             .expect("speculative autotuner poisoned")
             .cancel_step();
-        target.speculative_bypass(&bypassed)?;
+        target
+            .speculative_model_mut()
+            .speculative_bypass(&bypassed)?;
     }
 
     Ok(())
@@ -835,7 +844,7 @@ where
     P: SpeculativePipelineExt,
 {
     let seq_ids = seqs.iter().map(|seq| *seq.id()).collect::<Vec<_>>();
-    target.speculative_bypass(&seq_ids)
+    target.speculative_model_mut().speculative_bypass(&seq_ids)
 }
 
 fn clear_active_staged(seqs: &mut [&mut Sequence], active_indices: &[usize]) {
