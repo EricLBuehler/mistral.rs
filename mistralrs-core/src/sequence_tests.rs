@@ -258,12 +258,12 @@ fn seeded_sequence_owns_its_sampling_stream() {
 #[test]
 fn prompt_rate_uses_accumulated_chunk_time() {
     let mut seq = make_test_sequence();
-    seq.cache.push(None);
+    seq.caches.cache.push(None);
     seq.finish_prompt_timing(Duration::from_secs(1));
     seq.finish_prompt_timing(Duration::from_secs(1));
 
-    assert_eq!(seq.total_prompt_time, Some(2_000));
-    assert_eq!(seq.prompt_tok_per_sec, 4.0);
+    assert_eq!(seq.timing.total_prompt_time, Some(2_000));
+    assert_eq!(seq.timing.prompt_tok_per_sec, 4.0);
 }
 
 fn add_test_media(seq: &mut Sequence) {
@@ -348,7 +348,7 @@ fn reasoning_parser_only_observes_visible_stop_filtered_bytes() {
 #[test]
 fn reasoning_usage_distinguishes_untracked_formats_from_zero_tokens() {
     let mut seq = make_test_sequence();
-    seq.cache.push(None);
+    seq.caches.cache.push(None);
     seq.tool_call_state = Some(
         ToolCallState::new(
             crate::tools::ToolChoice::Auto,
@@ -371,7 +371,7 @@ fn reasoning_usage_distinguishes_untracked_formats_from_zero_tokens() {
 
     let mut seq = make_test_sequence();
     seq.enable_reasoning(TagReasoningContext::new_think_tags());
-    seq.cache.push(None);
+    seq.caches.cache.push(None);
     seq.update_time_info();
     assert_eq!(
         get_mut_group!(seq)
@@ -618,7 +618,7 @@ fn required_tool_call_deadline_clamps() {
 
 fn completion_whitespace_sequence(streaming: bool, logprobs: bool) -> Sequence {
     let mut seq = make_test_sequence();
-    seq.cache.push(None);
+    seq.caches.cache.push(None);
     seq.get_mut_group().is_chat = false;
     seq.get_mut_group().is_streaming = streaming;
     seq.return_logprobs = logprobs;
@@ -777,34 +777,34 @@ fn completion_whitespace_chat_keeps_existing_initial_trim() {
 #[test]
 fn final_delta_flushes_incomplete_utf8() {
     let mut seq = make_test_sequence();
-    seq.completion_bytes = vec![b'a', 0xe2, 0x82];
+    seq.stream.completion_bytes = vec![b'a', 0xe2, 0x82];
 
     assert_eq!(seq.get_delta().unwrap(), Some("a".to_string()));
-    assert_eq!(seq.stream_idx, 1);
+    assert_eq!(seq.stream.stream_idx, 1);
     assert_eq!(seq.get_final_delta(), "\u{fffd}");
-    assert_eq!(seq.stream_idx, seq.completion_bytes.len());
+    assert_eq!(seq.stream.stream_idx, seq.stream.completion_bytes.len());
 }
 
 #[test]
 fn replacement_character_is_not_buffered() {
     let mut seq = make_test_sequence();
-    seq.completion_bytes = "\u{fffd}".as_bytes().to_vec();
+    seq.stream.completion_bytes = "\u{fffd}".as_bytes().to_vec();
 
     assert_eq!(seq.get_delta().unwrap(), Some("\u{fffd}".to_string()));
-    assert_eq!(seq.stream_idx, seq.completion_bytes.len());
+    assert_eq!(seq.stream.stream_idx, seq.stream.completion_bytes.len());
 }
 
 #[test]
 fn invalid_bytes_do_not_consume_a_trailing_incomplete_character() {
     let mut seq = make_test_sequence();
-    seq.completion_bytes = vec![0xff, 0xe2];
+    seq.stream.completion_bytes = vec![0xff, 0xe2];
 
     assert_eq!(seq.get_delta().unwrap(), Some("\u{fffd}".to_string()));
-    assert_eq!(seq.stream_idx, 1);
+    assert_eq!(seq.stream.stream_idx, 1);
 
-    seq.completion_bytes.extend([0x82, 0xac]);
+    seq.stream.completion_bytes.extend([0x82, 0xac]);
     assert_eq!(seq.get_delta().unwrap(), Some("\u{20ac}".to_string()));
-    assert_eq!(seq.stream_idx, seq.completion_bytes.len());
+    assert_eq!(seq.stream.stream_idx, seq.stream.completion_bytes.len());
 }
 
 #[test]
@@ -814,7 +814,7 @@ fn prefix_cache_hit_is_recorded_once_for_generation_sequences() {
     assert!(!seq.record_prefix_cache_hit());
 
     seq.sequence_stepping_type = SeqStepType::OneShot;
-    seq.prefix_cache_hit_recorded = false;
+    seq.prefill.prefix_cache_hit_recorded = false;
     assert!(!seq.record_prefix_cache_hit());
 }
 

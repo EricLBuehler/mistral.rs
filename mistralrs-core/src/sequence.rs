@@ -750,6 +750,58 @@ pub fn build_mm_features_from_ranges_with_policy(
     layout.into_features()
 }
 
+/// Tokens a speculative proposer staged for the next verify step.
+pub(crate) struct SpeculativeStage {
+    staged_speculative_tokens: SpeculativeTokens,
+    staged_speculative_distribution: Option<SpeculativeProposalDistribution>,
+    speculative_depth_hint: Option<usize>,
+}
+
+/// How much of the prompt is already represented in cache state.
+pub(crate) struct PrefillProgress {
+    prefill_prompt_toks: Option<PrefillTokens>,
+    /// Number of tokens at the start of the prompt that are cached (KV already computed).
+    /// These tokens should be skipped during prefill.
+    prefix_cache_len: usize,
+    prefix_cache_hit_recorded: bool,
+    block_hash_revision: u64,
+    /// Number of logical tokens represented in model/cache state.
+    num_computed_tokens: usize,
+}
+
+/// Per-sequence KV state for the non-paged cache backends.
+pub(crate) struct SequenceCaches {
+    normal_cache: Vec<Option<KvCache>>,
+    normal_draft_cache: Vec<Option<KvCache>>,
+    scaling_cache: Option<Tensor>,
+    cache: LayerCaches,
+    draft_cache: LayerCaches,
+    xlora_cache: Option<LayerCaches>,
+    /// For hybrid models: index into the recurrent state pool
+    recurrent_state_idx: Option<usize>,
+    seq_preallocated_cache: Option<SeqPreallocatedCache>,
+}
+
+/// Completion bytes and the emissions held back while a stop string may still match.
+pub(crate) struct StreamState {
+    last_completion_bytes_len: usize,
+    completion_bytes: Vec<u8>,
+    stop_pending_bytes: Vec<u8>,
+    stop_pending_emissions: VecDeque<PendingStreamingEmission>,
+    ready_streaming_emissions: VecDeque<PendingStreamingEmission>,
+    stream_idx: usize,
+}
+
+/// Prompt and completion timing accumulated across steps.
+pub(crate) struct StepTiming {
+    prompt_tok_per_sec: f32,
+    prompt_timestamp: Option<u128>,
+    total_prompt_time: Option<u128>,
+    total_completion_time: Option<u128>,
+    step_start_instant: Option<Instant>,
+    step_timing_kind: Option<StepTimingKind>,
+}
+
 pub struct Sequence {
     pub(crate) decision: Option<Arc<crate::decision::DecisionRequest>>,
     audio_output: Option<crate::ChatAudioRequest>,
@@ -782,60 +834,23 @@ pub struct Sequence {
     // Completion requests
     suffix: Option<String>,
     prefix: Option<String>,
-
-    // Speculative
-    staged_speculative_tokens: SpeculativeTokens,
-    staged_speculative_distribution: Option<SpeculativeProposalDistribution>,
-    speculative_depth_hint: Option<usize>,
-
-    // Prefix caching
-    prefill_prompt_toks: Option<PrefillTokens>,
-    /// Number of tokens at the start of the prompt that are cached (KV already computed).
-    /// These tokens should be skipped during prefill.
-    prefix_cache_len: usize,
-    prefix_cache_hit_recorded: bool,
-    block_hash_revision: u64,
-    /// Number of logical tokens represented in model/cache state.
-    num_computed_tokens: usize,
+    speculative: SpeculativeStage,
+    prefill: PrefillProgress,
     /// Denoising-loop time inside the latest block-generation step; booked as completion
     /// time even when the step was a prompt step (the encoder prefill is the prompt part).
     pending_denoise_time_ms: u128,
-
-    // Cache
-    normal_cache: Vec<Option<KvCache>>,
-    normal_draft_cache: Vec<Option<KvCache>>,
-    scaling_cache: Option<Tensor>,
-    cache: LayerCaches,
-    draft_cache: LayerCaches,
-    xlora_cache: Option<LayerCaches>,
-    /// For hybrid models: index into the recurrent state pool
-    recurrent_state_idx: Option<usize>,
-
-    // Preallocated KV cache templates, keyed by layer.
-    seq_preallocated_cache: Option<SeqPreallocatedCache>,
+    caches: SequenceCaches,
 
     // Mutables
     tokens: Vec<u32>,
     logprobs: Vec<Logprobs>,
     cumulative_logprob: f32,
     last_logprob: f32,
-    last_completion_bytes_len: usize,
+    stream: StreamState,
     last_is_done: Option<StopReason>,
-    completion_bytes: Vec<u8>,
-    stop_pending_bytes: Vec<u8>,
-    stop_pending_emissions: VecDeque<PendingStreamingEmission>,
-    ready_streaming_emissions: VecDeque<PendingStreamingEmission>,
-    stream_idx: usize,
     pub recognizer: SequenceRecognizer,
     scheduling_urgency: usize, // The number of passes since scheduling
-
-    // GPU things
-    pub prompt_tok_per_sec: f32,
-    pub prompt_timestamp: Option<u128>,
-    pub total_prompt_time: Option<u128>,
-    pub total_completion_time: Option<u128>,
-    pub step_start_instant: Option<Instant>,
-    step_timing_kind: Option<StepTimingKind>,
+    timing: StepTiming,
     group: Arc<Mutex<SequenceGroup>>,
     state: RwLock<SequenceState>,
 
@@ -942,17 +957,6 @@ impl Sequence {
             id,
             timestamp,
             state: RwLock::new(SequenceState::Waiting),
-            normal_cache: vec![None; layers],
-            normal_draft_cache: vec![None; layers],
-            cache: vec![None; layers],
-            draft_cache: vec![None; layers],
-            xlora_cache: if is_xlora {
-                Some(vec![None; layers])
-            } else {
-                None
-            },
-            recurrent_state_idx: None,
-            seq_preallocated_cache,
             responder,
             sampler: sampler.into(),
             sampling_rng: sampling_seed
@@ -963,35 +967,17 @@ impl Sequence {
             max_len,
             return_logprobs,
             stream_logprobs,
-            prompt_tok_per_sec: 0.,
-            prompt_timestamp: None,
             group,
-            scaling_cache: None,
             response_index,
             creation_time,
             recognizer,
-            prefill_prompt_toks: None,
-            prefix_cache_len: 0,
-            prefix_cache_hit_recorded: false,
-            block_hash_revision: 0,
-            num_computed_tokens: 0,
             pending_denoise_time_ms: 0,
             suffix,
             prefix,
             cumulative_logprob: 0.,
-            completion_bytes: Vec::new(),
-            stop_pending_bytes: Vec::new(),
-            stop_pending_emissions: VecDeque::new(),
-            ready_streaming_emissions: VecDeque::new(),
-            stream_idx: 0,
-            last_completion_bytes_len: 0,
             last_logprob: 0.0,
             last_is_done: None,
-            staged_speculative_tokens: SpeculativeTokens::default(),
-            staged_speculative_distribution: None,
-            speculative_depth_hint: None,
             scheduling_urgency: 0,
-            // Multimodal data
             multimodal: MultimodalData::new(
                 input_images,
                 input_audios,
@@ -1006,13 +992,51 @@ impl Sequence {
             token_offset: 0,
             eos_tokens,
             adapter: None,
-            total_prompt_time: None,
-            total_completion_time: None,
-            step_start_instant: None,
-            step_timing_kind: None,
             reasoning_parser: None,
             reasoning_budget: None,
             special_text_guard: None,
+            speculative: SpeculativeStage {
+                staged_speculative_tokens: SpeculativeTokens::default(),
+                staged_speculative_distribution: None,
+                speculative_depth_hint: None,
+            },
+            prefill: PrefillProgress {
+                prefill_prompt_toks: None,
+                prefix_cache_len: 0,
+                prefix_cache_hit_recorded: false,
+                block_hash_revision: 0,
+                num_computed_tokens: 0,
+            },
+            caches: SequenceCaches {
+                normal_cache: vec![None; layers],
+                normal_draft_cache: vec![None; layers],
+                cache: vec![None; layers],
+                draft_cache: vec![None; layers],
+                xlora_cache: if is_xlora {
+                    Some(vec![None; layers])
+                } else {
+                    None
+                },
+                recurrent_state_idx: None,
+                seq_preallocated_cache,
+                scaling_cache: None,
+            },
+            stream: StreamState {
+                completion_bytes: Vec::new(),
+                stop_pending_bytes: Vec::new(),
+                stop_pending_emissions: VecDeque::new(),
+                ready_streaming_emissions: VecDeque::new(),
+                stream_idx: 0,
+                last_completion_bytes_len: 0,
+            },
+            timing: StepTiming {
+                prompt_tok_per_sec: 0.,
+                prompt_timestamp: None,
+                total_prompt_time: None,
+                total_completion_time: None,
+                step_start_instant: None,
+                step_timing_kind: None,
+            },
         }
     }
 
@@ -1040,31 +1064,36 @@ impl Sequence {
         toks: Vec<u32>,
         offset: usize,
     ) -> Self {
-        self.normal_cache = cache;
-        self.prefill_prompt_toks = Some(PrefillTokens {
+        self.caches.normal_cache = cache;
+        self.prefill.prefill_prompt_toks = Some(PrefillTokens {
             tokens: toks,
             view: PrefillTokenView::SuffixOnly,
         });
         self.set_state(SequenceState::RunningPrefillPrompt);
         self.token_offset = offset;
-        self.prefix_cache_len = offset;
+        self.prefill.prefix_cache_len = offset;
         self
     }
 
     /// This is the number of tokens. If the KV cache is Some, then it will use that.
     pub fn len(&self) -> usize {
-        if let Some(prefill) = &self.prefill_prompt_toks {
+        if let Some(prefill) = &self.prefill.prefill_prompt_toks {
             return prefill.tokens.len();
         }
         // Use xlora cache first because of non granular
-        if self.xlora_cache.as_ref().is_some_and(|c| c[0].is_some()) {
-            self.xlora_cache.as_ref().unwrap()[0]
+        if self
+            .caches
+            .xlora_cache
+            .as_ref()
+            .is_some_and(|c| c[0].is_some())
+        {
+            self.caches.xlora_cache.as_ref().unwrap()[0]
                 .as_ref()
                 .unwrap()
                 .0
                 .dims()[2]
                 + 1
-        } else if let Some((_, x)) = &self.cache[0] {
+        } else if let Some((_, x)) = &self.caches.cache[0] {
             x.dims()[2] + 1
         } else {
             self.tokens.len()
@@ -1090,7 +1119,7 @@ impl Sequence {
     pub(crate) fn bind_adapter(&mut self, adapter: AdapterLease) {
         assert!(self.adapter.is_none(), "sequence adapter is already bound");
         self.adapter = Some(adapter);
-        self.block_hash_revision = self.block_hash_revision.wrapping_add(1);
+        self.prefill.block_hash_revision = self.prefill.block_hash_revision.wrapping_add(1);
     }
 
     pub(crate) fn adapter_lease(&self) -> Option<&AdapterLease> {
@@ -1137,7 +1166,7 @@ impl Sequence {
     }
 
     pub fn get_toks(&self) -> &[u32] {
-        if let Some(prefill) = &self.prefill_prompt_toks {
+        if let Some(prefill) = &self.prefill.prefill_prompt_toks {
             return &prefill.tokens;
         }
         &self.tokens
@@ -1168,11 +1197,12 @@ impl Sequence {
     }
 
     pub fn is_chunked_prefill_view(&self) -> bool {
-        self.prefill_prompt_toks.is_some() && !self.mm_features().is_empty()
+        self.prefill.prefill_prompt_toks.is_some() && !self.mm_features().is_empty()
     }
 
     fn prefill_token_view(&self) -> Option<PrefillTokenView> {
-        self.prefill_prompt_toks
+        self.prefill
+            .prefill_prompt_toks
             .as_ref()
             .map(|prefill| prefill.view)
     }
@@ -1267,19 +1297,19 @@ impl Sequence {
     }
 
     pub(crate) fn active_staged_speculative_tokens(&self) -> &SpeculativeTokens {
-        &self.staged_speculative_tokens
+        &self.speculative.staged_speculative_tokens
     }
 
     pub(crate) fn speculative_depth_hint(&self) -> Option<usize> {
-        self.speculative_depth_hint
+        self.speculative.speculative_depth_hint
     }
 
     pub(crate) fn set_speculative_depth_hint(&mut self, depth: Option<usize>) {
-        self.speculative_depth_hint = depth;
+        self.speculative.speculative_depth_hint = depth;
     }
 
     pub(crate) fn active_staged_speculative_len(&self) -> usize {
-        self.staged_speculative_tokens.len()
+        self.speculative.staged_speculative_tokens.len()
     }
 
     pub(crate) fn set_staged_speculative(
@@ -1287,31 +1317,31 @@ impl Sequence {
         tokens: impl Into<SpeculativeTokens>,
         distribution: Option<SpeculativeProposalDistribution>,
     ) {
-        self.staged_speculative_tokens = tokens.into();
-        self.staged_speculative_distribution = distribution;
+        self.speculative.staged_speculative_tokens = tokens.into();
+        self.speculative.staged_speculative_distribution = distribution;
     }
 
     pub(crate) fn take_staged_speculative_tokens(&mut self) -> SpeculativeTokens {
-        std::mem::take(&mut self.staged_speculative_tokens)
+        std::mem::take(&mut self.speculative.staged_speculative_tokens)
     }
 
     pub(crate) fn take_staged_speculative_distribution(
         &mut self,
     ) -> Option<SpeculativeProposalDistribution> {
-        self.staged_speculative_distribution.take()
+        self.speculative.staged_speculative_distribution.take()
     }
 
     #[cfg(feature = "cuda")]
     pub(crate) fn staged_speculative_distribution(
         &self,
     ) -> Option<&SpeculativeProposalDistribution> {
-        self.staged_speculative_distribution.as_ref()
+        self.speculative.staged_speculative_distribution.as_ref()
     }
 
     pub(crate) fn clear_staged_speculative_tokens(&mut self) {
-        self.staged_speculative_tokens = SpeculativeTokens::default();
-        self.staged_speculative_distribution = None;
-        self.speculative_depth_hint = None;
+        self.speculative.staged_speculative_tokens = SpeculativeTokens::default();
+        self.speculative.staged_speculative_distribution = None;
+        self.speculative.speculative_depth_hint = None;
     }
 
     pub fn get_initial_prompt(&self) -> &str {
@@ -1329,29 +1359,29 @@ impl Sequence {
     /// Get the number of prefix tokens that are cached (KV already computed).
     /// These tokens should be skipped during prefill.
     pub fn prefix_cache_len(&self) -> usize {
-        self.prefix_cache_len
+        self.prefill.prefix_cache_len
     }
 
     /// Set the number of prefix tokens that are cached.
     pub fn set_prefix_cache_len(&mut self, len: usize) {
-        self.prefix_cache_len = len;
+        self.prefill.prefix_cache_len = len;
     }
 
     pub(crate) fn record_prefix_cache_hit(&mut self) -> bool {
         if !matches!(self.sequence_stepping_type, SeqStepType::PromptAndDecode)
-            || self.prefix_cache_hit_recorded
+            || self.prefill.prefix_cache_hit_recorded
         {
             return false;
         }
-        self.prefix_cache_hit_recorded = true;
+        self.prefill.prefix_cache_hit_recorded = true;
         true
     }
 
     pub fn clip_prefix_cache_len_for_non_causal_mm_features(&mut self, block_size: usize) {
-        if block_size == 0 || self.prefix_cache_len == 0 {
+        if block_size == 0 || self.prefill.prefix_cache_len == 0 {
             return;
         }
-        let mut prefix_len = self.prefix_cache_len;
+        let mut prefix_len = self.prefill.prefix_cache_len;
         for feature in self.mm_features() {
             if feature.attention_policy == MultimodalAttentionPolicy::NonCausal
                 && feature.offset < prefix_len
@@ -1360,14 +1390,14 @@ impl Sequence {
                 prefix_len = prefix_len.min((feature.offset / block_size) * block_size);
             }
         }
-        self.prefix_cache_len = prefix_len;
+        self.prefill.prefix_cache_len = prefix_len;
     }
 
     pub fn clip_prefix_cache_len_for_mm_features(&mut self, block_size: usize) {
-        if block_size == 0 || self.prefix_cache_len == 0 {
+        if block_size == 0 || self.prefill.prefix_cache_len == 0 {
             return;
         }
-        let mut prefix_len = self.prefix_cache_len;
+        let mut prefix_len = self.prefill.prefix_cache_len;
         loop {
             let next = self
                 .mm_features()
@@ -1386,7 +1416,7 @@ impl Sequence {
             }
             prefix_len = next;
         }
-        self.prefix_cache_len = prefix_len;
+        self.prefill.prefix_cache_len = prefix_len;
     }
 
     /// Override the maximum generation length.
@@ -1407,11 +1437,11 @@ impl Sequence {
         self.tokens.clone_from(&toks);
         self.prompt_len = self.tokens.len();
         self.clear_staged_speculative_tokens();
-        self.num_computed_tokens = 0;
+        self.prefill.num_computed_tokens = 0;
         self.bump_block_hash_revision();
 
         if let Some(metadata) = paged_attn_metadata {
-            self.prefix_cache_len = 0;
+            self.prefill.prefix_cache_len = 0;
             // Free and then reallocate with the new token count
             let seq_id = *self.id();
             let num_tokens = self.tokens.len();
@@ -1426,11 +1456,11 @@ impl Sequence {
     }
 
     pub fn completion_bytes(&self) -> &[u8] {
-        &self.completion_bytes
+        &self.stream.completion_bytes
     }
 
     pub(crate) fn completion_text(&self) -> String {
-        let text = String::from_utf8_lossy(&self.completion_bytes);
+        let text = String::from_utf8_lossy(&self.stream.completion_bytes);
         if get_mut_group!(self).is_chat {
             text.trim_start().to_string()
         } else {
@@ -1439,59 +1469,59 @@ impl Sequence {
     }
 
     pub fn preallocated_cache(&self) -> Option<&SeqPreallocatedCache> {
-        self.seq_preallocated_cache.as_ref()
+        self.caches.seq_preallocated_cache.as_ref()
     }
 
     pub fn normal_cache(&mut self) -> &mut Vec<Option<KvCache>> {
-        &mut self.normal_cache
+        &mut self.caches.normal_cache
     }
 
     pub fn normal_cache_ref(&self) -> &[Option<KvCache>] {
-        &self.normal_cache
+        &self.caches.normal_cache
     }
 
     pub fn normal_draft_cache(&mut self) -> &mut Vec<Option<KvCache>> {
-        &mut self.normal_draft_cache
+        &mut self.caches.normal_draft_cache
     }
 
     pub fn cache(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {
-        &mut self.cache
+        &mut self.caches.cache
     }
 
     pub fn draft_cache(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {
-        &mut self.draft_cache
+        &mut self.caches.draft_cache
     }
 
     pub fn xlora_cache(&mut self) -> &mut Vec<Option<(Tensor, Tensor)>> {
-        self.xlora_cache.as_mut().expect("No X-LoRA cache.")
+        self.caches.xlora_cache.as_mut().expect("No X-LoRA cache.")
     }
 
     pub fn scaling_cache(&mut self) -> &mut Option<Tensor> {
-        &mut self.scaling_cache
+        &mut self.caches.scaling_cache
     }
 
     pub fn recurrent_state_idx(&self) -> Option<usize> {
-        self.recurrent_state_idx
+        self.caches.recurrent_state_idx
     }
 
     pub fn set_recurrent_state_idx(&mut self, idx: Option<usize>) {
-        self.recurrent_state_idx = idx;
+        self.caches.recurrent_state_idx = idx;
     }
 
     pub fn block_hash_revision(&self) -> u64 {
-        self.block_hash_revision
+        self.prefill.block_hash_revision
     }
 
     pub fn num_computed_tokens(&self) -> usize {
-        self.num_computed_tokens.min(self.len())
+        self.prefill.num_computed_tokens.min(self.len())
     }
 
     pub fn set_num_computed_tokens(&mut self, len: usize) {
-        self.num_computed_tokens = len.min(self.len());
+        self.prefill.num_computed_tokens = len.min(self.len());
     }
 
     pub fn advance_num_computed_tokens(&mut self, amount: usize) {
-        self.set_num_computed_tokens(self.num_computed_tokens.saturating_add(amount));
+        self.set_num_computed_tokens(self.prefill.num_computed_tokens.saturating_add(amount));
     }
 
     pub fn num_uncomputed_tokens(&self) -> usize {
@@ -1505,11 +1535,11 @@ impl Sequence {
     }
 
     fn bump_block_hash_revision(&mut self) {
-        self.block_hash_revision = self.block_hash_revision.wrapping_add(1);
+        self.prefill.block_hash_revision = self.prefill.block_hash_revision.wrapping_add(1);
     }
 
     pub fn is_xlora(&self) -> bool {
-        self.xlora_cache.is_some()
+        self.caches.xlora_cache.is_some()
     }
 
     pub fn sampler(&self) -> Arc<Sampler> {
@@ -1525,10 +1555,10 @@ impl Sequence {
 
     /// Add a some prefill tokens. Only meant for internal speculative decoding usage.
     pub fn set_prefill_toks(&mut self, toks: Vec<u32>) {
-        if let Some(prefill) = self.prefill_prompt_toks.as_mut() {
+        if let Some(prefill) = self.prefill.prefill_prompt_toks.as_mut() {
             prefill.tokens = toks;
         } else {
-            self.prefill_prompt_toks = Some(PrefillTokens {
+            self.prefill.prefill_prompt_toks = Some(PrefillTokens {
                 tokens: toks,
                 view: PrefillTokenView::PrefixInclusive,
             });
@@ -1536,21 +1566,22 @@ impl Sequence {
     }
 
     pub fn has_prefill_toks(&self) -> bool {
-        self.prefill_prompt_toks.is_some()
+        self.prefill.prefill_prompt_toks.is_some()
     }
 
     /// Remove the prefill tokens.
     pub fn reset_prefill_toks(&mut self) {
-        self.prefill_prompt_toks = None
+        self.prefill.prefill_prompt_toks = None
     }
 
     fn push_stop_pending_emission(&mut self, bytes: Vec<u8>, logprobs: &Logprobs) {
         if bytes.is_empty() {
             return;
         }
-        self.stop_pending_bytes.extend_from_slice(&bytes);
+        self.stream.stop_pending_bytes.extend_from_slice(&bytes);
         if self.stream_logprobs {
-            self.stop_pending_emissions
+            self.stream
+                .stop_pending_emissions
                 .push_back(PendingStreamingEmission {
                     bytes,
                     logprobs: logprobs.clone(),
@@ -1559,15 +1590,16 @@ impl Sequence {
     }
 
     fn commit_stop_pending_prefix(&mut self, len: usize) {
-        debug_assert!(len <= self.stop_pending_bytes.len());
+        debug_assert!(len <= self.stream.stop_pending_bytes.len());
         if len > 0 {
             if let Some(parser) = self.reasoning_parser.as_mut() {
-                parser.process_bytes(&self.stop_pending_bytes[..len]);
+                parser.process_bytes(&self.stream.stop_pending_bytes[..len]);
             }
         }
-        self.completion_bytes
-            .extend_from_slice(&self.stop_pending_bytes[..len]);
-        self.stop_pending_bytes.drain(..len);
+        self.stream
+            .completion_bytes
+            .extend_from_slice(&self.stream.stop_pending_bytes[..len]);
+        self.stream.stop_pending_bytes.drain(..len);
 
         if !self.stream_logprobs {
             return;
@@ -1576,17 +1608,19 @@ impl Sequence {
         let mut remaining = len;
         while remaining > 0 {
             let mut emission = self
+                .stream
                 .stop_pending_emissions
                 .pop_front()
                 .expect("pending stop bytes must have matching logprobs");
             if emission.bytes.len() <= remaining {
                 remaining -= emission.bytes.len();
-                self.ready_streaming_emissions.push_back(emission);
+                self.stream.ready_streaming_emissions.push_back(emission);
             } else {
                 let suffix = emission.bytes.split_off(remaining);
                 let suffix_logprobs = emission.logprobs.clone();
-                self.ready_streaming_emissions.push_back(emission);
-                self.stop_pending_emissions
+                self.stream.ready_streaming_emissions.push_back(emission);
+                self.stream
+                    .stop_pending_emissions
                     .push_front(PendingStreamingEmission {
                         bytes: suffix,
                         logprobs: suffix_logprobs,
@@ -1597,15 +1631,16 @@ impl Sequence {
     }
 
     fn discard_stop_pending_bytes(&mut self) {
-        self.stop_pending_bytes.clear();
-        self.stop_pending_emissions.clear();
+        self.stream.stop_pending_bytes.clear();
+        self.stream.stop_pending_emissions.clear();
     }
 
     fn streaming_safe_commit_len(&self, byte_limit: usize) -> usize {
         if !self.stream_logprobs {
             return byte_limit;
         }
-        self.stop_pending_emissions
+        self.stream
+            .stop_pending_emissions
             .iter()
             .map(|emission| emission.bytes.len())
             .scan(0, |total, len| {
@@ -1618,19 +1653,19 @@ impl Sequence {
     }
 
     pub(crate) fn flush_stop_pending_bytes(&mut self) {
-        self.commit_stop_pending_prefix(self.stop_pending_bytes.len());
+        self.commit_stop_pending_prefix(self.stream.stop_pending_bytes.len());
     }
 
     pub(crate) fn take_ready_streaming_emissions(
         &mut self,
         finalize: bool,
     ) -> Vec<StreamingEmission> {
-        let mut emissions = Vec::with_capacity(self.ready_streaming_emissions.len());
-        while !self.ready_streaming_emissions.is_empty() {
+        let mut emissions = Vec::with_capacity(self.stream.ready_streaming_emissions.len());
+        while !self.stream.ready_streaming_emissions.is_empty() {
             let mut bytes = Vec::new();
             let mut group_len = 0;
             let mut is_complete = false;
-            for emission in &self.ready_streaming_emissions {
+            for emission in &self.stream.ready_streaming_emissions {
                 bytes.extend_from_slice(&emission.bytes);
                 group_len += 1;
                 if !has_incomplete_utf8_tail(&bytes) {
@@ -1642,8 +1677,8 @@ impl Sequence {
                 break;
             }
 
-            let is_first = self.stream_idx == 0;
-            self.stream_idx += bytes.len();
+            let is_first = self.stream.stream_idx == 0;
+            self.stream.stream_idx += bytes.len();
             let text = String::from_utf8_lossy(&bytes);
             let text = if is_first && get_mut_group!(self).is_chat {
                 text.trim_start().to_string()
@@ -1652,6 +1687,7 @@ impl Sequence {
             };
             for idx in 0..group_len {
                 let emission = self
+                    .stream
                     .ready_streaming_emissions
                     .pop_front()
                     .expect("streaming UTF-8 group length must match the queue");
@@ -1687,7 +1723,7 @@ impl Sequence {
             is_done,
             None | Some(StopReason::Length(_)) | Some(StopReason::ModelLength(_))
         );
-        let committed_start = self.completion_bytes.len();
+        let committed_start = self.stream.completion_bytes.len();
 
         if let Some(ref mut tool_call_state) = self.tool_call_state {
             tool_call_state.observe_token(tok.token, &completion_bytes);
@@ -1698,7 +1734,7 @@ impl Sequence {
         {
             self.push_stop_pending_emission(completion_bytes, &tok);
             if let Some((stop_string_idx, pos)) =
-                find_earliest_stop_string(&self.stop_pending_bytes, &self.stop_strings)
+                find_earliest_stop_string(&self.stream.stop_pending_bytes, &self.stop_strings)
             {
                 self.commit_stop_pending_prefix(pos);
                 self.discard_stop_pending_bytes();
@@ -1710,9 +1746,9 @@ impl Sequence {
                 self.flush_stop_pending_bytes();
             } else {
                 let pending_len =
-                    longest_stop_prefix_suffix(&self.stop_pending_bytes, &self.stop_strings);
-                let committed_len =
-                    self.streaming_safe_commit_len(self.stop_pending_bytes.len() - pending_len);
+                    longest_stop_prefix_suffix(&self.stream.stop_pending_bytes, &self.stop_strings);
+                let committed_len = self
+                    .streaming_safe_commit_len(self.stream.stop_pending_bytes.len() - pending_len);
                 self.commit_stop_pending_prefix(committed_len);
             }
         } else {
@@ -1721,8 +1757,8 @@ impl Sequence {
             self.flush_stop_pending_bytes();
         }
 
-        let committed_bytes = &self.completion_bytes[committed_start..];
-        self.last_completion_bytes_len = committed_bytes.len();
+        let committed_bytes = &self.stream.completion_bytes[committed_start..];
+        self.stream.last_completion_bytes_len = committed_bytes.len();
         self.last_logprob = tok.logprob;
         self.last_is_done = is_done;
 
@@ -1836,15 +1872,16 @@ impl Sequence {
     ) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
         let (new_decoded, consumed) = self.decode_streamable_delta();
         if new_decoded.is_some() {
-            self.stream_idx += consumed;
+            self.stream.stream_idx += consumed;
         }
         Ok(new_decoded)
     }
 
     pub fn get_final_delta(&mut self) -> String {
-        let is_first = self.stream_idx == 0;
-        let decoded = String::from_utf8_lossy(&self.completion_bytes[self.stream_idx..]);
-        self.stream_idx = self.completion_bytes.len();
+        let is_first = self.stream.stream_idx == 0;
+        let decoded =
+            String::from_utf8_lossy(&self.stream.completion_bytes[self.stream.stream_idx..]);
+        self.stream.stream_idx = self.stream.completion_bytes.len();
         if is_first && get_mut_group!(self).is_chat {
             decoded.trim_start().to_string()
         } else {
@@ -1858,8 +1895,8 @@ impl Sequence {
     }
 
     fn decode_streamable_delta(&self) -> (Option<String>, usize) {
-        let is_first = self.stream_idx == 0;
-        let pending = &self.completion_bytes[self.stream_idx..];
+        let is_first = self.stream.stream_idx == 0;
+        let pending = &self.stream.completion_bytes[self.stream.stream_idx..];
         let mut consumed = 0;
         while consumed < pending.len() {
             match std::str::from_utf8(&pending[consumed..]) {
@@ -1892,7 +1929,7 @@ impl Sequence {
     }
 
     pub fn prompt_timestamp(&self) -> Option<u128> {
-        self.prompt_timestamp
+        self.timing.prompt_timestamp
     }
 
     pub fn set_step_start_instant(&mut self) {
@@ -1900,13 +1937,13 @@ impl Sequence {
     }
 
     pub(crate) fn start_prompt_timing(&mut self) {
-        self.step_start_instant = Some(Instant::now());
-        self.step_timing_kind = Some(StepTimingKind::Prompt);
+        self.timing.step_start_instant = Some(Instant::now());
+        self.timing.step_timing_kind = Some(StepTimingKind::Prompt);
     }
 
     pub(crate) fn start_completion_timing(&mut self) {
-        self.step_start_instant = Some(Instant::now());
-        self.step_timing_kind = Some(StepTimingKind::Completion);
+        self.timing.step_start_instant = Some(Instant::now());
+        self.timing.step_timing_kind = Some(StepTimingKind::Completion);
     }
 
     pub(crate) fn finish_prompt_timing(&mut self, duration: Duration) {
@@ -1915,23 +1952,25 @@ impl Sequence {
         let denoise_ms = std::mem::take(&mut self.pending_denoise_time_ms);
         let prompt_ms = duration.as_millis().saturating_sub(denoise_ms);
         let total = self
+            .timing
             .total_prompt_time
             .unwrap_or(0)
             .saturating_add(prompt_ms);
-        self.total_prompt_time = Some(total);
+        self.timing.total_prompt_time = Some(total);
         if denoise_ms > 0 {
-            self.total_completion_time = Some(
-                self.total_completion_time
+            self.timing.total_completion_time = Some(
+                self.timing
+                    .total_completion_time
                     .unwrap_or(0)
                     .saturating_add(denoise_ms),
             );
         }
-        self.step_start_instant = None;
-        self.step_timing_kind = None;
+        self.timing.step_start_instant = None;
+        self.timing.step_timing_kind = None;
         if total > 0 {
             #[allow(clippy::cast_precision_loss)]
             {
-                self.prompt_tok_per_sec = self.prompt_len as f32 / (total as f32 / 1000.0);
+                self.timing.prompt_tok_per_sec = self.prompt_len as f32 / (total as f32 / 1000.0);
             }
         }
         self.update_time_info();
@@ -1940,19 +1979,22 @@ impl Sequence {
     pub(crate) fn finish_completion_timing(&mut self, duration: Duration) {
         self.pending_denoise_time_ms = 0;
         let total = self
+            .timing
             .total_completion_time
             .unwrap_or(0)
             .saturating_add(duration.as_millis());
-        self.total_completion_time = Some(total);
-        self.step_start_instant = None;
-        self.step_timing_kind = None;
+        self.timing.total_completion_time = Some(total);
+        self.timing.step_start_instant = None;
+        self.timing.step_timing_kind = None;
         self.update_time_info();
     }
 
     pub(crate) fn update_time_info(&self) {
-        let mut prompt_time_ms = self.total_prompt_time.unwrap_or(0);
-        let mut completion_time_ms = self.total_completion_time.unwrap_or(0);
-        if let (Some(start), Some(kind)) = (self.step_start_instant, self.step_timing_kind) {
+        let mut prompt_time_ms = self.timing.total_prompt_time.unwrap_or(0);
+        let mut completion_time_ms = self.timing.total_completion_time.unwrap_or(0);
+        if let (Some(start), Some(kind)) =
+            (self.timing.step_start_instant, self.timing.step_timing_kind)
+        {
             match kind {
                 StepTimingKind::Prompt => {
                     let denoise_ms = self.pending_denoise_time_ms;
