@@ -1277,6 +1277,11 @@ pub struct ChatCompletionRequest {
     #[schema(example = json!(Option::None::<bool>))]
     #[serde(default)]
     pub truncate_sequence: Option<bool>,
+    /// Optional prefix-cache isolation key: requests only reuse cached prompt prefixes
+    /// computed for requests carrying the same salt.
+    #[schema(example = json!(Option::None::<String>))]
+    #[serde(default)]
+    pub cache_salt: Option<String>,
 }
 
 /// Function for ChatCompletionRequest.messages Schema generation to handle `Either`
@@ -1564,6 +1569,11 @@ pub struct CompletionRequest {
     #[schema(example = json!(Option::None::<bool>))]
     #[serde(default)]
     pub truncate_sequence: Option<bool>,
+    /// Optional prefix-cache isolation key: requests only reuse cached prompt prefixes
+    /// computed for requests carrying the same salt.
+    #[schema(example = json!(Option::None::<String>))]
+    #[serde(default)]
+    pub cache_salt: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

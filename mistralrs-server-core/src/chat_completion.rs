@@ -1165,6 +1165,7 @@ pub async fn parse_request(
             },
             adapter: oairequest.adapter.map(Into::into),
             truncate_sequence: oairequest.truncate_sequence.unwrap_or(false),
+            cache_salt: oairequest.cache_salt.clone(),
         })),
         is_streaming,
     ))

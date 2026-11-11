@@ -58,6 +58,7 @@ See [tool calling](/guides/agents/tool-calling-basics/), [structured output](/gu
 | `agent_permission`, `code_execution_permission` | Tighten tool permissions for a request. |
 | `max_tool_rounds` | Cap server-side tool-loop rounds. |
 | `truncate_sequence` | Truncate an oversized prompt instead of rejecting it. |
+| `cache_salt` | Isolate prefix-cache reuse; a request only reuses cached prompt prefixes from requests that sent the same salt. Omit it to share the default cache. |
 | `adapter` | Loaded LoRA alias or `{"generation":"..."}`; omitted/null selects the base model. |
 
 `reasoning_effort` takes `off`, `low`, `medium`, `high`, or `xhigh`, in any case, and `none` means `off`. Any value except `off` turns thinking on. `enable_thinking` is a plain on/off switch.
@@ -129,7 +130,7 @@ Upload, list, and version Skills through `/v1/skills`, then reference them in a 
 
 ### mistralrs extensions on Responses
 
-`top_k`, `min_p`, `repetition_penalty`, the `dry_*` sampling fields, `grammar`, `seed`, `ignore_eos`, `reasoning_max_tokens`, and `adapter` follow the Chat Completions behavior. `files` requests tool-produced output files; `max_tool_rounds` caps agentic rounds. Chat-only `session_id`, `agent_permission`, and `web_search_options` are not accepted as controls here. Use the Responses `tools` array for hosted tools and Skills.
+`top_k`, `min_p`, `repetition_penalty`, the `dry_*` sampling fields, `grammar`, `seed`, `ignore_eos`, `reasoning_max_tokens`, `adapter`, and `cache_salt` follow the Chat Completions behavior. `files` requests tool-produced output files; `max_tool_rounds` caps agentic rounds. Chat-only `session_id`, `agent_permission`, and `web_search_options` are not accepted as controls here. Use the Responses `tools` array for hosted tools and Skills.
 
 For thinking and truncation, Responses uses the standard OpenAI fields instead of the Chat Completions extensions:
 
@@ -146,7 +147,7 @@ Send `background: true`, then poll `GET /v1/responses/{id}` or cancel with `POST
 
 ## Completions (legacy)
 
-`/v1/completions` (non-chat) is supported with a subset of Chat Completions extensions: `top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`, `truncate_sequence`, `adapter`. LoRA accepts the same alias-as-`model`, adapter alias, and exact-generation forms as Chat Completions. The agentic, session, file, web-search, thinking, and reasoning-effort fields are not part of this endpoint's schema and have no effect.
+`/v1/completions` (non-chat) is supported with a subset of Chat Completions extensions: `top_k`, `min_p`, `repetition_penalty`, `dry_multiplier`, `dry_base`, `dry_allowed_length`, `dry_sequence_breakers`, `grammar`, `truncate_sequence`, `adapter`, `cache_salt`. LoRA accepts the same alias-as-`model`, adapter alias, and exact-generation forms as Chat Completions. The agentic, session, file, web-search, thinking, and reasoning-effort fields are not part of this endpoint's schema and have no effect.
 
 ## Embeddings
 
