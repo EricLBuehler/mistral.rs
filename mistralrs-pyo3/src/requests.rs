@@ -306,6 +306,7 @@ pub struct ChatCompletionRequest {
     pub(crate) logprobs: bool,
     pub(crate) top_logprobs: Option<usize>,
     pub(crate) max_tokens: Option<usize>,
+    pub(crate) reasoning_max_tokens: Option<usize>,
     pub(crate) n_choices: usize,
     pub(crate) presence_penalty: Option<f32>,
     pub(crate) frequency_penalty: Option<f32>,
@@ -397,6 +398,7 @@ impl ChatCompletionRequest {
         adapter=None,
         modalities=None,
         audio=None,
+        reasoning_max_tokens=None,
     ))]
     fn new(
         messages: Py<PyAny>,
@@ -442,6 +444,7 @@ impl ChatCompletionRequest {
         adapter: Option<Py<PyAny>>,
         modalities: Option<Vec<String>>,
         audio: Option<HashMap<String, String>>,
+        reasoning_max_tokens: Option<usize>,
     ) -> PyResult<Self> {
         let messages = Python::with_gil(|py| -> PyResult<PythonChatMessages> {
             if let Ok(messages) = messages.bind(py).downcast_exact::<PyList>() {
@@ -458,6 +461,7 @@ impl ChatCompletionRequest {
         let reasoning_effort = parse_reasoning_effort(reasoning_effort.as_deref())
             .map_err(|error| PyValueError::new_err(error.to_string()))?;
         mistralrs_core::resolve_reasoning_controls(enable_thinking, reasoning_effort)
+            .and_then(|controls| controls.validate_budget(reasoning_max_tokens))
             .map_err(|error| PyValueError::new_err(error.to_string()))?;
 
         let audio = audio
@@ -482,6 +486,7 @@ impl ChatCompletionRequest {
             logprobs,
             top_logprobs,
             max_tokens,
+            reasoning_max_tokens,
             n_choices,
             presence_penalty,
             frequency_penalty,
@@ -572,7 +577,8 @@ mod tests {
         assert!(chat.starts_with("(messages, model, logprobs=False"));
         assert!(chat.contains("reasoning_effort=None"));
         assert!(chat.contains("ignore_eos=False"));
-        assert!(chat.ends_with("*, adapter=None, modalities=None, audio=None)"));
+        assert!(chat
+            .ends_with("*, adapter=None, modalities=None, audio=None, reasoning_max_tokens=None)"));
     }
 
     #[test]

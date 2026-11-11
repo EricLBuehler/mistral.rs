@@ -1645,6 +1645,7 @@ impl Runner {
                     presence_penalty: request.presence_penalty,
                     repetition_penalty: request.repetition_penalty,
                     max_len: request.max_tokens,
+                    reasoning_max_tokens: request.reasoning_max_tokens,
                     stop_toks,
                     ignore_eos: request.ignore_eos,
                     logits_bias: request.logit_bias.clone(),
@@ -1913,6 +1914,7 @@ impl Runner {
                     presence_penalty: request.presence_penalty,
                     repetition_penalty: request.repetition_penalty,
                     max_len: request.max_tokens,
+                    reasoning_max_tokens: None,
                     stop_toks,
                     ignore_eos: request.ignore_eos,
                     logits_bias: request.logit_bias.clone(),
@@ -2405,6 +2407,7 @@ impl Runner {
                     presence_penalty: request.presence_penalty,
                     repetition_penalty: request.repetition_penalty,
                     max_len: request.max_tokens,
+                    reasoning_max_tokens: None,
                     stop_toks,
                     ignore_eos: request.ignore_eos,
                     logits_bias: request.logit_bias.clone(),
@@ -2886,6 +2889,7 @@ fn mistralrs(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<mistralrs_core::Choice>()?;
     m.add_class::<mistralrs_core::ChunkChoice>()?;
     m.add_class::<mistralrs_core::Usage>()?;
+    m.add_class::<mistralrs_core::CompletionTokensDetails>()?;
     m.add_class::<mistralrs_core::AgenticToolCallRecord>()?;
     m.add_class::<mistralrs_core::ChatCompletionResponse>()?;
     m.add_class::<mistralrs_core::ChatCompletionChunkResponse>()?;

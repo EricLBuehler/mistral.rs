@@ -14,6 +14,8 @@
 //! - Multiple blocks are concatenated
 //! - At EOS, treat unclosed blocks as reasoning
 
+use std::borrow::Cow;
+
 pub const THINK_OPEN_TAG: &str = "<think>";
 pub const THINK_CLOSE_TAG: &str = "</think>";
 
@@ -38,9 +40,14 @@ pub const GEMMA_THOUGHT_CLOSE_TAG: &str = "<unused95>";
 /// This provides incremental parsing of token streams containing reasoning tags,
 /// with delta extraction for streaming responses. The open/close tag pair is
 /// configurable, enabling reuse for both `<think>` tags and Gemma 4 channel tags.
+#[derive(Clone)]
 pub struct TagReasoningContext {
     open_tag: String,
     close_tag: String,
+    native_open_tag: bool,
+    native_close_tag: bool,
+    recognize_open_tag: bool,
+    recognize_close_tag: bool,
     implicit_leading_reasoning_prefix: Option<String>,
     allow_implicit_leading_reasoning_prefix: bool,
     /// Optional prefix to strip from the start of each reasoning block
@@ -117,6 +124,10 @@ impl TagReasoningContext {
         Self {
             open_tag: open.to_string(),
             close_tag: close.to_string(),
+            native_open_tag: false,
+            native_close_tag: false,
+            recognize_open_tag: true,
+            recognize_close_tag: true,
             implicit_leading_reasoning_prefix: None,
             allow_implicit_leading_reasoning_prefix: false,
             reasoning_strip_prefix: None,
@@ -136,31 +147,29 @@ impl TagReasoningContext {
     /// This method handles bytes that may contain incomplete UTF-8 sequences
     /// (e.g., multi-byte characters like emojis split across token boundaries).
     pub fn process_bytes(&mut self, bytes: &[u8]) {
-        // Combine with any leftover bytes from previous calls
         self.utf8_buffer.extend_from_slice(bytes);
-
-        // Take ownership of buffer to avoid borrow issues
         let buffer = std::mem::take(&mut self.utf8_buffer);
-
-        // Find the longest valid UTF-8 prefix
-        let valid_up_to = match std::str::from_utf8(&buffer) {
-            Ok(s) => {
-                // All bytes are valid UTF-8
-                self.process_text(s);
-                return;
+        let mut remaining = buffer.as_slice();
+        while !remaining.is_empty() {
+            match std::str::from_utf8(remaining) {
+                Ok(text) => {
+                    self.process_text(text);
+                    return;
+                }
+                Err(error) => {
+                    let valid_up_to = error.valid_up_to();
+                    self.process_text(std::str::from_utf8(&remaining[..valid_up_to]).unwrap());
+                    if let Some(error_len) = error.error_len() {
+                        self.process_text("\u{fffd}");
+                        remaining = &remaining[valid_up_to + error_len..];
+                    } else {
+                        self.utf8_buffer
+                            .extend_from_slice(&remaining[valid_up_to..]);
+                        return;
+                    }
+                }
             }
-            Err(e) => e.valid_up_to(),
-        };
-
-        // Process the valid portion
-        if valid_up_to > 0 {
-            // Safety: we just verified this portion is valid UTF-8
-            let valid_str = unsafe { std::str::from_utf8_unchecked(&buffer[..valid_up_to]) };
-            self.process_text(valid_str);
         }
-
-        // Keep the incomplete bytes for next time
-        self.utf8_buffer = buffer[valid_up_to..].to_vec();
     }
 
     /// Process incremental text from the model output.
@@ -170,6 +179,8 @@ impl TagReasoningContext {
     pub fn process_text(&mut self, text: &str) {
         // Add new text to buffer
         self.buffer.push_str(text);
+        let open_tag = self.recognize_open_tag.then_some(self.open_tag.as_str());
+        let close_tag = self.recognize_close_tag.then_some(self.close_tag.as_str());
 
         // Process the buffer, looking for complete tags
         loop {
@@ -193,7 +204,8 @@ impl TagReasoningContext {
                 }
 
                 // Looking for close tag
-                if let Some(end_pos) = self.buffer.find(&*self.close_tag) {
+                let close_pos = close_tag.and_then(|tag| self.buffer.find(tag));
+                if let Some(end_pos) = close_pos {
                     // Found closing tag - extract reasoning content before it
                     let reasoning = self.buffer[..end_pos].to_string();
                     self.accumulated_reasoning.push_str(&reasoning);
@@ -204,7 +216,8 @@ impl TagReasoningContext {
                 } else {
                     // No complete closing tag found
                     // Check if buffer might contain a partial closing tag at the end
-                    let partial_len = self.potential_partial_tag_len_for(&self.close_tag);
+                    let partial_len =
+                        close_tag.map_or(0, |tag| self.potential_partial_tag_len_for(tag));
                     if partial_len > 0 {
                         // Keep the potential partial tag in buffer, process the rest
                         let safe_len = self.buffer.len() - partial_len;
@@ -240,8 +253,8 @@ impl TagReasoningContext {
                     }
                 }
 
-                let open_pos = self.buffer.find(&*self.open_tag);
-                let close_pos = self.buffer.find(&*self.close_tag);
+                let open_pos = open_tag.and_then(|tag| self.buffer.find(tag));
+                let close_pos = close_tag.and_then(|tag| self.buffer.find(tag));
                 // A bare close tag outside any reasoning block is a special-token artifact
                 // (e.g. a dangling `<channel|>` right before EOS) - swallow it.
                 if let Some(close_pos) = close_pos.filter(|&c| open_pos.is_none_or(|o| c < o)) {
@@ -266,9 +279,11 @@ impl TagReasoningContext {
                 } else {
                     // No complete opening tag found; hold back anything that could be the
                     // start of an opening OR closing tag split across token boundaries.
-                    let partial_len = self
-                        .potential_partial_tag_len_for(&self.open_tag)
-                        .max(self.potential_partial_tag_len_for(&self.close_tag));
+                    let open_partial =
+                        open_tag.map_or(0, |tag| self.potential_partial_tag_len_for(tag));
+                    let close_partial =
+                        close_tag.map_or(0, |tag| self.potential_partial_tag_len_for(tag));
+                    let partial_len = open_partial.max(close_partial);
                     if partial_len > 0 {
                         // Keep the potential partial tag in buffer, process the rest
                         let safe_len = self.buffer.len() - partial_len;
@@ -296,7 +311,7 @@ impl TagReasoningContext {
         let tag_bytes = tag.as_bytes();
 
         // Check each possible suffix of the buffer
-        for suffix_len in 1..=tag.len().min(self.buffer.len()) {
+        for suffix_len in (1..=tag.len().min(self.buffer.len())).rev() {
             let suffix_start = self.buffer.len() - suffix_len;
             let suffix = &buffer_bytes[suffix_start..];
             let tag_prefix = &tag_bytes[..suffix_len];
@@ -391,6 +406,71 @@ impl TagReasoningContext {
     /// Check if currently inside a reasoning block
     pub fn is_in_think_block(&self) -> bool {
         self.in_think_block
+    }
+
+    pub(crate) fn configure_special_tokens(&mut self, tokenizer: &tokenizers::Tokenizer) {
+        self.native_open_tag = false;
+        self.native_close_tag = false;
+        for token in tokenizer.get_added_tokens_decoder().into_values() {
+            if token.special || (token.content.starts_with('<') && token.content.ends_with('>')) {
+                self.native_open_tag |= token.content == self.open_tag;
+                self.native_close_tag |= token.content == self.close_tag;
+            }
+        }
+    }
+
+    pub(crate) fn process_token_bytes(&mut self, bytes: &[u8], is_special: bool) {
+        self.recognize_open_tag = is_special || !self.native_open_tag;
+        self.recognize_close_tag = is_special || !self.native_close_tag;
+        self.process_bytes(bytes);
+        self.recognize_open_tag = true;
+        self.recognize_close_tag = true;
+    }
+
+    pub(crate) fn closing_is_special(&self) -> bool {
+        self.native_close_tag
+    }
+
+    pub(crate) fn closing_text(&self) -> &str {
+        &self.close_tag
+    }
+
+    pub(crate) fn closing_suffix(&self) -> Option<Cow<'_, str>> {
+        self.in_think_block.then(|| {
+            if self.pending_strip {
+                if let Some(prefix) = &self.reasoning_strip_prefix {
+                    if prefix.starts_with(&self.buffer) {
+                        return Cow::Owned(format!(
+                            "{}{}",
+                            &prefix[self.buffer.len()..],
+                            self.close_tag
+                        ));
+                    }
+                }
+            }
+            let partial_len = self.potential_partial_tag_len_for(&self.close_tag);
+            Cow::Borrowed(&self.close_tag[partial_len..])
+        })
+    }
+
+    pub(crate) fn reasoning_bytes(&self) -> usize {
+        self.accumulated_reasoning.len()
+            + if self.in_think_block {
+                self.utf8_buffer.len()
+            } else {
+                0
+            }
+    }
+
+    pub(crate) fn has_pending_reasoning_delimiter(&self) -> bool {
+        self.in_think_block && !self.buffer.is_empty() && self.close_tag.starts_with(&self.buffer)
+    }
+
+    pub(crate) fn discard_output(&mut self) {
+        self.accumulated_content.clear();
+        self.accumulated_reasoning.clear();
+        self.sent_content_len = 0;
+        self.sent_reasoning_len = 0;
     }
 }
 

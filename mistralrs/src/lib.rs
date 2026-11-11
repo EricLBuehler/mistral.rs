@@ -295,7 +295,8 @@ pub mod core;
 // ========== Response Types ==========
 pub use mistralrs_core::{
     BlockDenoisingProgress, ChatCompletionChunkResponse, ChatCompletionResponse, Choice,
-    ChunkChoice, CompletionResponse, Delta, Logprobs, Response, ResponseMessage, TopLogprob, Usage,
+    ChunkChoice, CompletionResponse, CompletionTokensDetails, Delta, Logprobs, Response,
+    ResponseMessage, TopLogprob, Usage,
 };
 
 // ========== Request Types ==========

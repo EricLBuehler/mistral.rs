@@ -188,12 +188,20 @@ to_dict() -> dict[str, Any]
 | `completion_tokens` | `int` |
 | `prompt_tokens` | `int` |
 | `total_tokens` | `int` |
+| `completion_tokens_details` | `CompletionTokensDetails \| None` |
 | `avg_tok_per_sec` | `float` |
 | `avg_prompt_tok_per_sec` | `float` |
 | `avg_compl_tok_per_sec` | `float` |
 | `total_time_sec` | `float` |
 | `total_prompt_time_sec` | `float` |
 | `total_completion_time_sec` | `float` |
+
+
+## `CompletionTokensDetails`
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `reasoning_tokens` | `int` | Reasoning tokens, excluding delimiters; included in `Usage.completion_tokens`. |
 
 
 ## `Logprobs`

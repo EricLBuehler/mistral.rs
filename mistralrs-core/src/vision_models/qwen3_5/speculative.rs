@@ -779,7 +779,8 @@ impl SpeculativeTargetMixin for Qwen3_5Model {
         }
         if let Some(drafter) = self.dflash.lock().expect("dflash poisoned").as_ref() {
             if self.mtp_auto_depth.load(Ordering::Relaxed) {
-                return auto_depth_graph_plans(&self.speculative_depth_candidates(), n);
+                let depths = depths_up_to(&crate::speculative::dflash::AUTO_DEPTHS, n);
+                return auto_depth_graph_plans(&depths, n);
             }
             return drafter.graph_plans(n);
         }

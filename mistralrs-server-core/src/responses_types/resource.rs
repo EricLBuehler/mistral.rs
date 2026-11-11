@@ -43,6 +43,28 @@ impl ResponseUsage {
     }
 }
 
+impl From<&mistralrs_core::Usage> for ResponseUsage {
+    fn from(usage: &mistralrs_core::Usage) -> Self {
+        Self {
+            input_tokens: usage.prompt_tokens,
+            output_tokens: usage.completion_tokens,
+            total_tokens: usage.total_tokens,
+            input_tokens_details: usage.prompt_tokens_details.as_ref().map(|details| {
+                InputTokensDetails {
+                    cached_tokens: Some(details.cached_tokens),
+                    ..Default::default()
+                }
+            }),
+            output_tokens_details: usage.completion_tokens_details.as_ref().map(|details| {
+                OutputTokensDetails {
+                    reasoning_tokens: Some(details.reasoning_tokens),
+                    ..Default::default()
+                }
+            }),
+        }
+    }
+}
+
 /// Detailed input token breakdown
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema, Default)]
 pub struct InputTokensDetails {

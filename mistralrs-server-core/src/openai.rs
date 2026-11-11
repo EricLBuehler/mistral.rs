@@ -1258,6 +1258,9 @@ pub struct ChatCompletionRequest {
     /// Toggle thinking output for models that support it.
     #[schema(example = json!(Option::None::<bool>))]
     pub enable_thinking: Option<bool>,
+    /// Maximum reasoning tokens before generation switches to the answer.
+    #[serde(default)]
+    pub reasoning_max_tokens: Option<usize>,
     /// Reasoning effort level for models and templates that support it.
     /// Valid values are "off", "low", "medium", "high", and "xhigh".
     /// "none" is accepted as an alias for "off".

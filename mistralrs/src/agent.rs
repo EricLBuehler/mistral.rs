@@ -284,6 +284,7 @@ impl<'a> AgentStream<'a> {
                                                         prompt_tokens: 0,
                                                         total_tokens: 0,
                                                         prompt_tokens_details: None,
+                                                        completion_tokens_details: None,
                                                         avg_tok_per_sec: 0.0,
                                                         avg_prompt_tok_per_sec: 0.0,
                                                         avg_compl_tok_per_sec: 0.0,
