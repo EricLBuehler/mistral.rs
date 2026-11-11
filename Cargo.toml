@@ -155,7 +155,7 @@ csv = "1.4.0"
 bytemuck_derive = "1.10.2"
 uuid = "1.19.0"
 schemars = "1.2.0"
-serde-saphyr = "0.0.16"
+serde-saphyr = "2"
 serde_plain = "1.0.2"
 as-any = "0.3.2"
 llguidance = { version = "1.2.0", default-features = false, features = ["lark"] }
