@@ -106,23 +106,40 @@ where
 
     let out_ptr = out_ptr as *mut T;
     for row_idx in 0..total_rows {
+        // The sink is one extra denominator term with no value behind it, so it joins the max
+        // and the sum once here, after the chunks, rather than in every chunk.
+        let sink = ctx
+            .sinks
+            .and_then(|s| s.get(row_idx % meta.h).copied())
+            .filter(|sink| sink.is_finite());
         let mut m_all = f32::NEG_INFINITY;
         for c in 0..n_kv_chunks {
             let base = (c * total_rows + row_idx) * stride;
             m_all = m_all.max(partials[base + meta.dv]);
         }
+        if let Some(sink) = sink {
+            m_all = m_all.max(sink);
+        }
         let out_chunk =
             unsafe { std::slice::from_raw_parts_mut(out_ptr.add(row_idx * meta.dv), meta.dv) };
         if n_kv_chunks == 1 {
             let base = row_idx * stride;
-            let s = partials[base + meta.dv + 1];
+            let m_c = partials[base + meta.dv];
+            // The chunk's partial is relative to its own max; the sink may have raised it.
+            let w = if m_c == f32::NEG_INFINITY {
+                0.0
+            } else {
+                (m_c - m_all).exp()
+            };
+            let s =
+                partials[base + meta.dv + 1] * w + sink.map_or(0.0, |sink| (sink - m_all).exp());
             let inv_s = 1.0 / s;
             for (o, v) in out_chunk.iter_mut().zip(&partials[base..base + meta.dv]) {
-                *o = T::cast(*v * inv_s);
+                *o = T::cast(*v * w * inv_s);
             }
             continue;
         }
-        let mut s_all = 0f32;
+        let mut s_all = sink.map_or(0.0, |sink| (sink - m_all).exp());
         let mut stack_acc = [0f32; SINGLE_Q_STACK_DV];
         let mut heap_acc;
         let acc: &mut [f32] = if meta.dv <= SINGLE_Q_STACK_DV {
@@ -307,9 +324,15 @@ where
     let v_head = h_i / meta.rv2;
     let q_base = b_i * ctx.q.stride[0] + h_i * ctx.q.stride[2];
     let q_row = &ctx.q.data[q_base..q_base + meta.d];
+    // A sink starts the running max and sum as if it were a scored position with a zero value:
+    // it can win the max without contributing to the accumulator.
+    let sink = ctx
+        .sinks
+        .and_then(|s| s.get(h_i).copied())
+        .filter(|sink| sink.is_finite());
 
-    let mut s = 0f32;
-    let mut m = f32::NEG_INFINITY;
+    let mut s = if sink.is_some() { 1.0 } else { 0.0 };
+    let mut m = sink.unwrap_or(f32::NEG_INFINITY);
 
     for kv_pos in kv_start..kv_end {
         let next_pos = kv_pos + 1;
