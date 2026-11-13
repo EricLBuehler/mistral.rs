@@ -16,34 +16,35 @@ mistralrs serve -m <model>   # OpenAI-compatible server
 
 | Model families | Example | Architecture |
 |---|---|---|
-| DeepSeek-V2 | <details><summary><code>deepseek-ai/DeepSeek-V2-Chat</code></summary><code>mistralrs run -m deepseek-ai/DeepSeek-V2-Chat</code></details> | `DeepseekV2ForCausalLM` |
-| DeepSeek-V3, DeepSeek-R1 | <details><summary><code>deepseek-ai/DeepSeek-V3</code> (V3), <code>deepseek-ai/DeepSeek-R1</code> (R1)</summary><code>mistralrs run -m deepseek-ai/DeepSeek-V3</code><br><code>mistralrs run -m deepseek-ai/DeepSeek-R1</code></details> | `DeepseekV3ForCausalLM` |
-| Flint | <details><summary><code>RecursiveSI/flint</code></summary><code>mistralrs run -m RecursiveSI/flint</code></details> | `FlintForCausalLM` |
-| Gemma | <details><summary><code>google/gemma-7b-it</code></summary><code>mistralrs run -m google/gemma-7b-it</code></details> | `GemmaForCausalLM` |
-| Gemma 2 | <details><summary><code>google/gemma-2-9b-it</code></summary><code>mistralrs run -m google/gemma-2-9b-it</code></details> | `Gemma2ForCausalLM` |
-| GLM-4 | <details><summary><code>zai-org/GLM-4-32B-0414</code></summary><code>mistralrs run -m zai-org/GLM-4-32B-0414</code></details> | `Glm4ForCausalLM` |
-| GLM-4.7 | <details><summary><code>zai-org/GLM-4.7</code></summary><code>mistralrs run -m zai-org/GLM-4.7</code></details> | `Glm4MoeForCausalLM` |
-| GLM-4.7-Flash | <details><summary><code>zai-org/GLM-4.7-Flash</code></summary><code>mistralrs run -m zai-org/GLM-4.7-Flash</code></details> | `Glm4MoeLiteForCausalLM` |
-| GPT-OSS | <details><summary><code>openai/gpt-oss-20b</code> (20b), <code>openai/gpt-oss-120b</code> (120b)</summary><code>mistralrs run -m openai/gpt-oss-20b</code><br><code>mistralrs run -m openai/gpt-oss-120b</code></details> | `GptOssForCausalLM` |
-| Granite 4.0 | <details><summary><code>ibm-granite/granite-4.0-micro</code></summary><code>mistralrs run -m ibm-granite/granite-4.0-micro</code></details> | `GraniteMoeHybridForCausalLM` |
-| HunYuan | <details><summary><code>tencent/Hunyuan-7B-Instruct</code></summary><code>mistralrs run -m tencent/Hunyuan-7B-Instruct</code></details> | `HunYuanDenseV1ForCausalLM` |
-| HunYuan MoE | <details><summary><code>tencent/Hunyuan-A13B-Instruct</code></summary><code>mistralrs run -m tencent/Hunyuan-A13B-Instruct</code></details> | `HunYuanMoEV1ForCausalLM` |
-| LFM2, LFM2.5 | <details><summary><code>LiquidAI/LFM2.5-1.2B-Instruct</code> (LFM2.5), <code>LiquidAI/LFM2-1.2B</code> (LFM2)</summary><code>mistralrs run -m LiquidAI/LFM2.5-1.2B-Instruct</code><br><code>mistralrs run -m LiquidAI/LFM2-1.2B</code></details> | `Lfm2ForCausalLM` |
-| LFM2 MoE, LFM2.5 MoE | <details><summary><code>LiquidAI/LFM2.5-8B-A1B</code> (LFM2.5), <code>LiquidAI/LFM2-8B-A1B</code> (LFM2)</summary><code>mistralrs run -m LiquidAI/LFM2.5-8B-A1B</code><br><code>mistralrs run -m LiquidAI/LFM2-8B-A1B</code></details> | `Lfm2MoeForCausalLM` |
-| LFM3 | <details><summary><code>LiquidAI/LFM3-1.7B</code></summary><code>mistralrs run -m LiquidAI/LFM3-1.7B</code></details> | `Lfm3ForCausalLM` |
-| Llama 2, Llama 3.x | <details><summary><code>meta-llama/Llama-3.1-8B-Instruct</code></summary><code>mistralrs run -m meta-llama/Llama-3.1-8B-Instruct</code></details> | `LlamaForCausalLM` |
-| Mistral | <details><summary><code>mistralai/Mistral-7B-Instruct-v0.3</code></summary><code>mistralrs run -m mistralai/Mistral-7B-Instruct-v0.3</code></details> | `MistralForCausalLM` |
-| Mixtral | <details><summary><code>mistralai/Mixtral-8x7B-Instruct-v0.1</code></summary><code>mistralrs run -m mistralai/Mixtral-8x7B-Instruct-v0.1</code></details> | `MixtralForCausalLM` |
-| Phi-2 | <details><summary><code>microsoft/phi-2</code></summary><code>mistralrs run -m microsoft/phi-2</code></details> | `PhiForCausalLM` |
-| Phi-3, Phi-3.5 | <details><summary><code>microsoft/Phi-3-medium-4k-instruct</code></summary><code>mistralrs run -m microsoft/Phi-3-medium-4k-instruct</code></details> | `Phi3ForCausalLM` |
-| Phi-3.5-MoE | <details><summary><code>microsoft/Phi-3.5-MoE-instruct</code></summary><code>mistralrs run -m microsoft/Phi-3.5-MoE-instruct</code></details> | `PhiMoEForCausalLM` |
-| Qwen2, Qwen2.5 | <details><summary><code>Qwen/Qwen2.5-7B-Instruct</code> (2.5), <code>Qwen/Qwen2-7B-Instruct</code> (2)</summary><code>mistralrs run -m Qwen/Qwen2.5-7B-Instruct</code><br><code>mistralrs run -m Qwen/Qwen2-7B-Instruct</code></details> | `Qwen2ForCausalLM` |
-| Qwen3 | <details><summary><code>Qwen/Qwen3-4B</code></summary><code>mistralrs run -m Qwen/Qwen3-4B</code></details> | `Qwen3ForCausalLM` |
-| Qwen3 MoE | <details><summary><code>Qwen/Qwen3-30B-A3B</code></summary><code>mistralrs run -m Qwen/Qwen3-30B-A3B</code></details> | `Qwen3MoeForCausalLM` |
-| Qwen3-Next, Qwen3-Coder-Next | <details><summary><code>Qwen/Qwen3-Next-80B-A3B-Instruct</code></summary><code>mistralrs run -m Qwen/Qwen3-Next-80B-A3B-Instruct</code></details> | `Qwen3NextForCausalLM` |
-| Qwen3.5 | No published example | `Qwen3_5ForCausalLM` |
-| SmolLM3 | <details><summary><code>HuggingFaceTB/SmolLM3-3B</code></summary><code>mistralrs run -m HuggingFaceTB/SmolLM3-3B</code></details> | `SmolLM3ForCausalLM` |
-| Starcoder2 | <details><summary><code>bigcode/starcoder2-7b</code></summary><code>mistralrs run -m bigcode/starcoder2-7b</code></details> | `Starcoder2ForCausalLM` |
+| `MistralForCausalLM` | Mistral | <details><summary><code>mistralai/Mistral-7B-Instruct-v0.3</code></summary><code>mistralrs run -m mistralai/Mistral-7B-Instruct-v0.3</code></details> |
+| `GemmaForCausalLM` | Gemma | <details><summary><code>google/gemma-7b-it</code></summary><code>mistralrs run -m google/gemma-7b-it</code></details> |
+| `MixtralForCausalLM` | Mixtral | <details><summary><code>mistralai/Mixtral-8x7B-Instruct-v0.1</code></summary><code>mistralrs run -m mistralai/Mixtral-8x7B-Instruct-v0.1</code></details> |
+| `LlamaForCausalLM` | Llama 2, Llama 3.x | <details><summary><code>meta-llama/Llama-3.1-8B-Instruct</code></summary><code>mistralrs run -m meta-llama/Llama-3.1-8B-Instruct</code></details> |
+| `PhiForCausalLM` | Phi-2 | <details><summary><code>microsoft/phi-2</code></summary><code>mistralrs run -m microsoft/phi-2</code></details> |
+| `Phi3ForCausalLM` | Phi-3, Phi-3.5 | <details><summary><code>microsoft/Phi-3-medium-4k-instruct</code></summary><code>mistralrs run -m microsoft/Phi-3-medium-4k-instruct</code></details> |
+| `Qwen2ForCausalLM` | Qwen2, Qwen2.5 | <details><summary><code>Qwen/Qwen2.5-7B-Instruct</code> (2.5), <code>Qwen/Qwen2-7B-Instruct</code> (2)</summary><code>mistralrs run -m Qwen/Qwen2.5-7B-Instruct</code><br><code>mistralrs run -m Qwen/Qwen2-7B-Instruct</code></details> |
+| `Gemma2ForCausalLM` | Gemma 2 | <details><summary><code>google/gemma-2-9b-it</code></summary><code>mistralrs run -m google/gemma-2-9b-it</code></details> |
+| `Starcoder2ForCausalLM` | Starcoder2 | <details><summary><code>bigcode/starcoder2-7b</code></summary><code>mistralrs run -m bigcode/starcoder2-7b</code></details> |
+| `PhiMoEForCausalLM` | Phi-3.5-MoE | <details><summary><code>microsoft/Phi-3.5-MoE-instruct</code></summary><code>mistralrs run -m microsoft/Phi-3.5-MoE-instruct</code></details> |
+| `DeepseekV2ForCausalLM` | DeepSeek-V2 | <details><summary><code>deepseek-ai/DeepSeek-V2-Chat</code></summary><code>mistralrs run -m deepseek-ai/DeepSeek-V2-Chat</code></details> |
+| `DeepseekV3ForCausalLM` | DeepSeek-V3, DeepSeek-R1 | <details><summary><code>deepseek-ai/DeepSeek-V3</code> (V3), <code>deepseek-ai/DeepSeek-R1</code> (R1)</summary><code>mistralrs run -m deepseek-ai/DeepSeek-V3</code><br><code>mistralrs run -m deepseek-ai/DeepSeek-R1</code></details> |
+| `Qwen3ForCausalLM` | Qwen3 | <details><summary><code>Qwen/Qwen3-4B</code></summary><code>mistralrs run -m Qwen/Qwen3-4B</code></details> |
+| `Glm4ForCausalLM` | GLM-4 | <details><summary><code>zai-org/GLM-4-32B-0414</code></summary><code>mistralrs run -m zai-org/GLM-4-32B-0414</code></details> |
+| `Glm4MoeLiteForCausalLM` | GLM-4.7-Flash | <details><summary><code>zai-org/GLM-4.7-Flash</code></summary><code>mistralrs run -m zai-org/GLM-4.7-Flash</code></details> |
+| `Glm4MoeForCausalLM` | GLM-4.7 | <details><summary><code>zai-org/GLM-4.7</code></summary><code>mistralrs run -m zai-org/GLM-4.7</code></details> |
+| `Qwen3MoeForCausalLM` | Qwen3 MoE | <details><summary><code>Qwen/Qwen3-30B-A3B</code></summary><code>mistralrs run -m Qwen/Qwen3-30B-A3B</code></details> |
+| `FlintForCausalLM` | Flint | <details><summary><code>RecursiveSI/flint</code></summary><code>mistralrs run -m RecursiveSI/flint</code></details> |
+| `SmolLM3ForCausalLM` | SmolLM3 | <details><summary><code>HuggingFaceTB/SmolLM3-3B</code></summary><code>mistralrs run -m HuggingFaceTB/SmolLM3-3B</code></details> |
+| `GraniteMoeHybridForCausalLM` | Granite 4.0 | <details><summary><code>ibm-granite/granite-4.0-micro</code></summary><code>mistralrs run -m ibm-granite/granite-4.0-micro</code></details> |
+| `GptOssForCausalLM` | GPT-OSS | <details><summary><code>openai/gpt-oss-20b</code> (20b), <code>openai/gpt-oss-120b</code> (120b)</summary><code>mistralrs run -m openai/gpt-oss-20b</code><br><code>mistralrs run -m openai/gpt-oss-120b</code></details> |
+| `HunYuanDenseV1ForCausalLM` | HunYuan | <details><summary><code>tencent/Hunyuan-7B-Instruct</code></summary><code>mistralrs run -m tencent/Hunyuan-7B-Instruct</code></details> |
+| `HunYuanMoEV1ForCausalLM` | HunYuan MoE | <details><summary><code>tencent/Hunyuan-A13B-Instruct</code></summary><code>mistralrs run -m tencent/Hunyuan-A13B-Instruct</code></details> |
+| `Qwen3NextForCausalLM` | Qwen3-Next, Qwen3-Coder-Next | <details><summary><code>Qwen/Qwen3-Next-80B-A3B-Instruct</code></summary><code>mistralrs run -m Qwen/Qwen3-Next-80B-A3B-Instruct</code></details> |
+| `Qwen3_5ForCausalLM` | Qwen3.5 | No published example |
+| `Lfm2ForCausalLM` | LFM2, LFM2.5 | <details><summary><code>LiquidAI/LFM2.5-1.2B-Instruct</code> (LFM2.5), <code>LiquidAI/LFM2-1.2B</code> (LFM2)</summary><code>mistralrs run -m LiquidAI/LFM2.5-1.2B-Instruct</code><br><code>mistralrs run -m LiquidAI/LFM2-1.2B</code></details> |
+| `Lfm3ForCausalLM` | LFM3 | <details><summary><code>LiquidAI/LFM3-1.7B</code></summary><code>mistralrs run -m LiquidAI/LFM3-1.7B</code></details> |
+| `Lfm2MoeForCausalLM` | LFM2 MoE, LFM2.5 MoE | <details><summary><code>LiquidAI/LFM2.5-8B-A1B</code> (LFM2.5), <code>LiquidAI/LFM2-8B-A1B</code> (LFM2)</summary><code>mistralrs run -m LiquidAI/LFM2.5-8B-A1B</code><br><code>mistralrs run -m LiquidAI/LFM2-8B-A1B</code></details> |
+| `Kolibri1ForCausalLM` | Kolibri-1 | <details><summary><code>Aleph-Alpha/Kolibri-1</code></summary><code>mistralrs run -m Aleph-Alpha/Kolibri-1</code></details> |
 
 ## Multimodal models
 

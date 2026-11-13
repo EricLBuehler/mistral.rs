@@ -41,6 +41,7 @@ To find a file's row, match the architecture column against the file's `general.
 | LFM2 and LFM2.5 dense | `lfm2` |
 | LFM2 and LFM2.5 MoE | `lfm2moe` |
 | LFM3 | `lfm3` |
+| Kolibri-1 | `kolibri1` |
 
 Some architecture names, such as `llama`, cover several families. If mistral.rs can't tell which family a standalone file belongs to, pass the original model with `--tok-model-id`.
 
