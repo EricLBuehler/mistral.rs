@@ -1084,7 +1084,11 @@ impl Engine {
                     self.disable_eos_stop,
                 )
                 .await?;
-            decode_tokens.record(&self.logger, guards_mut.iter().map(|seq| &**seq));
+            decode_tokens.record(
+                &self.logger,
+                guards_mut.iter().map(|seq| &**seq),
+                step_duration,
+            );
             for (seq, commit) in guards_mut.iter_mut().zip(&commit_rows) {
                 if *commit {
                     seq.finish_completion_timing(step_duration);
@@ -1480,8 +1484,11 @@ impl Engine {
                             seq.finish_completion_timing(completion_exec_time);
                         }
 
-                        decode_tokens
-                            .record(&self.logger, scheduled.completion.iter().map(|seq| &**seq));
+                        decode_tokens.record(
+                            &self.logger,
+                            scheduled.completion.iter().map(|seq| &**seq),
+                            completion_exec_time,
+                        );
 
                         last_completion_ids = current_completion_ids;
                     }
@@ -1554,7 +1561,7 @@ impl Engine {
                             .map(|seq| seq.get_toks().len())
                             .sum();
                         self.logger
-                            .add_prefill_tokens_processed(total_processed_tokens);
+                            .add_prefill_tokens_processed(total_processed_tokens, prompt_exec_time);
 
                         for seq in scheduled.prompt.iter_mut() {
                             if !seq.is_finished_paged_attn() {
@@ -2356,10 +2363,16 @@ impl Engine {
                         }
 
                         if is_prompt {
-                            self.logger
-                                .add_prefill_tokens_processed(scheduled_token_counts.iter().sum());
+                            self.logger.add_prefill_tokens_processed(
+                                scheduled_token_counts.iter().sum(),
+                                step_exec_time,
+                            );
                         } else {
-                            decode_tokens.record(&self.logger, guards_mut.iter().map(|seq| &**seq));
+                            decode_tokens.record(
+                                &self.logger,
+                                guards_mut.iter().map(|seq| &**seq),
+                                step_exec_time,
+                            );
                         }
 
                         // Capture recurrent states at full-block boundaries so hybrid models can

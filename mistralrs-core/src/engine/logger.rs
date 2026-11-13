@@ -21,10 +21,38 @@ impl DecodeTokenSnapshot {
         self,
         logger: &IntervalLogger,
         sequences: impl Iterator<Item = &'a Sequence>,
+        duration: Duration,
     ) {
         let generated_tokens = sequences.map(Sequence::generated_len).sum::<usize>();
-        logger.add_decode_tokens_processed(generated_tokens.saturating_sub(self.0));
+        logger.add_decode_tokens_processed(generated_tokens.saturating_sub(self.0), duration);
     }
+}
+
+#[derive(Default)]
+struct ThroughputWindow {
+    prefill_tokens: usize,
+    prefill_nanos: u128,
+    decode_tokens: usize,
+    decode_nanos: u128,
+}
+
+fn tokens_per_second(tokens: usize, nanos: u128) -> f64 {
+    if tokens == 0 || nanos == 0 {
+        0.0
+    } else {
+        tokens as f64 / (nanos as f64 / 1_000_000_000.0)
+    }
+}
+
+fn throughput_rates(window: &ThroughputWindow) -> (f64, f64, f64) {
+    (
+        tokens_per_second(
+            window.prefill_tokens + window.decode_tokens,
+            window.prefill_nanos + window.decode_nanos,
+        ),
+        tokens_per_second(window.prefill_tokens, window.prefill_nanos),
+        tokens_per_second(window.decode_tokens, window.decode_nanos),
+    )
 }
 
 #[derive(Default)]
@@ -39,6 +67,9 @@ pub struct IntervalLogger {
     tokens_processed: Arc<AtomicUsize>,
     prefill_tokens_processed: Arc<AtomicUsize>,
     decode_tokens_processed: Arc<AtomicUsize>,
+    // Tokens and the step duration that produced them are published together.
+    // The logging wake takes both, so a chunk is divided by its step time.
+    throughput: Arc<Mutex<ThroughputWindow>>,
     num_running: Arc<AtomicUsize>,
     num_waiting: Arc<AtomicUsize>,
     sequence_capacity: Arc<AtomicUsize>,
@@ -63,6 +94,7 @@ impl IntervalLogger {
         let tokens_processed = Arc::new(AtomicUsize::new(0));
         let prefill_tokens_processed = Arc::new(AtomicUsize::new(0));
         let decode_tokens_processed = Arc::new(AtomicUsize::new(0));
+        let throughput = Arc::new(Mutex::new(ThroughputWindow::default()));
         let enable_logging = Arc::new(AtomicBool::new(false));
         let num_running = Arc::new(AtomicUsize::new(0));
         let num_waiting = Arc::new(AtomicUsize::new(0));
@@ -72,9 +104,7 @@ impl IntervalLogger {
         let spec_accepted_tokens = Arc::new(AtomicUsize::new(0));
 
         let t_prefix_cache_stats = prefix_cache_stats.clone();
-        let t_tokens_processed = tokens_processed.clone();
-        let t_prefill_tokens_processed = prefill_tokens_processed.clone();
-        let t_decode_tokens_processed = decode_tokens_processed.clone();
+        let t_throughput = throughput.clone();
         let t_enable_logging = enable_logging.clone();
         let t_num_running = num_running.clone();
         let t_num_waiting = num_waiting.clone();
@@ -117,10 +147,8 @@ impl IntervalLogger {
                     metrics::counter!("mistralrs_encoder_cache_misses_total")
                         .absolute(misses.load(Ordering::Relaxed) as u64);
                 }
-                let tokens_processed = t_tokens_processed.swap(0, Ordering::Relaxed);
-                let prefill_tokens_processed =
-                    t_prefill_tokens_processed.swap(0, Ordering::Relaxed);
-                let decode_tokens_processed = t_decode_tokens_processed.swap(0, Ordering::Relaxed);
+                let window = std::mem::take(&mut *t_throughput.lock().unwrap());
+                let tokens_processed = window.prefill_tokens + window.decode_tokens;
                 let spec_drafts = t_spec_drafts.swap(0, Ordering::Relaxed);
                 let spec_draft_tokens = t_spec_draft_tokens.swap(0, Ordering::Relaxed);
                 let spec_accepted_tokens = t_spec_accepted_tokens.swap(0, Ordering::Relaxed);
@@ -156,14 +184,14 @@ impl IntervalLogger {
                         String::new()
                     };
 
-                    // Throughput = tokens processed during this interval / interval duration.
-                    // The counter is atomically swapped to 0 each interval, so the metric
-                    // reflects only the current window and is not cumulative.
+                    // Counted tokens over the step durations that produced them. A chunk
+                    // that finishes inside this logging period is not divided by the period.
+                    let (total_rate, prefill_rate, decode_rate) = throughput_rates(&window);
                     info!(
                         "Throughput (T/s) {:.2} (prefill {:.2}, decode {:.2}), Prefix cache hitrate {:.2}%{enc_cache_info}{spec_info}, {num_running} running, {num_waiting} waiting",
-                        tokens_processed as f64 / interval.as_secs_f64(),
-                        prefill_tokens_processed as f64 / interval.as_secs_f64(),
-                        decode_tokens_processed as f64 / interval.as_secs_f64(),
+                        total_rate,
+                        prefill_rate,
+                        decode_rate,
                         100. * prefix_cache_hits as f64 / total_new_seqs as f64,
                     );
                 }
@@ -177,6 +205,7 @@ impl IntervalLogger {
             tokens_processed,
             prefill_tokens_processed,
             decode_tokens_processed,
+            throughput,
             enable_logging,
             num_running,
             num_waiting,
@@ -203,6 +232,7 @@ impl IntervalLogger {
         self.tokens_processed.store(0, Ordering::Relaxed);
         self.prefill_tokens_processed.store(0, Ordering::Relaxed);
         self.decode_tokens_processed.store(0, Ordering::Relaxed);
+        *self.throughput.lock().unwrap() = ThroughputWindow::default();
         self.num_running.store(0, Ordering::Relaxed);
         self.num_waiting.store(0, Ordering::Relaxed);
         if let Some(ref hits) = self.encoder_cache_hits {
@@ -216,28 +246,43 @@ impl IntervalLogger {
         self.spec_accepted_tokens.store(0, Ordering::Relaxed);
     }
 
-    /// Count prompt (prefill) tokens through the pipeline. Also advances the
-    /// combined `mistralrs_tokens_processed_total` counter, which always equals
+    /// Count prompt (prefill) tokens through the pipeline. `duration` is the
+    /// step that produced them; the live rate divides by that, not by the
+    /// logging period. Also advances the combined
+    /// `mistralrs_tokens_processed_total` counter, which always equals
     /// prefill plus decode tokens.
-    pub fn add_prefill_tokens_processed(&self, num_tokens: usize) {
+    pub fn add_prefill_tokens_processed(&self, num_tokens: usize, duration: Duration) {
+        if num_tokens == 0 {
+            return;
+        }
         self.tokens_processed
             .fetch_add(num_tokens, Ordering::Relaxed);
         self.prefill_tokens_processed
             .fetch_add(num_tokens, Ordering::Relaxed);
         metrics::counter!("mistralrs_tokens_processed_total").increment(num_tokens as u64);
         metrics::counter!("mistralrs_prefill_tokens_processed_total").increment(num_tokens as u64);
+        let mut window = self.throughput.lock().unwrap();
+        window.prefill_tokens += num_tokens;
+        window.prefill_nanos += duration.as_nanos();
     }
 
     /// Count generated (decode) tokens through the pipeline. With speculative
-    /// decoding only verified tokens are counted. Also advances the combined
-    /// `mistralrs_tokens_processed_total` counter.
-    pub fn add_decode_tokens_processed(&self, num_tokens: usize) {
+    /// decoding only verified tokens are counted. `duration` is the step that
+    /// produced them; the live rate divides by that, not by the logging period.
+    /// Also advances the combined `mistralrs_tokens_processed_total` counter.
+    pub fn add_decode_tokens_processed(&self, num_tokens: usize, duration: Duration) {
+        if num_tokens == 0 {
+            return;
+        }
         self.tokens_processed
             .fetch_add(num_tokens, Ordering::Relaxed);
         self.decode_tokens_processed
             .fetch_add(num_tokens, Ordering::Relaxed);
         metrics::counter!("mistralrs_tokens_processed_total").increment(num_tokens as u64);
         metrics::counter!("mistralrs_decode_tokens_processed_total").increment(num_tokens as u64);
+        let mut window = self.throughput.lock().unwrap();
+        window.decode_tokens += num_tokens;
+        window.decode_nanos += duration.as_nanos();
     }
 
     /// Record one speculative verification batch (across all its sequences).
@@ -422,7 +467,7 @@ mod tests {
         seq.take_staged_speculative_tokens();
         commit_token(&mut seq, 11, b" accepted");
         commit_token(&mut seq, 20, b" replacement");
-        snapshot.record(&logger, [&seq].into_iter());
+        snapshot.record(&logger, [&seq].into_iter(), Duration::ZERO);
 
         assert_eq!(logger.decode_tokens_processed.load(Ordering::Relaxed), 2);
         assert_eq!(logger.tokens_processed.load(Ordering::Relaxed), 2);
@@ -441,7 +486,7 @@ mod tests {
             let snapshot = DecodeTokenSnapshot::capture([&seq].into_iter());
 
             assert!(commit_token(&mut seq, token, bytes).is_some());
-            snapshot.record(&logger, [&seq].into_iter());
+            snapshot.record(&logger, [&seq].into_iter(), Duration::ZERO);
 
             assert_eq!(logger.decode_tokens_processed.load(Ordering::Relaxed), 1);
         }
@@ -456,7 +501,7 @@ mod tests {
         let snapshot = DecodeTokenSnapshot::capture([&seq].into_iter());
 
         seq.advance_num_computed_tokens(1);
-        snapshot.record(&logger, [&seq].into_iter());
+        snapshot.record(&logger, [&seq].into_iter(), Duration::ZERO);
 
         assert_eq!(logger.decode_tokens_processed.load(Ordering::Relaxed), 0);
         assert_eq!(logger.tokens_processed.load(Ordering::Relaxed), 0);
@@ -472,6 +517,65 @@ mod tests {
             logger.sequence_capacity.load(Ordering::Relaxed),
             TEST_SEQUENCE_CAPACITY
         );
+    }
+
+    #[test]
+    fn throughput_is_tokens_over_step_duration() {
+        let logger = IntervalLogger::new(INACTIVE_LOGGER_INTERVAL, None);
+        logger.add_prefill_tokens_processed(512, Duration::from_secs(90));
+        logger.add_decode_tokens_processed(1, Duration::from_millis(125));
+
+        let (total, prefill, decode) = throughput_rates(&logger.throughput.lock().unwrap());
+
+        let expected_prefill = 512.0 / 90.0;
+        assert!(
+            (prefill - expected_prefill).abs() < 1e-9,
+            "prefill {prefill} was divided by the logging interval"
+        );
+        assert!(
+            (decode - 8.0).abs() < 1e-9,
+            "decode {decode} stepped by one token per logging interval"
+        );
+        let expected_total = 513.0 / 90.125;
+        assert!((total - expected_total).abs() < 1e-9, "{total}");
+    }
+
+    #[test]
+    fn throughput_boundaries_are_zero_duration_and_summed_steps() {
+        let logger = IntervalLogger::new(INACTIVE_LOGGER_INTERVAL, None);
+
+        logger.add_prefill_tokens_processed(0, Duration::from_secs(90));
+        logger.add_decode_tokens_processed(0, Duration::from_millis(125));
+        let (_, prefill, decode) = throughput_rates(&logger.throughput.lock().unwrap());
+        assert_eq!(prefill, 0.0);
+        assert_eq!(decode, 0.0);
+
+        logger.add_decode_tokens_processed(1, Duration::ZERO);
+        let (total, _, decode) = throughput_rates(&logger.throughput.lock().unwrap());
+        assert_eq!(decode, 0.0);
+        assert_eq!(total, 0.0);
+
+        let logger = IntervalLogger::new(INACTIVE_LOGGER_INTERVAL, None);
+        logger.add_decode_tokens_processed(1, Duration::from_nanos(1));
+        let (_, _, decode) = throughput_rates(&logger.throughput.lock().unwrap());
+        assert!((decode - 1_000_000_000.0).abs() < 1.0, "{decode}");
+
+        let logger = IntervalLogger::new(INACTIVE_LOGGER_INTERVAL, None);
+        logger.add_decode_tokens_processed(1, Duration::from_millis(100));
+        logger.add_decode_tokens_processed(1, Duration::from_millis(300));
+        let (_, _, decode) = throughput_rates(&logger.throughput.lock().unwrap());
+        assert!((decode - 5.0).abs() < 1e-9, "{decode}");
+
+        let taken = std::mem::take(&mut *logger.throughput.lock().unwrap());
+        let (_, _, decode) = throughput_rates(&taken);
+        assert!((decode - 5.0).abs() < 1e-9, "{decode}");
+        let (_, _, decode) = throughput_rates(&logger.throughput.lock().unwrap());
+        assert_eq!(decode, 0.0);
+
+        logger.add_prefill_tokens_processed(512, Duration::from_secs(90));
+        logger.reset();
+        let (total, prefill, decode) = throughput_rates(&logger.throughput.lock().unwrap());
+        assert_eq!((total, prefill, decode), (0.0, 0.0, 0.0));
     }
 
     #[test]
