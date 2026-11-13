@@ -1867,7 +1867,8 @@ impl Sequence {
         if total > 0 {
             #[allow(clippy::cast_precision_loss)]
             {
-                self.prompt_tok_per_sec = self.prompt_len as f32 / (total as f32 / 1000.0);
+                let processed = self.prompt_len.saturating_sub(self.prefix_cache_len());
+                self.prompt_tok_per_sec = processed as f32 / (total as f32 / 1000.0);
             }
         }
         self.update_time_info();
@@ -2372,7 +2373,10 @@ impl SequenceGroup {
                 0.0
             },
             avg_prompt_tok_per_sec: if self.total_prompt_time > 0 {
-                (self.total_prompt_toks as f32 / self.total_prompt_time as f32) * 1000.
+                let processed = self
+                    .total_prompt_toks
+                    .saturating_sub(self.total_cached_toks);
+                (processed as f32 / self.total_prompt_time as f32) * 1000.
             } else {
                 0.0
             },
@@ -2833,6 +2837,35 @@ mod tests {
 
         assert_eq!(seq.total_prompt_time, Some(2_000));
         assert_eq!(seq.prompt_tok_per_sec, 4.0);
+    }
+
+    #[test]
+    fn prompt_rate_excludes_prefix_cached_tokens() {
+        let seq = make_test_sequence();
+        let mut seq = seq.prefill_v2_normal(vec![], vec![5, 6, 7, 8], 4);
+        seq.finish_prompt_timing(Duration::from_secs(1));
+
+        assert_eq!(seq.total_prompt_time, Some(1_000));
+        assert_eq!(seq.prompt_tok_per_sec, 4.0);
+
+        let usage = seq.get_mut_group().get_usage();
+        assert_eq!(usage.prompt_tokens, 8);
+        assert_eq!(usage.avg_prompt_tok_per_sec, 4.0);
+
+        // boundary: zero cached (uses full prompt_len)
+        let mut seq0 = make_test_sequence();
+        seq0.cache.push(None);
+        seq0.finish_prompt_timing(Duration::from_secs(1));
+        assert_eq!(seq0.prompt_tok_per_sec, 8.0);
+        let u0 = seq0.get_mut_group().get_usage();
+        assert_eq!(u0.avg_prompt_tok_per_sec, 8.0);
+
+        // time==0 guard: rate 0
+        let mut seqz = make_test_sequence();
+        seqz.cache.push(None);
+        seqz.update_time_info();
+        let uz = seqz.get_mut_group().get_usage();
+        assert_eq!(uz.avg_prompt_tok_per_sec, 0.0);
     }
 
     fn add_test_media(seq: &mut Sequence) {
