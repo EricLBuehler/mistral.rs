@@ -44,6 +44,10 @@ If you have several GPUs, you can also spread the model across them. See [distri
 
 ## Runtime
 
+### Server never becomes ready on several GPUs
+
+With NCCL tensor parallelism on PCIe GPUs, the log can stop after `Model loaded.` while the GPUs stay at 100% use. It was seen on two NVIDIA L4 cards in a cloud container, and `NCCL_P2P_LEVEL=NVL` or `NCCL_P2P_DISABLE=1` fixed it there. Launch with one of them. See [distributed inference](/guides/perf/distributed-inference/#select-gpus).
+
 ### Generation slower than expected
 
 Run `mistralrs doctor` and check the `Build features:` line. If `cuda` (or `metal` on a Mac) is missing, the binary was built without GPU support. Reinstall with the [installer](/reference/installer/) or rebuild with the right [Cargo features](/reference/cargo-features/).
