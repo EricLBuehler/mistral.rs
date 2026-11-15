@@ -46,6 +46,10 @@ mistral.rs renumbers the visible GPUs from 0. With `CUDA_VISIBLE_DEVICES=2,3`, r
 
 Tensor parallelism needs the model's attention heads to split evenly across the GPUs. The KV heads must also split evenly, or, when there are fewer KV heads than GPUs, the GPU count must be a multiple of the KV head count. If that doesn't work for all visible GPUs, mistral.rs uses the largest GPU count that does and logs the size it chose. For example, Qwen3-32B has 64 attention heads and 8 KV heads, so on 3 GPUs it runs tensor-parallel on 2, and on 6 GPUs it runs on 4. If no count works, the model loads without tensor parallelism. Use `CUDA_VISIBLE_DEVICES` to control exactly which GPUs take part.
 
+:::caution
+With NCCL tensor parallelism on PCIe GPUs without NVLink, the server can stall. It logs `Model loaded.`, then never answers, and the GPUs stay at 100% use with no error. This was seen on two NVIDIA L4 cards in a cloud container. If it happens, set `NCCL_P2P_LEVEL=NVL` to use peer-to-peer only over NVLink, or `NCCL_P2P_DISABLE=1` to turn it off, in the shell before launching.
+:::
+
 ### Layer mapping (CUDA P2P)
 
 By default, layer mapping gives each GPU a contiguous range of layers, in GPU order, sized to that GPU's free memory. It budgets weights, working memory, and the KV cache together; see [memory budget](/guides/perf/paged-attention/#memory-budget).
