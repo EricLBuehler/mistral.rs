@@ -2230,6 +2230,8 @@ impl Engine {
             #[cfg(not(feature = "cuda"))]
             self.free_finished_scheduler_sequences(&mut *scheduler);
         }
+        // Decode graphs capture this thread's cuTile modules, so they go before the thread does.
+        get_mut_arcmutex!(self.pipeline).cleanup_cuda_graphs();
     }
 
     fn build_sequence_recognizer(
