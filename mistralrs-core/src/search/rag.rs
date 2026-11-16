@@ -34,7 +34,7 @@ pub struct SearchPipeline {
     model: Arc<TokioMutex<dyn Pipeline + Send + Sync>>,
     tokenizer: Arc<Tokenizer>,
     device: Device,
-    has_causal_attention: bool,
+    embedding_model: SearchEmbeddingModel,
     max_seq_len: usize,
 }
 
@@ -100,7 +100,7 @@ impl SearchPipeline {
             model: pipeline,
             tokenizer,
             device,
-            has_causal_attention: false,
+            embedding_model: model,
             max_seq_len,
         })
     }
@@ -110,7 +110,7 @@ impl SearchPipeline {
             return Ok(Vec::new());
         }
 
-        let encoded: Vec<(usize, Vec<u32>)> = prompts
+        let mut encoded: Vec<(usize, Vec<u32>)> = prompts
             .iter()
             .enumerate()
             .map(|(idx, prompt)| {
@@ -122,22 +122,25 @@ impl SearchPipeline {
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
 
+        let causal = self.embedding_model == SearchEmbeddingModel::Qwen3Embedding;
+        let batches: Vec<_> = if causal {
+            // Last-token pooling would select padding for shorter sequences.
+            encoded.sort_unstable_by_key(|(_, ids)| ids.len());
+            encoded
+                .chunk_by(|(_, a), (_, b)| a.len() == b.len())
+                .flat_map(|group| group.chunks(EMBEDDING_BATCH))
+                .collect()
+        } else {
+            encoded.chunks(EMBEDDING_BATCH).collect()
+        };
+
         let mut outputs = vec![Vec::new(); prompts.len()];
-        // Batch all prompts together — make_prompt_chunk handles variable-length
-        // sequences via flash attention cumulative sequence lengths.
-        for chunk_entries in encoded.chunks(EMBEDDING_BATCH) {
+        for chunk_entries in batches {
             let slices: Vec<&[u32]> = chunk_entries
                 .iter()
                 .map(|(_, ids)| ids.as_slice())
                 .collect();
-            let chunk = make_prompt_chunk(
-                0,
-                slices,
-                &self.device,
-                None,
-                self.has_causal_attention,
-                None,
-            )?;
+            let chunk = make_prompt_chunk(0, slices, &self.device, None, causal, None)?;
             let inputs = Box::new(ModelInputs {
                 input_ids: chunk.input,
                 flash_meta: chunk.flash_meta,
@@ -261,8 +264,14 @@ fn sanitize_title(title: &str) -> String {
     }
 }
 
-fn format_query_prompt(query: &str) -> String {
-    format!("task: search result | query: {}", query.trim())
+fn format_query_prompt(model: SearchEmbeddingModel, query: &str) -> String {
+    let query = query.trim();
+    match model {
+        SearchEmbeddingModel::EmbeddingGemma300M => format!("task: search result | query: {query}"),
+        SearchEmbeddingModel::Qwen3Embedding => format!(
+            "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: {query}"
+        ),
+    }
 }
 
 fn format_document_prompt(title: &str, text: &str) -> String {
@@ -340,7 +349,7 @@ pub fn rank_document_chunks(
 
     // 3. Neural re-ranking: embed query + only the BM25 top-K chunks.
     let query_embedding = pipeline
-        .embed(&[format_query_prompt(query)])?
+        .embed(&[format_query_prompt(pipeline.embedding_model, query)])?
         .into_iter()
         .next()
         .context("Failed to generate embedding for search query")?;

@@ -1066,7 +1066,7 @@ class Runner:
           with `no_paged_attn`.
         - `seed`: random seed, for reproducible sampling.
         - `enable_search`: load a reranker for web search results. The default is EmbeddingGemma.
-        - `search_embedding_model`: which reranker to load. The only option is `"embedding_gemma"`.
+        - `search_embedding_model`: which reranker to load. Use `"embedding_gemma"` or `"qwen3_embedding"`.
         - `search_callback`: a function to run web searches yourself. It takes the query string and returns
           a list of dicts with `"title"`, `"description"`, `"url"`, and `"content"`.
         - `tool_callbacks`: map of tool name to a Python function that runs that tool. The function gets the

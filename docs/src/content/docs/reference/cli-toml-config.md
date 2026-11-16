@@ -65,7 +65,7 @@ Memory sizing and device placement are automatic. For optional overrides, see [p
 | `mcp_config` | `--mcp-config` | not set | [MCP (Model Context Protocol)](/guides/agents/connect-mcp-server/) client configuration JSON for outbound servers. Also reads `MCP_CONFIG_PATH` if unset. |
 | `agent` | `--agent` (alias `--agentic`) | false | Shortcut for `enable_search = true` + `enable_code_execution = true` + `enable_shell = true`. |
 | `enable_search` | `--enable-search` | false | Enable the built-in web search tool. |
-| `search_embedding_model` | `--search-embedding-model` | not set | Search reranker; `embedding-gemma` is the only accepted value. Requires `enable_search` (or `agent`). |
+| `search_embedding_model` | `--search-embedding-model` | not set | Search reranker; Accepts `embedding-gemma` or `qwen3-embedding`. Requires `enable_search` (or `agent`). |
 | `enable_code_execution` | `--enable-code-execution` | false | Enable Python code execution. |
 | `code_exec_python` | `--code-exec-python` | `python` on Windows, `python3` elsewhere | Python interpreter. Requires `enable_code_execution` (or `agent`). |
 | `code_exec_timeout` | `--code-exec-timeout` | 60 | Per-call timeout in seconds. Requires `enable_code_execution` (or `agent`). |

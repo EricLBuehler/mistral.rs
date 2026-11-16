@@ -115,17 +115,19 @@ pub enum SearchEmbeddingModel {
     #[default]
     #[serde(rename = "embedding_gemma")]
     EmbeddingGemma300M,
+    Qwen3Embedding,
 }
 
 impl SearchEmbeddingModel {
     pub fn hf_model_id(&self) -> &'static str {
         match self {
             Self::EmbeddingGemma300M => "google/embeddinggemma-300m",
+            Self::Qwen3Embedding => "Qwen/Qwen3-Embedding-0.6B",
         }
     }
 
     pub fn variants() -> &'static [&'static str] {
-        &["embedding_gemma"]
+        &["embedding_gemma", "qwen3_embedding"]
     }
 }
 
@@ -133,6 +135,7 @@ impl fmt::Display for SearchEmbeddingModel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::EmbeddingGemma300M => f.write_str("embedding_gemma"),
+            Self::Qwen3Embedding => f.write_str("qwen3_embedding"),
         }
     }
 }
@@ -143,6 +146,7 @@ impl FromStr for SearchEmbeddingModel {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.trim().to_ascii_lowercase().as_str() {
             "embedding_gemma" => Ok(Self::EmbeddingGemma300M),
+            "qwen3_embedding" => Ok(Self::Qwen3Embedding),
             other => Err(format!(
                 "Unknown search embedding model `{other}`. Supported values: {}",
                 Self::variants().join(", ")
