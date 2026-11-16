@@ -105,9 +105,11 @@ A search returns more page text than the model can usefully read, so mistral.rs 
 | With a reranker | Pages are split into passages of about 500 tokens. A keyword pass keeps the best 20, and an embedding model orders those by how well they answer the query. | The most relevant passages, drawn from across all the results. |
 | Without a reranker | Whole pages are ranked by keyword overlap with the query. | As many complete pages as fit in the budget. |
 
-The reranker gives the model more relevant text, from more sources, in the same budget. The cost is an extra small model, [google/embeddinggemma-300m](https://huggingface.co/google/embeddinggemma-300m), which is downloaded and loaded at startup.
+The reranker gives the model more relevant text from more sources in the same budget. It loads an extra embedding model at startup. The default, [google/embeddinggemma-300m](https://huggingface.co/google/embeddinggemma-300m), requires accepting the model terms and signing in to Hugging Face for the first download.
 
-The reranker is on by default whenever you turn on search: `--enable-search` or `--agent` on the CLI, `enable_search=True` in Python, and `.with_search(...)` in Rust. `--search-embedding-model embedding-gemma` selects it explicitly; it's currently the only choice. In Rust, a request with `web_search_options` on a model built without `.with_search(...)` still searches, using keyword ranking only.
+To use the public [Qwen/Qwen3-Embedding-0.6B](https://huggingface.co/Qwen/Qwen3-Embedding-0.6B) checkpoint without signing in, set `--search-embedding-model qwen3-embedding` alongside `--enable-search` or `--agent`. In Python, pass `search_embedding_model="qwen3_embedding"`. In Rust, use `SearchEmbeddingModel::Qwen3Embedding`.
+
+In Rust, a request with `web_search_options` uses keyword ranking only unless you configure the reranker with `.with_search(...)`.
 
 ## Per-request options
 

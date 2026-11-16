@@ -903,6 +903,7 @@ impl BenchRuntimeOptions {
 #[serde(rename_all = "kebab-case")]
 pub enum SearchEmbeddingModelArg {
     EmbeddingGemma,
+    Qwen3Embedding,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum, Deserialize)]
@@ -1004,6 +1005,9 @@ impl From<SearchEmbeddingModelArg> for mistralrs_core::SearchEmbeddingModel {
         match value {
             SearchEmbeddingModelArg::EmbeddingGemma => {
                 mistralrs_core::SearchEmbeddingModel::EmbeddingGemma300M
+            }
+            SearchEmbeddingModelArg::Qwen3Embedding => {
+                mistralrs_core::SearchEmbeddingModel::Qwen3Embedding
             }
         }
     }
@@ -1108,6 +1112,68 @@ fn default_max_decode_steps_before_prefill() -> NonZeroUsize {
 mod tests {
     use super::*;
     use std::{fs, path::Path};
+
+    #[test]
+    fn search_embedding_model_is_selectable_on_cli_and_in_config() {
+        for (cli_name, sdk_name, model_id) in [
+            (
+                "embedding-gemma",
+                "embedding_gemma",
+                "google/embeddinggemma-300m",
+            ),
+            (
+                "qwen3-embedding",
+                "qwen3_embedding",
+                "Qwen/Qwen3-Embedding-0.6B",
+            ),
+        ] {
+            let model: mistralrs_core::SearchEmbeddingModel = sdk_name.parse().unwrap();
+            assert_eq!(model.to_string(), sdk_name);
+            assert_eq!(model.hf_model_id(), model_id);
+            assert_eq!(
+                serde_json::from_str::<mistralrs_core::SearchEmbeddingModel>(&format!(
+                    "\"{sdk_name}\""
+                ))
+                .unwrap(),
+                model
+            );
+
+            for command in ["run", "serve"] {
+                let (agent_options, mut runtime) = match Cli::try_parse_from([
+                    "mistralrs",
+                    command,
+                    "--enable-search",
+                    "--search-embedding-model",
+                    cli_name,
+                ])
+                .unwrap()
+                .command
+                {
+                    Command::Run {
+                        agent_options,
+                        runtime,
+                        ..
+                    }
+                    | Command::Serve {
+                        agent_options,
+                        runtime,
+                        ..
+                    } => (agent_options, runtime),
+                    _ => unreachable!(),
+                };
+                agent_options.apply_to(&mut runtime);
+                assert!(runtime.enable_search);
+                assert_eq!(runtime.search_embedding_model.map(Into::into), Some(model));
+            }
+            let config: RuntimeOptions =
+                toml::from_str(&format!("search_embedding_model = \"{cli_name}\"")).unwrap();
+            assert_eq!(config.search_embedding_model.map(Into::into), Some(model));
+        }
+        assert_eq!(
+            mistralrs_core::SearchEmbeddingModel::default().to_string(),
+            "embedding_gemma"
+        );
+    }
 
     #[test]
     fn prefix_cache_defaults_preserve_explicit_counts() {

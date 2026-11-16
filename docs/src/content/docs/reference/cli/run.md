@@ -72,7 +72,7 @@ mistralrs run [OPTIONS] [COMMAND]
 | `--mcp-config <MCP_CONFIG>` |  | Path to an MCP client configuration JSON. Also reads `MCP_CONFIG_PATH` if unset |
 | `--agent` | `false` | Run as a local agent that can search the web and run Python and shell commands, each session in its own temp directory. Same as `--enable-search --enable-code-execution --enable-shell` |
 | `--enable-search` | `false` | Give the model a web search tool. Also loads a small embedding model to rank results |
-| `--search-embedding-model <SEARCH_EMBEDDING_MODEL>` |  | Embedding model that ranks search results. Requires `--enable-search` or `--agent`. Possible values: `embedding-gemma`. |
+| `--search-embedding-model <SEARCH_EMBEDDING_MODEL>` |  | Embedding model that ranks search results. Requires `--enable-search` or `--agent`. Possible values: `embedding-gemma`, `qwen3-embedding`. |
 | `--enable-code-execution` | `false` | Enable Python code execution tool (WARNING: allows arbitrary code execution) |
 | `--enable-shell` | `false` | Enable shell execution tool (WARNING: allows arbitrary command execution) |
 | `--code-exec-python <CODE_EXEC_PYTHON>` |  | Python interpreter path for code execution. Requires code execution to be on (via `--enable-code-execution` or `--agent`). Defaults to `python3` |
