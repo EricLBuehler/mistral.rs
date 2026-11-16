@@ -54,11 +54,11 @@ async fn main() -> Result<()> {
     messages = messages.add_message(TextMessageRole::Assistant, resp);
 
     let bytes = reqwest::get(
-"https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg"
-)
-.await?
-.bytes()
-.await?;
+        "https://www.nhmagazine.com/content/uploads/2019/05/mtwashingtonFranconia-2-19-18-108-Edit-Edit.jpg",
+    )
+    .await?
+    .bytes()
+    .await?;
     let image = image::load_from_memory(&bytes)?;
 
     messages = messages.add_image_message(TextMessageRole::User, "What is this?", vec![image]);
