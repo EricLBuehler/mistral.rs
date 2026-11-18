@@ -564,10 +564,7 @@ impl QuantMethod for GgufMatMul {
         // - indices: (n_tokens, n_experts_per_tok)
         // - weights (self): (n_experts, out_features, in_features)
         // For CPU and Metal: use dequantize-then-matmul approach
-        //
-        // If the expert weights were offloaded to a different device than the activations
-        // (e.g. a topology placing experts on CPU), run on the weights' device and move the
-        // result back to the activations' device.
+        // Offloaded experts (topology) run on their own device, then the result moves back.
         let x_device = x.device().clone();
         let x_dtype = x.dtype();
         let offload_device = self
@@ -1314,8 +1311,7 @@ mod tests {
         Ok(())
     }
 
-    /// Experts offloaded to CPU (e.g. via a topology) must still work when the activations are on
-    /// CUDA: the result matches an all-CPU run and comes back on the activations' device and dtype.
+    /// CPU experts with CUDA activations match an all-CPU run and return on the CUDA device.
     #[cfg(feature = "cuda")]
     #[test]
     fn gather_forward_raw_runs_cpu_experts_with_cuda_activations() -> Result<()> {

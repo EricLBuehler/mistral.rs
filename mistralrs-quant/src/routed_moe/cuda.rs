@@ -70,8 +70,7 @@ impl RoutedExperts<'_> {
         let Device::Cuda(dev) = forward.xs_flat.device() else {
             return None;
         };
-        // The fused kernels read the expert weights directly, so they only work when every
-        // expert projection lives on the same device as the activations (not offloaded to CPU).
+        // fused kernels read expert weights directly, so they need them on the activations' device
         if !self.members().iter().all(|member| {
             member
                 .dtype_and_device()
