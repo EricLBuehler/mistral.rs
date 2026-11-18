@@ -12,6 +12,25 @@ use uuid::Uuid;
 
 use crate::responses_types::{ResponseError, ResponseResource, ResponseStatus};
 
+/// Stored results also live in the response cache, so this only drops the background bookkeeping.
+const FINISHED_TASK_TTL_SECS: u64 = 60 * 60;
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+}
+
+fn retain_unexpired(tasks: &mut HashMap<String, BackgroundTask>, now: u64, max_age_secs: u64) {
+    tasks.retain(|_, task| {
+        matches!(
+            task.state,
+            BackgroundTaskState::Queued | BackgroundTaskState::InProgress
+        ) || now.saturating_sub(task.created_at) < max_age_secs
+    });
+}
+
 /// State of a background task
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
@@ -46,15 +65,10 @@ pub struct BackgroundTask {
 impl BackgroundTask {
     /// Create a new background task
     pub fn new(id: String, model: String) -> Self {
-        let created_at = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
         Self {
             id,
             state: BackgroundTaskState::Queued,
-            created_at,
+            created_at: now_secs(),
             model,
             cancel_requested: false,
         }
@@ -109,6 +123,7 @@ impl BackgroundTaskManager {
         let task = BackgroundTask::new(id.clone(), model);
 
         let mut tasks = self.tasks.write().unwrap();
+        retain_unexpired(&mut tasks, task.created_at, FINISHED_TASK_TTL_SECS);
         tasks.insert(id.clone(), task);
 
         id
@@ -205,24 +220,8 @@ impl BackgroundTaskManager {
 
     /// Clean up old completed/failed tasks older than the given duration (in seconds)
     pub fn cleanup_old_tasks(&self, max_age_secs: u64) {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
         let mut tasks = self.tasks.write().unwrap();
-        tasks.retain(|_, task| {
-            // Keep queued and in-progress tasks
-            if matches!(
-                task.state,
-                BackgroundTaskState::Queued | BackgroundTaskState::InProgress
-            ) {
-                return true;
-            }
-
-            // Remove old completed/failed/cancelled tasks
-            now - task.created_at < max_age_secs
-        });
+        retain_unexpired(&mut tasks, now_secs(), max_age_secs);
     }
 }
 
@@ -291,5 +290,46 @@ mod tests {
         assert!(manager.mark_cancelled(&id));
         let task = manager.get_task(&id).unwrap();
         assert!(matches!(task.state, BackgroundTaskState::Cancelled));
+    }
+
+    #[test]
+    fn creating_a_task_evicts_expired_finished_tasks() {
+        let manager = BackgroundTaskManager::new();
+        let finished = manager.create_task("test-model".to_string());
+        let running = manager.create_task("test-model".to_string());
+        manager.mark_failed(
+            &finished,
+            ResponseError::new("server_error", "failed".to_string()),
+        );
+        manager.mark_in_progress(&running);
+        {
+            let mut tasks = manager.tasks.write().unwrap();
+            for task in tasks.values_mut() {
+                task.created_at -= FINISHED_TASK_TTL_SECS;
+            }
+        }
+
+        manager.create_task("test-model".to_string());
+
+        assert!(manager.get_task(&finished).is_none());
+        assert!(manager.get_task(&running).is_some());
+    }
+
+    #[test]
+    fn cleanup_tolerates_a_clock_that_moved_backwards() {
+        let manager = BackgroundTaskManager::new();
+        let id = manager.create_task("test-model".to_string());
+        manager.mark_cancelled(&id);
+        manager
+            .tasks
+            .write()
+            .unwrap()
+            .get_mut(&id)
+            .unwrap()
+            .created_at = u64::MAX;
+
+        manager.cleanup_old_tasks(FINISHED_TASK_TTL_SECS);
+
+        assert!(manager.get_task(&id).is_some());
     }
 }
