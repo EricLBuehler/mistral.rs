@@ -65,6 +65,7 @@ pub struct GgufMatMul {
     pub(crate) w: QMatMul,
     pub(crate) b: Option<Tensor>,
     stats: crate::ImatrixLayerStats,
+    expert_matmuls: cpu::ExpertMatMuls,
     #[cfg(all(feature = "cuda", has_marlin_kernels))]
     packed_affine: OnceLock<Option<Arc<packed_affine::PackedAffine>>>,
     #[cfg(all(feature = "cuda", has_marlin_kernels))]
@@ -167,6 +168,7 @@ impl GgufMatMul {
             w,
             b,
             stats,
+            expert_matmuls: cpu::ExpertMatMuls::default(),
             #[cfg(all(feature = "cuda", has_marlin_kernels))]
             packed_affine: OnceLock::new(),
             #[cfg(all(feature = "cuda", has_marlin_kernels))]
@@ -587,11 +589,12 @@ impl QuantMethod for GgufMatMul {
         let res = if x.device().is_cuda() {
             cuda::qmatmul_indexed_moe_forward(&self.w, x, indices)?
         } else {
-            cpu::cpu_indexed_moe_forward(&self.w, x, indices)?
+            cpu::cpu_indexed_moe_forward_cached(&self.w, Some(&self.expert_matmuls), x, indices)?
         };
 
         #[cfg(not(feature = "cuda"))]
-        let res = cpu::cpu_indexed_moe_forward(&self.w, x, indices)?;
+        let res =
+            cpu::cpu_indexed_moe_forward_cached(&self.w, Some(&self.expert_matmuls), x, indices)?;
 
         let res = if let Some(b) = &self.b {
             if b.rank() == 2 {
