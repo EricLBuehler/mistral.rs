@@ -2495,7 +2495,7 @@ fn new_cuda_async_token_slot(
     let event_flags = Some(sys::CUevent_flags::CU_EVENT_BLOCKING_SYNC);
     Ok(CudaAsyncTokenSlot {
         owned_token_ids,
-        token_ids_host: unsafe { context.alloc_pinned::<u32>(capacity_rows) }
+        token_ids_host: unsafe { context.alloc_pinned_with_flags::<u32>(capacity_rows, 0) }
             .map_err(candle_core::Error::wrap)?,
         device_ready: std::sync::Arc::new(
             context
@@ -2842,7 +2842,7 @@ fn new_cuda_top1_slot(
         block_values: unsafe { dev.alloc::<f32>(workspace_elems) }?,
         block_indices: unsafe { dev.alloc::<u32>(workspace_elems) }?,
         packed: unsafe { dev.alloc::<f32>(packed_elems) }?,
-        packed_host: unsafe { context.alloc_pinned::<f32>(packed_elems) }
+        packed_host: unsafe { context.alloc_pinned_with_flags::<f32>(packed_elems, 0) }
             .map_err(candle_core::Error::wrap)?,
     })
 }
