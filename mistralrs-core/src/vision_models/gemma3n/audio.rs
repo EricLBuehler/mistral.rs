@@ -1316,8 +1316,8 @@ impl AudioModel {
         let t_sub = audio_encodings.dim(1)?;
 
         let mut time_stride_product = 1;
-        for i in 0..self.sscp_conv_stride_size.len() {
-            time_stride_product *= self.sscp_conv_stride_size[i][0];
+        for stride in &self.sscp_conv_stride_size {
+            time_stride_product *= stride[0];
         }
 
         // Create indices for gathering from the original mask

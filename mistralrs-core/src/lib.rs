@@ -2210,11 +2210,7 @@ impl MistralRs {
             .unloaded_models
             .read()
             .map_err(|_| MistralRsError::EnginePoisoned)?;
-        if unloaded.contains_key(&resolved_model_id) {
-            return Ok(true);
-        }
-
-        Ok(false)
+        Ok(unloaded.contains_key(&resolved_model_id))
     }
 
     /// Get the interval logger for a specific model. If model_id is None, uses default engine.

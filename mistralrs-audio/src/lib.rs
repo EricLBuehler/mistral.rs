@@ -130,9 +130,8 @@ impl AudioInput {
     pub fn apply_fade(&mut self, fade_in_samples: usize, fade_out_samples: usize) -> &mut Self {
         let len = self.samples.len();
         // Fade in
-        for i in 0..fade_in_samples.min(len) {
-            let factor = i as f32 / fade_in_samples as f32;
-            self.samples[i] *= factor;
+        for (i, sample) in self.samples.iter_mut().enumerate().take(fade_in_samples) {
+            *sample *= i as f32 / fade_in_samples as f32;
         }
         // Fade out
         for i in 0..fade_out_samples.min(len) {
