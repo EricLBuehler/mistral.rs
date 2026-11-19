@@ -1176,10 +1176,16 @@ impl futures::Stream for OpenResponsesStreamer {
                 return Poll::Ready(Some(Ok(Event::default().data("[DONE]"))));
             }
             DoneState::Done => {
-                // Store conversation history if needed
+                // Store the final response and conversation history if needed
                 if self.store {
+                    let cache = get_response_cache();
+                    if let Some(response) = final_response(&self.events) {
+                        let _ = cache.store_response(
+                            self.streaming_state.response_id.clone(),
+                            response.clone(),
+                        );
+                    }
                     if let Some(history) = self.conversation_history.take() {
-                        let cache = get_response_cache();
                         let mut history = history;
 
                         // Add assistant's response
@@ -1619,6 +1625,16 @@ impl futures::Stream for OpenResponsesStreamer {
             Poll::Pending => Poll::Pending,
         }
     }
+}
+
+// Stream errors carry no response resource, so like the non-streaming path they leave nothing to store.
+fn final_response(events: &[OpenResponsesStreamEvent]) -> Option<&ResponseResource> {
+    events.iter().rev().find_map(|event| match event {
+        OpenResponsesStreamEvent::ResponseCompleted { response, .. }
+        | OpenResponsesStreamEvent::ResponseFailed { response, .. }
+        | OpenResponsesStreamEvent::ResponseIncomplete { response, .. } => Some(response),
+        _ => None,
+    })
 }
 
 /// Get the event type string for an event
@@ -2457,6 +2473,53 @@ pub async fn cancel_response(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn resource(status: ResponseStatus) -> ResponseResource {
+        let mut response = ResponseResource::new("resp_1".to_string(), "model".to_string(), 0);
+        response.status = status;
+        response
+    }
+
+    #[test]
+    fn final_response_is_the_terminal_event_of_a_stream() {
+        let events = vec![
+            OpenResponsesStreamEvent::ResponseCreated {
+                sequence_number: 0,
+                response: resource(ResponseStatus::Queued),
+            },
+            OpenResponsesStreamEvent::ResponseInProgress {
+                sequence_number: 1,
+                response: resource(ResponseStatus::InProgress),
+            },
+            OpenResponsesStreamEvent::ResponseCompleted {
+                sequence_number: 2,
+                response: resource(ResponseStatus::Completed),
+            },
+        ];
+
+        assert_eq!(
+            final_response(&events).unwrap().status,
+            ResponseStatus::Completed
+        );
+    }
+
+    #[test]
+    fn a_stream_that_ended_in_an_error_event_has_no_final_response() {
+        let events = vec![
+            OpenResponsesStreamEvent::ResponseCreated {
+                sequence_number: 0,
+                response: resource(ResponseStatus::Queued),
+            },
+            OpenResponsesStreamEvent::Error {
+                sequence_number: 1,
+                code: "server_error".to_string(),
+                message: "boom".to_string(),
+                param: None,
+            },
+        ];
+
+        assert!(final_response(&events).is_none());
+    }
 
     #[test]
     fn stream_error_matches_openai_shape() {
