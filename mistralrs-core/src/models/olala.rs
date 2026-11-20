@@ -1,6 +1,6 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
+use candle_core::{DType, Device, Result, Tensor, D};
 use mistralrs_quant::ShardedVarBuilder;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
@@ -574,72 +574,30 @@ impl Model {
             v_cache.slice_assign(&[pos..pos + 1, 0..hn * dh], &v_row.reshape((1, hn * dh))?)?;
 
         let n_cells = pos + 1;
-        let k_all = k_cache.narrow(0, 0, n_cells)?;
-        let v_all = v_cache.narrow(0, 0, n_cells)?;
+        let k_all = k_cache.narrow(0, 0, n_cells)?.reshape((n_cells, hn, dh))?;
+        let v_all = v_cache.narrow(0, 0, n_cells)?.reshape((n_cells, hn, dh))?;
 
         let softcap = cfg.attn_logit_softcapping as f32;
-        let mut cells = Vec::with_capacity(n_cells);
-        for c in 0..n_cells {
-            let kc = k_all.narrow(0, c, 1)?.reshape((hn, dh))?;
-            let vc = v_all.narrow(0, c, 1)?.reshape((hn, dh))?;
-            cells.push((kc, vc));
+        let qg = qs.reshape((hn, g, dh))?;
+        let kk = k_all.permute((1, 2, 0))?.contiguous()?;
+        let vv = v_all.permute((1, 0, 2))?.contiguous()?;
+        let mut s = qg.matmul(&kk)?.affine(1.0 / dh as f64, 0.0)?;
+        if softcap > 0.0 {
+            s = s
+                .affine(1.0 / f64::from(softcap), 0.0)?
+                .tanh()?
+                .affine(f64::from(softcap), 0.0)?;
         }
-
-        let mut o_full = Tensor::zeros((h, dh), DType::F32, &self.device)?;
-        for kv in 0..hn {
-            let qg = qs.narrow(0, kv * g, g)?;
-            let mut m_vec = vec![f32::NEG_INFINITY; g];
-            let mut l_vec = vec![0.0f32; g];
-            let mut acc = Tensor::zeros((g, dh), DType::F32, &self.device)?;
-            for (kc, vc) in &cells {
-                let vg = vc.narrow(0, kv, 1)?.reshape((dh,))?;
-                let kg = kc.narrow(0, kv, 1)?.reshape((dh,))?;
-                let s = qg
-                    .matmul(&kg.reshape((dh, 1))?)?
-                    .reshape((g,))?
-                    .affine(1.0 / dh as f64, 0.0)?;
-                let s = if softcap > 0.0 {
-                    s.affine(1.0 / f64::from(softcap), 0.0)?
-                        .tanh()?
-                        .affine(f64::from(softcap), 0.0)?
-                } else {
-                    s
-                };
-                let s_vec = s.to_vec1::<f32>()?;
-                let mut rescale = vec![1.0f32; g];
-                let mut w = vec![0.0f32; g];
-                for j in 0..g {
-                    let m_new = m_vec[j].max(s_vec[j]);
-                    if m_vec[j].is_finite() {
-                        rescale[j] = (m_vec[j] - m_new).exp();
-                    }
-                    w[j] = (s_vec[j] - m_new).exp();
-                    m_vec[j] = m_new;
-                    l_vec[j] = l_vec[j] * rescale[j] + w[j];
-                }
-                let rescale_t = Tensor::from_vec(rescale, (g, 1), &self.device)?;
-                let w_t = Tensor::from_vec(w, (g, 1), &self.device)?;
-                acc = acc
-                    .broadcast_mul(&rescale_t)?
-                    .add(&w_t.broadcast_mul(&vg.reshape((1, dh))?)?)?;
-            }
-            let l_t = Tensor::from_vec(l_vec, (g, 1), &self.device)?;
-            let og = acc.broadcast_div(&l_t.clamp(1e-12, f32::MAX)?)?;
-            o_full = o_full.slice_assign(&[kv * g..(kv + 1) * g, 0..dh], &og)?;
-        }
+        let s = candle_nn::ops::softmax_last_dim(&s)?;
+        let o_full = s.matmul(&vv)?.reshape((h, dh))?;
 
         let lam = sigmoid(&ell)?;
         let gate = gate.affine(1.0, cfg.gate_bias)?.silu()?;
-        let mut y = Tensor::zeros((hs, dh), DType::F32, &self.device)?;
-        for i in 0..hs {
-            let kv = i / snr;
-            let k = i % snr;
-            let sig = o_full.narrow(0, kv * g + k, 1)?;
-            let noi = o_full.narrow(0, kv * g + snr, 1)?;
-            let comb = sig.sub(&noi.broadcast_mul(&lam.narrow(0, kv, 1)?.reshape((1, 1))?)?)?;
-            let yi = comb.mul(&gate.narrow(0, i, 1)?)?;
-            y = y.slice_assign(&[i..i + 1, 0..dh], &yi)?;
-        }
+        let o_grouped = o_full.reshape((hn, g, dh))?;
+        let sig = o_grouped.narrow(1, 0, snr)?;
+        let noi = o_grouped.narrow(1, snr, 1)?;
+        let comb = sig.broadcast_sub(&noi.broadcast_mul(&lam.reshape((hn, 1, 1))?)?)?;
+        let y = comb.reshape((hs, dh))?.mul(&gate)?;
         y.reshape((1, hs * dh))?.matmul(&w.wo.t()?)
     }
 
@@ -678,14 +636,21 @@ impl Model {
             *weight = *weight / sum * cfg.expert_weights_scale as f32;
         }
 
-        let mut routed = Tensor::zeros_like(&latent)?;
-        for (slot, &e) in selected.iter().enumerate() {
-            let up_w = w.up_exps.i(e)?.t()?;
-            let h = latent.matmul(&up_w)?.relu()?.sqr()?;
-            let down_w = w.down_exps.i(e)?.t()?;
-            let out = h.matmul(&down_w)?;
-            routed = routed.add(&out.affine(f64::from(weights[slot]), 0.0)?)?;
-        }
+        let latent_dim = latent.dim(1)?;
+        let indices = Tensor::from_vec(
+            selected.iter().map(|&e| e as u32).collect::<Vec<_>>(),
+            (k,),
+            &self.device,
+        )?;
+        let weights_t = Tensor::from_vec(weights, (k, 1, 1), &self.device)?;
+        let up = w.up_exps.index_select(&indices, 0)?; // (k, ff_exp, latent)
+        let down = w.down_exps.index_select(&indices, 0)?; // (k, latent, ff_exp)
+        let latent_b = latent
+            .reshape((1, 1, latent_dim))?
+            .broadcast_as((k, 1, latent_dim))?;
+        let h = latent_b.matmul(&up.transpose(1, 2)?)?.relu()?.sqr()?;
+        let out = h.matmul(&down.transpose(1, 2)?)?;
+        let routed = out.broadcast_mul(&weights_t)?.sum(0)?; // (1, latent)
         let routed = routed.matmul(&w.latent_up.t()?)?;
 
         let sh = x.matmul(&w.up_shexp.t()?)?.relu()?.sqr()?;

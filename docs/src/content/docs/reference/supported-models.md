@@ -34,6 +34,7 @@ mistralrs serve -m <model>   # OpenAI-compatible server
 | Llama 2, Llama 3.x | <details><summary><code>meta-llama/Llama-3.1-8B-Instruct</code></summary><code>mistralrs run -m meta-llama/Llama-3.1-8B-Instruct</code></details> | `LlamaForCausalLM` |
 | Mistral | <details><summary><code>mistralai/Mistral-7B-Instruct-v0.3</code></summary><code>mistralrs run -m mistralai/Mistral-7B-Instruct-v0.3</code></details> | `MistralForCausalLM` |
 | Mixtral | <details><summary><code>mistralai/Mixtral-8x7B-Instruct-v0.1</code></summary><code>mistralrs run -m mistralai/Mixtral-8x7B-Instruct-v0.1</code></details> | `MixtralForCausalLM` |
+| Olala | <details><summary><code>OVHaiLLM/Olala-v1.0-mini-7A1B</code></summary><code>mistralrs run -m OVHaiLLM/Olala-v1.0-mini-7A1B</code></details> | `OlalaForCausalLM` |
 | Phi-2 | <details><summary><code>microsoft/phi-2</code></summary><code>mistralrs run -m microsoft/phi-2</code></details> | `PhiForCausalLM` |
 | Phi-3, Phi-3.5 | <details><summary><code>microsoft/Phi-3-medium-4k-instruct</code></summary><code>mistralrs run -m microsoft/Phi-3-medium-4k-instruct</code></details> | `Phi3ForCausalLM` |
 | Phi-3.5-MoE | <details><summary><code>microsoft/Phi-3.5-MoE-instruct</code></summary><code>mistralrs run -m microsoft/Phi-3.5-MoE-instruct</code></details> | `PhiMoEForCausalLM` |
