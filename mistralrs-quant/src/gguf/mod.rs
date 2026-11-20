@@ -591,6 +591,10 @@ impl QuantMethod for GgufMatMul {
         let res = cpu::cpu_indexed_moe_forward(&self.w, x, indices)?;
 
         let res = if let Some(b) = &self.b {
+            let b = match &offload_device {
+                Some(device) if !b.device().same_device(device) => b.to_device(device)?,
+                _ => b.clone(),
+            };
             if b.rank() == 2 {
                 let mut shape = indices.dims().to_vec();
                 shape.push(b.dim(1)?);
@@ -599,7 +603,7 @@ impl QuantMethod for GgufMatMul {
                     .reshape(Shape::from(shape))?;
                 res.broadcast_add(&bias)?
             } else {
-                res.broadcast_add(b)?
+                res.broadcast_add(&b)?
             }
         } else {
             res
@@ -1342,6 +1346,31 @@ mod tests {
             max_diff <= 0.02 * max_abs,
             "max diff {max_diff} vs max magnitude {max_abs}"
         );
+        Ok(())
+    }
+
+    /// A per-expert bias living on the activations' device (not the offload device) must not panic.
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn gather_forward_raw_moves_bias_to_offload_device() -> Result<()> {
+        let Ok(cuda) = Device::new_cuda(0) else {
+            return Ok(());
+        };
+        let cpu = Device::Cpu;
+        let (experts, n_out, k, tokens) = (4usize, 8usize, 256usize, 2usize);
+        let weight = Tensor::randn(0f32, 1f32, (experts, n_out, k), &cpu)?;
+        let bias = Tensor::randn(0f32, 1f32, (experts, n_out), &cuda)?;
+        let layer =
+            GgufMatMul::from_qtensor(QTensor::quantize(&weight, GgmlDType::Q4K)?, Some(bias));
+
+        let x = Tensor::randn(0f32, 1f32, (tokens, 1, k), &cpu)?
+            .to_dtype(DType::BF16)?
+            .to_device(&cuda)?;
+        let ids = Tensor::new(&[[0u32, 3], [2, 1]], &cuda)?;
+        let out = layer.gather_forward_raw(&x, &ids)?;
+
+        assert!(out.device().is_cuda());
+        assert_eq!(out.dtype(), DType::BF16);
         Ok(())
     }
 }
