@@ -1,9 +1,9 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use candle_core::{DType, Device, Result, Tensor, D};
-use mistralrs_quant::ShardedVarBuilder;
+use mistralrs_quant::{QuantMethod, ReplicatedLayer, ShardedVarBuilder};
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::{
     paged_attention::ModelConfigMetadata,
@@ -105,41 +105,41 @@ fn geodesic(x: &Tensor, g: &Tensor, scale: f32, bias: f32, layer: usize) -> Resu
 }
 
 struct MambaWeights {
-    ssm_in: Tensor,
-    ssm_in_dyn: Tensor,
+    ssm_in: Arc<dyn QuantMethod>,
+    ssm_in_dyn: Arc<dyn QuantMethod>,
     bias: Tensor,
     mxz: Tensor,
     norms: Tensor,
     misc: Tensor,
     mimo_o: Tensor,
-    wo: Tensor,
+    wo: Arc<dyn QuantMethod>,
 }
 
 struct AttentionWeights {
-    wq: Tensor,
-    wa_k: Tensor,
-    wa_v: Tensor,
-    wb_k: Tensor,
-    wb_v: Tensor,
-    ws_k: Tensor,
-    ws_v: Tensor,
-    wlambda: Tensor,
-    wgate: Tensor,
+    wq: Arc<dyn QuantMethod>,
+    wa_k: Arc<dyn QuantMethod>,
+    wa_v: Arc<dyn QuantMethod>,
+    wb_k: Arc<dyn QuantMethod>,
+    wb_v: Arc<dyn QuantMethod>,
+    ws_k: Arc<dyn QuantMethod>,
+    ws_v: Arc<dyn QuantMethod>,
+    wlambda: Arc<dyn QuantMethod>,
+    wgate: Arc<dyn QuantMethod>,
     q_norm: Tensor,
     k_norm: Tensor,
     scaler: Tensor,
-    wo: Tensor,
+    wo: Arc<dyn QuantMethod>,
 }
 
 struct MoeWeights {
-    gate_inp: Tensor,
+    gate_inp: Arc<dyn QuantMethod>,
     exp_probs_b: Tensor,
-    latent_down: Tensor,
-    latent_up: Tensor,
+    latent_down: Arc<dyn QuantMethod>,
+    latent_up: Arc<dyn QuantMethod>,
     up_exps: Tensor,
     down_exps: Tensor,
-    up_shexp: Tensor,
-    down_shexp: Tensor,
+    up_shexp: Arc<dyn QuantMethod>,
+    down_shexp: Arc<dyn QuantMethod>,
 }
 
 struct LayerWeights {
@@ -171,7 +171,7 @@ struct OlalaState {
 pub struct Model {
     config: Config,
     embed: Tensor,
-    lm_head: Tensor,
+    lm_head: Arc<dyn QuantMethod>,
     layers: Vec<LayerWeights>,
     state: Mutex<OlalaState>,
     cache: EitherCache,
@@ -200,16 +200,17 @@ impl Model {
         max_seq_len: usize,
     ) -> Result<Self> {
         let device = vb.device().clone();
+        let qcfg = &config.quantization_config;
         let load_vec =
             |name: &str, n: usize| -> Result<Tensor> { vb.get(n, name)?.to_dtype(DType::F32) };
-        let load_mat = |name: &str, out: usize, in_: usize| -> Result<Tensor> {
-            vb.get((out, in_), name)?.to_dtype(DType::F32)
-        };
         let load_mat3 = |name: &str, d0: usize, d1: usize, d2: usize| -> Result<Tensor> {
             vb.get((d0, d1, d2), name)?.to_dtype(DType::F32)
         };
         let load_scalar =
             |name: &str| -> Result<f32> { Ok(scalar(&vb.get(1, name)?.to_dtype(DType::F32)?)?) };
+        let linear = |in_dim: usize, out_dim: usize, vb: ShardedVarBuilder| {
+            ReplicatedLayer::new(in_dim, out_dim, qcfg, false, vb)
+        };
 
         let embed = vb
             .get(
@@ -217,9 +218,7 @@ impl Model {
                 "model.embed_tokens.weight",
             )?
             .to_dtype(DType::F32)?;
-        let lm_head = vb
-            .get((config.vocab_size, config.hidden_size), "lm_head.weight")?
-            .to_dtype(DType::F32)?;
+        let lm_head = linear(config.hidden_size, config.vocab_size, vb.pp("lm_head"))?;
 
         let h = config.hidden_size;
         let v = config.vocab_size;
@@ -241,38 +240,38 @@ impl Model {
         for (i, &is_v) in config.layer_types().iter().enumerate() {
             let p = format!("model.layers.{i}");
             let moe = MoeWeights {
-                gate_inp: load_mat(&format!("{p}.moe.gate_inp.weight"), n_exp, h)?,
+                gate_inp: linear(h, n_exp, vb.pp(format!("{p}.moe.gate_inp")))?,
                 exp_probs_b: load_vec(&format!("{p}.moe.exp_probs_b"), n_exp)?,
-                latent_down: load_mat(&format!("{p}.moe.latent_down.weight"), latent, h)?,
-                latent_up: load_mat(&format!("{p}.moe.latent_up.weight"), h, latent)?,
+                latent_down: linear(h, latent, vb.pp(format!("{p}.moe.latent_down")))?,
+                latent_up: linear(latent, h, vb.pp(format!("{p}.moe.latent_up")))?,
                 up_exps: load_mat3(&format!("{p}.moe.up_exps.weight"), n_exp, ff_exp, latent)?,
                 down_exps: load_mat3(&format!("{p}.moe.down_exps.weight"), n_exp, latent, ff_exp)?,
-                up_shexp: load_mat(&format!("{p}.moe.up_shexp.weight"), ff_sh, h)?,
-                down_shexp: load_mat(&format!("{p}.moe.down_shexp.weight"), h, ff_sh)?,
+                up_shexp: linear(h, ff_sh, vb.pp(format!("{p}.moe.up_shexp")))?,
+                down_shexp: linear(ff_sh, h, vb.pp(format!("{p}.moe.down_shexp")))?,
             };
 
             let (mamba, attn) = if is_v {
                 let attn = AttentionWeights {
-                    wq: load_mat(
-                        &format!("{p}.mixer.attn_q.weight"),
-                        config.num_attention_heads * dh,
+                    wq: linear(
                         h,
+                        config.num_attention_heads * dh,
+                        vb.pp(format!("{p}.mixer.attn_q")),
                     )?,
-                    wa_k: load_mat(&format!("{p}.mixer.attn_wa_k.weight"), n_hn * r, h)?,
-                    wa_v: load_mat(&format!("{p}.mixer.attn_wa_v.weight"), n_hn * r, h)?,
-                    wb_k: load_mat(&format!("{p}.mixer.attn_wb_k.weight"), r * dh, h)?,
-                    wb_v: load_mat(&format!("{p}.mixer.attn_wb_v.weight"), r * dh, h)?,
-                    ws_k: load_mat(&format!("{p}.mixer.attn_shift_k.weight"), n_hn, h)?,
-                    ws_v: load_mat(&format!("{p}.mixer.attn_shift_v.weight"), n_hn, h)?,
-                    wlambda: load_mat(&format!("{p}.mixer.attn_lambda.weight"), n_hn, h)?,
-                    wgate: load_mat(&format!("{p}.mixer.attn_gate.weight"), n_hs * dh, h)?,
+                    wa_k: linear(h, n_hn * r, vb.pp(format!("{p}.mixer.attn_wa_k")))?,
+                    wa_v: linear(h, n_hn * r, vb.pp(format!("{p}.mixer.attn_wa_v")))?,
+                    wb_k: linear(h, r * dh, vb.pp(format!("{p}.mixer.attn_wb_k")))?,
+                    wb_v: linear(h, r * dh, vb.pp(format!("{p}.mixer.attn_wb_v")))?,
+                    ws_k: linear(h, n_hn, vb.pp(format!("{p}.mixer.attn_shift_k")))?,
+                    ws_v: linear(h, n_hn, vb.pp(format!("{p}.mixer.attn_shift_v")))?,
+                    wlambda: linear(h, n_hn, vb.pp(format!("{p}.mixer.attn_lambda")))?,
+                    wgate: linear(h, n_hs * dh, vb.pp(format!("{p}.mixer.attn_gate")))?,
                     q_norm: load_vec(&format!("{p}.mixer.attn_q_norm.weight"), dh)?,
                     k_norm: load_vec(&format!("{p}.mixer.attn_k_norm.weight"), dh)?,
                     scaler: load_vec(
                         &format!("{p}.mixer.attn_softmax_scaler"),
                         config.num_attention_heads,
                     )?,
-                    wo: load_mat(&format!("{p}.mixer.attn_output.weight"), h, n_hs * dh)?,
+                    wo: linear(n_hs * dh, h, vb.pp(format!("{p}.mixer.attn_output")))?,
                 };
                 let shift = Tensor::zeros(2 * n_hn * dh, DType::F32, &device)?;
                 states.push(LayerState::Attention {
@@ -283,15 +282,15 @@ impl Model {
                 (None, Some(attn))
             } else {
                 let mamba = MambaWeights {
-                    ssm_in: load_mat(
-                        &format!("{p}.mixer.ssm_in.weight"),
+                    ssm_in: linear(
+                        h,
                         n_mamba_h * (2 * d_v + 3),
-                        h,
+                        vb.pp(format!("{p}.mixer.ssm_in")),
                     )?,
-                    ssm_in_dyn: load_mat(
-                        &format!("{p}.mixer.ssm_in_dyn.weight"),
-                        2 * config.ssm_group_count * d_qk * r + n_ang,
+                    ssm_in_dyn: linear(
                         h,
+                        2 * config.ssm_group_count * d_qk * r + n_ang,
+                        vb.pp(format!("{p}.mixer.ssm_in_dyn")),
                     )?,
                     bias: Tensor::cat(
                         &[
@@ -326,7 +325,7 @@ impl Model {
                         1,
                     )?,
                     mimo_o: load_mat3(&format!("{p}.mixer.ssm_mimo_o"), n_mamba_h, r, d_v)?,
-                    wo: load_mat(&format!("{p}.mixer.attn_output.weight"), h, n_mamba_h * d_v)?,
+                    wo: linear(n_mamba_h * d_v, h, vb.pp(format!("{p}.mixer.attn_output")))?,
                 };
                 let n_state = n_mamba_h * d_v * d_qk
                     + n_mamba_h * r * d_qk
@@ -373,8 +372,8 @@ impl Model {
         let n_ang = cfg.num_rope_angles;
         let eps = cfg.rms_norm_eps as f32;
 
-        let ps = x.matmul(&w.ssm_in.t()?)?.reshape((h, 2 * d_v + 3))?;
-        let pd = x.matmul(&w.ssm_in_dyn.t()?)?;
+        let ps = w.ssm_in.forward(x)?.reshape((h, 2 * d_v + 3))?;
+        let pd = w.ssm_in_dyn.forward(x)?;
         let z_in = ps.narrow(1, 0, d_v)?;
         let x_in = ps.narrow(1, d_v, d_v)?;
         let dt_raw = ps.narrow(1, 2 * d_v, 1)?;
@@ -500,7 +499,7 @@ impl Model {
             0,
         )?;
 
-        y.reshape((1, h * d_v))?.matmul(&w.wo.t()?)
+        w.wo.forward(&y.reshape((1, h * d_v))?)
     }
 
     fn attention_forward(
@@ -520,15 +519,15 @@ impl Model {
         let snr = hs / hn;
         let eps = cfg.rms_norm_eps as f32;
 
-        let q = x.matmul(&w.wq.t()?)?.reshape((h, dh))?;
-        let ak = x.matmul(&w.wa_k.t()?)?.reshape((hn, r))?;
-        let av = x.matmul(&w.wa_v.t()?)?.reshape((hn, r))?;
-        let bk = x.matmul(&w.wb_k.t()?)?.reshape((r, dh))?;
-        let bv = x.matmul(&w.wb_v.t()?)?.reshape((r, dh))?;
-        let sk = x.matmul(&w.ws_k.t()?)?.reshape((hn,))?;
-        let sv = x.matmul(&w.ws_v.t()?)?.reshape((hn,))?;
-        let ell = x.matmul(&w.wlambda.t()?)?.reshape((hn,))?;
-        let gate = x.matmul(&w.wgate.t()?)?.reshape((hs, dh))?;
+        let q = w.wq.forward(x)?.reshape((h, dh))?;
+        let ak = w.wa_k.forward(x)?.reshape((hn, r))?;
+        let av = w.wa_v.forward(x)?.reshape((hn, r))?;
+        let bk = w.wb_k.forward(x)?.reshape((r, dh))?;
+        let bv = w.wb_v.forward(x)?.reshape((r, dh))?;
+        let sk = w.ws_k.forward(x)?.reshape((hn,))?;
+        let sv = w.ws_v.forward(x)?.reshape((hn,))?;
+        let ell = w.wlambda.forward(x)?.reshape((hn,))?;
+        let gate = w.wgate.forward(x)?.reshape((hs, dh))?;
 
         let k0 = ak.matmul(&bk)?.affine(1.0 / r as f64, 0.0)?;
         let v0 = av.matmul(&bv)?.affine(1.0 / r as f64, 0.0)?;
@@ -594,15 +593,15 @@ impl Model {
         let noi = o_grouped.narrow(1, snr, 1)?;
         let comb = sig.broadcast_sub(&noi.broadcast_mul(&lam.reshape((hn, 1, 1))?)?)?;
         let y = comb.reshape((hs, dh))?.mul(&gate)?;
-        y.reshape((1, hs * dh))?.matmul(&w.wo.t()?)
+        w.wo.forward(&y.reshape((1, hs * dh))?)
     }
 
     fn moe_forward(&self, x: &Tensor, w: &MoeWeights) -> Result<Tensor> {
         let cfg = &self.config;
         let k = cfg.expert_used_count;
         let n_exp = cfg.expert_count;
-        let latent = x.matmul(&w.latent_down.t()?)?;
-        let logits = x.matmul(&w.gate_inp.t()?)?;
+        let latent = w.latent_down.forward(x)?;
+        let logits = w.gate_inp.forward(x)?;
         let score = sigmoid(&logits)?.broadcast_add(&w.exp_probs_b.reshape((1, n_exp))?)?;
 
         let score_v = score.reshape((n_exp,))?.to_vec1::<f32>()?;
@@ -647,10 +646,10 @@ impl Model {
         let h = latent_b.matmul(&up.transpose(1, 2)?)?.relu()?.sqr()?;
         let out = h.matmul(&down.transpose(1, 2)?)?;
         let routed = out.broadcast_mul(&weights_t)?.sum(0)?; // (1, latent)
-        let routed = routed.matmul(&w.latent_up.t()?)?;
+        let routed = w.latent_up.forward(&routed)?;
 
-        let sh = x.matmul(&w.up_shexp.t()?)?.relu()?.sqr()?;
-        let shared = sh.matmul(&w.down_shexp.t()?)?;
+        let sh = w.up_shexp.forward(x)?.relu()?.sqr()?;
+        let shared = w.down_shexp.forward(&sh)?;
         routed.add(&shared)
     }
 
@@ -724,7 +723,7 @@ impl Model {
             outputs.push(residual);
         }
         let last = Tensor::cat(&outputs, 0)?;
-        let logits = last.matmul(&self.lm_head.t()?)?;
+        let logits = self.lm_head.forward(&last)?;
         Ok(logits)
     }
 }
