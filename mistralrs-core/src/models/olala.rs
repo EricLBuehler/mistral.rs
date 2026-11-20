@@ -1,0 +1,829 @@
+#![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+
+use candle_core::{DType, Device, IndexOp, Result, Tensor, D};
+use mistralrs_quant::ShardedVarBuilder;
+use serde::{Deserialize, Serialize};
+use std::sync::Mutex;
+
+use crate::{
+    paged_attention::ModelConfigMetadata,
+    pipeline::{EitherCache, IsqModel, NormalModel},
+    serde_default_fn,
+};
+
+serde_default_fn!(f64, default_rms_norm_eps, 1e-6);
+serde_default_fn!(f64, default_softcap, 0.0);
+serde_default_fn!(f64, default_gate_bias, 0.0);
+serde_default_fn!(bool, default_tie, false);
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Config {
+    pub vocab_size: usize,
+    pub hidden_size: usize,
+    pub num_hidden_layers: usize,
+    pub num_attention_heads: usize,
+    pub num_key_value_heads: usize,
+    pub head_dim: usize,
+    #[serde(default = "default_rms_norm_eps")]
+    pub rms_norm_eps: f64,
+    pub max_position_embeddings: usize,
+    #[serde(default)]
+    pub sliding_window: usize,
+    #[serde(default = "default_softcap")]
+    pub attn_logit_softcapping: f64,
+    pub num_signal_heads: usize,
+    pub num_noise_heads: usize,
+    pub tpa_rank: usize,
+    #[serde(default = "default_gate_bias")]
+    pub gate_bias: f64,
+    pub num_rope_angles: usize,
+    pub ssm_inner_size: usize,
+    pub ssm_state_size: usize,
+    pub ssm_group_count: usize,
+    pub ssm_time_step_rank: usize,
+    pub mamba_mimo_dim: usize,
+    pub mamba_headdim: usize,
+    pub expert_count: usize,
+    pub expert_used_count: usize,
+    pub expert_feed_forward_length: usize,
+    pub expert_shared_feed_forward_length: usize,
+    pub moe_latent_size: usize,
+    pub expert_weights_scale: f64,
+    pub layer_types: String,
+    #[serde(default = "default_tie")]
+    pub tie_word_embeddings: bool,
+    pub quantization_config: Option<mistralrs_quant::QuantizedConfig>,
+}
+
+impl Config {
+    fn layer_types(&self) -> Vec<bool> {
+        self.layer_types.chars().map(|c| c == 'V').collect()
+    }
+}
+
+const PI: f32 = std::f32::consts::PI;
+const PI4: f32 = std::f32::consts::FRAC_PI_4;
+const A_FLOOR: f32 = 1e-4;
+const SUM_CLAMP: f32 = 6.103515625e-5;
+
+fn sigmoid(x: &Tensor) -> Result<Tensor> {
+    x.neg()?.exp()?.affine(1.0, 1.0)?.recip()
+}
+
+fn wrap_angle(a: &Tensor) -> Result<Tensor> {
+    let turns = a.affine(1.0 / (2.0 * f64::from(PI)), 0.0)?.round()?;
+    a.sub(&turns.affine(2.0 * f64::from(PI), 0.0)?)
+}
+
+fn rms_inv(x: &Tensor, eps: f32) -> Result<Tensor> {
+    x.sqr()?
+        .mean(D::Minus1)?
+        .affine(1.0, f64::from(eps))?
+        .sqrt()?
+        .recip()
+}
+
+fn geodesic(x: &Tensor, g: &Tensor, scale: f32, bias: f32, layer: usize) -> Result<Tensor> {
+    let x = x.to_dtype(DType::F32)?.contiguous()?;
+    let g = g.to_dtype(DType::F32)?.contiguous()?;
+    let xx = x.sqr()?.sum(D::Minus1)?.clamp(1e-12, f32::MAX)?;
+    let xg = x.mul(&g)?.sum(D::Minus1)?;
+    let proj = xg.broadcast_div(&xx)?;
+    let gp = g.sub(&x.broadcast_mul(&proj.unsqueeze(D::Minus1)?)?)?;
+    let tan = gp.sqr()?.sum(D::Minus1)?.sqrt()?.clamp(1e-8, f32::MAX)?;
+    let r = xx.sqrt()?;
+    let rmin = r.clamp(1e-6, f32::MAX)?;
+    let theta0 = tan.broadcast_div(&rmin)?.clamp(0.0, PI4)?;
+    let theta = theta0
+        .affine(f64::from(scale), f64::from(bias))?
+        .affine(1.0 / (layer + 1) as f64, 0.0)?
+        .clamp(f32::MIN, PI4)?;
+    let unit = gp.broadcast_div(&tan.unsqueeze(D::Minus1)?)?;
+    let tangent = unit.broadcast_mul(&theta.sin()?.mul(&r)?.unsqueeze(D::Minus1)?)?;
+    x.broadcast_mul(&theta.cos()?.unsqueeze(D::Minus1)?)?
+        .add(&tangent)
+}
+
+struct MambaWeights {
+    ssm_in: Tensor,
+    ssm_in_dyn: Tensor,
+    bias: Tensor,
+    mxz: Tensor,
+    norms: Tensor,
+    misc: Tensor,
+    mimo_o: Tensor,
+    wo: Tensor,
+}
+
+struct AttentionWeights {
+    wq: Tensor,
+    wa_k: Tensor,
+    wa_v: Tensor,
+    wb_k: Tensor,
+    wb_v: Tensor,
+    ws_k: Tensor,
+    ws_v: Tensor,
+    wlambda: Tensor,
+    wgate: Tensor,
+    q_norm: Tensor,
+    k_norm: Tensor,
+    scaler: Tensor,
+    wo: Tensor,
+}
+
+struct MoeWeights {
+    gate_inp: Tensor,
+    exp_probs_b: Tensor,
+    latent_down: Tensor,
+    latent_up: Tensor,
+    up_exps: Tensor,
+    down_exps: Tensor,
+    up_shexp: Tensor,
+    down_shexp: Tensor,
+}
+
+struct LayerWeights {
+    is_v: bool,
+    mamba: Option<MambaWeights>,
+    attn: Option<AttentionWeights>,
+    moe: MoeWeights,
+    geo_mixer_scale: f32,
+    geo_mixer_bias: f32,
+    geo_mlp_scale: f32,
+    geo_mlp_bias: f32,
+}
+
+enum LayerState {
+    Mamba {
+        state: Tensor,
+    },
+    Attention {
+        shift: Tensor,
+        k_cache: Tensor,
+        v_cache: Tensor,
+    },
+}
+
+struct OlalaState {
+    layers: Vec<LayerState>,
+}
+
+pub struct Model {
+    config: Config,
+    embed: Tensor,
+    lm_head: Tensor,
+    layers: Vec<LayerWeights>,
+    state: Mutex<OlalaState>,
+    cache: EitherCache,
+    device: Device,
+    dtype: DType,
+    cfg: ModelConfigMetadata,
+}
+
+fn scalar(v: &Tensor) -> Result<f32> {
+    v.reshape(())?.to_scalar::<f32>()
+}
+
+fn softplus(x: &Tensor) -> Result<Tensor> {
+    let neg_abs = x.abs()?.neg()?;
+    let soft = neg_abs.exp()?.affine(1.0, 1.0)?.log()?;
+    x.clamp(0.0, f32::MAX)?.add(&soft)
+}
+
+impl Model {
+    #[allow(clippy::too_many_arguments)]
+    pub fn load(
+        config: Config,
+        vb: ShardedVarBuilder,
+        cfg: ModelConfigMetadata,
+        dtype: DType,
+        max_seq_len: usize,
+    ) -> Result<Self> {
+        let device = vb.device().clone();
+        let load_vec =
+            |name: &str, n: usize| -> Result<Tensor> { vb.get(n, name)?.to_dtype(DType::F32) };
+        let load_mat = |name: &str, out: usize, in_: usize| -> Result<Tensor> {
+            vb.get((out, in_), name)?.to_dtype(DType::F32)
+        };
+        let load_mat3 = |name: &str, d0: usize, d1: usize, d2: usize| -> Result<Tensor> {
+            vb.get((d0, d1, d2), name)?.to_dtype(DType::F32)
+        };
+        let load_scalar =
+            |name: &str| -> Result<f32> { Ok(scalar(&vb.get(1, name)?.to_dtype(DType::F32)?)?) };
+
+        let embed = vb
+            .get(
+                (config.vocab_size, config.hidden_size),
+                "model.embed_tokens.weight",
+            )?
+            .to_dtype(DType::F32)?;
+        let lm_head = vb
+            .get((config.vocab_size, config.hidden_size), "lm_head.weight")?
+            .to_dtype(DType::F32)?;
+
+        let h = config.hidden_size;
+        let v = config.vocab_size;
+        let n_mamba_h = config.ssm_inner_size / config.ssm_time_step_rank;
+        let d_v = config.ssm_time_step_rank;
+        let d_qk = config.ssm_state_size;
+        let r = config.mamba_mimo_dim;
+        let n_ang = config.num_rope_angles;
+        let n_hn = config.num_noise_heads;
+        let n_hs = config.num_signal_heads;
+        let dh = config.head_dim;
+        let latent = config.moe_latent_size;
+        let n_exp = config.expert_count;
+        let ff_exp = config.expert_feed_forward_length;
+        let ff_sh = config.expert_shared_feed_forward_length;
+
+        let mut layers = Vec::with_capacity(config.num_hidden_layers);
+        let mut states = Vec::with_capacity(config.num_hidden_layers);
+        for (i, &is_v) in config.layer_types().iter().enumerate() {
+            let p = format!("model.layers.{i}");
+            let moe = MoeWeights {
+                gate_inp: load_mat(&format!("{p}.moe.gate_inp.weight"), n_exp, h)?,
+                exp_probs_b: load_vec(&format!("{p}.moe.exp_probs_b"), n_exp)?,
+                latent_down: load_mat(&format!("{p}.moe.latent_down.weight"), latent, h)?,
+                latent_up: load_mat(&format!("{p}.moe.latent_up.weight"), h, latent)?,
+                up_exps: load_mat3(&format!("{p}.moe.up_exps.weight"), n_exp, ff_exp, latent)?,
+                down_exps: load_mat3(&format!("{p}.moe.down_exps.weight"), n_exp, latent, ff_exp)?,
+                up_shexp: load_mat(&format!("{p}.moe.up_shexp.weight"), ff_sh, h)?,
+                down_shexp: load_mat(&format!("{p}.moe.down_shexp.weight"), h, ff_sh)?,
+            };
+
+            let (mamba, attn) = if is_v {
+                let attn = AttentionWeights {
+                    wq: load_mat(
+                        &format!("{p}.mixer.attn_q.weight"),
+                        config.num_attention_heads * dh,
+                        h,
+                    )?,
+                    wa_k: load_mat(&format!("{p}.mixer.attn_wa_k.weight"), n_hn * r, h)?,
+                    wa_v: load_mat(&format!("{p}.mixer.attn_wa_v.weight"), n_hn * r, h)?,
+                    wb_k: load_mat(&format!("{p}.mixer.attn_wb_k.weight"), r * dh, h)?,
+                    wb_v: load_mat(&format!("{p}.mixer.attn_wb_v.weight"), r * dh, h)?,
+                    ws_k: load_mat(&format!("{p}.mixer.attn_shift_k.weight"), n_hn, h)?,
+                    ws_v: load_mat(&format!("{p}.mixer.attn_shift_v.weight"), n_hn, h)?,
+                    wlambda: load_mat(&format!("{p}.mixer.attn_lambda.weight"), n_hn, h)?,
+                    wgate: load_mat(&format!("{p}.mixer.attn_gate.weight"), n_hs * dh, h)?,
+                    q_norm: load_vec(&format!("{p}.mixer.attn_q_norm.weight"), dh)?,
+                    k_norm: load_vec(&format!("{p}.mixer.attn_k_norm.weight"), dh)?,
+                    scaler: load_vec(
+                        &format!("{p}.mixer.attn_softmax_scaler"),
+                        config.num_attention_heads,
+                    )?,
+                    wo: load_mat(&format!("{p}.mixer.attn_output.weight"), h, n_hs * dh)?,
+                };
+                let shift = Tensor::zeros(2 * n_hn * dh, DType::F32, &device)?;
+                states.push(LayerState::Attention {
+                    shift,
+                    k_cache: Tensor::zeros((max_seq_len, n_hn * dh), DType::F32, &device)?,
+                    v_cache: Tensor::zeros((max_seq_len, n_hn * dh), DType::F32, &device)?,
+                });
+                (None, Some(attn))
+            } else {
+                let mamba = MambaWeights {
+                    ssm_in: load_mat(
+                        &format!("{p}.mixer.ssm_in.weight"),
+                        n_mamba_h * (2 * d_v + 3),
+                        h,
+                    )?,
+                    ssm_in_dyn: load_mat(
+                        &format!("{p}.mixer.ssm_in_dyn.weight"),
+                        2 * config.ssm_group_count * d_qk * r + n_ang,
+                        h,
+                    )?,
+                    bias: Tensor::cat(
+                        &[
+                            load_mat3(&format!("{p}.mixer.ssm_b_bias"), n_mamba_h, r, d_qk)?,
+                            load_mat3(&format!("{p}.mixer.ssm_c_bias"), n_mamba_h, r, d_qk)?,
+                        ],
+                        1,
+                    )?,
+                    mxz: Tensor::cat(
+                        &[
+                            load_mat3(&format!("{p}.mixer.ssm_mimo_x"), n_mamba_h, r, d_v)?,
+                            load_mat3(&format!("{p}.mixer.ssm_mimo_z"), n_mamba_h, r, d_v)?,
+                        ],
+                        1,
+                    )?,
+                    norms: Tensor::cat(
+                        &[
+                            load_vec(&format!("{p}.mixer.ssm_b_norm.weight"), d_qk)?
+                                .reshape((1, d_qk))?,
+                            load_vec(&format!("{p}.mixer.ssm_c_norm.weight"), d_qk)?
+                                .reshape((1, d_qk))?,
+                        ],
+                        0,
+                    )?,
+                    misc: Tensor::cat(
+                        &[
+                            load_vec(&format!("{p}.mixer.ssm_dt_bias"), n_mamba_h)?
+                                .reshape((n_mamba_h, 1))?,
+                            load_vec(&format!("{p}.mixer.ssm_d"), n_mamba_h)?
+                                .reshape((n_mamba_h, 1))?,
+                        ],
+                        1,
+                    )?,
+                    mimo_o: load_mat3(&format!("{p}.mixer.ssm_mimo_o"), n_mamba_h, r, d_v)?,
+                    wo: load_mat(&format!("{p}.mixer.attn_output.weight"), h, n_mamba_h * d_v)?,
+                };
+                let n_state = n_mamba_h * d_v * d_qk
+                    + n_mamba_h * r * d_qk
+                    + n_mamba_h * r * d_v
+                    + n_mamba_h * n_ang;
+                states.push(LayerState::Mamba {
+                    state: Tensor::zeros(n_state, DType::F32, &device)?,
+                });
+                (Some(mamba), None)
+            };
+            layers.push(LayerWeights {
+                is_v,
+                mamba,
+                attn,
+                moe,
+                geo_mixer_scale: load_scalar(&format!("{p}.geo_mixer_scale"))?,
+                geo_mixer_bias: load_scalar(&format!("{p}.geo_mixer_bias"))?,
+                geo_mlp_scale: load_scalar(&format!("{p}.geo_mlp_scale"))?,
+                geo_mlp_bias: load_scalar(&format!("{p}.geo_mlp_bias"))?,
+            });
+        }
+
+        let _ = v;
+        let num_layers = config.num_hidden_layers;
+        Ok(Self {
+            config,
+            embed,
+            lm_head,
+            layers,
+            state: Mutex::new(OlalaState { layers: states }),
+            cache: EitherCache::Normal(crate::kv_cache::NormalCache::new(num_layers, max_seq_len)),
+            device,
+            dtype,
+            cfg,
+        })
+    }
+
+    fn mamba_forward(&self, x: &Tensor, w: &MambaWeights, state: &mut Tensor) -> Result<Tensor> {
+        let cfg = &self.config;
+        let h = cfg.ssm_inner_size / cfg.ssm_time_step_rank;
+        let d_v = cfg.ssm_time_step_rank;
+        let d_qk = cfg.ssm_state_size;
+        let r = cfg.mamba_mimo_dim;
+        let n_ang = cfg.num_rope_angles;
+        let eps = cfg.rms_norm_eps as f32;
+
+        let ps = x.matmul(&w.ssm_in.t()?)?.reshape((h, 2 * d_v + 3))?;
+        let pd = x.matmul(&w.ssm_in_dyn.t()?)?;
+        let z_in = ps.narrow(1, 0, d_v)?;
+        let x_in = ps.narrow(1, d_v, d_v)?;
+        let dt_raw = ps.narrow(1, 2 * d_v, 1)?;
+        let a_raw = ps.narrow(1, 2 * d_v + 1, 1)?;
+        let trap_raw = ps.narrow(1, 2 * d_v + 2, 1)?;
+
+        let bc = pd
+            .narrow(1, 0, 2 * cfg.ssm_group_count * d_qk * r)?
+            .reshape((2 * r, d_qk))?;
+        let ang_raw = pd
+            .narrow(1, 2 * cfg.ssm_group_count * d_qk * r, n_ang)?
+            .reshape((n_ang,))?;
+
+        let inv = rms_inv(&bc, eps)?.reshape((2 * r, 1))?;
+        let norm_weight = Tensor::cat(
+            &[
+                w.norms.get(0)?.reshape((1, d_qk))?.expand((r, d_qk))?,
+                w.norms.get(1)?.reshape((1, d_qk))?.expand((r, d_qk))?,
+            ],
+            0,
+        )?;
+        let normed = bc
+            .broadcast_mul(&inv)?
+            .mul(&norm_weight)?
+            .reshape((1, 2 * r, d_qk))?;
+
+        let misc = w.misc.reshape((h, 2))?;
+        let dt_bias = misc.narrow(1, 0, 1)?;
+        let d_skip = misc.narrow(1, 1, 1)?;
+        let dt = softplus(&dt_raw.add(&dt_bias)?)?;
+        let a_neg = softplus(&a_raw)?.neg()?.clamp(f32::MIN, -A_FLOOR)?;
+        let alpha = a_neg.mul(&dt)?.exp()?;
+        let trap = sigmoid(&trap_raw)?;
+        let beta = trap.affine(-1.0, 1.0)?.mul(&dt)?.mul(&alpha)?;
+        let gamma = trap.mul(&dt)?;
+
+        let off_k = h * d_v * d_qk;
+        let off_vn = off_k + h * r * d_qk;
+        let off_a = off_vn + h * r * d_v;
+
+        let s_old = state.narrow(0, 0, off_k)?.reshape((h, d_v, d_qk))?;
+        let k_state = state
+            .narrow(0, off_k, h * r * d_qk)?
+            .reshape((h, r, d_qk))?;
+        let v_state = state.narrow(0, off_vn, h * r * d_v)?.reshape((h, r, d_v))?;
+        let ang = state.narrow(0, off_a, h * n_ang)?.reshape((h, n_ang))?;
+
+        let delta_ang = ang_raw
+            .reshape((1, n_ang))?
+            .tanh()?
+            .affine(f64::from(PI), 0.0)?
+            .broadcast_mul(&dt)?;
+        let ang_new = wrap_angle(&ang.add(&delta_ang)?)?;
+        let cos_a = ang_new.cos()?.reshape((h, 1, n_ang))?;
+        let sin_a = ang_new.sin()?.reshape((h, 1, n_ang))?;
+
+        let bias = w.bias.clone();
+        let mut k_b = normed
+            .narrow(1, 0, r)?
+            .broadcast_add(&bias.narrow(1, 0, r)?)?;
+        let mut q_b = normed
+            .narrow(1, r, r)?
+            .broadcast_add(&bias.narrow(1, r, r)?)?;
+
+        let quarter = n_ang;
+        let half = d_qk / 2;
+        for mat in [&mut k_b, &mut q_b] {
+            let g0 = mat.narrow(2, 0, quarter)?;
+            let g1 = mat.narrow(2, quarter, quarter)?;
+            let g2 = mat.narrow(2, half, quarter)?;
+            let g3 = mat.narrow(2, half + quarter, d_qk - half - quarter)?;
+            let n0 = g0.broadcast_mul(&cos_a)?.sub(&g2.broadcast_mul(&sin_a)?)?;
+            let n2 = g0.broadcast_mul(&sin_a)?.add(&g2.broadcast_mul(&cos_a)?)?;
+            *mat = Tensor::cat(&[n0, g1, n2, g3], 2)?.contiguous()?;
+        }
+
+        let mxz = w.mxz.permute((0, 2, 1))?;
+        let v_proj = x_in
+            .reshape((h, d_v, 1))?
+            .broadcast_mul(&mxz.narrow(2, 0, r)?)?;
+        let z_proj = z_in
+            .reshape((h, d_v, 1))?
+            .broadcast_mul(&mxz.narrow(2, r, r)?)?;
+
+        let prev_kv = k_state
+            .permute((0, 2, 1))?
+            .contiguous()?
+            .matmul(&v_state.contiguous()?)?
+            .permute((0, 2, 1))?
+            .contiguous()?;
+        let curr_kv = k_rot_view(&k_b)?
+            .permute((0, 2, 1))?
+            .contiguous()?
+            .matmul(&v_proj.permute((0, 2, 1))?.contiguous()?)?
+            .permute((0, 2, 1))?
+            .contiguous()?;
+
+        let alpha_b = alpha.reshape((h, 1, 1))?;
+        let beta_b = beta.reshape((h, 1, 1))?;
+        let gamma_b = gamma.reshape((h, 1, 1))?;
+        let s_new = s_old
+            .broadcast_mul(&alpha_b)?
+            .add(&prev_kv.broadcast_mul(&beta_b)?)?
+            .add(&curr_kv.broadcast_mul(&gamma_b)?)?
+            .contiguous()?;
+
+        let qstate = s_new.matmul(&k_rot_view(&q_b)?.permute((0, 2, 1))?.contiguous()?)?;
+        let o = qstate.add(&v_proj.broadcast_mul(&d_skip.reshape((h, 1, 1))?)?)?;
+        let o = o.mul(&z_proj.silu()?)?;
+        let mimo_o = w.mimo_o.permute((0, 2, 1))?;
+        let y = o.mul(&mimo_o)?.sum(D::Minus1)?.reshape((h * d_v,))?;
+
+        *state = Tensor::cat(
+            &[
+                s_new.contiguous()?.reshape((h * d_v * d_qk,))?,
+                k_b.contiguous()?.reshape((h * r * d_qk,))?,
+                v_proj
+                    .permute((0, 2, 1))?
+                    .contiguous()?
+                    .reshape((h * r * d_v,))?,
+                ang_new.contiguous()?.reshape((h * n_ang,))?,
+            ],
+            0,
+        )?;
+
+        y.reshape((1, h * d_v))?.matmul(&w.wo.t()?)
+    }
+
+    fn attention_forward(
+        &self,
+        x: &Tensor,
+        w: &AttentionWeights,
+        pos: usize,
+        state: &mut LayerState,
+    ) -> Result<Tensor> {
+        let cfg = &self.config;
+        let h = cfg.num_attention_heads;
+        let hs = cfg.num_signal_heads;
+        let hn = cfg.num_noise_heads;
+        let r = cfg.tpa_rank;
+        let dh = cfg.head_dim;
+        let g = h / hn;
+        let snr = hs / hn;
+        let eps = cfg.rms_norm_eps as f32;
+
+        let q = x.matmul(&w.wq.t()?)?.reshape((h, dh))?;
+        let ak = x.matmul(&w.wa_k.t()?)?.reshape((hn, r))?;
+        let av = x.matmul(&w.wa_v.t()?)?.reshape((hn, r))?;
+        let bk = x.matmul(&w.wb_k.t()?)?.reshape((r, dh))?;
+        let bv = x.matmul(&w.wb_v.t()?)?.reshape((r, dh))?;
+        let sk = x.matmul(&w.ws_k.t()?)?.reshape((hn,))?;
+        let sv = x.matmul(&w.ws_v.t()?)?.reshape((hn,))?;
+        let ell = x.matmul(&w.wlambda.t()?)?.reshape((hn,))?;
+        let gate = x.matmul(&w.wgate.t()?)?.reshape((hs, dh))?;
+
+        let k0 = ak.matmul(&bk)?.affine(1.0 / r as f64, 0.0)?;
+        let v0 = av.matmul(&bv)?.affine(1.0 / r as f64, 0.0)?;
+
+        let (shift, k_cache, v_cache) = match state {
+            LayerState::Attention {
+                shift,
+                k_cache,
+                v_cache,
+            } => (shift, k_cache, v_cache),
+            _ => candle_core::bail!("Olala attention layer has wrong state kind"),
+        };
+
+        let pmask = if pos == 0 { 0.0f32 } else { 1.0f32 };
+        let a_k = sigmoid(&sk)?.affine(f64::from(pmask), 0.0)?;
+        let a_v = sigmoid(&sv)?.affine(f64::from(pmask), 0.0)?;
+        let k_prev = shift.narrow(0, 0, hn * dh)?.reshape((hn, dh))?;
+        let v_prev = shift.narrow(0, hn * dh, hn * dh)?.reshape((hn, dh))?;
+        let ktil = k_prev
+            .broadcast_mul(&a_k.reshape((hn, 1))?)?
+            .add(&k0.broadcast_mul(&a_k.affine(-1.0, 1.0)?.reshape((hn, 1))?)?)?;
+        let vtil = v_prev
+            .broadcast_mul(&a_v.reshape((hn, 1))?)?
+            .add(&v0.broadcast_mul(&a_v.affine(-1.0, 1.0)?.reshape((hn, 1))?)?)?;
+        *shift = Tensor::cat(&[k0.reshape((hn * dh,))?, v0.reshape((hn * dh,))?], 0)?;
+
+        let rsk = rms_inv(&ktil, eps)?;
+        let rsq = rms_inv(&q, eps)?;
+        let k_cell = ktil.broadcast_mul(&rsk.reshape((hn, 1))?)?;
+
+        let lp = ((pos + 1).min(cfg.sliding_window.max(1)) as f32).ln();
+        let qs = q
+            .broadcast_mul(&rsq.reshape((h, 1))?)?
+            .broadcast_mul(&w.q_norm.reshape((1, dh))?)?
+            .broadcast_mul(&w.k_norm.reshape((1, dh))?)?
+            .broadcast_mul(&w.scaler.affine(f64::from(lp), 0.0)?.reshape((h, 1))?)?;
+
+        let k_row = k_cell.reshape((hn * dh,))?;
+        let v_row = vtil.reshape((hn * dh,))?;
+        *k_cache =
+            k_cache.slice_assign(&[pos..pos + 1, 0..hn * dh], &k_row.reshape((1, hn * dh))?)?;
+        *v_cache =
+            v_cache.slice_assign(&[pos..pos + 1, 0..hn * dh], &v_row.reshape((1, hn * dh))?)?;
+
+        let n_cells = pos + 1;
+        let k_all = k_cache.narrow(0, 0, n_cells)?;
+        let v_all = v_cache.narrow(0, 0, n_cells)?;
+
+        let softcap = cfg.attn_logit_softcapping as f32;
+        let mut cells = Vec::with_capacity(n_cells);
+        for c in 0..n_cells {
+            let kc = k_all.narrow(0, c, 1)?.reshape((hn, dh))?;
+            let vc = v_all.narrow(0, c, 1)?.reshape((hn, dh))?;
+            cells.push((kc, vc));
+        }
+
+        let mut o_full = Tensor::zeros((h, dh), DType::F32, &self.device)?;
+        for kv in 0..hn {
+            let qg = qs.narrow(0, kv * g, g)?;
+            let mut m_vec = vec![f32::NEG_INFINITY; g];
+            let mut l_vec = vec![0.0f32; g];
+            let mut acc = Tensor::zeros((g, dh), DType::F32, &self.device)?;
+            for (kc, vc) in &cells {
+                let vg = vc.narrow(0, kv, 1)?.reshape((dh,))?;
+                let kg = kc.narrow(0, kv, 1)?.reshape((dh,))?;
+                let s = qg
+                    .matmul(&kg.reshape((dh, 1))?)?
+                    .reshape((g,))?
+                    .affine(1.0 / dh as f64, 0.0)?;
+                let s = if softcap > 0.0 {
+                    s.affine(1.0 / f64::from(softcap), 0.0)?
+                        .tanh()?
+                        .affine(f64::from(softcap), 0.0)?
+                } else {
+                    s
+                };
+                let s_vec = s.to_vec1::<f32>()?;
+                let mut rescale = vec![1.0f32; g];
+                let mut w = vec![0.0f32; g];
+                for j in 0..g {
+                    let m_new = m_vec[j].max(s_vec[j]);
+                    if m_vec[j].is_finite() {
+                        rescale[j] = (m_vec[j] - m_new).exp();
+                    }
+                    w[j] = (s_vec[j] - m_new).exp();
+                    m_vec[j] = m_new;
+                    l_vec[j] = l_vec[j] * rescale[j] + w[j];
+                }
+                let rescale_t = Tensor::from_vec(rescale, (g, 1), &self.device)?;
+                let w_t = Tensor::from_vec(w, (g, 1), &self.device)?;
+                acc = acc
+                    .broadcast_mul(&rescale_t)?
+                    .add(&w_t.broadcast_mul(&vg.reshape((1, dh))?)?)?;
+            }
+            let l_t = Tensor::from_vec(l_vec, (g, 1), &self.device)?;
+            let og = acc.broadcast_div(&l_t.clamp(1e-12, f32::MAX)?)?;
+            o_full = o_full.slice_assign(&[kv * g..(kv + 1) * g, 0..dh], &og)?;
+        }
+
+        let lam = sigmoid(&ell)?;
+        let gate = gate.affine(1.0, cfg.gate_bias)?.silu()?;
+        let mut y = Tensor::zeros((hs, dh), DType::F32, &self.device)?;
+        for i in 0..hs {
+            let kv = i / snr;
+            let k = i % snr;
+            let sig = o_full.narrow(0, kv * g + k, 1)?;
+            let noi = o_full.narrow(0, kv * g + snr, 1)?;
+            let comb = sig.sub(&noi.broadcast_mul(&lam.narrow(0, kv, 1)?.reshape((1, 1))?)?)?;
+            let yi = comb.mul(&gate.narrow(0, i, 1)?)?;
+            y = y.slice_assign(&[i..i + 1, 0..dh], &yi)?;
+        }
+        y.reshape((1, hs * dh))?.matmul(&w.wo.t()?)
+    }
+
+    fn moe_forward(&self, x: &Tensor, w: &MoeWeights) -> Result<Tensor> {
+        let cfg = &self.config;
+        let k = cfg.expert_used_count;
+        let n_exp = cfg.expert_count;
+        let latent = x.matmul(&w.latent_down.t()?)?;
+        let logits = x.matmul(&w.gate_inp.t()?)?;
+        let score = sigmoid(&logits)?.broadcast_add(&w.exp_probs_b.reshape((1, n_exp))?)?;
+
+        let score_v = score.reshape((n_exp,))?.to_vec1::<f32>()?;
+        let mut selected = Vec::with_capacity(k);
+        let mut used = vec![false; n_exp];
+        for _ in 0..k {
+            let mut best = 0usize;
+            let mut best_v = f32::NEG_INFINITY;
+            for e in 0..n_exp {
+                if !used[e] && score_v[e] > best_v {
+                    best_v = score_v[e];
+                    best = e;
+                }
+            }
+            used[best] = true;
+            selected.push(best);
+        }
+
+        let logits_v = logits.reshape((n_exp,))?.to_vec1::<f32>()?;
+        let mut weights: Vec<f32> = selected
+            .iter()
+            .map(|&e| 1.0 / (1.0 + (-logits_v[e]).exp()))
+            .collect();
+        let sum: f32 = weights.iter().sum();
+        let sum = sum.max(SUM_CLAMP);
+        for weight in &mut weights {
+            *weight = *weight / sum * cfg.expert_weights_scale as f32;
+        }
+
+        let mut routed = Tensor::zeros_like(&latent)?;
+        for (slot, &e) in selected.iter().enumerate() {
+            let up_w = w.up_exps.i(e)?.t()?;
+            let h = latent.matmul(&up_w)?.relu()?.sqr()?;
+            let down_w = w.down_exps.i(e)?.t()?;
+            let out = h.matmul(&down_w)?;
+            routed = routed.add(&out.affine(f64::from(weights[slot]), 0.0)?)?;
+        }
+        let routed = routed.matmul(&w.latent_up.t()?)?;
+
+        let sh = x.matmul(&w.up_shexp.t()?)?.relu()?.sqr()?;
+        let shared = sh.matmul(&w.down_shexp.t()?)?;
+        routed.add(&shared)
+    }
+
+    fn forward_inner(
+        &self,
+        input_ids: &Tensor,
+        ctx: &crate::pipeline::ModelForwardContext<'_>,
+    ) -> Result<Tensor> {
+        let offsets = ctx.seqlen_offsets();
+        let (batch, seq_len) = input_ids.dims2()?;
+        if batch != 1 {
+            candle_core::bail!("Olala currently supports batch size 1 only");
+        }
+        let start_pos = offsets.first().copied().unwrap_or(0);
+        let mut state = self.state.lock().unwrap();
+        if start_pos == 0 {
+            for layer in state.layers.iter_mut() {
+                match layer {
+                    LayerState::Mamba { state } => {
+                        *state = state.zeros_like()?;
+                    }
+                    LayerState::Attention {
+                        shift,
+                        k_cache,
+                        v_cache,
+                    } => {
+                        *shift = shift.zeros_like()?;
+                        *k_cache = k_cache.zeros_like()?;
+                        *v_cache = v_cache.zeros_like()?;
+                    }
+                }
+            }
+        }
+
+        let tokens = input_ids.reshape((seq_len,))?.to_vec1::<u32>()?;
+        let ids = Tensor::from_vec(tokens, (seq_len,), &self.device)?;
+        let embedded = self.embed.index_select(&ids, 0)?.to_dtype(DType::F32)?;
+        let norm = embedded.sqr()?.sum(D::Minus1)?.affine(1.0, 1e-12)?.sqrt()?;
+        let inputs = embedded.broadcast_div(&norm.unsqueeze(D::Minus1)?)?;
+
+        let mut outputs = Vec::with_capacity(seq_len);
+        for t in 0..seq_len {
+            let pos = start_pos + t;
+            let x = inputs.narrow(0, t, 1)?;
+            let mut residual = x.clone();
+            for (i, layer) in self.layers.iter().enumerate() {
+                let mixer = if layer.is_v {
+                    self.attention_forward(
+                        &residual,
+                        layer.attn.as_ref().unwrap(),
+                        pos,
+                        &mut state.layers[i],
+                    )?
+                } else {
+                    let s = match &mut state.layers[i] {
+                        LayerState::Mamba { state } => state,
+                        _ => candle_core::bail!("Olala mamba layer has wrong state kind"),
+                    };
+                    self.mamba_forward(&residual, layer.mamba.as_ref().unwrap(), s)?
+                };
+                let cur = geodesic(
+                    &residual,
+                    &mixer,
+                    layer.geo_mixer_scale,
+                    layer.geo_mixer_bias,
+                    i,
+                )?;
+                let mlp = self.moe_forward(&cur, &layer.moe)?;
+                residual = geodesic(&cur, &mlp, layer.geo_mlp_scale, layer.geo_mlp_bias, i)?;
+            }
+            outputs.push(residual);
+        }
+        let last = Tensor::cat(&outputs, 0)?;
+        let logits = last.matmul(&self.lm_head.t()?)?;
+        Ok(logits)
+    }
+}
+
+fn k_rot_view(x: &Tensor) -> Result<Tensor> {
+    Ok(x.clone())
+}
+
+impl IsqModel for Model {
+    fn residual_tensors(&self) -> Vec<(String, Tensor)> {
+        Vec::new()
+    }
+}
+
+impl crate::speculative::SpeculativeTargetMixin for Model {}
+
+impl NormalModel for Model {
+    fn forward(
+        &self,
+        input_ids: &Tensor,
+        ctx: &mut crate::pipeline::ModelForwardContext<'_>,
+    ) -> Result<Tensor> {
+        self.forward_inner(input_ids, ctx)
+    }
+
+    fn xlora_forward(
+        &self,
+        _input_ids: &Tensor,
+        _input_ids_full: &Tensor,
+        _seqlen_offsets: &[usize],
+        _seqlen_offsets_full: &[usize],
+        _no_kv_cache: bool,
+        _non_granular_state: &Option<crate::xlora_models::NonGranularState>,
+        _context_lens: Vec<(usize, usize)>,
+        _position_ids: Vec<usize>,
+        _flash_params: &crate::pipeline::text_models_inputs_processor::FlashParams,
+        _flash_params_full: &crate::pipeline::text_models_inputs_processor::FlashParams,
+    ) -> Result<Tensor> {
+        candle_core::bail!("Olala does not support X-LoRA")
+    }
+
+    fn is_xlora(&self) -> bool {
+        false
+    }
+
+    fn device(&self) -> &Device {
+        &self.device
+    }
+
+    fn cache(&self) -> &EitherCache {
+        &self.cache
+    }
+
+    fn max_seq_len(&self) -> usize {
+        self.config.max_position_embeddings
+    }
+
+    fn config(&self) -> &ModelConfigMetadata {
+        &self.cfg
+    }
+}
+
+impl crate::amoe::AnyMoeBaseModelMixin for Model {}

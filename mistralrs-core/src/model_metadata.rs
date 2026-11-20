@@ -202,6 +202,11 @@ impl NormalLoaderType {
                     ex!("LiquidAI/LFM2-8B-A1B", "LFM2"),
                 ],
             },
+            Self::Olala => ArchMetadata {
+                families: &["Olala"],
+                modalities: m,
+                examples: &[ex!("OVHaiLLM/Olala-v1.0-mini-7A1B")],
+            },
         }
     }
 }
@@ -446,6 +451,7 @@ impl NormalLoaderType {
             Self::Lfm2 => "Lfm2ForCausalLM",
             Self::Lfm3 => "Lfm3ForCausalLM",
             Self::Lfm2Moe => "Lfm2MoeForCausalLM",
+            Self::Olala => "OlalaForCausalLM",
         }
     }
 }

@@ -158,6 +158,10 @@ pub(crate) const NORMAL_CONFIG_BUILDERS: &[NormalConfigBuilder; GGUF_NORMAL_LOAD
         loader: NormalLoaderType::Lfm3,
         build: build_lfm3,
     },
+    NormalConfigBuilder {
+        loader: NormalLoaderType::Olala,
+        build: build_olala,
+    },
 ];
 
 pub(crate) fn validate_lfm3_metadata(metadata: &HashMap<String, GgufValue>) -> SynthesisResult<()> {
@@ -1129,6 +1133,123 @@ fn value_f64(value: &GgufValue) -> Option<f64> {
 
 fn usize_to_u32(value: usize) -> Result<u32, TryFromIntError> {
     u32::try_from(value)
+}
+
+fn build_olala(metadata: &MetadataView<'_>) -> SynthesisResult<JsonValue> {
+    let layer_types = value_string(metadata.required_value("layer_types")?)
+        .ok_or_else(|| {
+            NormalConfigSynthesisError::new("GGUF `olala.layer_types` must be a string")
+        })?
+        .to_string();
+    let mut config = JsonMap::new();
+    config.insert("vocab_size".into(), json!(metadata.vocab_size()?));
+    config.insert(
+        "hidden_size".into(),
+        json!(metadata.required_uniform_usize("embedding_length")?),
+    );
+    config.insert(
+        "num_hidden_layers".into(),
+        json!(transformer_block_count(metadata)?),
+    );
+    config.insert(
+        "num_attention_heads".into(),
+        json!(metadata.required_uniform_usize("attention.head_count")?),
+    );
+    config.insert(
+        "num_key_value_heads".into(),
+        json!(metadata.required_uniform_usize("attention.head_count_kv")?),
+    );
+    config.insert(
+        "head_dim".into(),
+        json!(metadata.required_uniform_usize("attention.key_length")?),
+    );
+    config.insert("rms_norm_eps".into(), json!(metadata.norm_epsilon()?));
+    config.insert(
+        "max_position_embeddings".into(),
+        json!(metadata.required_usize("context_length")?),
+    );
+    config.insert(
+        "sliding_window".into(),
+        json!(metadata.sliding_window()?.unwrap_or(32768)),
+    );
+    config.insert(
+        "attn_logit_softcapping".into(),
+        json!(metadata
+            .optional_f64("attn_logit_softcapping")?
+            .unwrap_or(0.0)),
+    );
+    config.insert(
+        "num_signal_heads".into(),
+        json!(metadata.required_usize("num_signal_heads")?),
+    );
+    config.insert(
+        "num_noise_heads".into(),
+        json!(metadata.required_usize("num_noise_heads")?),
+    );
+    config.insert(
+        "tpa_rank".into(),
+        json!(metadata.required_usize("tpa_rank")?),
+    );
+    config.insert(
+        "gate_bias".into(),
+        json!(metadata.optional_f64("gate_bias")?.unwrap_or(0.0)),
+    );
+    config.insert(
+        "num_rope_angles".into(),
+        json!(metadata.required_usize("num_rope_angles")?),
+    );
+    config.insert(
+        "ssm_inner_size".into(),
+        json!(metadata.required_usize("ssm.inner_size")?),
+    );
+    config.insert(
+        "ssm_state_size".into(),
+        json!(metadata.required_usize("ssm.state_size")?),
+    );
+    config.insert(
+        "ssm_group_count".into(),
+        json!(metadata.required_usize("ssm.group_count")?),
+    );
+    config.insert(
+        "ssm_time_step_rank".into(),
+        json!(metadata.required_usize("ssm.time_step_rank")?),
+    );
+    config.insert(
+        "mamba_mimo_dim".into(),
+        json!(metadata.required_usize("mamba_mimo_dim")?),
+    );
+    config.insert(
+        "mamba_headdim".into(),
+        json!(metadata.required_usize("mamba_headdim")?),
+    );
+    config.insert(
+        "expert_count".into(),
+        json!(metadata.required_usize("expert_count")?),
+    );
+    config.insert(
+        "expert_used_count".into(),
+        json!(metadata.required_usize("expert_used_count")?),
+    );
+    config.insert(
+        "expert_feed_forward_length".into(),
+        json!(metadata.required_usize("expert_feed_forward_length")?),
+    );
+    config.insert(
+        "expert_shared_feed_forward_length".into(),
+        json!(metadata.required_usize("expert_shared_feed_forward_length")?),
+    );
+    config.insert(
+        "moe_latent_size".into(),
+        json!(metadata.required_usize("moe_latent_size")?),
+    );
+    config.insert(
+        "expert_weights_scale".into(),
+        json!(metadata.required_f64("expert_weights_scale")?),
+    );
+    config.insert("layer_types".into(), json!(layer_types));
+    config.insert("tie_word_embeddings".into(), json!(false));
+    config.insert("quantization_config".into(), JsonValue::Null);
+    Ok(JsonValue::Object(config))
 }
 
 fn build_mistral(metadata: &MetadataView<'_>) -> SynthesisResult<JsonValue> {
