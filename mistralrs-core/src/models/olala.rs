@@ -159,8 +159,8 @@ enum LayerState {
     },
     Attention {
         shift: Tensor,
-        k_cache: Tensor,
-        v_cache: Tensor,
+        k_rows: Vec<Tensor>,
+        v_rows: Vec<Tensor>,
     },
 }
 
@@ -277,8 +277,8 @@ impl Model {
                 let shift = Tensor::zeros(2 * n_hn * dh, DType::F32, &device)?;
                 states.push(LayerState::Attention {
                     shift,
-                    k_cache: Tensor::zeros((max_seq_len, n_hn * dh), DType::F32, &device)?,
-                    v_cache: Tensor::zeros((max_seq_len, n_hn * dh), DType::F32, &device)?,
+                    k_rows: Vec::new(),
+                    v_rows: Vec::new(),
                 });
                 (None, Some(attn))
             } else {
@@ -533,12 +533,12 @@ impl Model {
         let k0 = ak.matmul(&bk)?.affine(1.0 / r as f64, 0.0)?;
         let v0 = av.matmul(&bv)?.affine(1.0 / r as f64, 0.0)?;
 
-        let (shift, k_cache, v_cache) = match state {
+        let (shift, k_rows, v_rows) = match state {
             LayerState::Attention {
                 shift,
-                k_cache,
-                v_cache,
-            } => (shift, k_cache, v_cache),
+                k_rows,
+                v_rows,
+            } => (shift, k_rows, v_rows),
             _ => candle_core::bail!("Olala attention layer has wrong state kind"),
         };
 
@@ -566,16 +566,12 @@ impl Model {
             .broadcast_mul(&w.k_norm.reshape((1, dh))?)?
             .broadcast_mul(&w.scaler.affine(f64::from(lp), 0.0)?.reshape((h, 1))?)?;
 
-        let k_row = k_cell.reshape((hn * dh,))?;
-        let v_row = vtil.reshape((hn * dh,))?;
-        *k_cache =
-            k_cache.slice_assign(&[pos..pos + 1, 0..hn * dh], &k_row.reshape((1, hn * dh))?)?;
-        *v_cache =
-            v_cache.slice_assign(&[pos..pos + 1, 0..hn * dh], &v_row.reshape((1, hn * dh))?)?;
+        k_rows.push(k_cell.reshape((hn * dh,))?.contiguous()?);
+        v_rows.push(vtil.reshape((hn * dh,))?.contiguous()?);
 
-        let n_cells = pos + 1;
-        let k_all = k_cache.narrow(0, 0, n_cells)?.reshape((n_cells, hn, dh))?;
-        let v_all = v_cache.narrow(0, 0, n_cells)?.reshape((n_cells, hn, dh))?;
+        let n_cells = k_rows.len();
+        let k_all = Tensor::stack(k_rows, 0)?.reshape((n_cells, hn, dh))?;
+        let v_all = Tensor::stack(v_rows, 0)?.reshape((n_cells, hn, dh))?;
 
         let softcap = cfg.attn_logit_softcapping as f32;
         let qg = qs.reshape((hn, g, dh))?;
@@ -678,12 +674,12 @@ impl Model {
                     }
                     LayerState::Attention {
                         shift,
-                        k_cache,
-                        v_cache,
+                        k_rows,
+                        v_rows,
                     } => {
                         *shift = shift.zeros_like()?;
-                        *k_cache = k_cache.zeros_like()?;
-                        *v_cache = v_cache.zeros_like()?;
+                        k_rows.clear();
+                        v_rows.clear();
                     }
                 }
             }
