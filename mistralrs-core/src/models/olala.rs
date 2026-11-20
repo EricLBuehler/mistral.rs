@@ -109,8 +109,9 @@ struct MambaWeights {
     ssm_in_dyn: Arc<dyn QuantMethod>,
     bias: Tensor,
     mxz: Tensor,
-    norms: Tensor,
-    misc: Tensor,
+    norm_weight: Tensor,
+    dt_bias: Tensor,
+    d_skip: Tensor,
     mimo_o: Tensor,
     wo: Arc<dyn QuantMethod>,
 }
@@ -155,7 +156,10 @@ struct LayerWeights {
 
 enum LayerState {
     Mamba {
-        state: Tensor,
+        s: Tensor,
+        k: Tensor,
+        v: Tensor,
+        ang: Tensor,
     },
     Attention {
         shift: Tensor,
@@ -281,6 +285,26 @@ impl Model {
                 });
                 (None, Some(attn))
             } else {
+                let mxz = Tensor::cat(
+                    &[
+                        load_mat3(&format!("{p}.mixer.ssm_mimo_x"), n_mamba_h, r, d_v)?,
+                        load_mat3(&format!("{p}.mixer.ssm_mimo_z"), n_mamba_h, r, d_v)?,
+                    ],
+                    1,
+                )?;
+                let norms = Tensor::cat(
+                    &[
+                        load_vec(&format!("{p}.mixer.ssm_b_norm.weight"), d_qk)?
+                            .reshape((1, d_qk))?,
+                        load_vec(&format!("{p}.mixer.ssm_c_norm.weight"), d_qk)?
+                            .reshape((1, d_qk))?,
+                    ],
+                    0,
+                )?;
+                let dt_bias = load_vec(&format!("{p}.mixer.ssm_dt_bias"), n_mamba_h)?
+                    .reshape((n_mamba_h, 1))?;
+                let d_skip =
+                    load_vec(&format!("{p}.mixer.ssm_d"), n_mamba_h)?.reshape((n_mamba_h, 1))?;
                 let mamba = MambaWeights {
                     ssm_in: linear(
                         h,
@@ -299,40 +323,27 @@ impl Model {
                         ],
                         1,
                     )?,
-                    mxz: Tensor::cat(
+                    mxz: mxz.permute((0, 2, 1))?.contiguous()?,
+                    norm_weight: Tensor::cat(
                         &[
-                            load_mat3(&format!("{p}.mixer.ssm_mimo_x"), n_mamba_h, r, d_v)?,
-                            load_mat3(&format!("{p}.mixer.ssm_mimo_z"), n_mamba_h, r, d_v)?,
-                        ],
-                        1,
-                    )?,
-                    norms: Tensor::cat(
-                        &[
-                            load_vec(&format!("{p}.mixer.ssm_b_norm.weight"), d_qk)?
-                                .reshape((1, d_qk))?,
-                            load_vec(&format!("{p}.mixer.ssm_c_norm.weight"), d_qk)?
-                                .reshape((1, d_qk))?,
+                            norms.get(0)?.reshape((1, d_qk))?.expand((r, d_qk))?,
+                            norms.get(1)?.reshape((1, d_qk))?.expand((r, d_qk))?,
                         ],
                         0,
-                    )?,
-                    misc: Tensor::cat(
-                        &[
-                            load_vec(&format!("{p}.mixer.ssm_dt_bias"), n_mamba_h)?
-                                .reshape((n_mamba_h, 1))?,
-                            load_vec(&format!("{p}.mixer.ssm_d"), n_mamba_h)?
-                                .reshape((n_mamba_h, 1))?,
-                        ],
-                        1,
-                    )?,
-                    mimo_o: load_mat3(&format!("{p}.mixer.ssm_mimo_o"), n_mamba_h, r, d_v)?,
+                    )?
+                    .contiguous()?,
+                    dt_bias,
+                    d_skip,
+                    mimo_o: load_mat3(&format!("{p}.mixer.ssm_mimo_o"), n_mamba_h, r, d_v)?
+                        .permute((0, 2, 1))?
+                        .contiguous()?,
                     wo: linear(n_mamba_h * d_v, h, vb.pp(format!("{p}.mixer.attn_output")))?,
                 };
-                let n_state = n_mamba_h * d_v * d_qk
-                    + n_mamba_h * r * d_qk
-                    + n_mamba_h * r * d_v
-                    + n_mamba_h * n_ang;
                 states.push(LayerState::Mamba {
-                    state: Tensor::zeros(n_state, DType::F32, &device)?,
+                    s: Tensor::zeros((n_mamba_h, d_v, d_qk), DType::F32, &device)?,
+                    k: Tensor::zeros((n_mamba_h, r, d_qk), DType::F32, &device)?,
+                    v: Tensor::zeros((n_mamba_h, r, d_v), DType::F32, &device)?,
+                    ang: Tensor::zeros((n_mamba_h, n_ang), DType::F32, &device)?,
                 });
                 (Some(mamba), None)
             };
@@ -363,7 +374,15 @@ impl Model {
         })
     }
 
-    fn mamba_forward(&self, x: &Tensor, w: &MambaWeights, state: &mut Tensor) -> Result<Tensor> {
+    fn mamba_forward(
+        &self,
+        x: &Tensor,
+        w: &MambaWeights,
+        s_state: &mut Tensor,
+        k_state: &mut Tensor,
+        v_state: &mut Tensor,
+        ang_state: &mut Tensor,
+    ) -> Result<Tensor> {
         let cfg = &self.config;
         let h = cfg.ssm_inner_size / cfg.ssm_time_step_rank;
         let d_v = cfg.ssm_time_step_rank;
@@ -388,55 +407,33 @@ impl Model {
             .reshape((n_ang,))?;
 
         let inv = rms_inv(&bc, eps)?.reshape((2 * r, 1))?;
-        let norm_weight = Tensor::cat(
-            &[
-                w.norms.get(0)?.reshape((1, d_qk))?.expand((r, d_qk))?,
-                w.norms.get(1)?.reshape((1, d_qk))?.expand((r, d_qk))?,
-            ],
-            0,
-        )?;
         let normed = bc
             .broadcast_mul(&inv)?
-            .mul(&norm_weight)?
+            .mul(&w.norm_weight)?
             .reshape((1, 2 * r, d_qk))?;
 
-        let misc = w.misc.reshape((h, 2))?;
-        let dt_bias = misc.narrow(1, 0, 1)?;
-        let d_skip = misc.narrow(1, 1, 1)?;
-        let dt = softplus(&dt_raw.add(&dt_bias)?)?;
+        let dt = softplus(&dt_raw.add(&w.dt_bias)?)?;
         let a_neg = softplus(&a_raw)?.neg()?.clamp(f32::MIN, -A_FLOOR)?;
         let alpha = a_neg.mul(&dt)?.exp()?;
         let trap = sigmoid(&trap_raw)?;
         let beta = trap.affine(-1.0, 1.0)?.mul(&dt)?.mul(&alpha)?;
         let gamma = trap.mul(&dt)?;
 
-        let off_k = h * d_v * d_qk;
-        let off_vn = off_k + h * r * d_qk;
-        let off_a = off_vn + h * r * d_v;
-
-        let s_old = state.narrow(0, 0, off_k)?.reshape((h, d_v, d_qk))?;
-        let k_state = state
-            .narrow(0, off_k, h * r * d_qk)?
-            .reshape((h, r, d_qk))?;
-        let v_state = state.narrow(0, off_vn, h * r * d_v)?.reshape((h, r, d_v))?;
-        let ang = state.narrow(0, off_a, h * n_ang)?.reshape((h, n_ang))?;
-
         let delta_ang = ang_raw
             .reshape((1, n_ang))?
             .tanh()?
             .affine(f64::from(PI), 0.0)?
             .broadcast_mul(&dt)?;
-        let ang_new = wrap_angle(&ang.add(&delta_ang)?)?;
+        let ang_new = wrap_angle(&ang_state.add(&delta_ang)?)?;
         let cos_a = ang_new.cos()?.reshape((h, 1, n_ang))?;
         let sin_a = ang_new.sin()?.reshape((h, 1, n_ang))?;
 
-        let bias = w.bias.clone();
         let mut k_b = normed
             .narrow(1, 0, r)?
-            .broadcast_add(&bias.narrow(1, 0, r)?)?;
+            .broadcast_add(&w.bias.narrow(1, 0, r)?)?;
         let mut q_b = normed
             .narrow(1, r, r)?
-            .broadcast_add(&bias.narrow(1, r, r)?)?;
+            .broadcast_add(&w.bias.narrow(1, r, r)?)?;
 
         let quarter = n_ang;
         let half = d_qk / 2;
@@ -450,13 +447,12 @@ impl Model {
             *mat = Tensor::cat(&[n0, g1, n2, g3], 2)?.contiguous()?;
         }
 
-        let mxz = w.mxz.permute((0, 2, 1))?;
         let v_proj = x_in
             .reshape((h, d_v, 1))?
-            .broadcast_mul(&mxz.narrow(2, 0, r)?)?;
+            .broadcast_mul(&w.mxz.narrow(2, 0, r)?)?;
         let z_proj = z_in
             .reshape((h, d_v, 1))?
-            .broadcast_mul(&mxz.narrow(2, r, r)?)?;
+            .broadcast_mul(&w.mxz.narrow(2, r, r)?)?;
 
         let prev_kv = k_state
             .permute((0, 2, 1))?
@@ -464,7 +460,7 @@ impl Model {
             .matmul(&v_state.contiguous()?)?
             .permute((0, 2, 1))?
             .contiguous()?;
-        let curr_kv = k_rot_view(&k_b)?
+        let curr_kv = k_b
             .permute((0, 2, 1))?
             .contiguous()?
             .matmul(&v_proj.permute((0, 2, 1))?.contiguous()?)?
@@ -474,30 +470,21 @@ impl Model {
         let alpha_b = alpha.reshape((h, 1, 1))?;
         let beta_b = beta.reshape((h, 1, 1))?;
         let gamma_b = gamma.reshape((h, 1, 1))?;
-        let s_new = s_old
+        let s_new = s_state
             .broadcast_mul(&alpha_b)?
             .add(&prev_kv.broadcast_mul(&beta_b)?)?
             .add(&curr_kv.broadcast_mul(&gamma_b)?)?
             .contiguous()?;
 
-        let qstate = s_new.matmul(&k_rot_view(&q_b)?.permute((0, 2, 1))?.contiguous()?)?;
-        let o = qstate.add(&v_proj.broadcast_mul(&d_skip.reshape((h, 1, 1))?)?)?;
+        let qstate = s_new.matmul(&q_b.permute((0, 2, 1))?.contiguous()?)?;
+        let o = qstate.add(&v_proj.broadcast_mul(&w.d_skip.reshape((h, 1, 1))?)?)?;
         let o = o.mul(&z_proj.silu()?)?;
-        let mimo_o = w.mimo_o.permute((0, 2, 1))?;
-        let y = o.mul(&mimo_o)?.sum(D::Minus1)?.reshape((h * d_v,))?;
+        let y = o.mul(&w.mimo_o)?.sum(D::Minus1)?.reshape((h * d_v,))?;
 
-        *state = Tensor::cat(
-            &[
-                s_new.contiguous()?.reshape((h * d_v * d_qk,))?,
-                k_b.contiguous()?.reshape((h * r * d_qk,))?,
-                v_proj
-                    .permute((0, 2, 1))?
-                    .contiguous()?
-                    .reshape((h * r * d_v,))?,
-                ang_new.contiguous()?.reshape((h * n_ang,))?,
-            ],
-            0,
-        )?;
+        *s_state = s_new;
+        *k_state = k_b.contiguous()?;
+        *v_state = v_proj.permute((0, 2, 1))?.contiguous()?;
+        *ang_state = ang_new.contiguous()?;
 
         w.wo.forward(&y.reshape((1, h * d_v))?)
     }
@@ -668,8 +655,11 @@ impl Model {
         if start_pos == 0 {
             for layer in state.layers.iter_mut() {
                 match layer {
-                    LayerState::Mamba { state } => {
-                        *state = state.zeros_like()?;
+                    LayerState::Mamba { s, k, v, ang } => {
+                        *s = s.zeros_like()?;
+                        *k = k.zeros_like()?;
+                        *v = v.zeros_like()?;
+                        *ang = ang.zeros_like()?;
                     }
                     LayerState::Attention {
                         shift,
@@ -704,11 +694,18 @@ impl Model {
                         &mut state.layers[i],
                     )?
                 } else {
-                    let s = match &mut state.layers[i] {
-                        LayerState::Mamba { state } => state,
+                    let (s_st, k_st, v_st, ang_st) = match &mut state.layers[i] {
+                        LayerState::Mamba { s, k, v, ang } => (s, k, v, ang),
                         _ => candle_core::bail!("Olala mamba layer has wrong state kind"),
                     };
-                    self.mamba_forward(&residual, layer.mamba.as_ref().unwrap(), s)?
+                    self.mamba_forward(
+                        &residual,
+                        layer.mamba.as_ref().unwrap(),
+                        s_st,
+                        k_st,
+                        v_st,
+                        ang_st,
+                    )?
                 };
                 let cur = geodesic(
                     &residual,
@@ -726,10 +723,6 @@ impl Model {
         let logits = self.lm_head.forward(&last)?;
         Ok(logits)
     }
-}
-
-fn k_rot_view(x: &Tensor) -> Result<Tensor> {
-    Ok(x.clone())
 }
 
 impl IsqModel for Model {
