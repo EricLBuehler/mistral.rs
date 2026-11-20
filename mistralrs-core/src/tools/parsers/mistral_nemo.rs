@@ -39,9 +39,9 @@ impl ToolFormatParser for MistralNemoParser {
     fn parse(&self, message: &str) -> candle_core::Result<Option<String>> {
         let prefix = "[TOOL_CALLS]";
         if let Some(pos) = message.find(prefix) {
-            let rest = &message[pos + prefix.len()..];
-            if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-                Ok(Some(inner.to_string()))
+            let rest = message[pos + prefix.len()..].trim();
+            if rest.starts_with('[') && rest.ends_with(']') {
+                Ok(Some(rest.to_string()))
             } else {
                 Ok(None)
             }
@@ -62,6 +62,38 @@ mod tests {
             .parse(r#"I'll check.[TOOL_CALLS][{"name":"search","arguments":{"query":"rust"}}]"#)
             .unwrap()
             .unwrap();
-        assert_eq!(parsed, r#"{"name":"search","arguments":{"query":"rust"}}"#);
+        assert_eq!(
+            parsed,
+            r#"[{"name":"search","arguments":{"query":"rust"}}]"#
+        );
+    }
+
+    #[test]
+    fn keeps_parallel_calls_as_one_array() {
+        let parsed = MistralNemoParser
+            .parse(r#"[TOOL_CALLS][{"name":"a","arguments":{}}, {"name":"b","arguments":{}}]"#)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            parsed,
+            r#"[{"name":"a","arguments":{}}, {"name":"b","arguments":{}}]"#
+        );
+    }
+
+    #[test]
+    fn ignores_trailing_whitespace_after_the_array() {
+        let parsed = MistralNemoParser
+            .parse("[TOOL_CALLS][{\"name\":\"a\",\"arguments\":{}}]\n")
+            .unwrap()
+            .unwrap();
+        assert_eq!(parsed, r#"[{"name":"a","arguments":{}}]"#);
+    }
+
+    #[test]
+    fn waits_for_the_closing_bracket() {
+        assert!(MistralNemoParser
+            .parse(r#"[TOOL_CALLS][{"name":"a","arguments":{"#)
+            .unwrap()
+            .is_none());
     }
 }
