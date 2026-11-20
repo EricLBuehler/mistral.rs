@@ -95,19 +95,6 @@ fn adjust_cache_mask(mask: &AttentionMask, kv_len: usize) -> Result<AttentionMas
     Ok(mask.clone())
 }
 
-fn select_paged_mm_prefix_path(
-    requires_noncausal: bool,
-    is_paged: bool,
-    supported_backend: bool,
-    packed: bool,
-    has_range_metadata: bool,
-) -> Result<bool> {
-    if requires_noncausal && packed && !has_range_metadata {
-        candle_core::bail!("packed Gemma 4 multimodal prefill is missing noncausal range metadata");
-    }
-    Ok(requires_noncausal && is_paged && supported_backend && has_range_metadata)
-}
-
 /// Proportional RoPE for Gemma4 full-attention layers.
 ///
 /// Unlike standard RotaryEmbedding, this computes inv_freq for only the first
@@ -2147,7 +2134,7 @@ impl TextModel {
         let has_range_metadata = ctx
             .paged_input_metadata()
             .is_some_and(|metadata| metadata.has_noncausal_mm_context);
-        let use_paged_mm_prefix_path = select_paged_mm_prefix_path(
+        let use_paged_mm_prefix_path = crate::paged_attention::plan::select_paged_mm_prefix_path(
             active_bidirectional_attention == Gemma4BidirectionalAttention::Vision,
             ctx.is_paged(),
             crate::attention::supports_compact_paged_prefill(xs.device()),
@@ -2708,8 +2695,8 @@ mod tests {
     };
 
     use super::{
-        gemma4_moe_weight_prefix, is_paged_decode_forward, select_paged_mm_prefix_path,
-        sliding_decode_kv_window, Gemma4Router, TextModel,
+        gemma4_moe_weight_prefix, is_paged_decode_forward, sliding_decode_kv_window, Gemma4Router,
+        TextModel,
     };
     use candle_core::{DType, Device, Tensor};
     use mistralrs_quant::{
@@ -2836,14 +2823,6 @@ mod tests {
             vec![vec![2., 3., 4.], vec![7., 8., 9.]]
         );
         Ok(())
-    }
-
-    #[test]
-    fn paged_mm_prefix_requires_range_metadata() {
-        assert!(!select_paged_mm_prefix_path(true, true, true, false, false).unwrap());
-        assert!(select_paged_mm_prefix_path(true, true, true, true, false).is_err());
-        assert!(select_paged_mm_prefix_path(true, true, true, true, true).unwrap());
-        assert!(!select_paged_mm_prefix_path(false, true, true, true, false).unwrap());
     }
 
     #[test]

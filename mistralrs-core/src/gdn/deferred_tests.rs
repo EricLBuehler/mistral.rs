@@ -257,7 +257,6 @@ fn capture(
 }
 
 #[test]
-#[ignore = "requires CUDA"]
 fn deferred_layer_cached_fallback_prefill_and_rollback_match_eager() -> Result<()> {
     let device = Device::new_cuda(0)?;
     let _htod_cache = device.as_cuda_device()?.enable_cuda_graph_htod_cache();

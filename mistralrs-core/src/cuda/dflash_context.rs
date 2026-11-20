@@ -231,9 +231,7 @@ pub(crate) fn pack_taps(taps: &[Tensor], row_indices: &[u32]) -> Result<Option<T
             drop(output_guard);
             drop(indices_guard);
             drop(input_guards);
-            if status != 0 {
-                candle_core::bail!("dflash_pack_taps failed with status {status}");
-            }
+            crate::cuda::check_launch("dflash_pack_taps", status)?;
             let storage = CudaStorage {
                 slice: CudaStorageSlice::$variant(output),
                 device: dev.clone(),
@@ -356,9 +354,7 @@ pub(crate) fn context_keys(
             drop(output_guard);
             drop(position_guard);
             drop(guards);
-            if status != 0 {
-                candle_core::bail!("dflash_context_keys failed with status {status}");
-            }
+            crate::cuda::check_launch("dflash_context_keys", status)?;
             let storage = CudaStorage {
                 slice: CudaStorageSlice::$variant(output),
                 device: dev.clone(),
@@ -386,7 +382,6 @@ mod tests {
     use super::{context_keys, pack_taps};
 
     #[test]
-    #[ignore = "requires CUDA"]
     fn packed_taps_match_cuda_reference() -> Result<()> {
         let device = Device::new_cuda(0)?;
         for indices in [vec![2u32, 3, 4], vec![4u32, 1, 5]] {
@@ -411,7 +406,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires CUDA"]
     fn context_keys_match_layerwise_reference() -> Result<()> {
         let device = Device::new_cuda(0)?;
         let layers = 3;

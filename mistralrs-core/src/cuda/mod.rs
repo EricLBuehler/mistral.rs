@@ -1,3 +1,4 @@
+pub(crate) mod abi;
 #[cfg(feature = "cuda")]
 pub(crate) mod dflash_context;
 #[cfg(feature = "cuda")]
@@ -27,3 +28,11 @@ pub(crate) mod rounded_rope;
 #[cfg(feature = "cuda")]
 pub(crate) mod speculative_rejection;
 pub mod ssm;
+
+#[cfg(feature = "cuda")]
+pub(crate) fn check_launch(kernel: &'static str, status: i32) -> candle_core::Result<()> {
+    if status != 0 {
+        candle_core::bail!("{kernel} failed with status {status}");
+    }
+    Ok(())
+}

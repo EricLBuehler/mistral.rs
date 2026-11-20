@@ -901,7 +901,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a CUDA device with cuTile support"]
     fn cutile_fp8_w8a8_matches_dequantized_reference() -> Result<()> {
         use float8::F8E4M3;
 

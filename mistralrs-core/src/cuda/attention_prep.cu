@@ -1,5 +1,6 @@
 #include "cuda_bf16.h"
 #include "cuda_fp16.h"
+#include "mistralrs_core_abi.h"
 #include <stdint.h>
 
 constexpr int AP_WARP_SIZE = 32;
@@ -480,117 +481,119 @@ void launch_qkv_rms_norm_rope_positions(
           k_heads, seq_len, head_dim, rot_dim, q_eps, k_eps, v_eps);
 }
 
-extern "C" void qk_rms_norm_rope(
-    const void *q, const void *k, const void *q_weight, const void *k_weight,
-    const void *cos, const void *sin, void *q_out, void *k_out,
-    const int64_t q_stride_b, const int64_t q_stride_h,
-    const int64_t q_stride_s, const int64_t q_stride_d,
-    const int64_t k_stride_b, const int64_t k_stride_h,
-    const int64_t k_stride_s, const int64_t k_stride_d, const int batch,
-    const int q_heads, const int k_heads, const int seq_len, const int head_dim,
-    const int rot_dim, const int cos_batch_stride, const float q_eps,
-    const float k_eps, const int is_neox, const int dtype,
-    const int output_token_major, int64_t stream) {
-  if (is_neox) {
-    if (dtype == 0) {
+extern "C" int qk_rms_norm_rope(const QkRmsNormRopeParams *p) {
+  if (p->is_neox) {
+    if (p->dtype == 0) {
       launch_qk_rms_norm_rope<__half, true>(
-          q, k, q_weight, k_weight, cos, sin, q_out, k_out, q_stride_b,
-          q_stride_h, q_stride_s, q_stride_d, k_stride_b, k_stride_h,
-          k_stride_s, k_stride_d, batch, q_heads, k_heads, seq_len, head_dim,
-          rot_dim, cos_batch_stride, q_eps, k_eps, output_token_major != 0,
-          stream);
-    } else if (dtype == 1) {
+          p->q, p->k, p->q_weight, p->k_weight, p->cos, p->sin, p->q_out,
+          p->k_out, p->q_stride_b, p->q_stride_h, p->q_stride_s, p->q_stride_d,
+          p->k_stride_b, p->k_stride_h, p->k_stride_s, p->k_stride_d, p->batch,
+          p->q_heads, p->k_heads, p->seq_len, p->head_dim, p->rot_dim,
+          p->cos_batch_stride, p->q_eps, p->k_eps, p->output_token_major != 0,
+          p->stream);
+    } else if (p->dtype == 1) {
       launch_qk_rms_norm_rope<__nv_bfloat16, true>(
-          q, k, q_weight, k_weight, cos, sin, q_out, k_out, q_stride_b,
-          q_stride_h, q_stride_s, q_stride_d, k_stride_b, k_stride_h,
-          k_stride_s, k_stride_d, batch, q_heads, k_heads, seq_len, head_dim,
-          rot_dim, cos_batch_stride, q_eps, k_eps, output_token_major != 0,
-          stream);
-    } else if (dtype == 2) {
+          p->q, p->k, p->q_weight, p->k_weight, p->cos, p->sin, p->q_out,
+          p->k_out, p->q_stride_b, p->q_stride_h, p->q_stride_s, p->q_stride_d,
+          p->k_stride_b, p->k_stride_h, p->k_stride_s, p->k_stride_d, p->batch,
+          p->q_heads, p->k_heads, p->seq_len, p->head_dim, p->rot_dim,
+          p->cos_batch_stride, p->q_eps, p->k_eps, p->output_token_major != 0,
+          p->stream);
+    } else if (p->dtype == 2) {
       launch_qk_rms_norm_rope<float, true>(
-          q, k, q_weight, k_weight, cos, sin, q_out, k_out, q_stride_b,
-          q_stride_h, q_stride_s, q_stride_d, k_stride_b, k_stride_h,
-          k_stride_s, k_stride_d, batch, q_heads, k_heads, seq_len, head_dim,
-          rot_dim, cos_batch_stride, q_eps, k_eps, output_token_major != 0,
-          stream);
+          p->q, p->k, p->q_weight, p->k_weight, p->cos, p->sin, p->q_out,
+          p->k_out, p->q_stride_b, p->q_stride_h, p->q_stride_s, p->q_stride_d,
+          p->k_stride_b, p->k_stride_h, p->k_stride_s, p->k_stride_d, p->batch,
+          p->q_heads, p->k_heads, p->seq_len, p->head_dim, p->rot_dim,
+          p->cos_batch_stride, p->q_eps, p->k_eps, p->output_token_major != 0,
+          p->stream);
     }
   } else {
-    if (dtype == 0) {
+    if (p->dtype == 0) {
       launch_qk_rms_norm_rope<__half, false>(
-          q, k, q_weight, k_weight, cos, sin, q_out, k_out, q_stride_b,
-          q_stride_h, q_stride_s, q_stride_d, k_stride_b, k_stride_h,
-          k_stride_s, k_stride_d, batch, q_heads, k_heads, seq_len, head_dim,
-          rot_dim, cos_batch_stride, q_eps, k_eps, output_token_major != 0,
-          stream);
-    } else if (dtype == 1) {
+          p->q, p->k, p->q_weight, p->k_weight, p->cos, p->sin, p->q_out,
+          p->k_out, p->q_stride_b, p->q_stride_h, p->q_stride_s, p->q_stride_d,
+          p->k_stride_b, p->k_stride_h, p->k_stride_s, p->k_stride_d, p->batch,
+          p->q_heads, p->k_heads, p->seq_len, p->head_dim, p->rot_dim,
+          p->cos_batch_stride, p->q_eps, p->k_eps, p->output_token_major != 0,
+          p->stream);
+    } else if (p->dtype == 1) {
       launch_qk_rms_norm_rope<__nv_bfloat16, false>(
-          q, k, q_weight, k_weight, cos, sin, q_out, k_out, q_stride_b,
-          q_stride_h, q_stride_s, q_stride_d, k_stride_b, k_stride_h,
-          k_stride_s, k_stride_d, batch, q_heads, k_heads, seq_len, head_dim,
-          rot_dim, cos_batch_stride, q_eps, k_eps, output_token_major != 0,
-          stream);
-    } else if (dtype == 2) {
+          p->q, p->k, p->q_weight, p->k_weight, p->cos, p->sin, p->q_out,
+          p->k_out, p->q_stride_b, p->q_stride_h, p->q_stride_s, p->q_stride_d,
+          p->k_stride_b, p->k_stride_h, p->k_stride_s, p->k_stride_d, p->batch,
+          p->q_heads, p->k_heads, p->seq_len, p->head_dim, p->rot_dim,
+          p->cos_batch_stride, p->q_eps, p->k_eps, p->output_token_major != 0,
+          p->stream);
+    } else if (p->dtype == 2) {
       launch_qk_rms_norm_rope<float, false>(
-          q, k, q_weight, k_weight, cos, sin, q_out, k_out, q_stride_b,
-          q_stride_h, q_stride_s, q_stride_d, k_stride_b, k_stride_h,
-          k_stride_s, k_stride_d, batch, q_heads, k_heads, seq_len, head_dim,
-          rot_dim, cos_batch_stride, q_eps, k_eps, output_token_major != 0,
-          stream);
+          p->q, p->k, p->q_weight, p->k_weight, p->cos, p->sin, p->q_out,
+          p->k_out, p->q_stride_b, p->q_stride_h, p->q_stride_s, p->q_stride_d,
+          p->k_stride_b, p->k_stride_h, p->k_stride_s, p->k_stride_d, p->batch,
+          p->q_heads, p->k_heads, p->seq_len, p->head_dim, p->rot_dim,
+          p->cos_batch_stride, p->q_eps, p->k_eps, p->output_token_major != 0,
+          p->stream);
     }
   }
+  return static_cast<int>(cudaGetLastError());
 }
 
-extern "C" void qk_rms_norm_rope_positions(
-    const void *q, const void *k, const void *q_weight, const void *k_weight,
-    const void *cos, const void *sin, const void *positions, void *q_out,
-    void *k_out, const int64_t q_stride_b, const int64_t q_stride_h,
-    const int64_t q_stride_s, const int64_t q_stride_d,
-    const int64_t k_stride_b, const int64_t k_stride_h,
-    const int64_t k_stride_s, const int64_t k_stride_d, const int batch,
-    const int q_heads, const int k_heads, const int seq_len, const int head_dim,
-    const int rot_dim, const float q_eps, const float k_eps, const int is_neox,
-    const int dtype, const int output_token_major, int64_t stream) {
-  if (is_neox) {
-    if (dtype == 0) {
+extern "C" int
+qk_rms_norm_rope_positions(const QkRmsNormRopePositionsParams *p) {
+  if (p->is_neox) {
+    if (p->dtype == 0) {
       launch_qk_rms_norm_rope_positions<__half, true>(
-          q, k, q_weight, k_weight, cos, sin, positions, q_out, k_out,
-          q_stride_b, q_stride_h, q_stride_s, q_stride_d, k_stride_b,
-          k_stride_h, k_stride_s, k_stride_d, batch, q_heads, k_heads, seq_len,
-          head_dim, rot_dim, q_eps, k_eps, output_token_major != 0, stream);
-    } else if (dtype == 1) {
+          p->q, p->k, p->q_weight, p->k_weight, p->cos, p->sin, p->positions,
+          p->q_out, p->k_out, p->q_stride_b, p->q_stride_h, p->q_stride_s,
+          p->q_stride_d, p->k_stride_b, p->k_stride_h, p->k_stride_s,
+          p->k_stride_d, p->batch, p->q_heads, p->k_heads, p->seq_len,
+          p->head_dim, p->rot_dim, p->q_eps, p->k_eps,
+          p->output_token_major != 0, p->stream);
+    } else if (p->dtype == 1) {
       launch_qk_rms_norm_rope_positions<__nv_bfloat16, true>(
-          q, k, q_weight, k_weight, cos, sin, positions, q_out, k_out,
-          q_stride_b, q_stride_h, q_stride_s, q_stride_d, k_stride_b,
-          k_stride_h, k_stride_s, k_stride_d, batch, q_heads, k_heads, seq_len,
-          head_dim, rot_dim, q_eps, k_eps, output_token_major != 0, stream);
-    } else if (dtype == 2) {
+          p->q, p->k, p->q_weight, p->k_weight, p->cos, p->sin, p->positions,
+          p->q_out, p->k_out, p->q_stride_b, p->q_stride_h, p->q_stride_s,
+          p->q_stride_d, p->k_stride_b, p->k_stride_h, p->k_stride_s,
+          p->k_stride_d, p->batch, p->q_heads, p->k_heads, p->seq_len,
+          p->head_dim, p->rot_dim, p->q_eps, p->k_eps,
+          p->output_token_major != 0, p->stream);
+    } else if (p->dtype == 2) {
       launch_qk_rms_norm_rope_positions<float, true>(
-          q, k, q_weight, k_weight, cos, sin, positions, q_out, k_out,
-          q_stride_b, q_stride_h, q_stride_s, q_stride_d, k_stride_b,
-          k_stride_h, k_stride_s, k_stride_d, batch, q_heads, k_heads, seq_len,
-          head_dim, rot_dim, q_eps, k_eps, output_token_major != 0, stream);
+          p->q, p->k, p->q_weight, p->k_weight, p->cos, p->sin, p->positions,
+          p->q_out, p->k_out, p->q_stride_b, p->q_stride_h, p->q_stride_s,
+          p->q_stride_d, p->k_stride_b, p->k_stride_h, p->k_stride_s,
+          p->k_stride_d, p->batch, p->q_heads, p->k_heads, p->seq_len,
+          p->head_dim, p->rot_dim, p->q_eps, p->k_eps,
+          p->output_token_major != 0, p->stream);
     }
   } else {
-    if (dtype == 0) {
+    if (p->dtype == 0) {
       launch_qk_rms_norm_rope_positions<__half, false>(
-          q, k, q_weight, k_weight, cos, sin, positions, q_out, k_out,
-          q_stride_b, q_stride_h, q_stride_s, q_stride_d, k_stride_b,
-          k_stride_h, k_stride_s, k_stride_d, batch, q_heads, k_heads, seq_len,
-          head_dim, rot_dim, q_eps, k_eps, output_token_major != 0, stream);
-    } else if (dtype == 1) {
+          p->q, p->k, p->q_weight, p->k_weight, p->cos, p->sin, p->positions,
+          p->q_out, p->k_out, p->q_stride_b, p->q_stride_h, p->q_stride_s,
+          p->q_stride_d, p->k_stride_b, p->k_stride_h, p->k_stride_s,
+          p->k_stride_d, p->batch, p->q_heads, p->k_heads, p->seq_len,
+          p->head_dim, p->rot_dim, p->q_eps, p->k_eps,
+          p->output_token_major != 0, p->stream);
+    } else if (p->dtype == 1) {
       launch_qk_rms_norm_rope_positions<__nv_bfloat16, false>(
-          q, k, q_weight, k_weight, cos, sin, positions, q_out, k_out,
-          q_stride_b, q_stride_h, q_stride_s, q_stride_d, k_stride_b,
-          k_stride_h, k_stride_s, k_stride_d, batch, q_heads, k_heads, seq_len,
-          head_dim, rot_dim, q_eps, k_eps, output_token_major != 0, stream);
-    } else if (dtype == 2) {
+          p->q, p->k, p->q_weight, p->k_weight, p->cos, p->sin, p->positions,
+          p->q_out, p->k_out, p->q_stride_b, p->q_stride_h, p->q_stride_s,
+          p->q_stride_d, p->k_stride_b, p->k_stride_h, p->k_stride_s,
+          p->k_stride_d, p->batch, p->q_heads, p->k_heads, p->seq_len,
+          p->head_dim, p->rot_dim, p->q_eps, p->k_eps,
+          p->output_token_major != 0, p->stream);
+    } else if (p->dtype == 2) {
       launch_qk_rms_norm_rope_positions<float, false>(
-          q, k, q_weight, k_weight, cos, sin, positions, q_out, k_out,
-          q_stride_b, q_stride_h, q_stride_s, q_stride_d, k_stride_b,
-          k_stride_h, k_stride_s, k_stride_d, batch, q_heads, k_heads, seq_len,
-          head_dim, rot_dim, q_eps, k_eps, output_token_major != 0, stream);
+          p->q, p->k, p->q_weight, p->k_weight, p->cos, p->sin, p->positions,
+          p->q_out, p->k_out, p->q_stride_b, p->q_stride_h, p->q_stride_s,
+          p->q_stride_d, p->k_stride_b, p->k_stride_h, p->k_stride_s,
+          p->k_stride_d, p->batch, p->q_heads, p->k_heads, p->seq_len,
+          p->head_dim, p->rot_dim, p->q_eps, p->k_eps,
+          p->output_token_major != 0, p->stream);
     }
   }
+  return static_cast<int>(cudaGetLastError());
 }
 
 extern "C" void rope_sincos_positions(const void *positions,
@@ -610,64 +613,66 @@ extern "C" void rope_sincos_positions(const void *positions,
   }
 }
 
-extern "C" void qkv_rms_norm_rope_positions(
-    const void *q, const void *k, const void *v, const void *q_weight,
-    const void *k_weight, const void *v_weight, const void *cos,
-    const void *sin, const void *positions, void *q_out, void *k_out,
-    void *v_out, const int64_t q_stride_b, const int64_t q_stride_h,
-    const int64_t q_stride_s, const int64_t q_stride_d,
-    const int64_t k_stride_b, const int64_t k_stride_h,
-    const int64_t k_stride_s, const int64_t k_stride_d,
-    const int64_t v_stride_b, const int64_t v_stride_h,
-    const int64_t v_stride_s, const int64_t v_stride_d, const int batch,
-    const int q_heads, const int k_heads, const int seq_len, const int head_dim,
-    const int rot_dim, const float q_eps, const float k_eps, const float v_eps,
-    const int is_neox, const int dtype, int64_t stream) {
-  if (is_neox) {
-    if (dtype == 0) {
+extern "C" int
+qkv_rms_norm_rope_positions(const QkvRmsNormRopePositionsParams *p) {
+  if (p->is_neox) {
+    if (p->dtype == 0) {
       launch_qkv_rms_norm_rope_positions<__half, true>(
-          q, k, v, q_weight, k_weight, v_weight, cos, sin, positions, q_out,
-          k_out, v_out, q_stride_b, q_stride_h, q_stride_s, q_stride_d,
-          k_stride_b, k_stride_h, k_stride_s, k_stride_d, v_stride_b,
-          v_stride_h, v_stride_s, v_stride_d, batch, q_heads, k_heads, seq_len,
-          head_dim, rot_dim, q_eps, k_eps, v_eps, stream);
-    } else if (dtype == 1) {
+          p->q, p->k, p->v, p->q_weight, p->k_weight, p->v_weight, p->cos,
+          p->sin, p->positions, p->q_out, p->k_out, p->v_out, p->q_stride_b,
+          p->q_stride_h, p->q_stride_s, p->q_stride_d, p->k_stride_b,
+          p->k_stride_h, p->k_stride_s, p->k_stride_d, p->v_stride_b,
+          p->v_stride_h, p->v_stride_s, p->v_stride_d, p->batch, p->q_heads,
+          p->k_heads, p->seq_len, p->head_dim, p->rot_dim, p->q_eps, p->k_eps,
+          p->v_eps, p->stream);
+    } else if (p->dtype == 1) {
       launch_qkv_rms_norm_rope_positions<__nv_bfloat16, true>(
-          q, k, v, q_weight, k_weight, v_weight, cos, sin, positions, q_out,
-          k_out, v_out, q_stride_b, q_stride_h, q_stride_s, q_stride_d,
-          k_stride_b, k_stride_h, k_stride_s, k_stride_d, v_stride_b,
-          v_stride_h, v_stride_s, v_stride_d, batch, q_heads, k_heads, seq_len,
-          head_dim, rot_dim, q_eps, k_eps, v_eps, stream);
-    } else if (dtype == 2) {
+          p->q, p->k, p->v, p->q_weight, p->k_weight, p->v_weight, p->cos,
+          p->sin, p->positions, p->q_out, p->k_out, p->v_out, p->q_stride_b,
+          p->q_stride_h, p->q_stride_s, p->q_stride_d, p->k_stride_b,
+          p->k_stride_h, p->k_stride_s, p->k_stride_d, p->v_stride_b,
+          p->v_stride_h, p->v_stride_s, p->v_stride_d, p->batch, p->q_heads,
+          p->k_heads, p->seq_len, p->head_dim, p->rot_dim, p->q_eps, p->k_eps,
+          p->v_eps, p->stream);
+    } else if (p->dtype == 2) {
       launch_qkv_rms_norm_rope_positions<float, true>(
-          q, k, v, q_weight, k_weight, v_weight, cos, sin, positions, q_out,
-          k_out, v_out, q_stride_b, q_stride_h, q_stride_s, q_stride_d,
-          k_stride_b, k_stride_h, k_stride_s, k_stride_d, v_stride_b,
-          v_stride_h, v_stride_s, v_stride_d, batch, q_heads, k_heads, seq_len,
-          head_dim, rot_dim, q_eps, k_eps, v_eps, stream);
+          p->q, p->k, p->v, p->q_weight, p->k_weight, p->v_weight, p->cos,
+          p->sin, p->positions, p->q_out, p->k_out, p->v_out, p->q_stride_b,
+          p->q_stride_h, p->q_stride_s, p->q_stride_d, p->k_stride_b,
+          p->k_stride_h, p->k_stride_s, p->k_stride_d, p->v_stride_b,
+          p->v_stride_h, p->v_stride_s, p->v_stride_d, p->batch, p->q_heads,
+          p->k_heads, p->seq_len, p->head_dim, p->rot_dim, p->q_eps, p->k_eps,
+          p->v_eps, p->stream);
     }
   } else {
-    if (dtype == 0) {
+    if (p->dtype == 0) {
       launch_qkv_rms_norm_rope_positions<__half, false>(
-          q, k, v, q_weight, k_weight, v_weight, cos, sin, positions, q_out,
-          k_out, v_out, q_stride_b, q_stride_h, q_stride_s, q_stride_d,
-          k_stride_b, k_stride_h, k_stride_s, k_stride_d, v_stride_b,
-          v_stride_h, v_stride_s, v_stride_d, batch, q_heads, k_heads, seq_len,
-          head_dim, rot_dim, q_eps, k_eps, v_eps, stream);
-    } else if (dtype == 1) {
+          p->q, p->k, p->v, p->q_weight, p->k_weight, p->v_weight, p->cos,
+          p->sin, p->positions, p->q_out, p->k_out, p->v_out, p->q_stride_b,
+          p->q_stride_h, p->q_stride_s, p->q_stride_d, p->k_stride_b,
+          p->k_stride_h, p->k_stride_s, p->k_stride_d, p->v_stride_b,
+          p->v_stride_h, p->v_stride_s, p->v_stride_d, p->batch, p->q_heads,
+          p->k_heads, p->seq_len, p->head_dim, p->rot_dim, p->q_eps, p->k_eps,
+          p->v_eps, p->stream);
+    } else if (p->dtype == 1) {
       launch_qkv_rms_norm_rope_positions<__nv_bfloat16, false>(
-          q, k, v, q_weight, k_weight, v_weight, cos, sin, positions, q_out,
-          k_out, v_out, q_stride_b, q_stride_h, q_stride_s, q_stride_d,
-          k_stride_b, k_stride_h, k_stride_s, k_stride_d, v_stride_b,
-          v_stride_h, v_stride_s, v_stride_d, batch, q_heads, k_heads, seq_len,
-          head_dim, rot_dim, q_eps, k_eps, v_eps, stream);
-    } else if (dtype == 2) {
+          p->q, p->k, p->v, p->q_weight, p->k_weight, p->v_weight, p->cos,
+          p->sin, p->positions, p->q_out, p->k_out, p->v_out, p->q_stride_b,
+          p->q_stride_h, p->q_stride_s, p->q_stride_d, p->k_stride_b,
+          p->k_stride_h, p->k_stride_s, p->k_stride_d, p->v_stride_b,
+          p->v_stride_h, p->v_stride_s, p->v_stride_d, p->batch, p->q_heads,
+          p->k_heads, p->seq_len, p->head_dim, p->rot_dim, p->q_eps, p->k_eps,
+          p->v_eps, p->stream);
+    } else if (p->dtype == 2) {
       launch_qkv_rms_norm_rope_positions<float, false>(
-          q, k, v, q_weight, k_weight, v_weight, cos, sin, positions, q_out,
-          k_out, v_out, q_stride_b, q_stride_h, q_stride_s, q_stride_d,
-          k_stride_b, k_stride_h, k_stride_s, k_stride_d, v_stride_b,
-          v_stride_h, v_stride_s, v_stride_d, batch, q_heads, k_heads, seq_len,
-          head_dim, rot_dim, q_eps, k_eps, v_eps, stream);
+          p->q, p->k, p->v, p->q_weight, p->k_weight, p->v_weight, p->cos,
+          p->sin, p->positions, p->q_out, p->k_out, p->v_out, p->q_stride_b,
+          p->q_stride_h, p->q_stride_s, p->q_stride_d, p->k_stride_b,
+          p->k_stride_h, p->k_stride_s, p->k_stride_d, p->v_stride_b,
+          p->v_stride_h, p->v_stride_s, p->v_stride_d, p->batch, p->q_heads,
+          p->k_heads, p->seq_len, p->head_dim, p->rot_dim, p->q_eps, p->k_eps,
+          p->v_eps, p->stream);
     }
   }
+  return static_cast<int>(cudaGetLastError());
 }

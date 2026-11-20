@@ -196,7 +196,6 @@ mod cuda {
     }
 
     #[test]
-    #[ignore = "requires CUDA"]
     fn deferred_pool_gather_snapshot_and_slot_reuse_materialize_exactly() -> Result<()> {
         let device = Device::new_cuda(0)?;
         let mut cache = mixed_cache(&device, HEAD_DIM)?;

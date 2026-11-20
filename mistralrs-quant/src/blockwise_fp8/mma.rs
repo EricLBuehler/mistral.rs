@@ -280,7 +280,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a CUDA device"]
     fn tensor_core_gemv_matches_dequantized_reference() -> Result<()> {
         const N: usize = 272;
         const K: usize = 1024;

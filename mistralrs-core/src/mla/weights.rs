@@ -1,12 +1,12 @@
 //! MLA weight caching for efficient decode operations.
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 use std::sync::Mutex;
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 use candle_core::{Device, Result, Tensor, D};
 
-#[cfg(all(feature = "cuda", target_family = "unix"))]
+#[cfg(cuda_unix)]
 use mistralrs_quant::QuantMethod;
 
 /// Cached MLA weight matrices for efficient decode operations.
@@ -14,9 +14,9 @@ use mistralrs_quant::QuantMethod;
 /// Stores the precomputed w_uk and w_uv_t matrices extracted from kv_b_proj.
 /// These are computed lazily on first use and cached for subsequent calls.
 pub struct MlaWeights {
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     weights: Option<Mutex<Option<(Tensor, Tensor)>>>,
-    #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+    #[cfg(not(cuda_unix))]
     _phantom: std::marker::PhantomData<()>,
 }
 
@@ -25,7 +25,7 @@ impl MlaWeights {
     ///
     /// If `paged_attn_enabled` is true and we're on CUDA, allocates the mutex for caching.
     /// Otherwise, the weights are not cached (MLA decode won't be used).
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     pub fn new(paged_attn_enabled: bool, device: Option<&Device>) -> Self {
         let weights = if paged_attn_enabled {
             if let Some(device) = device {
@@ -44,7 +44,7 @@ impl MlaWeights {
         Self { weights }
     }
 
-    #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+    #[cfg(not(cuda_unix))]
     pub fn new(_paged_attn_enabled: bool, _device: Option<&candle_core::Device>) -> Self {
         Self {
             _phantom: std::marker::PhantomData,
@@ -63,7 +63,7 @@ impl MlaWeights {
     /// * `kv_lora_rank` - KV latent dimension
     /// * `qk_nope_head_dim` - Non-positional head dimension
     /// * `v_head_dim` - Value head dimension
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     pub fn compute_weights(
         kv_b_proj: &dyn QuantMethod,
         device: &Device,
@@ -104,7 +104,7 @@ impl MlaWeights {
     /// Get or compute the MLA weights.
     ///
     /// Returns cached weights if available, otherwise computes and caches them.
-    #[cfg(all(feature = "cuda", target_family = "unix"))]
+    #[cfg(cuda_unix)]
     pub fn get_or_compute(
         &self,
         kv_b_proj: &dyn QuantMethod,
@@ -138,7 +138,7 @@ impl MlaWeights {
         Ok((w_uk, w_uv_t))
     }
 
-    #[cfg(not(all(feature = "cuda", target_family = "unix")))]
+    #[cfg(not(cuda_unix))]
     #[allow(dead_code)]
     pub fn get_or_compute(
         &self,

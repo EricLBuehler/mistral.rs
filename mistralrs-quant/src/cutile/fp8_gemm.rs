@@ -572,7 +572,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a CUDA device with cuTile support"]
     fn cutile_fp8_gemm_reads_row_views_over_padded_storage() -> Result<()> {
         const N: usize = 256;
         const K: usize = 512;
@@ -617,7 +616,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a CUDA device with cuTile support"]
     fn cutile_fp8_gemm_matches_dequantized_reference() -> Result<()> {
         const N: usize = 256;
         const K: usize = 1024;

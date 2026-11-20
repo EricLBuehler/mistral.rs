@@ -74,6 +74,32 @@ fn needs_sequence_preallocated_cache(category: &ModelCategory, paged_cache: bool
         )
 }
 
+type BoxedError = Box<dyn std::error::Error + Send + Sync>;
+
+/// Why a request was refused before any sequence was scheduled.
+enum RequestRejection {
+    Validation(BoxedError),
+    Internal(BoxedError),
+}
+
+impl From<RequestRejection> for Response {
+    fn from(rejection: RequestRejection) -> Self {
+        match rejection {
+            RequestRejection::Validation(error) => Self::ValidationError(error),
+            RequestRejection::Internal(error) => Self::InternalError(error),
+        }
+    }
+}
+
+/// The request fields that shape how a chat prompt is rendered.
+struct ChatRenderOptions<'a> {
+    reasoning_disabled: bool,
+    has_audio_output: bool,
+    tools: Option<&'a [crate::Tool]>,
+    tool_choice: Option<&'a ToolChoice>,
+    preferred_tool_call_format: Option<ToolCallFormat>,
+}
+
 impl Engine {
     pub async fn handle_request(self: Arc<Self>, request: Request) {
         match request {
@@ -149,6 +175,228 @@ impl Engine {
             Request::Terminate => (),
             Request::TerminateAllSeqsNextStep => {
                 TERMINATE_ALL_NEXT_STEP.store(true, Ordering::SeqCst)
+            }
+        }
+    }
+
+    /// Splits requested stops into single-token ids and strings; `Err` is the rejection to send back.
+    fn resolve_stop_sequences(
+        &self,
+        stop: Option<&StopTokens>,
+    ) -> Result<(Vec<u32>, Vec<String>), RequestRejection> {
+        let (tok_env, tokenizer) = {
+            let pipeline = get_mut_arcmutex!(self.pipeline);
+            (pipeline.get_metadata().tok_env(), pipeline.tokenizer())
+        };
+        match stop {
+            None => Ok((vec![], vec![])),
+            Some(StopTokens::Ids(ids)) => {
+                // ` ` (space) cannot be a stop token because tokens like ` moon` start with one.
+                if let Some(tok_env) = tok_env.as_ref() {
+                    let tok_trie = tok_env.tok_trie();
+                    for id in ids {
+                        if tok_trie.has_extensions(tok_trie.token(*id)) {
+                            return Err(RequestRejection::Validation(
+                                format!("Stop token {:?} is also a prefix of other tokens and cannot be used as a stop token.", tok_trie.token_str(*id)).into(),
+                            ));
+                        }
+                    }
+                }
+                Ok((ids.clone(), vec![]))
+            }
+            Some(StopTokens::Seqs(seqs)) => {
+                let mut stop_toks = Vec::new();
+                let mut stop_strings: Vec<String> = Vec::new();
+                for stop_txt in seqs {
+                    let Some(tokenizer) = &tokenizer else {
+                        return Err(RequestRejection::Validation(
+                            "Completion requests require the pipeline to have a tokenizer".into(),
+                        ));
+                    };
+                    let toks = tokenizer
+                        .encode_fast(stop_txt.to_string(), true)
+                        .map_err(RequestRejection::Internal)?
+                        .get_ids()
+                        .to_vec();
+                    let single_unambiguous = toks.len() == 1
+                        && !tok_env.as_ref().is_some_and(|tok_env| {
+                            let tok_trie = tok_env.tok_trie();
+                            tok_trie.has_extensions(tok_trie.token(toks[0]))
+                        });
+                    if single_unambiguous {
+                        stop_toks.push(toks[0]);
+                    } else {
+                        stop_strings.push(stop_txt.clone());
+                    }
+                }
+                Ok((stop_toks, stop_strings))
+            }
+        }
+    }
+
+    /// Zeroed per-layer KV tensors sized for the prompt, for layers that keep a contiguous cache.
+    fn preallocate_sequence_kv_cache(
+        &self,
+        prompt_len: usize,
+    ) -> candle_core::Result<Vec<Option<(Tensor, Tensor)>>> {
+        let (metadata, device, needs_preallocated_cache) = {
+            let pipeline = get_mut_arcmutex!(self.pipeline);
+            let needs_preallocated_cache = match pipeline.cache() {
+                crate::pipeline::EitherCache::Normal(normal) => normal
+                    .lock()
+                    .unwrap()
+                    .0
+                    .iter()
+                    .map(|cache| matches!(cache, KvCache::Normal { .. }))
+                    .collect(),
+                _ => Vec::new(),
+            };
+            (
+                pipeline.get_metadata(),
+                pipeline.device(),
+                needs_preallocated_cache,
+            )
+        };
+        let model_metadata = metadata
+            .model_metadata
+            .as_ref()
+            .expect("If a model has a NormalCache it must have a model metadata");
+        let n_tokens = prompt_len;
+        let required_blocks = n_tokens.div_ceil(NormalCache::CACHE_GROW_SIZE);
+        let max_seq_len = required_blocks * NormalCache::CACHE_GROW_SIZE;
+        let mut dtype = metadata.activation_dtype;
+        // matches the f16 conversion KvCache::append applies on CPU
+        if device.is_cpu() && dtype == candle_core::DType::F32 && crate::kv_cache::cpu_kv_f16() {
+            dtype = candle_core::DType::F16;
+        }
+        let mut layer_caches = Vec::with_capacity(model_metadata.num_layers());
+        for layer_idx in 0..model_metadata.num_layers() {
+            if !needs_preallocated_cache
+                .get(layer_idx)
+                .copied()
+                .unwrap_or(false)
+                || !model_metadata.uses_own_kv_cache_for_layer(layer_idx)
+            {
+                layer_caches.push(None);
+                continue;
+            }
+
+            let k_shape = (
+                1usize,
+                model_metadata.num_kv_heads_for_layer(layer_idx),
+                max_seq_len,
+                model_metadata.k_head_dim_for_layer(layer_idx),
+            );
+            let v_shape = (
+                1usize,
+                model_metadata.num_kv_heads_for_layer(layer_idx),
+                max_seq_len,
+                model_metadata.v_head_dim_for_layer(layer_idx),
+            );
+
+            let k_seq_cache = Tensor::zeros(k_shape, dtype, &device)?;
+            let v_seq_cache = if k_shape == v_shape {
+                k_seq_cache.clone()
+            } else {
+                Tensor::zeros(v_shape, dtype, &device)?
+            };
+            layer_caches.push(Some((k_seq_cache, v_seq_cache)));
+        }
+        Ok(layer_caches)
+    }
+
+    /// Turns the request body into prompt tokens and text; `Err` is the rejection to send back.
+    fn render_prompt(
+        &self,
+        messages: RequestMessage,
+        chat: ChatRenderOptions<'_>,
+    ) -> Result<(Vec<u32>, String), RequestRejection> {
+        match messages {
+            RequestMessage::Decision(_) => Ok((vec![u32::MAX], String::new())),
+            RequestMessage::Chat {
+                messages,
+                enable_thinking,
+                reasoning_effort,
+            }
+            | RequestMessage::MultimodalChat {
+                images: _,
+                audios: _,
+                videos: _,
+                messages,
+                enable_thinking,
+                reasoning_effort,
+            } => {
+                let (enable_thinking, reasoning_effort) = if chat.reasoning_disabled {
+                    (
+                        Some(false),
+                        reasoning_effort.map(|_| crate::ReasoningEffort::Off),
+                    )
+                } else {
+                    (enable_thinking, reasoning_effort)
+                };
+                let enable_thinking =
+                    chat_enable_thinking(chat.has_audio_output, enable_thinking, reasoning_effort);
+                let pipeline = &*get_mut_arcmutex!(self.pipeline);
+                let tools = tools_for_chat_template(
+                    chat.tools,
+                    chat.tool_choice,
+                    chat.preferred_tool_call_format,
+                );
+                pipeline
+                    .get_processor()
+                    .process(
+                        pipeline,
+                        messages,
+                        true,
+                        true,
+                        enable_thinking,
+                        reasoning_effort,
+                        tools,
+                    )
+                    .map_err(|error| {
+                        if is_chat_template_request_error(&error) {
+                            RequestRejection::Validation(error.into())
+                        } else {
+                            RequestRejection::Internal(error.into())
+                        }
+                    })
+            }
+            RequestMessage::Completion { text, .. }
+            | RequestMessage::Embedding { prompt: text } => {
+                let Some(tokenizer) = &get_mut_arcmutex!(self.pipeline).tokenizer() else {
+                    return Err(RequestRejection::Validation(
+                        "Completion requests require the pipeline to have a tokenizer".into(),
+                    ));
+                };
+                let ids = tokenizer
+                    .encode_fast(text.clone(), true)
+                    .map_err(anyhow::Error::msg)
+                    .map_err(|e| RequestRejection::Internal(e.into()))?
+                    .get_ids()
+                    .to_vec();
+                Ok((ids, text))
+            }
+            RequestMessage::ImageGeneration { prompt, .. }
+            | RequestMessage::SpeechGeneration { prompt } => Ok((vec![u32::MAX], prompt)),
+            RequestMessage::CompletionTokens(it)
+            | RequestMessage::EmbeddingTokens { prompt: it } => {
+                let Some(tokenizer) = &get_mut_arcmutex!(self.pipeline).tokenizer() else {
+                    return Err(RequestRejection::Validation(
+                        "Completion requests w/ raw tokens require the pipeline to have a tokenizer".into(),
+                    ));
+                };
+                if let Some(token_id) = first_unknown_token_id(tokenizer, &it) {
+                    return Err(RequestRejection::Validation(
+                        format!(
+                            "Token ID {token_id} is not present in the selected model tokenizer."
+                        )
+                        .into(),
+                    ));
+                }
+                let prompt = tokenizer.decode(&it, false).map_err(|e| {
+                    RequestRejection::Internal(anyhow::Error::msg(e.to_string()).into())
+                })?;
+                Ok((it, prompt))
             }
         }
     }
@@ -412,120 +660,22 @@ impl Engine {
             None
         };
 
-        let (mut prompt_tokens, prompt_text) = match request.messages {
-            RequestMessage::Decision(_) => (vec![u32::MAX], String::new()),
-            RequestMessage::Chat {
-                messages,
-                enable_thinking,
-                reasoning_effort,
-            }
-            | RequestMessage::MultimodalChat {
-                images: _,
-                audios: _,
-                videos: _,
-                messages,
-                enable_thinking,
-                reasoning_effort,
-            } => {
-                let (enable_thinking, reasoning_effort) =
-                    if request.sampling_params.reasoning_max_tokens == Some(0) {
-                        (
-                            Some(false),
-                            reasoning_effort.map(|_| crate::ReasoningEffort::Off),
-                        )
-                    } else {
-                        (enable_thinking, reasoning_effort)
-                    };
-                let enable_thinking = chat_enable_thinking(
-                    request.audio_output.is_some(),
-                    enable_thinking,
-                    reasoning_effort,
-                );
-                let pipeline = &*get_mut_arcmutex!(self.pipeline);
-                let tools = tools_for_chat_template(
-                    request.tools.as_deref(),
-                    request.tool_choice.as_ref(),
-                    preferred_tool_call_format,
-                );
-                let template = pipeline.get_processor().process(
-                    pipeline,
-                    messages,
-                    true,
-                    true,
-                    enable_thinking,
-                    reasoning_effort,
-                    tools,
-                );
-                match template {
-                    Ok(template) => template,
-                    Err(error) => {
-                        let response = if is_chat_template_request_error(&error) {
-                            Response::ValidationError(error.into())
-                        } else {
-                            Response::InternalError(error.into())
-                        };
-                        request
-                            .response
-                            .send(response)
-                            .await
-                            .unwrap_or_else(|_| warn!("Receiver disconnected"));
-                        return;
-                    }
-                }
-            }
-            RequestMessage::Completion { text, .. }
-            | RequestMessage::Embedding { prompt: text } => {
-                let Some(tokenizer) = &get_mut_arcmutex!(self.pipeline).tokenizer() else {
-                    request
-                        .response
-                        .send(Response::ValidationError(
-                            "Completion requests require the pipeline to have a tokenizer".into(),
-                        ))
-                        .await
-                        .unwrap_or_else(|_| warn!("Receiver disconnected"));
-                    return;
-                };
-                let prompt = tokenizer
-                    .encode_fast(text.clone(), true)
-                    .map_err(anyhow::Error::msg);
-                (
-                    handle_seq_error!(prompt, request.response)
-                        .get_ids()
-                        .to_vec(),
-                    text,
-                )
-            }
-            RequestMessage::ImageGeneration { prompt, .. }
-            | RequestMessage::SpeechGeneration { prompt } => (vec![u32::MAX], prompt),
-            RequestMessage::CompletionTokens(it)
-            | RequestMessage::EmbeddingTokens { prompt: it } => {
-                let Some(tokenizer) = &get_mut_arcmutex!(self.pipeline).tokenizer() else {
-                    request
-                        .response
-                        .send(Response::ValidationError(
-                            "Completion requests w/ raw tokens require the pipeline to have a tokenizer".into(),
-                        ))
-                        .await
-                        .unwrap_or_else(|_| warn!("Receiver disconnected"));
-                    return;
-                };
-                if let Some(token_id) = first_unknown_token_id(tokenizer, &it) {
-                    request
-                        .response
-                        .send(Response::ValidationError(
-                            format!(
-                                "Token ID {token_id} is not present in the selected model tokenizer."
-                            )
-                            .into(),
-                        ))
-                        .await
-                        .unwrap_or_else(|_| warn!("Receiver disconnected"));
-                    return;
-                }
-                let prompt = tokenizer
-                    .decode(&it, false)
-                    .map_err(|e| anyhow::Error::msg(e.to_string()));
-                (it, handle_seq_error!(prompt, request.response))
+        let chat = ChatRenderOptions {
+            reasoning_disabled: request.sampling_params.reasoning_max_tokens == Some(0),
+            has_audio_output: request.audio_output.is_some(),
+            tools: request.tools.as_deref(),
+            tool_choice: request.tool_choice.as_ref(),
+            preferred_tool_call_format,
+        };
+        let (mut prompt_tokens, prompt_text) = match self.render_prompt(request.messages, chat) {
+            Ok(prompt) => prompt,
+            Err(rejection) => {
+                request
+                    .response
+                    .send(rejection.into())
+                    .await
+                    .unwrap_or_else(|_| warn!("Receiver disconnected"));
+                return;
             }
         };
         if prompt_tokens.is_empty() {
@@ -610,77 +760,18 @@ impl Engine {
             .get_metadata()
             .num_hidden_layers;
 
-        let (stop_toks, stop_strings) = match request.sampling_params.stop_toks {
-            None => (vec![], vec![]),
-            Some(StopTokens::Ids(ref i)) => {
-                let tok_env = {
-                    let pipeline = get_mut_arcmutex!(self.pipeline);
-                    pipeline.get_metadata().tok_env()
-                };
-                for id in i {
-                    // We can't use ` ` (space) as a stop token because other tokens like ` moon` start with a space.
-                    if let Some(tok_env) = tok_env.as_ref() {
-                        let tok_trie = tok_env.tok_trie();
-                        if tok_trie.has_extensions(tok_trie.token(*id)) {
-                            request
-                                .response
-                                .send(Response::ValidationError(
-                                    format!("Stop token {:?} is also a prefix of other tokens and cannot be used as a stop token.", tok_trie.token_str(*id)).into(),
-                                ))
-                                .await
-                                .unwrap_or_else(|_| warn!("Receiver disconnected"));
-                            return;
-                        }
-                    }
+        let (stop_toks, stop_strings) =
+            match self.resolve_stop_sequences(request.sampling_params.stop_toks.as_ref()) {
+                Ok(stops) => stops,
+                Err(rejection) => {
+                    request
+                        .response
+                        .send(rejection.into())
+                        .await
+                        .unwrap_or_else(|_| warn!("Receiver disconnected"));
+                    return;
                 }
-
-                (i.clone(), vec![])
-            }
-            Some(StopTokens::Seqs(ref s)) => {
-                let mut stop_toks = Vec::new();
-                let mut stop_strings: Vec<String> = Vec::new();
-
-                let (tok_env, tokenizer) = {
-                    let pipeline = get_mut_arcmutex!(self.pipeline);
-                    let tok_env = pipeline.get_metadata().tok_env();
-                    let tokenizer = pipeline.tokenizer();
-                    (tok_env, tokenizer)
-                };
-
-                for stop_txt in s {
-                    let Some(tokenizer) = &tokenizer else {
-                        request
-                            .response
-                            .send(Response::ValidationError(
-                                "Completion requests require the pipeline to have a tokenizer"
-                                    .into(),
-                            ))
-                            .await
-                            .unwrap_or_else(|_| warn!("Receiver disconnected"));
-                        return;
-                    };
-                    let encoded = tokenizer.encode_fast(stop_txt.to_string(), true);
-                    let toks = handle_seq_error!(encoded, request.response)
-                        .get_ids()
-                        .to_vec();
-
-                    if toks.len() == 1 {
-                        if tok_env.as_ref().is_some_and(|tok_env| {
-                            let tok_trie = tok_env.tok_trie();
-                            tok_trie.has_extensions(tok_trie.token(toks[0]))
-                        }) {
-                            stop_strings.push(stop_txt.clone());
-                        } else {
-                            stop_toks.push(toks[0]);
-                        }
-                    } else {
-                        stop_strings.push(stop_txt.clone());
-                    }
-                }
-
-                (stop_toks, stop_strings)
-            }
-        };
+            };
 
         let group = Arc::new(tokio::sync::Mutex::new(SequenceGroup::new(
             request.sampling_params.n_choices,
@@ -756,99 +847,20 @@ impl Engine {
                 &get_mut_arcmutex!(self.pipeline).category(),
                 block_size.is_some(),
             ) {
-                let (metadata, device, needs_preallocated_cache) = {
-                    let pipeline = get_mut_arcmutex!(self.pipeline);
-                    let needs_preallocated_cache = match pipeline.cache() {
-                        crate::pipeline::EitherCache::Normal(normal) => normal
-                            .lock()
-                            .unwrap()
-                            .0
-                            .iter()
-                            .map(|cache| matches!(cache, KvCache::Normal { .. }))
-                            .collect(),
-                        _ => Vec::new(),
-                    };
-                    (
-                        pipeline.get_metadata(),
-                        pipeline.device(),
-                        needs_preallocated_cache,
-                    )
-                };
-                let model_metadata = metadata
-                    .model_metadata
-                    .as_ref()
-                    .expect("If a model has a NormalCache it must have a model metadata");
-                let n_tokens = prompt_tokens.len();
-                let required_blocks = n_tokens.div_ceil(NormalCache::CACHE_GROW_SIZE);
-                let max_seq_len = required_blocks * NormalCache::CACHE_GROW_SIZE;
-                let mut dtype = metadata.activation_dtype;
-                // matches the f16 conversion KvCache::append applies on CPU
-                if device.is_cpu()
-                    && dtype == candle_core::DType::F32
-                    && crate::kv_cache::cpu_kv_f16()
-                {
-                    dtype = candle_core::DType::F16;
-                }
-                let mut layer_caches = Vec::with_capacity(model_metadata.num_layers());
-                for layer_idx in 0..model_metadata.num_layers() {
-                    if !needs_preallocated_cache
-                        .get(layer_idx)
-                        .copied()
-                        .unwrap_or(false)
-                        || !model_metadata.uses_own_kv_cache_for_layer(layer_idx)
-                    {
-                        layer_caches.push(None);
-                        continue;
+                match self.preallocate_sequence_kv_cache(prompt_tokens.len()) {
+                    Ok(layer_caches) => Some(layer_caches),
+                    Err(err) => {
+                        request
+                            .response
+                            .send(Response::InternalError(
+                                err.context("Failed to allocate preallocated KV cache.")
+                                    .into(),
+                            ))
+                            .await
+                            .unwrap_or_else(|_| warn!("Receiver disconnected"));
+                        return;
                     }
-
-                    let k_shape = (
-                        1usize,
-                        model_metadata.num_kv_heads_for_layer(layer_idx),
-                        max_seq_len,
-                        model_metadata.k_head_dim_for_layer(layer_idx),
-                    );
-                    let v_shape = (
-                        1usize,
-                        model_metadata.num_kv_heads_for_layer(layer_idx),
-                        max_seq_len,
-                        model_metadata.v_head_dim_for_layer(layer_idx),
-                    );
-
-                    let k_seq_cache = match Tensor::zeros(k_shape, dtype, &device) {
-                        Ok(x) => x,
-                        Err(err) => {
-                            request
-                                .response
-                                .send(Response::InternalError(
-                                    err.context("Failed to allocate preallocated KV cache.")
-                                        .into(),
-                                ))
-                                .await
-                                .unwrap_or_else(|_| warn!("Receiver disconnected"));
-                            return;
-                        }
-                    };
-                    let v_seq_cache = if k_shape == v_shape {
-                        k_seq_cache.clone()
-                    } else {
-                        match Tensor::zeros(v_shape, dtype, &device) {
-                            Ok(x) => x,
-                            Err(err) => {
-                                request
-                                    .response
-                                    .send(Response::InternalError(
-                                        err.context("Failed to allocate preallocated KV cache.")
-                                            .into(),
-                                    ))
-                                    .await
-                                    .unwrap_or_else(|_| warn!("Receiver disconnected"));
-                                return;
-                            }
-                        }
-                    };
-                    layer_caches.push(Some((k_seq_cache, v_seq_cache)));
                 }
-                Some(layer_caches)
             } else {
                 None
             };
@@ -875,44 +887,43 @@ impl Engine {
             } else {
                 None
             };
-            let mut seq = Sequence::new_waiting(
-                prompt_tokens.clone(),
-                prompt_text.clone(),
-                *get_mut_arcmutex!(self.id).deref(),
-                now.as_millis(),
-                num_hidden_layers,
-                request.response.clone(),
-                sampler.clone(),
-                stop_toks.clone(),
-                stop_strings.clone(),
-                request.sampling_params.max_len,
-                request.return_logprobs,
-                get_mut_arcmutex!(self.pipeline).get_metadata().is_xlora,
-                group.clone(),
+            let mut seq = Sequence::new_waiting(crate::sequence::SequenceInit {
+                tokens: prompt_tokens.clone(),
+                prompt: prompt_text.clone(),
+                id: *get_mut_arcmutex!(self.id).deref(),
+                timestamp: now.as_millis(),
+                layers: num_hidden_layers,
+                responder: request.response.clone(),
+                sampler: sampler.clone(),
+                stop_tokens: stop_toks.clone(),
+                stop_strings: stop_strings.clone(),
+                max_len: request.sampling_params.max_len,
+                return_logprobs: request.return_logprobs,
+                is_xlora: get_mut_arcmutex!(self.pipeline).get_metadata().is_xlora,
+                group: group.clone(),
                 response_index,
-                now.as_secs(),
+                creation_time: now.as_secs(),
                 recognizer,
-                request.suffix.clone(),
-                if echo_prompt {
+                suffix: request.suffix.clone(),
+                prefix: if echo_prompt {
                     Some(prompt_text.clone())
                 } else {
                     None
                 },
-                images.clone(),
-                audios.clone(),
-                videos.clone(),
-                block_size,
+                input_images: images.clone(),
+                input_audios: audios.clone(),
+                input_videos: videos.clone(),
                 tool_call_state,
-                image_generation_format,
-                seq_step_type,
-                diffusion_params.clone(),
-                image_gen_save_file.clone(),
+                image_gen_response_format: image_generation_format,
+                sequence_stepping_type: seq_step_type,
+                diffusion_params: diffusion_params.clone(),
+                image_gen_save_file: image_gen_save_file.clone(),
                 seq_preallocated_cache,
-                request.return_raw_logits,
-                request.sampling_params.ignore_eos,
-                eos_toks,
-                choice_seed(request.seed, response_index),
-            );
+                return_raw_logits: request.return_raw_logits,
+                ignore_eos: request.sampling_params.ignore_eos,
+                eos_tokens: eos_toks,
+                sampling_seed: choice_seed(request.seed, response_index),
+            });
             seq.set_audio_output(request.audio_output);
             seq.decision = decision.clone();
             if let Some(adapter_lease) = &adapter_lease {

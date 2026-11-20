@@ -183,7 +183,7 @@ pub(crate) fn text_decode_position_ids_from_context(
     ctx: &crate::pipeline::ModelForwardContext<'_>,
 ) -> Result<Option<Tensor>> {
     let (batch, seq_len) = input_ids.dims2()?;
-    let rope_positions = match ctx.cache().rope_positions(input_ids.device()) {
+    let rope_positions = match ctx.rope_positions(input_ids.device()) {
         Some(rope_positions) => rope_positions.clone(),
         None if matches!(
             ctx.recurrent_batch_kind(),
@@ -215,9 +215,7 @@ pub(crate) fn text_decode_position_ids_from_context(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::{
-        text_models_inputs_processor::FlashParams, ForwardCache, ModelForwardContext,
-    };
+    use crate::pipeline::{text_models_inputs_processor::FlashParams, ModelForwardContext};
     use candle_core::IndexOp;
 
     #[test]
@@ -227,26 +225,15 @@ mod tests {
         let context_lens = [(0, 3), (0, 3)];
         let position_ids = [1, 10];
         let flash = FlashParams::empty(true);
-        let prefill = ModelForwardContext::with_cache(
-            ForwardCache::None,
-            &offsets,
-            &context_lens,
-            &position_ids,
-            &flash,
-        )
-        .with_recurrent_batch_kind(RecurrentBatchKind::Prefill);
+        let prefill =
+            ModelForwardContext::new(&offsets, &context_lens, &position_ids, None, &flash)
+                .with_recurrent_batch_kind(RecurrentBatchKind::Prefill);
 
         assert!(text_decode_mrope_position_ids_from_context(&input_ids, &prefill)?.is_none());
 
         let position_ids = [5, 10];
-        let decode = ModelForwardContext::with_cache(
-            ForwardCache::None,
-            &offsets,
-            &context_lens,
-            &position_ids,
-            &flash,
-        )
-        .with_recurrent_batch_kind(RecurrentBatchKind::SpeculativeDecode);
+        let decode = ModelForwardContext::new(&offsets, &context_lens, &position_ids, None, &flash)
+            .with_recurrent_batch_kind(RecurrentBatchKind::SpeculativeDecode);
         let positions = text_decode_mrope_position_ids_from_context(&input_ids, &decode)?
             .expect("decode MRoPE positions missing");
         let text_positions = text_decode_position_ids_from_context(&input_ids, &decode)?

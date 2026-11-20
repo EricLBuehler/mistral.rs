@@ -26,7 +26,7 @@ use std::{
     thread::{self, JoinHandle},
     time::{SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::mpsc::{channel, Sender};
+use tokio::sync::mpsc::{channel, error::TrySendError, Sender};
 use tracing::{debug, info, warn};
 
 fn build_engine_runtime() -> Runtime {
@@ -430,8 +430,11 @@ impl EngineInstance {
             .is_none_or(JoinHandle::is_finished)
     }
 
+    // blocking_send panics inside a runtime, so spin on the queue the engine keeps draining.
     fn terminate(&self) {
-        let _ = self.sender.try_send(Request::Terminate);
+        while let Err(TrySendError::Full(_)) = self.sender.try_send(Request::Terminate) {
+            thread::yield_now();
+        }
     }
 
     fn join(&mut self) {
@@ -730,12 +733,15 @@ impl MistralRsBuilder {
 
 impl Drop for MistralRs {
     fn drop(&mut self) {
-        // Terminate all engines
-        if let Ok(engines) = self.engines.read() {
-            for engine in engines.values() {
-                // Use try_send instead of blocking_send to avoid runtime panics
-                engine.terminate();
-            }
+        let Ok(engines) = self.engines.get_mut() else {
+            return;
+        };
+        for engine in engines.values() {
+            engine.terminate();
+        }
+        // Engines still tearing down CUDA state at process exit hit a deinitialized context.
+        for engine in engines.values_mut() {
+            engine.join();
         }
     }
 }
@@ -1225,6 +1231,7 @@ impl MistralRs {
                 .is_some_and(|(format, tokenizer)| format.supports_tokenizer(&tokenizer));
         let encoder_cache_counters = pipeline_guard.encoder_cache_counters();
         let adapter_runtime = pipeline_guard.adapter_runtime();
+        pipeline_guard.log_runtime_plan();
         drop(pipeline_guard);
 
         // Warm cuTile before the engine starts capturing and serving CUDA work.
@@ -2203,11 +2210,7 @@ impl MistralRs {
             .unloaded_models
             .read()
             .map_err(|_| MistralRsError::EnginePoisoned)?;
-        if unloaded.contains_key(&resolved_model_id) {
-            return Ok(true);
-        }
-
-        Ok(false)
+        Ok(unloaded.contains_key(&resolved_model_id))
     }
 
     /// Get the interval logger for a specific model. If model_id is None, uses default engine.

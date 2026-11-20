@@ -12,7 +12,6 @@ const GRAPH_KV_HEADS: usize = 2;
 const GRAPH_Q_HEADS: usize = 24;
 
 #[test]
-#[ignore = "requires a CUDA device"]
 fn qsa_reopened_block_matches_fresh_prefill() -> Result<()> {
     let device = Device::new_cuda(0)?;
     let dtype = DType::BF16;
@@ -91,7 +90,6 @@ fn qsa_reopened_block_matches_fresh_prefill() -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires a CUDA device"]
 fn qsa_scored_topk_graph_ignores_poisoned_unused_pages_across_requests() -> Result<()> {
     use crate::pipeline::cuda_graph::CudaGraphHandle;
 

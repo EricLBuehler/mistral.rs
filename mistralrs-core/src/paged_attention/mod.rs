@@ -22,10 +22,7 @@ pub(crate) mod mm_prefix;
 pub(crate) mod plan;
 mod scales;
 mod scheduler;
-#[cfg(any(
-    test,
-    all(feature = "cuda", feature = "flash-attn", target_family = "unix")
-))]
+#[cfg(any(test, cuda_flash_attn))]
 pub(crate) mod windowed_pool;
 pub const _PAD_SLOT_ID: i64 = -1;
 

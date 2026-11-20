@@ -821,7 +821,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a CUDA device with cuTile support"]
     fn retained_fp8_w8a16_matches_reference() -> Result<()> {
         for dtype in [DType::BF16, DType::F16] {
             for layout in [

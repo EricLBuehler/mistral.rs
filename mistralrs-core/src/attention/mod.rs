@@ -50,25 +50,24 @@ impl AttentionMask {
 }
 
 mod backends;
+mod layer;
 
 #[allow(unused)]
 pub(crate) use backends::cpu::fast_exp;
 #[cfg(feature = "cuda")]
 use backends::naive::maybe_synchronize;
 pub(crate) use backends::{
-    flash_attn, flash_backend_supports, flash_backend_supports_sdpa, naive_sdpa, sinks_attn,
-    sinks_backend_is_available, sinks_backend_supports,
+    cuda_flash_usable, flash_attn, flash_backend_supports, flash_backend_supports_sdpa,
+    flash_dtype_supported, naive_sdpa, sinks_attn, sinks_backend_is_available,
+    sinks_backend_supports,
 };
+pub(crate) use layer::{KvStore, LayerAttention};
 
 /// Chunk size for attention computation to avoid OOM on long sequences
 pub(crate) const ATTENTION_CHUNK_SIZE: usize = 1024;
 pub(crate) const FLASH_ATTN_NATIVE_MAX_GQA_GROUP: usize = 8;
 
-#[cfg(any(
-    feature = "flash-attn",
-    feature = "flash-attn-v3",
-    all(feature = "cuda", target_family = "unix")
-))]
+#[cfg(any(feature = "flash-attn", feature = "flash-attn-v3", cuda_unix))]
 pub(crate) fn sliding_window_left(sliding_window: Option<usize>) -> Option<usize> {
     sliding_window.map(|window| window.saturating_sub(1))
 }
@@ -283,9 +282,7 @@ fn packed_attention_backend_is_available(q: &Tensor, sdpa_params: &SdpaParams) -
             (q.device().is_cuda() || q.dim(0)? > 1) && sinks_backend_is_available(q, head_dim)
         );
     }
-    Ok(q.device().is_cuda()
-        && crate::using_flash_attn()
-        && matches!(q.dtype(), DType::F16 | DType::BF16)
+    Ok(cuda_flash_usable(q.device(), q.dtype())
         && flash_backend_supports_sdpa(
             head_dim,
             sdpa_params.softcap.is_some(),
@@ -389,29 +386,26 @@ impl Sdpa {
         }
 
         // CausalFlash or None: try flash attention, fall back to eager
-        let can_use_flash = q.device().is_cpu()
-            || q.device().is_cuda() && crate::using_flash_attn() && q.dtype() != DType::F32;
+        let cuda_flash = cuda_flash_usable(q.device(), q.dtype());
+        let can_use_flash = q.device().is_cpu() || cuda_flash;
 
         if can_use_flash {
-            let expanded_kv = if q.device().is_cuda()
-                && crate::using_flash_attn()
-                && q.dtype() != DType::F32
-                && sdpa_params.n_kv_groups > FLASH_ATTN_NATIVE_MAX_GQA_GROUP
-            {
-                Some((
-                    repeat_kv(k.clone(), sdpa_params.n_kv_groups)?,
-                    repeat_kv(v.clone(), sdpa_params.n_kv_groups)?,
-                    SdpaParams {
-                        n_kv_groups: 1,
-                        softcap: sdpa_params.softcap,
-                        softmax_scale: sdpa_params.softmax_scale,
-                        sliding_window: sdpa_params.sliding_window,
-                        sinks: sdpa_params.sinks.clone(),
-                    },
-                ))
-            } else {
-                None
-            };
+            let expanded_kv =
+                if cuda_flash && sdpa_params.n_kv_groups > FLASH_ATTN_NATIVE_MAX_GQA_GROUP {
+                    Some((
+                        repeat_kv(k.clone(), sdpa_params.n_kv_groups)?,
+                        repeat_kv(v.clone(), sdpa_params.n_kv_groups)?,
+                        SdpaParams {
+                            n_kv_groups: 1,
+                            softcap: sdpa_params.softcap,
+                            softmax_scale: sdpa_params.softmax_scale,
+                            sliding_window: sdpa_params.sliding_window,
+                            sinks: sdpa_params.sinks.clone(),
+                        },
+                    ))
+                } else {
+                    None
+                };
             let (k, v, sdpa_params) = match &expanded_kv {
                 Some((k, v, sdpa_params)) => (k, v, sdpa_params),
                 None => (k, v, sdpa_params),
@@ -592,14 +586,24 @@ impl Sdpa {
         let k = repeat_kv(k.clone(), sdpa_params.n_kv_groups)?;
         let v = repeat_kv(v.clone(), sdpa_params.n_kv_groups)?;
 
-        if mask.is_some_and(|x| x.rank() == 2) || mistralrs_quant::distributed::use_nccl() {
-            return naive_sdpa(
+        let naive = |mask: Option<&Tensor>| {
+            // naive_sdpa has no causal flag, so a maskless causal request needs an explicit mask.
+            let causal_mask = if causal && mask.is_none() && seq_len > 1 {
+                eager_attention_mask(seq_len, k.dim(2)?, true, None, q.dtype(), q.device())?
+            } else {
+                None
+            };
+            naive_sdpa(
                 &q.contiguous()?,
                 &k.contiguous()?,
                 &v.contiguous()?,
-                mask,
+                mask.or(causal_mask.as_ref()),
                 sdpa_params,
-            );
+            )
+        };
+
+        if mask.is_some_and(|x| x.rank() == 2) || mistralrs_quant::distributed::use_nccl() {
+            return naive(mask);
         }
 
         // TODO: bench?
@@ -712,7 +716,7 @@ impl Sdpa {
                 candle_core::bail!("`cuda` feature is not enabled")
             }
         } else {
-            naive_sdpa(q, &k, &v, mask, sdpa_params)
+            naive(mask)
         }
     }
 }
@@ -892,11 +896,7 @@ mod tests {
         assert_close(&out, &expected)
     }
 
-    #[cfg(any(
-        feature = "flash-attn",
-        feature = "flash-attn-v3",
-        all(feature = "cuda", target_family = "unix")
-    ))]
+    #[cfg(any(feature = "flash-attn", feature = "flash-attn-v3", cuda_unix))]
     #[test]
     fn sliding_window_capacity_converts_to_left_distance() {
         assert_eq!(sliding_window_left(None), None);

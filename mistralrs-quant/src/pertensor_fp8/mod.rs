@@ -20,9 +20,9 @@ pub struct PerTensorFP8Linear {
     device: Device,
     weight_scale_inv: Tensor,
     weight_scale_layout: Fp8WeightScaleLayout,
-    #[cfg_attr(not(all(feature = "cuda", feature = "cutile")), allow(dead_code))]
+    #[cfg_attr(not(cuda_cutile), allow(dead_code))]
     activation_mode: Fp8ActivationMode,
-    #[cfg_attr(not(all(feature = "cuda", feature = "cutile")), allow(dead_code))]
+    #[cfg_attr(not(cuda_cutile), allow(dead_code))]
     activation_scale: Option<Tensor>,
     bias: Option<Tensor>,
     dequant_dtype: DType,
@@ -202,7 +202,7 @@ impl PerTensorFP8Linear {
     }
 
     fn register_cutile(&self) -> bool {
-        #[cfg(all(feature = "cuda", feature = "cutile"))]
+        #[cfg(cuda_cutile)]
         if let Some(weight) = self.weight.as_ref() {
             if let Device::Cuda(dev) = weight.device() {
                 let [n, k] = self.weight_shape;
@@ -342,7 +342,7 @@ impl PerTensorFP8Linear {
         Tensor::zeros(shape, input.dtype(), input.device()).map(Some)
     }
 
-    #[cfg(all(feature = "cuda", feature = "cutile"))]
+    #[cfg(cuda_cutile)]
     fn try_cutile_w8a16(&self, input: &Tensor) -> Result<Option<Tensor>> {
         if self.activation_mode != Fp8ActivationMode::None
             || input.rank() == 0
@@ -388,7 +388,7 @@ impl PerTensorFP8Linear {
         }
     }
 
-    #[cfg(all(feature = "cuda", feature = "cutile"))]
+    #[cfg(cuda_cutile)]
     fn try_cutile_w8a8(&self, input: &Tensor) -> Result<Option<Tensor>> {
         if !matches!(
             self.activation_mode,
@@ -594,11 +594,11 @@ impl QuantMethod for PerTensorFP8Linear {
         if let Some(result) = self.empty_output(x)? {
             return Ok(result);
         }
-        #[cfg(all(feature = "cuda", feature = "cutile"))]
+        #[cfg(cuda_cutile)]
         if let Some(result) = self.try_cutile_w8a16(x)? {
             return Ok(result);
         }
-        #[cfg(all(feature = "cuda", feature = "cutile"))]
+        #[cfg(cuda_cutile)]
         if let Some(result) = self.try_cutile_w8a8(x)? {
             return Ok(result);
         }

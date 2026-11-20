@@ -13,7 +13,6 @@ fn values(tensor: &Tensor) -> Result<Vec<f32>> {
 }
 
 #[test]
-#[ignore = "requires a CUDA device"]
 fn gemv_alignment_checks_use_compute_stream_during_graph_capture() -> Result<()> {
     let device = Device::new_cuda_with_stream(0)?;
     let cuda = device.as_cuda_device()?;

@@ -1,7 +1,6 @@
 use std::{
     fs::{self, File},
     path::PathBuf,
-    str::FromStr,
 };
 
 use crate::{
@@ -12,9 +11,9 @@ use crate::{
         MultimodalSpecificConfig, NormalLoaderBuilder, NormalSpecificConfig,
     },
     toml_selector::get_toml_selected_model_device_map_params,
-    AutoDeviceMapParams, EmbeddingLoaderBuilder, EmbeddingSpecificConfig, Loader, ModelDType,
-    ModelSelected, SpeechLoader, TomlLoaderArgs, TomlSelector, Topology, GGUF_MULTI_FILE_DELIMITER,
-    UQFF_MULTI_FILE_DELIMITER,
+    AutoDeviceMapParams, EmbeddingLoaderBuilder, EmbeddingSpecificConfig, IsqOrganization, Loader,
+    ModelDType, ModelSelected, SpeechLoader, TomlLoaderArgs, TomlSelector, Topology,
+    UqffWriteConfig, GGUF_MULTI_FILE_DELIMITER, UQFF_MULTI_FILE_DELIMITER,
 };
 
 /// A builder for a loader using the selected model.
@@ -289,6 +288,91 @@ pub fn get_auto_device_map_params(model: &ModelSelected) -> anyhow::Result<AutoD
     }
 }
 
+/// Safetensors load options shared by the text, multimodal and embedding loader configs.
+struct SafetensorsLoadOptions {
+    topology: Option<Topology>,
+    organization: IsqOrganization,
+    write_uqff: Option<UqffWriteConfig>,
+    from_uqff: Option<Vec<PathBuf>>,
+    imatrix: Option<PathBuf>,
+    calibration_file: Option<PathBuf>,
+    hf_cache_path: Option<PathBuf>,
+    hf_config_overrides: Option<HfConfigOverrides>,
+    max_model_len: Option<usize>,
+    matformer_config_path: Option<PathBuf>,
+    matformer_slice_name: Option<String>,
+    max_edge: Option<u32>,
+}
+
+impl SafetensorsLoadOptions {
+    fn normal(&self) -> NormalSpecificConfig {
+        NormalSpecificConfig {
+            topology: self.topology.clone(),
+            organization: self.organization,
+            write_uqff: self.write_uqff.clone(),
+            from_uqff: self.from_uqff.clone(),
+            imatrix: self.imatrix.clone(),
+            calibration_file: self.calibration_file.clone(),
+            hf_cache_path: self.hf_cache_path.clone(),
+            hf_config_overrides: self.hf_config_overrides.clone(),
+            max_model_len: self.max_model_len,
+            matformer_config_path: self.matformer_config_path.clone(),
+            matformer_slice_name: self.matformer_slice_name.clone(),
+        }
+    }
+
+    fn multimodal(&self) -> MultimodalSpecificConfig {
+        MultimodalSpecificConfig {
+            topology: self.topology.clone(),
+            write_uqff: self.write_uqff.clone(),
+            from_uqff: self.from_uqff.clone(),
+            max_edge: self.max_edge,
+            max_model_len: self.max_model_len,
+            hf_config_overrides: self.hf_config_overrides.clone(),
+            imatrix: self.imatrix.clone(),
+            calibration_file: self.calibration_file.clone(),
+            hf_cache_path: self.hf_cache_path.clone(),
+            matformer_config_path: self.matformer_config_path.clone(),
+            matformer_slice_name: self.matformer_slice_name.clone(),
+            organization: self.organization,
+        }
+    }
+
+    fn embedding(&self) -> EmbeddingSpecificConfig {
+        EmbeddingSpecificConfig {
+            topology: self.topology.clone(),
+            write_uqff: self.write_uqff.clone(),
+            from_uqff: self.from_uqff.clone(),
+            imatrix: self.imatrix.clone(),
+            calibration_file: self.calibration_file.clone(),
+            hf_cache_path: self.hf_cache_path.clone(),
+        }
+    }
+}
+
+pub(crate) fn split_uqff_files(files: Option<String>) -> Option<Vec<PathBuf>> {
+    files.map(|files| {
+        files
+            .split(UQFF_MULTI_FILE_DELIMITER)
+            .map(PathBuf::from)
+            .collect()
+    })
+}
+
+pub(crate) fn split_gguf_files(files: &str) -> Vec<String> {
+    files
+        .split(GGUF_MULTI_FILE_DELIMITER)
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+/// Reads an adapter ordering file; a missing file is a startup-time panic.
+pub(crate) fn read_ordering<T: serde::de::DeserializeOwned>(path: &str) -> anyhow::Result<T> {
+    let file =
+        File::open(path).unwrap_or_else(|_| panic!("Could not load ordering file at {path}"));
+    Ok(serde_json::from_reader(file)?)
+}
+
 fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loader>> {
     if args.mtp
         && matches!(
@@ -366,12 +450,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 topology: Topology::from_option_path(topology)?,
                 organization: organization.unwrap_or_default(),
                 write_uqff,
-                from_uqff: from_uqff.map(|x| {
-                    x.split(UQFF_MULTI_FILE_DELIMITER)
-                        .map(PathBuf::from_str)
-                        .map(|x| x.unwrap())
-                        .collect::<Vec<_>>()
-                }),
+                from_uqff: split_uqff_files(from_uqff),
                 imatrix,
                 calibration_file,
                 hf_cache_path,
@@ -407,57 +486,24 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             matformer_config_path,
             matformer_slice_name,
         } => {
+            let options = SafetensorsLoadOptions {
+                topology: Topology::from_option_path(topology)?,
+                organization: organization.unwrap_or_default(),
+                write_uqff,
+                from_uqff: split_uqff_files(from_uqff),
+                imatrix,
+                calibration_file,
+                hf_cache_path: hf_cache_path.clone(),
+                hf_config_overrides: args.hf_config_overrides.clone(),
+                max_model_len: args.max_model_len,
+                matformer_config_path,
+                matformer_slice_name,
+                max_edge,
+            };
             let builder = AutoLoaderBuilder::new(
-                NormalSpecificConfig {
-                    topology: Topology::from_option_path(topology.clone())?,
-                    organization: organization.unwrap_or_default(),
-                    write_uqff: write_uqff.clone(),
-                    from_uqff: from_uqff.clone().map(|x| {
-                        x.split(UQFF_MULTI_FILE_DELIMITER)
-                            .map(PathBuf::from_str)
-                            .map(|x| x.unwrap())
-                            .collect::<Vec<_>>()
-                    }),
-                    imatrix: imatrix.clone(),
-                    calibration_file: calibration_file.clone(),
-                    hf_cache_path: hf_cache_path.clone(),
-                    hf_config_overrides: args.hf_config_overrides.clone(),
-                    max_model_len: args.max_model_len,
-                    matformer_config_path: matformer_config_path.clone(),
-                    matformer_slice_name: matformer_slice_name.clone(),
-                },
-                MultimodalSpecificConfig {
-                    topology: Topology::from_option_path(topology.clone())?,
-                    write_uqff: write_uqff.clone(),
-                    from_uqff: from_uqff.clone().map(|x| {
-                        x.split(UQFF_MULTI_FILE_DELIMITER)
-                            .map(PathBuf::from_str)
-                            .map(|x| x.unwrap())
-                            .collect::<Vec<_>>()
-                    }),
-                    max_edge,
-                    max_model_len: args.max_model_len,
-                    hf_config_overrides: args.hf_config_overrides.clone(),
-                    calibration_file: calibration_file.clone(),
-                    imatrix: imatrix.clone(),
-                    hf_cache_path: hf_cache_path.clone(),
-                    matformer_config_path,
-                    matformer_slice_name,
-                    organization: organization.unwrap_or_default(),
-                },
-                EmbeddingSpecificConfig {
-                    topology: Topology::from_option_path(topology)?,
-                    write_uqff,
-                    from_uqff: from_uqff.map(|x| {
-                        x.split(UQFF_MULTI_FILE_DELIMITER)
-                            .map(PathBuf::from_str)
-                            .map(|x| x.unwrap())
-                            .collect::<Vec<_>>()
-                    }),
-                    imatrix,
-                    calibration_file,
-                    hf_cache_path: hf_cache_path.clone(),
-                },
+                options.normal(),
+                options.multimodal(),
+                options.embedding(),
                 args.chat_template,
                 tokenizer_json,
                 model_id,
@@ -497,12 +543,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             MultimodalSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
                 write_uqff,
-                from_uqff: from_uqff.map(|x| {
-                    x.split(UQFF_MULTI_FILE_DELIMITER)
-                        .map(PathBuf::from_str)
-                        .map(|x| x.unwrap())
-                        .collect::<Vec<_>>()
-                }),
+                from_uqff: split_uqff_files(from_uqff),
                 max_edge,
                 max_model_len: args.max_model_len,
                 hf_config_overrides: args.hf_config_overrides.clone(),
@@ -556,12 +597,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 topology: Topology::from_option_path(topology)?,
                 organization: Default::default(),
                 write_uqff,
-                from_uqff: from_uqff.map(|x| {
-                    x.split(UQFF_MULTI_FILE_DELIMITER)
-                        .map(PathBuf::from_str)
-                        .map(|x| x.unwrap())
-                        .collect::<Vec<_>>()
-                }),
+                from_uqff: split_uqff_files(from_uqff),
                 imatrix: None,
                 calibration_file: None,
                 hf_cache_path,
@@ -578,10 +614,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
         )
         .with_xlora(
             xlora_model_id,
-            serde_json::from_reader(
-                File::open(order.clone())
-                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-            )?,
+            read_ordering(&order)?,
             args.no_kv_cache,
             tgt_non_granular_index,
         )
@@ -608,29 +641,23 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             matformer_config_path,
             matformer_slice_name,
         } => {
-            let topology = Topology::from_option_path(topology)?;
-            let from_uqff = from_uqff.map(|x| {
-                x.split(UQFF_MULTI_FILE_DELIMITER)
-                    .map(PathBuf::from_str)
-                    .map(|x| x.unwrap())
-                    .collect::<Vec<_>>()
-            });
-            let normal_config = NormalSpecificConfig {
-                topology: topology.clone(),
+            let options = SafetensorsLoadOptions {
+                topology: Topology::from_option_path(topology)?,
                 organization: organization.unwrap_or_default(),
-                write_uqff: write_uqff.clone(),
-                from_uqff: from_uqff.clone(),
-                imatrix: imatrix.clone(),
-                calibration_file: calibration_file.clone(),
+                write_uqff,
+                from_uqff: split_uqff_files(from_uqff),
+                imatrix,
+                calibration_file,
                 hf_cache_path: hf_cache_path.clone(),
                 hf_config_overrides: args.hf_config_overrides.clone(),
                 max_model_len: args.max_model_len,
-                matformer_config_path: matformer_config_path.clone(),
-                matformer_slice_name: matformer_slice_name.clone(),
+                matformer_config_path,
+                matformer_slice_name,
+                max_edge,
             };
             if let Some(arch) = arch {
                 NormalLoaderBuilder::new(
-                    normal_config,
+                    options.normal(),
                     args.chat_template,
                     tokenizer_json,
                     Some(model_id),
@@ -641,29 +668,9 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 .build(Some(arch))?
             } else {
                 let builder = AutoLoaderBuilder::new(
-                    normal_config,
-                    MultimodalSpecificConfig {
-                        topology: topology.clone(),
-                        write_uqff: write_uqff.clone(),
-                        from_uqff: from_uqff.clone(),
-                        max_edge,
-                        max_model_len: args.max_model_len,
-                        hf_config_overrides: args.hf_config_overrides.clone(),
-                        imatrix: imatrix.clone(),
-                        calibration_file: calibration_file.clone(),
-                        hf_cache_path: hf_cache_path.clone(),
-                        matformer_config_path: matformer_config_path.clone(),
-                        matformer_slice_name,
-                        organization: organization.unwrap_or_default(),
-                    },
-                    EmbeddingSpecificConfig {
-                        topology,
-                        write_uqff,
-                        from_uqff,
-                        imatrix,
-                        calibration_file,
-                        hf_cache_path: hf_cache_path.clone(),
-                    },
+                    options.normal(),
+                    options.multimodal(),
+                    options.embedding(),
                     args.chat_template,
                     tokenizer_json,
                     model_id,
@@ -704,10 +711,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
                 args.chat_template,
                 tok_model_id,
                 quantized_model_id,
-                quantized_filename
-                    .split(GGUF_MULTI_FILE_DELIMITER)
-                    .map(ToOwned::to_owned)
-                    .collect::<Vec<_>>(),
+                split_gguf_files(&quantized_filename),
                 GGUFSpecificConfig {
                     topology: Topology::from_option_path(topology)?,
                     organization: organization.unwrap_or_default(),
@@ -725,12 +729,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             )
             .with_encoder_cache_memory_bytes(args.encoder_cache_memory_bytes);
             if let Some(mmproj_filename) = mmproj_filename {
-                builder = builder.with_mmproj_files(
-                    mmproj_filename
-                        .split(GGUF_MULTI_FILE_DELIMITER)
-                        .map(ToOwned::to_owned)
-                        .collect(),
-                );
+                builder = builder.with_mmproj_files(split_gguf_files(&mmproj_filename));
             }
             if let Some(tokenizer_json) = tokenizer_json {
                 builder = builder.with_tokenizer_json(tokenizer_json);
@@ -753,10 +752,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             args.chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename
-                .split(GGUF_MULTI_FILE_DELIMITER)
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>(),
+            split_gguf_files(&quantized_filename),
             GGUFSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
                 ..Default::default()
@@ -767,10 +763,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
         .with_encoder_cache_memory_bytes(args.encoder_cache_memory_bytes)
         .with_xlora(
             xlora_model_id,
-            serde_json::from_reader(
-                File::open(order.clone())
-                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-            )?,
+            read_ordering(&order)?,
             args.no_kv_cache,
             tgt_non_granular_index,
         )
@@ -787,10 +780,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             args.chat_template,
             tok_model_id,
             quantized_model_id,
-            quantized_filename
-                .split(GGUF_MULTI_FILE_DELIMITER)
-                .map(ToOwned::to_owned)
-                .collect::<Vec<_>>(),
+            split_gguf_files(&quantized_filename),
             GGUFSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
                 ..Default::default()
@@ -799,13 +789,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             args.jinja_explicit,
         )
         .with_encoder_cache_memory_bytes(args.encoder_cache_memory_bytes)
-        .with_lora(
-            adapters_model_id,
-            serde_json::from_reader(
-                File::open(order.clone())
-                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-            )?,
-        )
+        .with_lora(adapters_model_id, read_ordering(&order)?)
         .build(),
         ModelSelected::GGML {
             tok_model_id,
@@ -855,10 +839,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
         )
         .with_xlora(
             xlora_model_id,
-            serde_json::from_reader(
-                File::open(order.clone())
-                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-            )?,
+            read_ordering(&order)?,
             args.no_kv_cache,
             tgt_non_granular_index,
         )
@@ -886,13 +867,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             args.no_kv_cache,
             args.jinja_explicit,
         )
-        .with_lora(
-            adapters_model_id,
-            serde_json::from_reader(
-                File::open(order.clone())
-                    .unwrap_or_else(|_| panic!("Could not load ordering file at {order}")),
-            )?,
-        )
+        .with_lora(adapters_model_id, read_ordering(&order)?)
         .build(),
         ModelSelected::Embedding {
             model_id,
@@ -909,12 +884,7 @@ fn loader_from_model_selected(args: LoaderBuilder) -> anyhow::Result<Box<dyn Loa
             EmbeddingSpecificConfig {
                 topology: Topology::from_option_path(topology)?,
                 write_uqff,
-                from_uqff: from_uqff.map(|x| {
-                    x.split(UQFF_MULTI_FILE_DELIMITER)
-                        .map(PathBuf::from_str)
-                        .map(|x| x.unwrap())
-                        .collect::<Vec<_>>()
-                }),
+                from_uqff: split_uqff_files(from_uqff),
                 imatrix,
                 calibration_file,
                 hf_cache_path,

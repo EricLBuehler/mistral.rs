@@ -1,4 +1,5 @@
 #include "cuda_bf16.h"
+#include "mistralrs_core_abi.h"
 #include "cuda_fp16.h"
 #include <cmath>
 #include <cstdint>
@@ -16,7 +17,6 @@ struct alignas(1) gdn_fp8_e4m3 {
 };
 #endif
 
-constexpr int GDN_CHANNEL_BLOCK_SIZE = 256;
 constexpr int GDN_DECODE_VALUE_TILE = 64;
 constexpr int GDN_DECODE_STATE_LOAD_UNROLL = 128;
 constexpr int GDN_DECODE_STATE_UPDATE_TILE_ROWS = 32;
@@ -48,9 +48,6 @@ constexpr int GDN_RMSNORM_TILED_ROW_PAIR_OFFSET = 2;
 constexpr int GDN_RMSNORM_TILED_ROWS_PER_BLOCK = 4;
 constexpr int GDN_RMSNORM_TILED_MIN_ROWS = 1024;
 constexpr int GDN_RMSNORM_TILED_VALUES_PER_LANE = 8;
-constexpr int GDN_STATE_DTYPE_F16 = 0;
-constexpr int GDN_STATE_DTYPE_BF16 = 1;
-constexpr int GDN_STATE_DTYPE_F32 = 2;
 constexpr uint32_t GDN_PENDING_KEY_BANK_MASK = 1u;
 
 __device__ __forceinline__ float4 gdn_load_state_x4(const float *source) {
@@ -1710,34 +1707,30 @@ static void launch_gdn_prepare_recurrence(
       tiled_v_heads);
 }
 
-extern "C" void gdn_prepare_recurrence(
-    const void *mixed_qkv, const void *b, const void *a, const float *a_log,
-    const float *dt_bias, void *q_out, void *k_out, void *v_out, float *g_out,
-    float *beta_out, int batch_size, int seq_len, int token_stride,
-    int num_k_heads, int num_v_heads, int head_k_dim, int head_v_dim,
-    int tiled_v_heads, int dtype, int out_bf16, int64_t stream) {
-  const cudaStream_t custream = (cudaStream_t)stream;
-  if (dtype == 0 && out_bf16) {
+extern "C" int gdn_prepare_recurrence(const GdnPrepareRecurrenceParams *p) {
+  const cudaStream_t custream = (cudaStream_t)p->stream;
+  if (p->dtype == 0 && p->out_bf16) {
     launch_gdn_prepare_recurrence<__half, __nv_bfloat16>(
-        mixed_qkv, b, a, a_log, dt_bias, q_out, k_out, v_out, g_out, beta_out,
-        batch_size, seq_len, token_stride, num_k_heads, num_v_heads,
-        head_k_dim, head_v_dim, tiled_v_heads, custream);
-  } else if (dtype == 0) {
+        p->mixed_qkv, p->b, p->a, p->a_log, p->dt_bias, p->q_out, p->k_out, p->v_out, p->g_out, p->beta_out,
+        p->batch_size, p->seq_len, p->token_stride, p->num_k_heads, p->num_v_heads,
+        p->head_k_dim, p->head_v_dim, p->tiled_v_heads, custream);
+  } else if (p->dtype == 0) {
     launch_gdn_prepare_recurrence<__half, float>(
-        mixed_qkv, b, a, a_log, dt_bias, q_out, k_out, v_out, g_out, beta_out,
-        batch_size, seq_len, token_stride, num_k_heads, num_v_heads,
-        head_k_dim, head_v_dim, tiled_v_heads, custream);
-  } else if (out_bf16) {
+        p->mixed_qkv, p->b, p->a, p->a_log, p->dt_bias, p->q_out, p->k_out, p->v_out, p->g_out, p->beta_out,
+        p->batch_size, p->seq_len, p->token_stride, p->num_k_heads, p->num_v_heads,
+        p->head_k_dim, p->head_v_dim, p->tiled_v_heads, custream);
+  } else if (p->out_bf16) {
     launch_gdn_prepare_recurrence<__nv_bfloat16, __nv_bfloat16>(
-        mixed_qkv, b, a, a_log, dt_bias, q_out, k_out, v_out, g_out, beta_out,
-        batch_size, seq_len, token_stride, num_k_heads, num_v_heads,
-        head_k_dim, head_v_dim, tiled_v_heads, custream);
+        p->mixed_qkv, p->b, p->a, p->a_log, p->dt_bias, p->q_out, p->k_out, p->v_out, p->g_out, p->beta_out,
+        p->batch_size, p->seq_len, p->token_stride, p->num_k_heads, p->num_v_heads,
+        p->head_k_dim, p->head_v_dim, p->tiled_v_heads, custream);
   } else {
     launch_gdn_prepare_recurrence<__nv_bfloat16, float>(
-        mixed_qkv, b, a, a_log, dt_bias, q_out, k_out, v_out, g_out, beta_out,
-        batch_size, seq_len, token_stride, num_k_heads, num_v_heads,
-        head_k_dim, head_v_dim, tiled_v_heads, custream);
+        p->mixed_qkv, p->b, p->a, p->a_log, p->dt_bias, p->q_out, p->k_out, p->v_out, p->g_out, p->beta_out,
+        p->batch_size, p->seq_len, p->token_stride, p->num_k_heads, p->num_v_heads,
+        p->head_k_dim, p->head_v_dim, p->tiled_v_heads, custream);
   }
+  return static_cast<int>(cudaGetLastError());
 }
 
 __device__ __forceinline__ float gdn_warp_sum(float value) {
@@ -2649,31 +2642,25 @@ void dispatch_gdn_decode_recurrence(
   }
 }
 
-extern "C" void gdn_decode_recurrence(
-    const void *mixed_qkv, const void *b, const void *a, const float *a_log,
-    const float *dt_bias, void *state, void *output, int batch_size,
-    int num_k_heads, int num_v_heads, int head_k_dim, int head_v_dim,
-    int tiled_v_heads, int64_t b_batch_stride, int64_t b_head_stride,
-    int64_t a_batch_stride, int64_t a_head_stride,
-    const int32_t *slot_indices, int kernel_kind, int dtype, int state_dtype,
-    int64_t stream) {
-  const cudaStream_t custream = (cudaStream_t)stream;
-  if (dtype == 0) {
+extern "C" int gdn_decode_recurrence(const GdnDecodeRecurrenceParams *p) {
+  const cudaStream_t custream = (cudaStream_t)p->stream;
+  if (p->dtype == 0) {
     dispatch_gdn_decode_recurrence(
-        (const __half *)mixed_qkv, (const __half *)b, (const __half *)a,
-        a_log, dt_bias, state, (__half *)output, batch_size, num_k_heads,
-        num_v_heads, head_k_dim, head_v_dim, tiled_v_heads, b_batch_stride,
-        b_head_stride, a_batch_stride, a_head_stride, slot_indices, kernel_kind,
-        state_dtype, custream);
+        (const __half *)p->mixed_qkv, (const __half *)p->b, (const __half *)p->a,
+        p->a_log, p->dt_bias, p->state, (__half *)p->output, p->batch_size, p->num_k_heads,
+        p->num_v_heads, p->head_k_dim, p->head_v_dim, p->tiled_v_heads, p->b_batch_stride,
+        p->b_head_stride, p->a_batch_stride, p->a_head_stride, p->slot_indices, p->kernel_kind,
+        p->state_dtype, custream);
   } else {
     dispatch_gdn_decode_recurrence(
-        (const __nv_bfloat16 *)mixed_qkv, (const __nv_bfloat16 *)b,
-        (const __nv_bfloat16 *)a, a_log, dt_bias, state,
-        (__nv_bfloat16 *)output, batch_size, num_k_heads, num_v_heads,
-        head_k_dim, head_v_dim, tiled_v_heads, b_batch_stride, b_head_stride,
-        a_batch_stride, a_head_stride, slot_indices, kernel_kind, state_dtype,
+        (const __nv_bfloat16 *)p->mixed_qkv, (const __nv_bfloat16 *)p->b,
+        (const __nv_bfloat16 *)p->a, p->a_log, p->dt_bias, p->state,
+        (__nv_bfloat16 *)p->output, p->batch_size, p->num_k_heads, p->num_v_heads,
+        p->head_k_dim, p->head_v_dim, p->tiled_v_heads, p->b_batch_stride, p->b_head_stride,
+        p->a_batch_stride, p->a_head_stride, p->slot_indices, p->kernel_kind, p->state_dtype,
         custream);
   }
+  return static_cast<int>(cudaGetLastError());
 }
 
 __device__ __forceinline__ float gdn_silu(float x) {
@@ -3108,138 +3095,125 @@ __host__ __forceinline__ bool gdn_rmsnorm_dense_rows(
           stride_0 == (int64_t)outer_plane * GDN_RMSNORM_FAST_HIDDEN);
 }
 
-extern "C" void gdn_rmsnorm_gated(const void *x, const void *gate,
-                                  const void *weight, void *output, int rows,
-                                  int hidden_dim, int outer_dim_1,
-                                  int outer_dim_2, int64_t x_stride_0,
-                                  int64_t x_stride_1, int64_t x_stride_2,
-                                  int64_t x_stride_3, int64_t gate_stride_0,
-                                  int64_t gate_stride_1, int64_t gate_stride_2,
-                                  int64_t gate_stride_3, float eps,
-                                  int sigmoid_gate, int dtype,
-                                  int64_t stream) {
-  const cudaStream_t custream = (cudaStream_t)stream;
+extern "C" int gdn_rmsnorm_gated(const GdnRmsNormGatedParams *p) {
+  const cudaStream_t custream = (cudaStream_t)p->stream;
   const bool use_warp_kernel =
-      hidden_dim == GDN_RMSNORM_FAST_HIDDEN && x_stride_3 == 1 &&
-      gate_stride_3 == 1;
+      p->hidden_dim == GDN_RMSNORM_FAST_HIDDEN && p->x_stride_3 == 1 &&
+      p->gate_stride_3 == 1;
   if (use_warp_kernel) {
     const bool use_rows4_kernel =
-        rows >= GDN_RMSNORM_TILED_MIN_ROWS &&
-        gdn_rmsnorm_dense_rows(rows, outer_dim_1, outer_dim_2, x_stride_0,
-                               x_stride_1, x_stride_2) &&
-        gdn_rmsnorm_dense_rows(rows, outer_dim_1, outer_dim_2, gate_stride_0,
-                               gate_stride_1, gate_stride_2);
-    if (dtype == 0 && use_rows4_kernel &&
-        gdn_rmsnorm_vec8_aligned<__half>(x) &&
-        gdn_rmsnorm_vec8_aligned<__half>(gate) &&
-        gdn_rmsnorm_vec8_aligned<__half>(weight) &&
-        gdn_rmsnorm_vec8_aligned<__half>(output)) {
+        p->rows >= GDN_RMSNORM_TILED_MIN_ROWS &&
+        gdn_rmsnorm_dense_rows(p->rows, p->outer_dim_1, p->outer_dim_2, p->x_stride_0,
+                               p->x_stride_1, p->x_stride_2) &&
+        gdn_rmsnorm_dense_rows(p->rows, p->outer_dim_1, p->outer_dim_2, p->gate_stride_0,
+                               p->gate_stride_1, p->gate_stride_2);
+    if (p->dtype == 0 && use_rows4_kernel &&
+        gdn_rmsnorm_vec8_aligned<__half>(p->x) &&
+        gdn_rmsnorm_vec8_aligned<__half>(p->gate) &&
+        gdn_rmsnorm_vec8_aligned<__half>(p->weight) &&
+        gdn_rmsnorm_vec8_aligned<__half>(p->output)) {
       const dim3 rows4_block(32);
-      const dim3 rows4_grid((rows + GDN_RMSNORM_TILED_ROWS_PER_BLOCK - 1) /
+      const dim3 rows4_grid((p->rows + GDN_RMSNORM_TILED_ROWS_PER_BLOCK - 1) /
                             GDN_RMSNORM_TILED_ROWS_PER_BLOCK);
       gdn_rmsnorm_gated_rows4_kernel<<<rows4_grid, rows4_block, 0, custream>>>(
-          (const __half *)x, (const __half *)gate, (const __half *)weight,
-          (__half *)output, rows, eps, sigmoid_gate);
-      return;
+          (const __half *)p->x, (const __half *)p->gate, (const __half *)p->weight,
+          (__half *)p->output, p->rows, p->eps, p->sigmoid_gate);
+      return 0;
     }
-    if (dtype != 0 && use_rows4_kernel &&
-        gdn_rmsnorm_vec8_aligned<__nv_bfloat16>(x) &&
-        gdn_rmsnorm_vec8_aligned<__nv_bfloat16>(gate) &&
-        gdn_rmsnorm_vec8_aligned<__nv_bfloat16>(weight) &&
-        gdn_rmsnorm_vec8_aligned<__nv_bfloat16>(output)) {
+    if (p->dtype != 0 && use_rows4_kernel &&
+        gdn_rmsnorm_vec8_aligned<__nv_bfloat16>(p->x) &&
+        gdn_rmsnorm_vec8_aligned<__nv_bfloat16>(p->gate) &&
+        gdn_rmsnorm_vec8_aligned<__nv_bfloat16>(p->weight) &&
+        gdn_rmsnorm_vec8_aligned<__nv_bfloat16>(p->output)) {
       const dim3 rows4_block(32);
-      const dim3 rows4_grid((rows + GDN_RMSNORM_TILED_ROWS_PER_BLOCK - 1) /
+      const dim3 rows4_grid((p->rows + GDN_RMSNORM_TILED_ROWS_PER_BLOCK - 1) /
                             GDN_RMSNORM_TILED_ROWS_PER_BLOCK);
       gdn_rmsnorm_gated_rows4_kernel<<<rows4_grid, rows4_block, 0, custream>>>(
-          (const __nv_bfloat16 *)x, (const __nv_bfloat16 *)gate,
-          (const __nv_bfloat16 *)weight, (__nv_bfloat16 *)output, rows, eps,
-          sigmoid_gate);
-      return;
+          (const __nv_bfloat16 *)p->x, (const __nv_bfloat16 *)p->gate,
+          (const __nv_bfloat16 *)p->weight, (__nv_bfloat16 *)p->output, p->rows, p->eps,
+          p->sigmoid_gate);
+      return 0;
     }
 
     const dim3 warp_block(32, GDN_RMSNORM_ROWS_PER_BLOCK);
-    const dim3 warp_grid((rows + GDN_RMSNORM_ROWS_PER_BLOCK - 1) /
+    const dim3 warp_grid((p->rows + GDN_RMSNORM_ROWS_PER_BLOCK - 1) /
                          GDN_RMSNORM_ROWS_PER_BLOCK);
-    if (dtype == 0) {
+    if (p->dtype == 0) {
       gdn_rmsnorm_gated_warp_kernel<__half, GDN_RMSNORM_FAST_HIDDEN,
                                      GDN_RMSNORM_ROWS_PER_BLOCK>
           <<<warp_grid, warp_block, 0, custream>>>(
-              (const __half *)x, (const __half *)gate,
-              (const __half *)weight, (__half *)output, rows, outer_dim_1,
-              outer_dim_2, x_stride_0, x_stride_1, x_stride_2, gate_stride_0,
-              gate_stride_1, gate_stride_2, eps, sigmoid_gate);
+              (const __half *)p->x, (const __half *)p->gate,
+              (const __half *)p->weight, (__half *)p->output, p->rows, p->outer_dim_1,
+              p->outer_dim_2, p->x_stride_0, p->x_stride_1, p->x_stride_2, p->gate_stride_0,
+              p->gate_stride_1, p->gate_stride_2, p->eps, p->sigmoid_gate);
     } else {
       gdn_rmsnorm_gated_warp_kernel<
           __nv_bfloat16, GDN_RMSNORM_FAST_HIDDEN,
           GDN_RMSNORM_ROWS_PER_BLOCK>
           <<<warp_grid, warp_block, 0, custream>>>(
-              (const __nv_bfloat16 *)x, (const __nv_bfloat16 *)gate,
-              (const __nv_bfloat16 *)weight, (__nv_bfloat16 *)output, rows,
-              outer_dim_1, outer_dim_2, x_stride_0, x_stride_1, x_stride_2,
-              gate_stride_0, gate_stride_1, gate_stride_2, eps, sigmoid_gate);
+              (const __nv_bfloat16 *)p->x, (const __nv_bfloat16 *)p->gate,
+              (const __nv_bfloat16 *)p->weight, (__nv_bfloat16 *)p->output, p->rows,
+              p->outer_dim_1, p->outer_dim_2, p->x_stride_0, p->x_stride_1, p->x_stride_2,
+              p->gate_stride_0, p->gate_stride_1, p->gate_stride_2, p->eps, p->sigmoid_gate);
     }
-    return;
+    return 0;
   }
 
   dim3 block(128);
-  dim3 grid(rows);
+  dim3 grid(p->rows);
 
-  if (dtype == 0) {
+  if (p->dtype == 0) {
     gdn_rmsnorm_gated_kernel<__half><<<grid, block, 0, custream>>>(
-        (const __half *)x, (const __half *)gate, (const __half *)weight,
-        (__half *)output, rows, hidden_dim, outer_dim_1, outer_dim_2,
-        x_stride_0, x_stride_1, x_stride_2, x_stride_3, gate_stride_0,
-        gate_stride_1, gate_stride_2, gate_stride_3, eps, sigmoid_gate);
+        (const __half *)p->x, (const __half *)p->gate, (const __half *)p->weight,
+        (__half *)p->output, p->rows, p->hidden_dim, p->outer_dim_1, p->outer_dim_2,
+        p->x_stride_0, p->x_stride_1, p->x_stride_2, p->x_stride_3, p->gate_stride_0,
+        p->gate_stride_1, p->gate_stride_2, p->gate_stride_3, p->eps, p->sigmoid_gate);
   } else {
     gdn_rmsnorm_gated_kernel<__nv_bfloat16><<<grid, block, 0, custream>>>(
-        (const __nv_bfloat16 *)x, (const __nv_bfloat16 *)gate,
-        (const __nv_bfloat16 *)weight, (__nv_bfloat16 *)output, rows,
-        hidden_dim, outer_dim_1, outer_dim_2, x_stride_0, x_stride_1,
-        x_stride_2, x_stride_3, gate_stride_0, gate_stride_1, gate_stride_2,
-        gate_stride_3, eps, sigmoid_gate);
+        (const __nv_bfloat16 *)p->x, (const __nv_bfloat16 *)p->gate,
+        (const __nv_bfloat16 *)p->weight, (__nv_bfloat16 *)p->output, p->rows,
+        p->hidden_dim, p->outer_dim_1, p->outer_dim_2, p->x_stride_0, p->x_stride_1,
+        p->x_stride_2, p->x_stride_3, p->gate_stride_0, p->gate_stride_1, p->gate_stride_2,
+        p->gate_stride_3, p->eps, p->sigmoid_gate);
   }
+  return static_cast<int>(cudaGetLastError());
 }
 
-extern "C" void gdn_rmsnorm_gated_quantized_bf16(
-    const void *x, const void *gate, const void *weight, void *output,
-    float *scales, int rows, int groups, int scale_stride_m,
-    int scale_layout, int outer_dim_1, int outer_dim_2, int64_t x_stride_0,
-    int64_t x_stride_1, int64_t x_stride_2, int64_t x_stride_3,
-    int64_t gate_stride_0, int64_t gate_stride_1, int64_t gate_stride_2,
-    int64_t gate_stride_3, float eps, int sigmoid_gate, int64_t stream) {
-  const cudaStream_t custream = (cudaStream_t)stream;
+extern "C" int gdn_rmsnorm_gated_quantized_bf16(const GdnRmsNormGatedQuantizedParams *p) {
+  const cudaStream_t custream = (cudaStream_t)p->stream;
   const bool use_rows4_kernel =
-      rows >= GDN_RMSNORM_TILED_MIN_ROWS &&
-      x_stride_3 == 1 && gate_stride_3 == 1 &&
-      gdn_rmsnorm_dense_rows(rows, outer_dim_1, outer_dim_2, x_stride_0,
-                             x_stride_1, x_stride_2) &&
-      gdn_rmsnorm_dense_rows(rows, outer_dim_1, outer_dim_2, gate_stride_0,
-                             gate_stride_1, gate_stride_2) &&
-      gdn_rmsnorm_vec8_aligned<__nv_bfloat16>(x) &&
-      gdn_rmsnorm_vec8_aligned<__nv_bfloat16>(gate) &&
-      gdn_rmsnorm_vec8_aligned<__nv_bfloat16>(weight);
+      p->rows >= GDN_RMSNORM_TILED_MIN_ROWS &&
+      p->x_stride_3 == 1 && p->gate_stride_3 == 1 &&
+      gdn_rmsnorm_dense_rows(p->rows, p->outer_dim_1, p->outer_dim_2, p->x_stride_0,
+                             p->x_stride_1, p->x_stride_2) &&
+      gdn_rmsnorm_dense_rows(p->rows, p->outer_dim_1, p->outer_dim_2, p->gate_stride_0,
+                             p->gate_stride_1, p->gate_stride_2) &&
+      gdn_rmsnorm_vec8_aligned<__nv_bfloat16>(p->x) &&
+      gdn_rmsnorm_vec8_aligned<__nv_bfloat16>(p->gate) &&
+      gdn_rmsnorm_vec8_aligned<__nv_bfloat16>(p->weight);
   if (use_rows4_kernel) {
     const dim3 block(32);
-    const dim3 grid((rows + GDN_RMSNORM_TILED_ROWS_PER_BLOCK - 1) /
+    const dim3 grid((p->rows + GDN_RMSNORM_TILED_ROWS_PER_BLOCK - 1) /
                     GDN_RMSNORM_TILED_ROWS_PER_BLOCK);
     gdn_rmsnorm_gated_quantized_rows4_kernel<<<grid, block, 0, custream>>>(
-        (const __nv_bfloat16 *)x, (const __nv_bfloat16 *)gate,
-        (const __nv_bfloat16 *)weight, (gdn_fp8_e4m3 *)output, scales, rows,
-        groups, scale_stride_m, scale_layout, eps, sigmoid_gate);
-    return;
+        (const __nv_bfloat16 *)p->x, (const __nv_bfloat16 *)p->gate,
+        (const __nv_bfloat16 *)p->weight, (gdn_fp8_e4m3 *)p->output, p->scales, p->rows,
+        p->groups, p->scale_stride_m, p->scale_layout, p->eps, p->sigmoid_gate);
+    return 0;
   }
 
   const dim3 block(32, GDN_RMSNORM_ROWS_PER_BLOCK);
-  const dim3 grid((rows + GDN_RMSNORM_ROWS_PER_BLOCK - 1) /
+  const dim3 grid((p->rows + GDN_RMSNORM_ROWS_PER_BLOCK - 1) /
                   GDN_RMSNORM_ROWS_PER_BLOCK);
   gdn_rmsnorm_gated_quantized_warp_kernel<GDN_RMSNORM_ROWS_PER_BLOCK>
       <<<grid, block, 0, custream>>>(
-          (const __nv_bfloat16 *)x, (const __nv_bfloat16 *)gate,
-          (const __nv_bfloat16 *)weight, (gdn_fp8_e4m3 *)output, scales,
-          rows, groups, scale_stride_m, scale_layout, outer_dim_1,
-          outer_dim_2, x_stride_0, x_stride_1, x_stride_2, x_stride_3,
-          gate_stride_0, gate_stride_1, gate_stride_2, gate_stride_3, eps,
-          sigmoid_gate);
+          (const __nv_bfloat16 *)p->x, (const __nv_bfloat16 *)p->gate,
+          (const __nv_bfloat16 *)p->weight, (gdn_fp8_e4m3 *)p->output, p->scales,
+          p->rows, p->groups, p->scale_stride_m, p->scale_layout, p->outer_dim_1,
+          p->outer_dim_2, p->x_stride_0, p->x_stride_1, p->x_stride_2, p->x_stride_3,
+          p->gate_stride_0, p->gate_stride_1, p->gate_stride_2, p->gate_stride_3, p->eps,
+          p->sigmoid_gate);
+  return static_cast<int>(cudaGetLastError());
 }
 
 // ============================================================================
@@ -3308,7 +3282,6 @@ extern "C" void fused_gdn_gating(const void *b, const void *a,
 }
 
 constexpr int GDN_SPEC_COMMIT_WARPS = 4;
-constexpr int GDN_SPEC_COMMIT_MAX_K = 256;
 
 template <typename T>
 __global__ void gdn_speculative_conv_state_commit_kernel(
@@ -3562,45 +3535,35 @@ void dispatch_gdn_speculative_state_commit(
   }
 }
 
-extern "C" void gdn_speculative_state_commit(
-    const void *mixed_qkv, const void *convolved_qkv, const void *b,
-    const void *a, const void *initial_conv_state,
-    const void *initial_recurrent_state, const float *a_log,
-    const float *dt_bias, void *conv_state_pool, void *recurrent_state_pool,
-    const uint32_t *keep_rows, const uint32_t *slot_indices, int batch_size,
-    int seq_len, int num_k_heads, int num_v_heads, int head_k_dim,
-    int head_v_dim, int kernel_size, int tiled_v_heads, int value_major,
-    int dtype, int state_dtype, int64_t stream) {
-  const cudaStream_t custream = (cudaStream_t)stream;
-  if (dtype == 0) {
+extern "C" int gdn_speculative_state_commit(const GdnSpeculativeStateCommitParams *p) {
+  const cudaStream_t custream = (cudaStream_t)p->stream;
+  if (p->dtype == 0) {
     dispatch_gdn_speculative_state_commit(
-        (const __half *)mixed_qkv, (const __half *)convolved_qkv,
-        (const __half *)b, (const __half *)a,
-        (const __half *)initial_conv_state, initial_recurrent_state, a_log,
-        dt_bias, (__half *)conv_state_pool, recurrent_state_pool, keep_rows,
-        slot_indices, batch_size, seq_len, num_k_heads, num_v_heads,
-        head_k_dim, head_v_dim, kernel_size, tiled_v_heads, value_major,
-        state_dtype, custream);
+        (const __half *)p->mixed_qkv, (const __half *)p->convolved_qkv,
+        (const __half *)p->b, (const __half *)p->a,
+        (const __half *)p->initial_conv_state, p->initial_recurrent_state, p->a_log,
+        p->dt_bias, (__half *)p->conv_state_pool, p->recurrent_state_pool, p->keep_rows,
+        p->slot_indices, p->batch_size, p->seq_len, p->num_k_heads, p->num_v_heads,
+        p->head_k_dim, p->head_v_dim, p->kernel_size, p->tiled_v_heads, p->value_major,
+        p->state_dtype, custream);
   } else {
     dispatch_gdn_speculative_state_commit(
-        (const __nv_bfloat16 *)mixed_qkv,
-        (const __nv_bfloat16 *)convolved_qkv, (const __nv_bfloat16 *)b,
-        (const __nv_bfloat16 *)a,
-        (const __nv_bfloat16 *)initial_conv_state, initial_recurrent_state,
-        a_log, dt_bias, (__nv_bfloat16 *)conv_state_pool,
-        recurrent_state_pool, keep_rows, slot_indices, batch_size, seq_len,
-        num_k_heads, num_v_heads, head_k_dim, head_v_dim, kernel_size,
-        tiled_v_heads, value_major, state_dtype, custream);
+        (const __nv_bfloat16 *)p->mixed_qkv,
+        (const __nv_bfloat16 *)p->convolved_qkv, (const __nv_bfloat16 *)p->b,
+        (const __nv_bfloat16 *)p->a,
+        (const __nv_bfloat16 *)p->initial_conv_state, p->initial_recurrent_state,
+        p->a_log, p->dt_bias, (__nv_bfloat16 *)p->conv_state_pool,
+        p->recurrent_state_pool, p->keep_rows, p->slot_indices, p->batch_size, p->seq_len,
+        p->num_k_heads, p->num_v_heads, p->head_k_dim, p->head_v_dim, p->kernel_size,
+        p->tiled_v_heads, p->value_major, p->state_dtype, custream);
   }
+  return static_cast<int>(cudaGetLastError());
 }
 
-constexpr int GDN_SPEC_CHECKPOINT_MAX_CONV_WIDTH = 16;
-constexpr int GDN_SPEC_CHECKPOINT_MAX_K = 256;
 constexpr int GDN_SPEC_CHECKPOINT_VALUE_TILE = 32;
 constexpr int GDN_SPEC_CHECKPOINT_WARPS = 4;
 constexpr int GDN_SPEC_CHECKPOINT_VALUES_PER_WARP =
     GDN_SPEC_CHECKPOINT_VALUE_TILE / GDN_SPEC_CHECKPOINT_WARPS;
-constexpr int GDN_SPEC_FUSED_MAX_TOKENS = 8;
 constexpr int GDN_SPEC_FUSED_THREADS = 256;
 constexpr int GDN_SPEC_FUSED_WARPS = GDN_SPEC_FUSED_THREADS / 32;
 constexpr int GDN_SPEC_FUSED_VALUE_CHUNK = 32;
@@ -3612,7 +3575,6 @@ constexpr int GDN_SPEC_FUSED_VALUES_PER_WARP =
 constexpr int GDN_SPEC_FUSED_PAIR_LOW_GRID_MAX = 144;
 constexpr int GDN_SPEC_FUSED_PAIR_HIGH_GRID_MIN = 768;
 constexpr uint32_t GDN_SPEC_CHECKPOINT_PAD_SLOT = 0xffffffffu;
-constexpr int GDN_DEFERRED_STATE_DEPTH = 4;
 
 __device__ __forceinline__ size_t
 gdn_spec_checkpoint_base(uint32_t active_slot, int checkpoint_lanes) {
@@ -3874,35 +3836,28 @@ void launch_gdn_speculative_conv_checkpoints(
   }
 }
 
-extern "C" void gdn_speculative_conv_checkpoints(
-    const void *x, const void *weight, void *state_pool, void *output,
-    const uint32_t *active_slots, int batch_size, int seq_len, int conv_dim,
-    int kernel_size, int checkpoint_lanes, int write_checkpoints,
-    void *pending_conv_input, const uint32_t *pending_keep_rows,
-    const uint32_t *pending_epochs, uint32_t *conv_applied_epochs,
-    int max_pending_rows, int pending_capacity, int conv_blocks,
-    int64_t x_stride_b, int64_t x_stride_s, int64_t x_stride_c, int dtype,
-    int64_t stream) {
-  const cudaStream_t custream = (cudaStream_t)stream;
-  if (dtype == 0) {
+extern "C" int gdn_speculative_conv_checkpoints(const GdnSpeculativeConvCheckpointsParams *p) {
+  const cudaStream_t custream = (cudaStream_t)p->stream;
+  if (p->dtype == 0) {
     launch_gdn_speculative_conv_checkpoints(
-        (const __half *)x, (const __half *)weight, (__half *)state_pool,
-        (__half *)output, active_slots, batch_size, seq_len, conv_dim,
-        kernel_size, checkpoint_lanes, write_checkpoints != 0,
-        (__half *)pending_conv_input, pending_keep_rows, pending_epochs,
-        conv_applied_epochs, max_pending_rows, pending_capacity, conv_blocks,
-        x_stride_b, x_stride_s, x_stride_c, custream);
+        (const __half *)p->x, (const __half *)p->weight, (__half *)p->state_pool,
+        (__half *)p->output, p->active_slots, p->batch_size, p->seq_len, p->conv_dim,
+        p->kernel_size, p->checkpoint_lanes, p->write_checkpoints != 0,
+        (__half *)p->pending_conv_input, p->pending_keep_rows, p->pending_epochs,
+        p->conv_applied_epochs, p->max_pending_rows, p->pending_capacity, p->conv_blocks,
+        p->x_stride_b, p->x_stride_s, p->x_stride_c, custream);
   } else {
     launch_gdn_speculative_conv_checkpoints(
-        (const __nv_bfloat16 *)x, (const __nv_bfloat16 *)weight,
-        (__nv_bfloat16 *)state_pool, (__nv_bfloat16 *)output, active_slots,
-        batch_size, seq_len, conv_dim, kernel_size, checkpoint_lanes,
-        write_checkpoints != 0,
-        (__nv_bfloat16 *)pending_conv_input, pending_keep_rows,
-        pending_epochs, conv_applied_epochs, max_pending_rows,
-        pending_capacity, conv_blocks, x_stride_b, x_stride_s, x_stride_c,
+        (const __nv_bfloat16 *)p->x, (const __nv_bfloat16 *)p->weight,
+        (__nv_bfloat16 *)p->state_pool, (__nv_bfloat16 *)p->output, p->active_slots,
+        p->batch_size, p->seq_len, p->conv_dim, p->kernel_size, p->checkpoint_lanes,
+        p->write_checkpoints != 0,
+        (__nv_bfloat16 *)p->pending_conv_input, p->pending_keep_rows,
+        p->pending_epochs, p->conv_applied_epochs, p->max_pending_rows,
+        p->pending_capacity, p->conv_blocks, p->x_stride_b, p->x_stride_s, p->x_stride_c,
         custream);
   }
+  return static_cast<int>(cudaGetLastError());
 }
 
 __device__ __forceinline__ float gdn_spec_softplus(float value) {
@@ -4985,37 +4940,27 @@ __global__ void gdn_deferred_cursor_clear_kernel(
   }
 }
 
-extern "C" void gdn_deferred_recurrence_rmsnorm_gate_value_major_128(
-    const void *mixed_qkv, const void *b, const void *a,
-    const float *a_log, const float *dt_bias, float *state_pool, void *output,
-    void *quantized_output, float *output_scales, int scale_stride_m,
-    int scale_layout,
-    const uint32_t *active_slots, float *deferred_key,
-    float *deferred_delta, float *deferred_decay, uint32_t *deferred_cursor,
-    const void *gate, const void *norm_weight, int64_t b_stride_b,
-    int64_t b_stride_h, int64_t a_stride_b, int64_t a_stride_h,
-    int64_t gate_stride_b, int64_t gate_stride_h, int64_t gate_stride_v,
-    int batch_size, int capacity, int num_k_heads, int num_v_heads,
-    int tiled_v_heads, float norm_eps, int sigmoid_gate, int64_t stream) {
-  const cudaStream_t custream = (cudaStream_t)stream;
-  dim3 recurrence_grid(batch_size, num_v_heads);
+extern "C" int gdn_deferred_recurrence_rmsnorm_gate_value_major_128(const GdnDeferredRecurrenceParams *p) {
+  const cudaStream_t custream = (cudaStream_t)p->stream;
+  dim3 recurrence_grid(p->batch_size, p->num_v_heads);
   gdn_deferred_recurrence_rmsnorm_gate_value_major_128_kernel
       <<<recurrence_grid, GDN_SPEC_FUSED_THREADS, 0, custream>>>(
-          (const __nv_bfloat16 *)mixed_qkv, (const __nv_bfloat16 *)b,
-          (const __nv_bfloat16 *)a, a_log, dt_bias, state_pool,
-          (__nv_bfloat16 *)output, (gdn_fp8_e4m3 *)quantized_output,
-          output_scales, scale_stride_m, scale_layout, active_slots,
-          deferred_key, deferred_delta, deferred_decay, deferred_cursor,
-          (const __nv_bfloat16 *)gate,
-          (const __nv_bfloat16 *)norm_weight, b_stride_b, b_stride_h,
-          a_stride_b, a_stride_h, gate_stride_b, gate_stride_h,
-          gate_stride_v, batch_size, capacity, num_k_heads, num_v_heads,
-          tiled_v_heads, norm_eps, sigmoid_gate);
+          (const __nv_bfloat16 *)p->mixed_qkv, (const __nv_bfloat16 *)p->b,
+          (const __nv_bfloat16 *)p->a, p->a_log, p->dt_bias, p->state_pool,
+          (__nv_bfloat16 *)p->output, (gdn_fp8_e4m3 *)p->quantized_output,
+          p->output_scales, p->scale_stride_m, p->scale_layout, p->active_slots,
+          p->deferred_key, p->deferred_delta, p->deferred_decay, p->deferred_cursor,
+          (const __nv_bfloat16 *)p->gate,
+          (const __nv_bfloat16 *)p->norm_weight, p->b_stride_b, p->b_stride_h,
+          p->a_stride_b, p->a_stride_h, p->gate_stride_b, p->gate_stride_h,
+          p->gate_stride_v, p->batch_size, p->capacity, p->num_k_heads, p->num_v_heads,
+          p->tiled_v_heads, p->norm_eps, p->sigmoid_gate);
   constexpr int FINALIZE_THREADS = 256;
   gdn_deferred_cursor_advance_kernel
-      <<<(batch_size + FINALIZE_THREADS - 1) / FINALIZE_THREADS,
-         FINALIZE_THREADS, 0, custream>>>(deferred_cursor, active_slots,
-                                          batch_size, capacity);
+      <<<(p->batch_size + FINALIZE_THREADS - 1) / FINALIZE_THREADS,
+         FINALIZE_THREADS, 0, custream>>>(p->deferred_cursor, p->active_slots,
+                                          p->batch_size, p->capacity);
+  return static_cast<int>(cudaGetLastError());
 }
 
 extern "C" void gdn_flush_deferred_state_value_major_128(
@@ -5476,60 +5421,42 @@ void dispatch_gdn_speculative_recurrence_checkpoints(
   }
 }
 
-extern "C" void gdn_speculative_recurrence_checkpoints(
-    const void *mixed_qkv, const void *b, const void *a,
-    const float *a_log, const float *dt_bias, void *state_pool, void *output,
-    void *quantized_output, float *output_scales, int scale_stride_m,
-    int scale_layout,
-    const uint32_t *active_slots, const void *gate, const void *norm_weight,
-    float *transition_key, float *transition_delta, float *transition_decay,
-    float *pending_key_banks, const uint32_t *pending_key_bank,
-    float *pending_delta, float *pending_decay,
-    const uint32_t *pending_keep_rows, const uint32_t *pending_epochs,
-    uint32_t *recurrent_applied_epochs,
-    int max_pending_rows, int pending_capacity,
-    int slot_indexed_transitions,
-    int64_t b_stride_b, int64_t b_stride_s, int64_t b_stride_h,
-    int64_t a_stride_b, int64_t a_stride_s, int64_t a_stride_h,
-    int64_t gate_stride_b, int64_t gate_stride_s, int64_t gate_stride_h,
-    int64_t gate_stride_v, int batch_size, int seq_len, int num_k_heads,
-    int num_v_heads, int head_k_dim, int head_v_dim, int checkpoint_lanes,
-    int tiled_v_heads, int value_major, float norm_eps, int sigmoid_gate, int dtype,
-    int state_dtype, int64_t stream) {
-  const cudaStream_t custream = (cudaStream_t)stream;
-  if (dtype == 0) {
+extern "C" int gdn_speculative_recurrence_checkpoints(const GdnSpeculativeRecurrenceCheckpointsParams *p) {
+  const cudaStream_t custream = (cudaStream_t)p->stream;
+  if (p->dtype == 0) {
     dispatch_gdn_speculative_recurrence_checkpoints(
-        (const __half *)mixed_qkv, (const __half *)b, (const __half *)a,
-        a_log, dt_bias, state_pool, (__half *)output,
-        (gdn_fp8_e4m3 *)quantized_output, output_scales, scale_stride_m,
-        scale_layout, active_slots,
-        (const __half *)gate, (const __half *)norm_weight, transition_key,
-        transition_delta, transition_decay, pending_key_banks,
-        pending_key_bank, pending_delta, pending_decay, pending_keep_rows,
-        pending_epochs, recurrent_applied_epochs, max_pending_rows,
-        pending_capacity, slot_indexed_transitions, b_stride_b, b_stride_s,
-        b_stride_h, a_stride_b, a_stride_s, a_stride_h, gate_stride_b,
-        gate_stride_s, gate_stride_h, gate_stride_v, batch_size, seq_len,
-        num_k_heads, num_v_heads, head_k_dim, head_v_dim, checkpoint_lanes,
-        tiled_v_heads, value_major, norm_eps, sigmoid_gate, state_dtype, custream);
+        (const __half *)p->mixed_qkv, (const __half *)p->b, (const __half *)p->a,
+        p->a_log, p->dt_bias, p->state_pool, (__half *)p->output,
+        (gdn_fp8_e4m3 *)p->quantized_output, p->output_scales, p->scale_stride_m,
+        p->scale_layout, p->active_slots,
+        (const __half *)p->gate, (const __half *)p->norm_weight, p->transition_key,
+        p->transition_delta, p->transition_decay, p->pending_key_banks,
+        p->pending_key_bank, p->pending_delta, p->pending_decay, p->pending_keep_rows,
+        p->pending_epochs, p->recurrent_applied_epochs, p->max_pending_rows,
+        p->pending_capacity, p->slot_indexed_transitions, p->b_stride_b, p->b_stride_s,
+        p->b_stride_h, p->a_stride_b, p->a_stride_s, p->a_stride_h, p->gate_stride_b,
+        p->gate_stride_s, p->gate_stride_h, p->gate_stride_v, p->batch_size, p->seq_len,
+        p->num_k_heads, p->num_v_heads, p->head_k_dim, p->head_v_dim, p->checkpoint_lanes,
+        p->tiled_v_heads, p->value_major, p->norm_eps, p->sigmoid_gate, p->state_dtype, custream);
   } else {
     dispatch_gdn_speculative_recurrence_checkpoints(
-        (const __nv_bfloat16 *)mixed_qkv, (const __nv_bfloat16 *)b,
-        (const __nv_bfloat16 *)a, a_log, dt_bias, state_pool,
-        (__nv_bfloat16 *)output, (gdn_fp8_e4m3 *)quantized_output,
-        output_scales, scale_stride_m, scale_layout, active_slots,
-        (const __nv_bfloat16 *)gate,
-        (const __nv_bfloat16 *)norm_weight, transition_key, transition_delta,
-        transition_decay, pending_key_banks, pending_key_bank, pending_delta,
-        pending_decay, pending_keep_rows, pending_epochs,
-        recurrent_applied_epochs, max_pending_rows, pending_capacity,
-        slot_indexed_transitions,
-        b_stride_b, b_stride_s, b_stride_h, a_stride_b, a_stride_s,
-        a_stride_h, gate_stride_b, gate_stride_s, gate_stride_h,
-        gate_stride_v, batch_size, seq_len, num_k_heads, num_v_heads,
-        head_k_dim, head_v_dim, checkpoint_lanes, tiled_v_heads, value_major,
-        norm_eps, sigmoid_gate, state_dtype, custream);
+        (const __nv_bfloat16 *)p->mixed_qkv, (const __nv_bfloat16 *)p->b,
+        (const __nv_bfloat16 *)p->a, p->a_log, p->dt_bias, p->state_pool,
+        (__nv_bfloat16 *)p->output, (gdn_fp8_e4m3 *)p->quantized_output,
+        p->output_scales, p->scale_stride_m, p->scale_layout, p->active_slots,
+        (const __nv_bfloat16 *)p->gate,
+        (const __nv_bfloat16 *)p->norm_weight, p->transition_key, p->transition_delta,
+        p->transition_decay, p->pending_key_banks, p->pending_key_bank, p->pending_delta,
+        p->pending_decay, p->pending_keep_rows, p->pending_epochs,
+        p->recurrent_applied_epochs, p->max_pending_rows, p->pending_capacity,
+        p->slot_indexed_transitions,
+        p->b_stride_b, p->b_stride_s, p->b_stride_h, p->a_stride_b, p->a_stride_s,
+        p->a_stride_h, p->gate_stride_b, p->gate_stride_s, p->gate_stride_h,
+        p->gate_stride_v, p->batch_size, p->seq_len, p->num_k_heads, p->num_v_heads,
+        p->head_k_dim, p->head_v_dim, p->checkpoint_lanes, p->tiled_v_heads, p->value_major,
+        p->norm_eps, p->sigmoid_gate, p->state_dtype, custream);
   }
+  return static_cast<int>(cudaGetLastError());
 }
 
 constexpr int GDN_TRANSITION_CONV_INPUT = 0;

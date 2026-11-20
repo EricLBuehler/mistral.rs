@@ -5,7 +5,10 @@ pub(crate) mod metal_flash_attn;
 pub(super) mod naive;
 mod sinks;
 
-pub(crate) use flash::{flash_attn, flash_backend_supports, flash_backend_supports_sdpa};
+pub(crate) use flash::{
+    cuda_flash_usable, flash_attn, flash_backend_supports, flash_backend_supports_sdpa,
+    flash_dtype_supported,
+};
 pub(crate) use naive::naive_sdpa;
 pub(crate) use sinks::{sinks_attn, sinks_backend_is_available, sinks_backend_supports};
 

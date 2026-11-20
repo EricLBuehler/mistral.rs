@@ -107,7 +107,7 @@ macro_rules! handle_seq_error_stateaware_ok {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! handle_pipeline_forward_error {
-    ($stage: tt, $fallible:expr, $seq_slice:expr, $pipeline:expr, $label:tt, $prefix_cacher:expr) => {
+    ($stage: tt, $fallible:expr, $seq_slice:expr, $pipeline:expr, $escape:expr, $prefix_cacher:expr) => {
         match $fallible {
             Ok(v) => v,
             Err(e) => {
@@ -135,7 +135,7 @@ macro_rules! handle_pipeline_forward_error {
                         }
                         get_mut_arcmutex!($prefix_cacher).evict_all_caches().unwrap();
                         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                        continue $label;
+                        $escape;
                     }
                 }
 
@@ -263,7 +263,7 @@ macro_rules! handle_pipeline_forward_error {
                 }
                 get_mut_arcmutex!($prefix_cacher).evict_all_caches().unwrap();
 
-                continue $label;
+                $escape;
             }
         }
     };
@@ -294,13 +294,13 @@ macro_rules! serde_default_fn {
 }
 
 /// `true` if built with CUDA (requires Unix) /Metal
-#[cfg(any(all(feature = "cuda", target_family = "unix"), feature = "metal"))]
+#[cfg(any(cuda_unix, feature = "metal"))]
 pub const fn paged_attn_supported() -> bool {
     true
 }
 
 /// `true` if built with CUDA (requires Unix) /Metal
-#[cfg(not(any(all(feature = "cuda", target_family = "unix"), feature = "metal")))]
+#[cfg(not(any(cuda_unix, feature = "metal")))]
 pub const fn paged_attn_supported() -> bool {
     false
 }

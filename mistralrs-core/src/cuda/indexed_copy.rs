@@ -134,7 +134,6 @@ mod tests {
     use candle_core::Device;
 
     #[test]
-    #[ignore = "requires CUDA"]
     fn copies_selected_rows_in_place() -> Result<()> {
         let device = Device::new_cuda(0)?;
         let expected = vec![

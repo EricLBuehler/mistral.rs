@@ -12,6 +12,10 @@ const FLASHINFER_GDN_MIN_CUDA: u32 = 1208;
 #[cfg(feature = "cuda")]
 const GDN_FP8_PRODUCER_MIN_CUDA: u32 = 1108;
 #[cfg(feature = "cuda")]
+const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+#[cfg(feature = "cuda")]
+const FNV_PRIME: u64 = 0x100000001b3;
+#[cfg(feature = "cuda")]
 const CUDA_BUILD_ROOT_ENV: &str = "MISTRALRS_CUDA_BUILD_ROOT";
 
 #[cfg(feature = "cuda")]
@@ -43,7 +47,7 @@ fn cuda_header_hash(dir: &std::path::Path) -> std::io::Result<u64> {
     fn update(hash: &mut u64, bytes: &[u8]) {
         for byte in bytes {
             *hash ^= u64::from(*byte);
-            *hash = hash.wrapping_mul(0x100000001b3);
+            *hash = hash.wrapping_mul(FNV_PRIME);
         }
     }
 
@@ -71,12 +75,104 @@ fn cuda_header_hash(dir: &std::path::Path) -> std::io::Result<u64> {
         Ok(())
     }
 
-    let mut hash = 0xcbf29ce484222325;
+    let mut hash = FNV_OFFSET_BASIS;
     visit(dir, &mut hash)?;
     Ok(hash)
 }
 
+#[cfg(feature = "cuda")]
+const ABI_SOURCE: &str = "src/cuda/abi.rs";
+#[cfg(feature = "cuda")]
+const ABI_HEADER: &str = "mistralrs_core_abi.h";
+
+#[cfg(feature = "cuda")]
+fn abi_c_type(ty: &str) -> String {
+    let scalar = |ty: &str| match ty {
+        "c_void" => "void",
+        "f32" => "float",
+        "u8" => "uint8_t",
+        "i32" => "int32_t",
+        "u32" => "uint32_t",
+        "i64" => "int64_t",
+        "u64" => "uint64_t",
+        "usize" => "int",
+        other => panic!("unsupported type `{other}` in {ABI_SOURCE}"),
+    };
+    if let Some(pointee) = ty.strip_prefix("*const ") {
+        format!("const {} *", scalar(pointee))
+    } else if let Some(pointee) = ty.strip_prefix("*mut ") {
+        format!("{} *", scalar(pointee))
+    } else {
+        format!("{} ", scalar(ty))
+    }
+}
+
+// The ABI module holds one const or struct field per line, so line matching is enough.
+#[cfg(feature = "cuda")]
+fn generate_abi_header(source: &str) -> String {
+    let mut header = String::from("#pragma once\n#include <cstdint>\n\n");
+    for line in source.lines().map(str::trim) {
+        if let Some(item) = line.strip_prefix("pub(crate) const ") {
+            let (name, rest) = item.split_once(": ").expect("const type");
+            let (ty, value) = rest
+                .trim_end_matches(';')
+                .split_once(" = ")
+                .expect("const value");
+            header += &format!("constexpr {}{name} = {value};\n", abi_c_type(ty));
+        } else if let Some(item) = line.strip_prefix("pub(crate) struct ") {
+            header += &format!("\nstruct {}\n", item);
+        } else if let Some(field) = line.strip_prefix("pub(crate) ") {
+            let (name, ty) = field
+                .trim_end_matches(',')
+                .split_once(": ")
+                .expect("field type");
+            header += &format!("  {}{name};\n", abi_c_type(ty));
+        } else if line == "}" {
+            header += "};\n";
+        }
+    }
+    header
+}
+
+#[cfg(feature = "cuda")]
+fn write_abi_header(out_dir: &std::path::Path) -> (std::path::PathBuf, u64) {
+    let source = std::fs::read_to_string(ABI_SOURCE).expect("failed to read the CUDA ABI module");
+    let header = generate_abi_header(&source);
+    let include_dir = out_dir.join("abi");
+    std::fs::create_dir_all(&include_dir).expect("failed to create the CUDA ABI include dir");
+    std::fs::write(include_dir.join(ABI_HEADER), &header)
+        .expect("failed to write the CUDA ABI header");
+    let hash = header.bytes().fold(FNV_OFFSET_BASIS, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(FNV_PRIME)
+    });
+    (include_dir, hash)
+}
+
+// Short names for feature combinations that gate large amounts of code.
+fn emit_cfg_aliases() {
+    let unix = std::env::var("CARGO_CFG_TARGET_FAMILY")
+        .is_ok_and(|family| family.split(',').any(|name| name == "unix"));
+    let aliases = [
+        ("cuda_unix", cfg!(feature = "cuda") && unix),
+        (
+            "cuda_flash_attn",
+            cfg!(all(feature = "cuda", feature = "flash-attn")) && unix,
+        ),
+        (
+            "cuda_cutile",
+            cfg!(all(feature = "cuda", feature = "cutile")),
+        ),
+    ];
+    for (name, enabled) in aliases {
+        println!("cargo::rustc-check-cfg=cfg({name})");
+        if enabled {
+            println!("cargo:rustc-cfg={name}");
+        }
+    }
+}
+
 fn main() {
+    emit_cfg_aliases();
     set_git_revision();
 
     #[cfg(feature = "metal")]
@@ -106,12 +202,15 @@ fn main() {
         println!("cargo:rerun-if-env-changed=CUDA_PATH");
         let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
         let build_dir = cuda_build_dir(&out_dir, "kernels");
+        let (abi_include_dir, abi_hash) = write_abi_header(&out_dir);
         let header_hash_arg = format!(
             "-DMISTRALRS_CORE_CUDA_HEADER_HASH=0x{:016x}",
             cuda_header_hash(std::path::Path::new("src/cuda"))
                 .expect("failed to hash CUDA headers")
+                ^ abi_hash
         );
 
+        let abi_include_arg = format!("-I{}", abi_include_dir.display());
         let mut builder = cudaforge::KernelBuilder::new()
             .source_glob("src/cuda/*.cu")
             .watch(["src/cuda"])
@@ -128,7 +227,8 @@ fn main() {
             .arg("--verbose")
             .arg("--compiler-options")
             .arg("-fPIC")
-            .arg(&header_hash_arg);
+            .arg(&header_hash_arg)
+            .arg(&abi_include_arg);
 
         let compute_cap = builder.get_compute_cap().unwrap_or(80);
 

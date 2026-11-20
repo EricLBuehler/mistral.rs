@@ -14,8 +14,8 @@ use crate::{
     },
     prefix_cacher::{PagedPrefixCheckpoint, PrefixCacheManagerV2},
     scheduler::{
-        modality_signature, DefaultSchedulerMethod, PagedPrefixCacheValidation,
-        PagedPrefixCacheValidator, Scheduler, SchedulerOutput,
+        modality_signature, DefaultSchedulerMethod, DefaultSchedulerOutput,
+        PagedPrefixCacheValidation, PagedPrefixCacheValidator, Scheduler, SchedulerOutput,
     },
     search::{self, rag::SearchPipeline},
     sequence::{SeqStepType, StopReason},
@@ -52,7 +52,7 @@ use tokio::{
 
 use crate::{
     get_mut_arcmutex, handle_pipeline_forward_error,
-    pipeline::{ModelCategory, Pipeline},
+    pipeline::Pipeline,
     request::Request,
     response::{
         ChatCompletionResponse, Choice, CompletionChoice, CompletionResponse, ResponseMessage,
@@ -72,6 +72,8 @@ mod cuda_memory;
 mod memory;
 #[cfg(test)]
 mod prefix_capacity_tests;
+#[cfg(any(feature = "cuda", feature = "metal"))]
+mod step_memory;
 pub use agentic_loop::DEFAULT_MAX_TOOL_ROUNDS;
 pub(crate) mod agentic_session;
 mod file_tools;
@@ -93,8 +95,6 @@ fn record_paged_recurrent_prefix_validation(outcome: &'static str, reason: &'sta
 
 #[cfg(feature = "cuda")]
 use self::cuda_decode::CudaDecodeCompletionWorker;
-#[cfg(any(feature = "cuda", feature = "metal"))]
-use crate::paged_attention::block_hash::MultimodalAttentionPolicy;
 #[cfg(feature = "cuda")]
 use crate::pipeline::execution::{
     submit_decode_tail, CudaDecodeTail, CudaStepCompletion, CudaStepSubmission, CudaTailSubmission,
@@ -235,6 +235,42 @@ struct CudaDecodeBatchLease {
     sequence_ids: Box<[usize]>,
     tail: CudaDecodeTail,
     started: Instant,
+}
+
+/// Everything the run loop carries from one scheduler step to the next.
+struct RunLoopState {
+    rng: Arc<std::sync::Mutex<Isaac64Rng>>,
+    last_completion_ids: Vec<usize>,
+    pending: admission::AdmissionQueue<Request>,
+    #[cfg(feature = "cuda")]
+    cuda_completion_worker: Option<CudaDecodeCompletionWorker>,
+    #[cfg(feature = "cuda")]
+    cuda_decode_lease: Option<CudaDecodeBatchLease>,
+    #[cfg(feature = "cuda")]
+    cuda_memory_pool: cuda_memory::CudaMemoryPoolMaintenance,
+    #[cfg(feature = "cuda")]
+    cuda_prompt_preemption_workspace: Option<memory::ForwardWorkspaceBytes>,
+}
+
+/// What one paged scheduler step reads off the scheduler before releasing it.
+struct PagedStepSetup {
+    block_size: usize,
+    kv_cache_manager: Arc<tokio::sync::Mutex<crate::paged_attention::KVCacheManager>>,
+    is_prompt: bool,
+    step_lookahead: StepLookahead,
+}
+
+/// The transient-workspace limits a paged step was admitted under.
+#[derive(Default)]
+struct StepMemoryGrant {
+    prefix_gather_workspace_limit: Option<usize>,
+    attention_memory: Option<crate::pipeline::text_models_inputs_processor::AttentionMemoryBudget>,
+}
+
+/// Whether the run loop finishes the current iteration or starts the next one right away.
+enum StepFlow {
+    Proceed,
+    Restart,
 }
 
 #[cfg(any(feature = "cuda", feature = "metal"))]
@@ -784,19 +820,6 @@ impl Engine {
         })
     }
 
-    /// Most tokens (prompt plus output) one request may use, if applicable.
-    #[allow(dead_code)]
-    pub fn max_sequence_length(&self) -> Option<usize> {
-        let pipeline = get_mut_arcmutex!(self.pipeline);
-        let category = pipeline.category();
-
-        if matches!(category, ModelCategory::Diffusion | ModelCategory::Speech) {
-            None
-        } else {
-            Some(pipeline.get_metadata().max_model_len)
-        }
-    }
-
     fn free_finished_scheduler_sequences(&self, scheduler: &mut dyn Scheduler) {
         scheduler.cancel_closed_response_groups();
         let finished_sequence_ids = scheduler.get_finished_sequence_ids();
@@ -1154,20 +1177,686 @@ impl Engine {
         CudaDecodeBatchLease::new(rows, next_tail).map(Some)
     }
 
+    async fn run_default_scheduler_step(
+        &self,
+        mut scheduled: DefaultSchedulerOutput<'_>,
+        rng: &Arc<std::sync::Mutex<Isaac64Rng>>,
+        last_completion_ids: &mut Vec<usize>,
+        run_start: Instant,
+    ) -> StepFlow {
+        if !scheduled.completion.is_empty() {
+            let decode_tokens =
+                logger::DecodeTokenSnapshot::capture(scheduled.completion.iter().map(|seq| &**seq));
+            let current_completion_ids: Vec<usize> =
+                scheduled.completion.iter().map(|seq| *seq.id()).collect();
+            for seq in scheduled.completion.iter_mut() {
+                seq.start_completion_timing();
+            }
+            let res = {
+                let mut pipeline = get_mut_arcmutex!(self.pipeline);
+                let pre_op = if !self.no_kv_cache && *last_completion_ids != current_completion_ids
+                {
+                    CacheInstruction::In
+                } else {
+                    CacheInstruction::Nothing
+                };
+                let post_op = if !self.no_kv_cache {
+                    CacheInstruction::Out
+                } else {
+                    CacheInstruction::Reset {
+                        load_preallocated_cache: false,
+                        reset_non_granular: false,
+                    }
+                };
+
+                let return_raw_logits = scheduled.completion[0].return_raw_logits;
+                assert!(
+                    scheduled
+                        .completion
+                        .iter()
+                        .all(|seq| seq.return_raw_logits == return_raw_logits),
+                    "All sequences must either return raw logits, or not."
+                );
+
+                pipeline
+                    .step(
+                        &mut scheduled.completion,
+                        false,
+                        return_raw_logits,
+                        &mut *get_mut_arcmutex!(self.prefix_cacher),
+                        self.disable_eos_stop,
+                        rng.clone(),
+                        CacheBackendMetadata::DefaultInstructions { pre_op, post_op },
+                        self.logger.as_ref(),
+                    )
+                    .await
+            };
+
+            let completion_exec_time = handle_pipeline_forward_error!(
+                "completion step",
+                res,
+                &mut scheduled.completion,
+                self.pipeline,
+                return StepFlow::Restart,
+                self.prefix_cacher
+            );
+            for seq in scheduled.completion.iter_mut() {
+                seq.finish_completion_timing(completion_exec_time);
+            }
+
+            decode_tokens.record(&self.logger, scheduled.completion.iter().map(|seq| &**seq));
+
+            *last_completion_ids = current_completion_ids;
+        }
+
+        if !scheduled.prompt.is_empty() {
+            for seq in scheduled.prompt.iter_mut() {
+                seq.start_prompt_timing();
+            }
+
+            let prompt_exec_time = {
+                let mut pipeline = get_mut_arcmutex!(self.pipeline);
+
+                // Run the prompt seqs
+                let post_op = if !self.no_kv_cache {
+                    CacheInstruction::Out
+                } else {
+                    CacheInstruction::Reset {
+                        load_preallocated_cache: false,
+                        reset_non_granular: false,
+                    }
+                };
+
+                let return_raw_logits = scheduled.prompt[0].return_raw_logits;
+                assert!(
+                    scheduled
+                        .prompt
+                        .iter()
+                        .all(|seq| seq.return_raw_logits == return_raw_logits),
+                    "All sequences must either return raw logits, or not."
+                );
+
+                // This comes from prefix caching
+                // The invariant where all token offsets are the same is handled by the scheduler
+                let pre_op = if scheduled.prompt[0].token_offset() != 0 {
+                    CacheInstruction::In
+                } else {
+                    CacheInstruction::Reset {
+                        load_preallocated_cache: true,
+                        reset_non_granular: false,
+                    }
+                };
+
+                crate::speculative::autotuner::note_interruption();
+                pipeline
+                    .step(
+                        &mut scheduled.prompt,
+                        true,
+                        return_raw_logits,
+                        &mut *get_mut_arcmutex!(self.prefix_cacher),
+                        self.disable_eos_stop,
+                        rng.clone(),
+                        CacheBackendMetadata::DefaultInstructions { pre_op, post_op },
+                        self.logger.as_ref(),
+                    )
+                    .await
+            };
+
+            let prompt_exec_time = handle_pipeline_forward_error!(
+                "prompt step",
+                prompt_exec_time,
+                &mut scheduled.prompt,
+                self.pipeline,
+                return StepFlow::Restart,
+                self.prefix_cacher
+            );
+
+            let total_processed_tokens: usize = scheduled
+                .prompt
+                .iter()
+                .map(|seq| seq.get_toks().len())
+                .sum();
+            self.logger
+                .add_prefill_tokens_processed(total_processed_tokens);
+
+            for seq in scheduled.prompt.iter_mut() {
+                if !seq.is_finished_paged_attn() {
+                    match seq.sequence_stepping_type() {
+                        SeqStepType::OneShot => {
+                            seq.set_state(SequenceState::Done(StopReason::GeneratedImage))
+                        }
+                        SeqStepType::PromptAndDecode => {
+                            seq.set_state(SequenceState::RunningCompletion)
+                        }
+                    }
+                }
+                seq.finish_prompt_timing(prompt_exec_time);
+            }
+            *last_completion_ids = vec![];
+        }
+
+        if self.is_debug {
+            let ms_from_last_run = run_start.elapsed().as_secs_f64();
+            let total_len = scheduled.prompt.len() + scheduled.completion.len();
+            if total_len > 0 {
+                let prompt_lengths = scheduled
+                    .prompt
+                    .iter()
+                    .map(|seq| seq.len().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                let completion_lengths = scheduled
+                    .completion
+                    .iter()
+                    .map(|seq| seq.len().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                tracing::info!(
+                    "Prompt[{}] Completion[{}] - {}ms",
+                    prompt_lengths,
+                    completion_lengths,
+                    ms_from_last_run * 1000.,
+                );
+            }
+        }
+        StepFlow::Proceed
+    }
+
+    async fn run_paged_attention_step(
+        &self,
+        state: &mut RunLoopState,
+        mut output: crate::paged_attention::PagedAttentionSchedulerOutput,
+        preempted_sequence_ids: Vec<usize>,
+        step: PagedStepSetup,
+        run_start: Instant,
+    ) -> StepFlow {
+        let PagedStepSetup {
+            block_size,
+            kv_cache_manager,
+            is_prompt,
+            step_lookahead,
+        } = step;
+        if !preempted_sequence_ids.is_empty() {
+            if let Err(err) = get_mut_arcmutex!(self.pipeline)
+                .release_speculative_sequences(&preempted_sequence_ids)
+            {
+                tracing::error!("Failed to release preempted speculative state: {err}");
+            }
+        }
+        #[cfg(any(feature = "cuda", feature = "metal"))]
+        let grant = if output.scheduled.is_empty() {
+            StepMemoryGrant::default()
+        } else {
+            match self.admit_paged_step_memory(
+                state,
+                &mut output,
+                is_prompt,
+                block_size,
+                &kv_cache_manager,
+            ) {
+                Ok(grant) => grant,
+                Err(rejection) => {
+                    self.reject_prompt_for_memory(&output.scheduled, rejection)
+                        .await;
+                    return StepFlow::Restart;
+                }
+            }
+        };
+        #[cfg(not(any(feature = "cuda", feature = "metal")))]
+        let grant = StepMemoryGrant::default();
+        let StepMemoryGrant {
+            prefix_gather_workspace_limit,
+            attention_memory,
+        } = grant;
+        if !output.scheduled.is_empty() {
+            for seq in output.scheduled.iter() {
+                let mut seq_guard = get_mut_arcmutex!(seq);
+                if is_prompt {
+                    seq_guard.start_prompt_timing();
+                } else {
+                    seq_guard.start_completion_timing();
+                }
+            }
+
+            let mut guards = output
+                .scheduled
+                .iter_mut()
+                .map(|seq| seq.lock().unwrap())
+                .collect::<Vec<_>>();
+
+            let mut guards_mut = guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>();
+
+            let decode_tokens =
+                logger::DecodeTokenSnapshot::capture(guards_mut.iter().map(|seq| &**seq));
+            let staged_width = crate::speculative::staging::staged_batch_width(&guards_mut);
+            let scheduler_visible_prompt_step = output.scheduled_prompt_chunks.is_some();
+            let num_computed_before_step = guards_mut
+                .iter()
+                .map(|seq| seq.num_computed_tokens())
+                .collect::<Vec<_>>();
+            let scheduled_token_counts = guards_mut
+                .iter()
+                .enumerate()
+                .map(|(seq_idx, seq)| {
+                    if is_prompt {
+                        if let Some(chunk) = output
+                            .scheduled_prompt_chunks
+                            .as_ref()
+                            .and_then(|chunks| chunks.get(seq_idx))
+                        {
+                            return chunk.end - chunk.start;
+                        }
+                    }
+                    let staged = staged_width
+                        .map(|_| seq.active_staged_speculative_len())
+                        .unwrap_or_default();
+                    seq.num_uncomputed_tokens().saturating_add(staged)
+                })
+                .collect::<Vec<_>>();
+
+            let res = {
+                let mut pipeline = get_mut_arcmutex!(self.pipeline);
+
+                if guards_mut.is_empty() {
+                    Ok(StepSubmission::ready(Duration::ZERO))
+                } else {
+                    let pipeline_metadata = pipeline.get_metadata();
+                    let model_metadata = pipeline_metadata.model_metadata.as_ref();
+                    let max_paged_context_len = {
+                        let kv_mgr = get_mut_arcmutex!(kv_cache_manager);
+                        kv_mgr.num_gpu_blocks().saturating_sub(1).max(1) * block_size
+                    };
+                    let scheduled_prompt_chunks = output.scheduled_prompt_chunks.take();
+                    let prompt_chunk_attention_policy = scheduled_prompt_chunks
+                        .as_ref()
+                        .and_then(|chunks| chunks.first())
+                        .map(|chunk| chunk.attention_policy)
+                        .unwrap_or(
+                            crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
+                        );
+                    let is_final_prompt_chunk =
+                        scheduled_prompt_chunks.as_ref().is_none_or(|chunks| {
+                            chunks
+                                .iter()
+                                .zip(guards_mut.iter())
+                                .all(|(chunk, seq)| chunk.end == seq.get_toks().len())
+                        });
+                    let metadata = PagedAttentionMeta {
+                        block_size,
+                        max_paged_context_len,
+                        sliding_window: pipeline_metadata.sliding_window,
+                        attention_backend: model_metadata
+                            .map(|metadata| metadata.attention_backend_kind())
+                            .unwrap_or(crate::paged_attention::AttentionBackendKind::Standard),
+                        has_flashinfer_decode_layers: model_metadata.is_some_and(|metadata| {
+                            (0..metadata.num_layers()).any(|layer_idx| {
+                                metadata.attention_backend_kind_for_layer(layer_idx)
+                                    == crate::paged_attention::AttentionBackendKind::FlashInfer
+                            })
+                        }),
+                        prefill_attention_heads: model_metadata
+                            .map(|metadata| metadata.num_attn_heads())
+                            .unwrap_or(1)
+                            .max(1),
+                        prefill_key_value_heads: model_metadata
+                            .map(|metadata| metadata.num_kv_heads())
+                            .unwrap_or(1)
+                            .max(1),
+                        prefill_head_dim: model_metadata
+                            .map(|metadata| metadata.k_head_dim())
+                            .unwrap_or(1)
+                            .max(1),
+                        kv_cache_manager: kv_cache_manager.clone(),
+                        prompt_chunk_size: output.prompt_chunk_size,
+                        scheduled_prompt_chunks,
+                        prompt_chunk_attention_policy,
+                        has_noncausal_mm_context: false,
+                        prefix_gather_workspace_limit,
+                        attention_memory,
+                        mm_prefix_ranges_by_seq_id: HashMap::new(),
+                        full_mm_prefix_ranges_by_seq_id: HashMap::new(),
+                        enable_packed_prefill: pipeline.supports_packed_prefill(),
+                        is_final_prompt_chunk,
+                        needs_logits: is_final_prompt_chunk || guards_mut[0].return_raw_logits,
+                    };
+
+                    let return_raw_logits = guards_mut[0].return_raw_logits;
+                    assert!(
+                        guards_mut
+                            .iter()
+                            .all(|seq| seq.return_raw_logits == return_raw_logits),
+                        "All sequences must either return raw logits, or not."
+                    );
+
+                    if is_prompt {
+                        crate::speculative::autotuner::note_interruption();
+                    }
+                    pipeline
+                        .submit_step(
+                            &mut guards_mut,
+                            is_prompt,
+                            return_raw_logits,
+                            &mut *get_mut_arcmutex!(self.prefix_cacher),
+                            self.disable_eos_stop,
+                            state.rng.clone(),
+                            CacheBackendMetadata::PagedAttention { metadata },
+                            self.logger.as_ref(),
+                            step_lookahead,
+                        )
+                        .await
+                }
+            };
+
+            let submission = handle_pipeline_forward_error!(
+                "step",
+                res,
+                &mut guards_mut,
+                self.pipeline,
+                return StepFlow::Restart,
+                self.prefix_cacher
+            );
+            drop(guards_mut);
+            drop(guards);
+
+            #[cfg(feature = "cuda")]
+            if submission.cuda_has_tail() {
+                let mut scheduler = get_mut_arcmutex!(self.scheduler);
+                scheduler.record_decode_continuation();
+            }
+
+            let step_exec_time = match submission.into_inner() {
+                StepSubmissionKind::Ready(completion) => completion.duration(),
+                #[cfg(feature = "cuda")]
+                StepSubmissionKind::Cuda(submission) => {
+                    let completion_result = self
+                        .complete_cuda_step(
+                            state
+                                .cuda_completion_worker
+                                .as_ref()
+                                .expect("CUDA decode submission requires a completion worker"),
+                            submission,
+                        )
+                        .await;
+                    let mut completion_guards = output
+                        .scheduled
+                        .iter()
+                        .map(|seq| seq.lock().unwrap())
+                        .collect::<Vec<_>>();
+                    let mut completion_guards_mut = completion_guards
+                        .iter_mut()
+                        .map(|seq| &mut **seq)
+                        .collect::<Vec<_>>();
+                    let mut completion = handle_pipeline_forward_error!(
+                        "CUDA decode completion",
+                        completion_result,
+                        &mut completion_guards_mut,
+                        self.pipeline,
+                        return StepFlow::Restart,
+                        self.prefix_cacher
+                    );
+
+                    for ((seq, before), scheduled) in completion_guards_mut
+                        .iter_mut()
+                        .zip(num_computed_before_step.iter().copied())
+                        .zip(scheduled_token_counts.iter().copied())
+                    {
+                        if seq.num_computed_tokens() == before {
+                            seq.advance_num_computed_tokens(scheduled);
+                        }
+                    }
+                    let commit_rows = completion_guards_mut
+                        .iter()
+                        .map(|seq| !seq.is_finished_paged_attn())
+                        .collect::<Vec<_>>();
+                    let finish_result: candle_core::Result<_> = async {
+                        let pipeline = get_mut_arcmutex!(self.pipeline);
+                        if crate::pipeline::sampling::cuda_token_batch_will_finish(
+                            &*pipeline,
+                            &completion_guards_mut,
+                            completion.token_ids(),
+                            &commit_rows,
+                            self.disable_eos_stop,
+                        )? {
+                            completion.synchronize_tail()?;
+                        }
+                        completion
+                            .finish(
+                                &*pipeline,
+                                &mut completion_guards_mut,
+                                &commit_rows,
+                                &mut *get_mut_arcmutex!(self.prefix_cacher),
+                                self.disable_eos_stop,
+                            )
+                            .await
+                    }
+                    .await;
+                    let completion = handle_pipeline_forward_error!(
+                        "CUDA decode finalize",
+                        finish_result,
+                        &mut completion_guards_mut,
+                        self.pipeline,
+                        return StepFlow::Restart,
+                        self.prefix_cacher
+                    );
+                    let duration = run_start.elapsed();
+                    let tail = completion.into_cuda_tail();
+                    let any_live = completion_guards_mut
+                        .iter()
+                        .any(|seq| !seq.is_finished_paged_attn());
+                    drop(completion_guards_mut);
+                    drop(completion_guards);
+
+                    if let Some(tail) = tail {
+                        if any_live {
+                            let lease_result =
+                                CudaDecodeBatchLease::new(output.scheduled.clone(), tail);
+                            let mut error_guards = output
+                                .scheduled
+                                .iter()
+                                .map(|seq| seq.lock().unwrap())
+                                .collect::<Vec<_>>();
+                            let mut error_guards_mut = error_guards
+                                .iter_mut()
+                                .map(|seq| &mut **seq)
+                                .collect::<Vec<_>>();
+                            state.cuda_decode_lease = Some(handle_pipeline_forward_error!(
+                                "CUDA decode lease",
+                                lease_result,
+                                &mut error_guards_mut,
+                                self.pipeline,
+                                return StepFlow::Restart,
+                                self.prefix_cacher
+                            ));
+                        } else {
+                            let drain_result = tail.drain();
+                            let mut error_guards = output
+                                .scheduled
+                                .iter()
+                                .map(|seq| seq.lock().unwrap())
+                                .collect::<Vec<_>>();
+                            let mut error_guards_mut = error_guards
+                                .iter_mut()
+                                .map(|seq| &mut **seq)
+                                .collect::<Vec<_>>();
+                            handle_pipeline_forward_error!(
+                                "CUDA decode tail drain",
+                                drain_result,
+                                &mut error_guards_mut,
+                                self.pipeline,
+                                return StepFlow::Restart,
+                                self.prefix_cacher
+                            );
+                            drop(error_guards_mut);
+                            drop(error_guards);
+                            self.account_cuda_decode_rows(&output.scheduled);
+                        }
+                    }
+                    duration
+                }
+            };
+
+            let mut guards = output
+                .scheduled
+                .iter()
+                .map(|seq| seq.lock().unwrap())
+                .collect::<Vec<_>>();
+            let mut guards_mut = guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>();
+            for ((seq, before), scheduled) in guards_mut
+                .iter_mut()
+                .zip(num_computed_before_step.iter().copied())
+                .zip(scheduled_token_counts.iter().copied())
+            {
+                if seq.num_computed_tokens() == before {
+                    seq.advance_num_computed_tokens(scheduled);
+                }
+            }
+            if is_prompt && !scheduler_visible_prompt_step {
+                for seq in guards_mut.iter_mut() {
+                    if !seq.is_finished_paged_attn()
+                        && matches!(seq.sequence_stepping_type(), SeqStepType::PromptAndDecode)
+                    {
+                        seq.set_state(SequenceState::RunningCompletion);
+                    }
+                }
+            }
+            for seq in guards_mut.iter_mut() {
+                if is_prompt {
+                    seq.finish_prompt_timing(step_exec_time);
+                } else {
+                    seq.finish_completion_timing(step_exec_time);
+                }
+            }
+
+            if is_prompt {
+                self.logger
+                    .add_prefill_tokens_processed(scheduled_token_counts.iter().sum());
+            } else {
+                decode_tokens.record(&self.logger, guards_mut.iter().map(|seq| &**seq));
+            }
+
+            // Capture recurrent states at full-block boundaries so hybrid models can
+            // reuse recurrent prefix state when paged prefix caching hits. Prompt steps
+            // only: a chat template re-renders a finished assistant turn differently
+            // than it was generated, so no later lookup can ever reach a key past the
+            // end of a prompt. Chunked prefill snapshots inline instead, in
+            // `snapshot_paged_recurrent_prefix`.
+            {
+                let mut pipeline = get_mut_arcmutex!(self.pipeline);
+                let mut prefix_cacher = get_mut_arcmutex!(self.prefix_cacher);
+                let prefix_policy = pipeline.speculative_prefix_checkpoint_policy();
+                if is_prompt
+                    && !scheduler_visible_prompt_step
+                    && pipeline.cache().is_hybrid()
+                    && prefix_cacher.accepts_paged_recurrent_prefix()
+                {
+                    for seq in guards_mut.iter() {
+                        if matches!(
+                            prefix_policy.replay_for(modality_signature(seq)),
+                            crate::speculative::SpeculativePrefixReplay::Full
+                        ) {
+                            continue;
+                        }
+                        let encoded_len = seq.num_computed_tokens();
+                        if encoded_len == 0 || encoded_len % block_size != 0 {
+                            continue;
+                        }
+
+                        let num_blocks = encoded_len / block_size;
+                        let adapter_key = adapter_generation_key(seq.adapter_generation());
+                        let block_hashes = compute_block_hashes(
+                            seq.get_toks(),
+                            block_size,
+                            seq.mm_features(),
+                            adapter_key.as_slice(),
+                        );
+                        if block_hashes.len() < num_blocks {
+                            continue;
+                        }
+                        let owner = block_hashes[num_blocks - 1];
+                        if prefix_cacher.has_paged_recurrent_owner(owner) {
+                            continue;
+                        }
+                        if let Err(e) = pipeline.snapshot_paged_recurrent_prefix(
+                            seq,
+                            &mut prefix_cacher,
+                            block_size,
+                            encoded_len,
+                        ) {
+                            tracing::warn!(
+                                "Failed snapshotting recurrent prefix for sequence {}: {e}",
+                                seq.id()
+                            );
+                        }
+                    }
+                }
+            }
+
+            if self.is_debug {
+                let ms_from_last_run = run_start.elapsed().as_secs_f64();
+                let total_len = guards.len();
+                if total_len > 0 {
+                    let lengths = guards
+                        .iter()
+                        .map(|seq| seq.len().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+
+                    let (prompt_lengths, completion_lengths) = if is_prompt {
+                        (lengths, "".to_string())
+                    } else {
+                        ("".to_string(), lengths)
+                    };
+
+                    tracing::info!(
+                        "Prompt[{}] Completion[{}] - {}ms",
+                        prompt_lengths,
+                        completion_lengths,
+                        ms_from_last_run * 1000.,
+                    );
+                }
+            }
+        }
+        #[cfg(feature = "cuda")]
+        let reclaim_graphs = if is_prompt {
+            state.cuda_memory_pool.after_prompt_step()
+        } else {
+            state.cuda_decode_lease.is_none() && state.cuda_memory_pool.after_decode_step()
+        };
+        #[cfg(feature = "cuda")]
+        if reclaim_graphs {
+            debug_assert!(state.cuda_decode_lease.is_none());
+            loop {
+                let reclaimed = get_mut_arcmutex!(self.pipeline)
+                    .reclaim_cuda_graph_memory(cuda_memory::GRAPH_RECLAIM_BATCH_SIZE);
+                if reclaimed == 0
+                    || !state
+                        .cuda_memory_pool
+                        .after_graph_reclaim(memory::ForwardWorkspaceBytes::default())
+                        .graph_pressure
+                {
+                    break;
+                }
+            }
+        }
+        StepFlow::Proceed
+    }
+
     pub async fn run(self: Arc<Self>) {
         if self.throughput_logging_enabled {
             self.logger.enable_logging();
         }
 
         let rng = Arc::new(std::sync::Mutex::new(Isaac64Rng::seed_from_u64(SEED)));
-        let mut last_completion_ids: Vec<usize> = vec![];
+        let last_completion_ids: Vec<usize> = vec![];
         let max_pending_requests = {
             let rx = self.rx.lock().await;
             rx.max_capacity()
         };
         let policy =
             admission::AdmissionPolicy::new(self.max_active_sequences, max_pending_requests);
-        let mut pending = admission::AdmissionQueue::new(policy);
+        let pending = admission::AdmissionQueue::new(policy);
         #[cfg(feature = "cuda")]
         let cuda_completion_worker = if self.cuda_decode_enabled {
             match CudaDecodeCompletionWorker::new() {
@@ -1181,9 +1870,9 @@ impl Engine {
             None
         };
         #[cfg(feature = "cuda")]
-        let mut cuda_decode_lease: Option<CudaDecodeBatchLease> = None;
+        let cuda_decode_lease: Option<CudaDecodeBatchLease> = None;
         #[cfg(feature = "cuda")]
-        let mut cuda_memory_pool = {
+        let cuda_memory_pool = {
             let pipeline = get_mut_arcmutex!(self.pipeline);
             let devices = pipeline.execution_devices();
             let mut unique_devices = Vec::new();
@@ -1203,7 +1892,20 @@ impl Engine {
             )
         };
         #[cfg(feature = "cuda")]
-        let mut cuda_prompt_preemption_workspace: Option<memory::ForwardWorkspaceBytes> = None;
+        let cuda_prompt_preemption_workspace: Option<memory::ForwardWorkspaceBytes> = None;
+        let mut state = RunLoopState {
+            rng,
+            last_completion_ids,
+            pending,
+            #[cfg(feature = "cuda")]
+            cuda_completion_worker,
+            #[cfg(feature = "cuda")]
+            cuda_decode_lease,
+            #[cfg(feature = "cuda")]
+            cuda_memory_pool,
+            #[cfg(feature = "cuda")]
+            cuda_prompt_preemption_workspace,
+        };
         'lp: loop {
             let should_terminate = || {
                 matches!(
@@ -1217,7 +1919,7 @@ impl Engine {
 
             if should_terminate() {
                 #[cfg(feature = "cuda")]
-                if let Some(lease) = cuda_decode_lease.take() {
+                if let Some(lease) = state.cuda_decode_lease.take() {
                     if let Err(err) = self.drain_cuda_decode_batch(lease) {
                         tracing::warn!("Failed to drain the CUDA decode tail: {err}");
                     }
@@ -1226,10 +1928,12 @@ impl Engine {
                 break 'lp;
             }
 
-            let channel_disconnected = self.collect_pending_requests(&mut pending).await;
-            pending.retain(|request| !Self::request_is_abandoned(request));
+            let channel_disconnected = self.collect_pending_requests(&mut state.pending).await;
+            state
+                .pending
+                .retain(|request| !Self::request_is_abandoned(request));
             #[cfg(feature = "cuda")]
-            let decode_batch_leased = cuda_decode_lease.is_some();
+            let decode_batch_leased = state.cuda_decode_lease.is_some();
             #[cfg(not(feature = "cuda"))]
             let decode_batch_leased = false;
             {
@@ -1240,9 +1944,9 @@ impl Engine {
                     self.free_finished_scheduler_sequences(&mut *scheduler);
                 }
             }
-            if let Some(request) = pending.take_shutdown() {
+            if let Some(request) = state.pending.take_shutdown() {
                 #[cfg(feature = "cuda")]
-                if let Some(lease) = cuda_decode_lease.take() {
+                if let Some(lease) = state.cuda_decode_lease.take() {
                     if let Err(err) = self.drain_cuda_decode_batch(lease) {
                         tracing::warn!("Failed to drain the CUDA decode tail: {err}");
                     }
@@ -1252,8 +1956,8 @@ impl Engine {
             }
 
             let mut dispatches = 0;
-            while dispatches < pending.max_dispatches_per_step() {
-                let Some(request) = pending.take_bypass_control() else {
+            while dispatches < state.pending.max_dispatches_per_step() {
+                let Some(request) = state.pending.take_bypass_control() else {
                     break;
                 };
                 if !self.dispatch_prepared_request(request).await {
@@ -1262,15 +1966,15 @@ impl Engine {
                 dispatches += 1;
             }
 
-            while dispatches < pending.max_dispatches_per_step() {
+            while dispatches < state.pending.max_dispatches_per_step() {
                 let active_sequences = {
                     let scheduler = get_mut_arcmutex!(self.scheduler);
                     scheduler.waiting_len() + scheduler.running_len()
                 };
                 let request = if decode_batch_leased {
-                    pending.pop_admissible_workload(active_sequences)
+                    state.pending.pop_admissible_workload(active_sequences)
                 } else {
-                    pending.pop_admissible(active_sequences)
+                    state.pending.pop_admissible(active_sequences)
                 };
                 let Some(request) = request else {
                     break;
@@ -1280,7 +1984,7 @@ impl Engine {
                 }
                 dispatches += 1;
             }
-            let pending_metric = u32::try_from(pending.len()).unwrap_or(u32::MAX);
+            let pending_metric = u32::try_from(state.pending.len()).unwrap_or(u32::MAX);
             metrics::gauge!("mistralrs_requests_pending_admission").set(f64::from(pending_metric));
 
             let (waiting_len, running_len) = {
@@ -1290,17 +1994,18 @@ impl Engine {
             let scheduler_idle = waiting_len == 0 && running_len == 0;
 
             if scheduler_idle {
-                if !pending.is_empty() {
+                if !state.pending.is_empty() {
                     continue;
                 }
                 #[cfg(feature = "cuda")]
-                if cuda_memory_pool.when_idle() {
-                    debug_assert!(cuda_decode_lease.is_none());
+                if state.cuda_memory_pool.when_idle() {
+                    debug_assert!(state.cuda_decode_lease.is_none());
                     loop {
                         let reclaimed = get_mut_arcmutex!(self.pipeline)
                             .reclaim_cuda_graph_memory(cuda_memory::GRAPH_RECLAIM_BATCH_SIZE);
                         if reclaimed == 0
-                            || !cuda_memory_pool
+                            || !state
+                                .cuda_memory_pool
                                 .after_graph_reclaim(memory::ForwardWorkspaceBytes::default())
                                 .graph_pressure
                         {
@@ -1338,7 +2043,8 @@ impl Engine {
                             continue;
                         };
                         let class = Self::admission_class(&request);
-                        pending
+                        state
+                            .pending
                             .push(request, class)
                             .expect("idle admission queue must have capacity");
                         // Give a concurrently submitted request wave one turn to reach the ingress channel.
@@ -1355,7 +2061,7 @@ impl Engine {
             if TERMINATE_ALL_NEXT_STEP.load(Ordering::SeqCst) {
                 self.replicate_request_to_daemons(&Request::TerminateAllSeqsNextStep);
                 #[cfg(feature = "cuda")]
-                if let Some(lease) = cuda_decode_lease.take() {
+                if let Some(lease) = state.cuda_decode_lease.take() {
                     let leased_rows = lease.rows.clone();
                     let result = self.drain_cuda_decode_batch(lease);
                     let mut guards = leased_rows
@@ -1369,27 +2075,28 @@ impl Engine {
                         result,
                         &mut guards_mut,
                         self.pipeline,
-                        'lp,
+                        continue 'lp,
                         self.prefix_cacher
                     );
                 }
             }
 
             #[cfg(feature = "cuda")]
-            if let Some(lease) = cuda_decode_lease.take() {
+            if let Some(lease) = state.cuda_decode_lease.take() {
                 let leased_rows = lease.rows.clone();
-                let allow_lookahead = !pending.blocks_decode_continuation() && {
+                let allow_lookahead = !state.pending.blocks_decode_continuation() && {
                     let scheduler = get_mut_arcmutex!(self.scheduler);
                     scheduler.can_continue_decode_batch(&lease.sequence_ids)
                 };
                 let result = self
                     .continue_cuda_decode_batch(
                         lease,
-                        cuda_completion_worker
+                        state
+                            .cuda_completion_worker
                             .as_ref()
                             .expect("CUDA decode lease requires a completion worker"),
                         allow_lookahead,
-                        &rng,
+                        &state.rng,
                     )
                     .await;
                 let mut guards = leased_rows
@@ -1397,17 +2104,17 @@ impl Engine {
                     .map(|seq| seq.lock().unwrap())
                     .collect::<Vec<_>>();
                 let mut guards_mut = guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>();
-                cuda_decode_lease = handle_pipeline_forward_error!(
+                state.cuda_decode_lease = handle_pipeline_forward_error!(
                     "resident CUDA decode step",
                     result,
                     &mut guards_mut,
                     self.pipeline,
-                    'lp,
+                    continue 'lp,
                     self.prefix_cacher
                 );
                 drop(guards_mut);
                 drop(guards);
-                if cuda_decode_lease.is_none() {
+                if state.cuda_decode_lease.is_none() {
                     let mut scheduler = get_mut_arcmutex!(self.scheduler);
                     self.free_finished_scheduler_sequences(&mut *scheduler);
                 }
@@ -1429,17 +2136,17 @@ impl Engine {
                 .map(|v| v as &mut dyn PagedPrefixCacheValidator);
             #[cfg(feature = "cuda")]
             let waiting_prompt_preemption_enabled =
-                if let Some(workspace_bytes) = cuda_prompt_preemption_workspace {
-                    debug_assert!(cuda_decode_lease.is_none());
-                    let memory_status =
-                        self.maintain_cuda_prompt_memory(&mut cuda_memory_pool, workspace_bytes);
+                if let Some(workspace_bytes) = state.cuda_prompt_preemption_workspace {
+                    debug_assert!(state.cuda_decode_lease.is_none());
+                    let memory_status = self
+                        .maintain_cuda_prompt_memory(&mut state.cuda_memory_pool, workspace_bytes);
                     if memory_status.insufficient_total_capacity {
-                        cuda_prompt_preemption_workspace = None;
+                        state.cuda_prompt_preemption_workspace = None;
                         true
                     } else if memory_status.maintenance_failed || memory_status.transient_pressure {
                         false
                     } else {
-                        cuda_prompt_preemption_workspace = None;
+                        state.cuda_prompt_preemption_workspace = None;
                         true
                     }
                 } else {
@@ -1453,191 +2160,21 @@ impl Engine {
             self.prune_revoked_paged_recurrent_prefixes();
 
             match scheduled {
-                SchedulerOutput::DefaultScheduler {
-                    output: mut scheduled,
-                } => {
-                    if !scheduled.completion.is_empty() {
-                        let decode_tokens = logger::DecodeTokenSnapshot::capture(
-                            scheduled.completion.iter().map(|seq| &**seq),
-                        );
-                        let current_completion_ids: Vec<usize> =
-                            scheduled.completion.iter().map(|seq| *seq.id()).collect();
-                        for seq in scheduled.completion.iter_mut() {
-                            seq.start_completion_timing();
-                        }
-                        let res = {
-                            let mut pipeline = get_mut_arcmutex!(self.pipeline);
-                            let pre_op = if !self.no_kv_cache
-                                && last_completion_ids != current_completion_ids
-                            {
-                                CacheInstruction::In
-                            } else {
-                                CacheInstruction::Nothing
-                            };
-                            let post_op = if !self.no_kv_cache {
-                                CacheInstruction::Out
-                            } else {
-                                CacheInstruction::Reset {
-                                    load_preallocated_cache: false,
-                                    reset_non_granular: false,
-                                }
-                            };
-
-                            let return_raw_logits = scheduled.completion[0].return_raw_logits;
-                            assert!(
-                                scheduled
-                                    .completion
-                                    .iter()
-                                    .all(|seq| seq.return_raw_logits == return_raw_logits),
-                                "All sequences must either return raw logits, or not."
-                            );
-
-                            pipeline
-                                .step(
-                                    &mut scheduled.completion,
-                                    false,
-                                    return_raw_logits,
-                                    &mut *get_mut_arcmutex!(self.prefix_cacher),
-                                    self.disable_eos_stop,
-                                    rng.clone(),
-                                    CacheBackendMetadata::DefaultInstructions { pre_op, post_op },
-                                    self.logger.as_ref(),
-                                )
-                                .await
-                        };
-
-                        let completion_exec_time = handle_pipeline_forward_error!(
-                            "completion step",
-                            res,
-                            &mut scheduled.completion,
-                            self.pipeline,
-                            'lp,
-                            self.prefix_cacher
-                        );
-                        for seq in scheduled.completion.iter_mut() {
-                            seq.finish_completion_timing(completion_exec_time);
-                        }
-
-                        decode_tokens
-                            .record(&self.logger, scheduled.completion.iter().map(|seq| &**seq));
-
-                        last_completion_ids = current_completion_ids;
-                    }
-
-                    if !scheduled.prompt.is_empty() {
-                        for seq in scheduled.prompt.iter_mut() {
-                            seq.start_prompt_timing();
-                        }
-
-                        let prompt_exec_time = {
-                            let mut pipeline = get_mut_arcmutex!(self.pipeline);
-
-                            // Run the prompt seqs
-                            let post_op = if !self.no_kv_cache {
-                                CacheInstruction::Out
-                            } else {
-                                CacheInstruction::Reset {
-                                    load_preallocated_cache: false,
-                                    reset_non_granular: false,
-                                }
-                            };
-
-                            let return_raw_logits = scheduled.prompt[0].return_raw_logits;
-                            assert!(
-                                scheduled
-                                    .prompt
-                                    .iter()
-                                    .all(|seq| seq.return_raw_logits == return_raw_logits),
-                                "All sequences must either return raw logits, or not."
-                            );
-
-                            // This comes from prefix caching
-                            // The invariant where all token offsets are the same is handled by the scheduler
-                            let pre_op = if scheduled.prompt[0].token_offset() != 0 {
-                                CacheInstruction::In
-                            } else {
-                                CacheInstruction::Reset {
-                                    load_preallocated_cache: true,
-                                    reset_non_granular: false,
-                                }
-                            };
-
-                            crate::speculative::autotuner::note_interruption();
-                            pipeline
-                                .step(
-                                    &mut scheduled.prompt,
-                                    true,
-                                    return_raw_logits,
-                                    &mut *get_mut_arcmutex!(self.prefix_cacher),
-                                    self.disable_eos_stop,
-                                    rng.clone(),
-                                    CacheBackendMetadata::DefaultInstructions { pre_op, post_op },
-                                    self.logger.as_ref(),
-                                )
-                                .await
-                        };
-
-                        let prompt_exec_time = handle_pipeline_forward_error!(
-                            "prompt step",
-                            prompt_exec_time,
-                            &mut scheduled.prompt,
-                            self.pipeline,
-                            'lp,
-                            self.prefix_cacher
-                        );
-
-                        let total_processed_tokens: usize = scheduled
-                            .prompt
-                            .iter()
-                            .map(|seq| seq.get_toks().len())
-                            .sum();
-                        self.logger
-                            .add_prefill_tokens_processed(total_processed_tokens);
-
-                        for seq in scheduled.prompt.iter_mut() {
-                            if !seq.is_finished_paged_attn() {
-                                match seq.sequence_stepping_type() {
-                                    SeqStepType::OneShot => seq
-                                        .set_state(SequenceState::Done(StopReason::GeneratedImage)),
-                                    SeqStepType::PromptAndDecode => {
-                                        seq.set_state(SequenceState::RunningCompletion)
-                                    }
-                                }
-                            }
-                            seq.finish_prompt_timing(prompt_exec_time);
-                        }
-                        last_completion_ids = vec![];
-                    }
-
-                    if self.is_debug {
-                        let ms_from_last_run = run_start.elapsed().as_secs_f64();
-                        let total_len = scheduled.prompt.len() + scheduled.completion.len();
-                        if total_len > 0 {
-                            let prompt_lengths = scheduled
-                                .prompt
-                                .iter()
-                                .map(|seq| seq.len().to_string())
-                                .collect::<Vec<_>>()
-                                .join(", ");
-
-                            let completion_lengths = scheduled
-                                .completion
-                                .iter()
-                                .map(|seq| seq.len().to_string())
-                                .collect::<Vec<_>>()
-                                .join(", ");
-
-                            tracing::info!(
-                                "Prompt[{}] Completion[{}] - {}ms",
-                                prompt_lengths,
-                                completion_lengths,
-                                ms_from_last_run * 1000.,
-                            );
-                        }
+                SchedulerOutput::DefaultScheduler { output } => {
+                    if let StepFlow::Restart = self
+                        .run_default_scheduler_step(
+                            output,
+                            &state.rng,
+                            &mut state.last_completion_ids,
+                            run_start,
+                        )
+                        .await
+                    {
+                        continue 'lp;
                     }
                 }
                 SchedulerOutput::PagedAttention {
-                    mut output,
+                    output,
                     preempted_sequence_ids,
                 } => {
                     let block_size = scheduler.block_size().unwrap();
@@ -1648,8 +2185,8 @@ impl Engine {
                         .is_some_and(|seq| get_mut_arcmutex!(seq).is_prompt());
                     #[cfg(feature = "cuda")]
                     let step_lookahead = if !is_prompt
-                        && cuda_completion_worker.is_some()
-                        && !pending.blocks_decode_continuation()
+                        && state.cuda_completion_worker.is_some()
+                        && !state.pending.blocks_decode_continuation()
                         && scheduler.can_continue_decode_batch(
                             &output
                                 .scheduled
@@ -1664,913 +2201,37 @@ impl Engine {
                     #[cfg(not(feature = "cuda"))]
                     let step_lookahead = StepLookahead::Disabled;
                     drop(scheduler);
-                    if !preempted_sequence_ids.is_empty() {
-                        if let Err(err) = get_mut_arcmutex!(self.pipeline)
-                            .release_speculative_sequences(&preempted_sequence_ids)
-                        {
-                            tracing::error!("Failed to release preempted speculative state: {err}");
-                        }
-                    }
-                    #[cfg(any(feature = "cuda", feature = "metal"))]
-                    let mut prefix_gather_workspace_limit = None;
-                    #[cfg(not(any(feature = "cuda", feature = "metal")))]
-                    let prefix_gather_workspace_limit = None;
-                    #[cfg(any(feature = "cuda", feature = "metal"))]
-                    let mut attention_memory = None;
-                    #[cfg(not(any(feature = "cuda", feature = "metal")))]
-                    let attention_memory = None;
-                    #[cfg(any(feature = "cuda", feature = "metal"))]
-                    if !output.scheduled.is_empty() {
-                        let (
-                            model_metadata,
-                            activation_dtype,
-                            cache_dtype,
-                            device_is_cuda,
-                            has_sliding_window,
-                            fa3_num_sm_by_layer,
-                            execution_devices,
-                            primary_device,
-                            memory_plan,
-                            _metal_hnd_by_layer,
-                            supports_packed_prefill,
-                        ) = {
-                            let pipeline = get_mut_arcmutex!(self.pipeline);
-                            let metadata = pipeline.get_metadata();
-                            let cache_dtype = metadata
-                                .cache_config
-                                .as_ref()
-                                .map(|config| config.cache_type.to_dtype(metadata.activation_dtype))
-                                .unwrap_or(metadata.activation_dtype);
-                            (
-                                metadata.model_metadata.clone(),
-                                metadata.activation_dtype,
-                                cache_dtype,
-                                pipeline
-                                    .execution_devices()
-                                    .iter()
-                                    .all(candle_core::Device::is_cuda),
-                                metadata.sliding_window.is_some(),
-                                metadata
-                                    .cache_engine
-                                    .as_ref()
-                                    .map(|engine| engine.fa3_prefill_num_sm_by_layer().to_vec())
-                                    .unwrap_or_default(),
-                                pipeline.execution_devices(),
-                                pipeline.device(),
-                                metadata.memory_plan,
-                                metadata
-                                    .cache_engine
-                                    .as_ref()
-                                    .map(|engine| {
-                                        engine
-                                            .get_kv_cache()
-                                            .iter()
-                                            .map(|(k, _)| k.rank() == 4)
-                                            .collect::<Vec<_>>()
-                                    })
-                                    .unwrap_or_default(),
-                                pipeline.supports_packed_prefill(),
-                            )
-                        };
-                        let mut rejection = None;
-                        loop {
-                            if !is_prompt
-                                && !execution_devices.iter().any(candle_core::Device::is_metal)
-                            {
-                                break;
-                            }
-                            let query_lens = output
-                                .scheduled
-                                .iter()
-                                .enumerate()
-                                .map(|(seq_idx, seq)| {
-                                    let seq = get_mut_arcmutex!(seq);
-                                    if !is_prompt {
-                                        return 1 + seq.active_staged_speculative_len();
-                                    }
-                                    output
-                                        .scheduled_prompt_chunks
-                                        .as_ref()
-                                        .and_then(|chunks| chunks.get(seq_idx))
-                                        .map(|chunk| chunk.end.saturating_sub(chunk.start))
-                                        .unwrap_or_else(|| seq.num_uncomputed_tokens())
-                                })
-                                .collect::<Vec<_>>();
-                            let full_context_lens = output
-                                .scheduled
-                                .iter()
-                                .zip(&query_lens)
-                                .map(|(seq, query_len)| {
-                                    let seq = get_mut_arcmutex!(seq);
-                                    if is_prompt {
-                                        seq.num_computed_tokens().saturating_add(*query_len)
-                                    } else {
-                                        seq.get_toks()
-                                            .len()
-                                            .saturating_add(query_len.saturating_sub(1))
-                                    }
-                                })
-                                .collect::<Vec<_>>();
-                            let max_pages_per_sequence = {
-                                let sequence_ids = output
-                                    .scheduled
-                                    .iter()
-                                    .map(|seq| *get_mut_arcmutex!(seq).id())
-                                    .collect::<Vec<_>>();
-                                let manager = get_mut_arcmutex!(kv_cache_manager);
-                                sequence_ids
-                                    .iter()
-                                    .map(|seq_id| manager.num_blocks_for_request(*seq_id))
-                                    .max()
-                                    .unwrap_or_default()
-                            };
-                            let has_noncausal_mm_context = output
-                                .scheduled_prompt_chunks
-                                .as_ref()
-                                .and_then(|chunks| chunks.first())
-                                .is_some_and(|chunk| {
-                                    chunk.attention_policy == MultimodalAttentionPolicy::NonCausal
-                                })
-                                || output.scheduled.iter().any(|seq| {
-                                    get_mut_arcmutex!(seq).mm_features().iter().any(|feature| {
-                                        feature.attention_policy
-                                            == MultimodalAttentionPolicy::NonCausal
-                                    })
-                                });
-                            let has_donor_cache_layers = model_metadata.as_deref().is_some_and(
-                                crate::paged_attention::plan::model_has_donor_paged_cache_layers,
-                            );
-                            let requires_prefix_attention = has_noncausal_mm_context
-                                || has_donor_cache_layers
-                                || query_lens
-                                    .iter()
-                                    .zip(&full_context_lens)
-                                    .any(|(query, full)| full > query);
-                            let workspace_result = if is_prompt {
-                                crate::paged_attention::plan::prompt_prefill_workspace(
-                                    model_metadata.as_deref().map(|model| {
-                                        model as &dyn crate::paged_attention::ModelConfigLike
-                                    }),
-                                    crate::paged_attention::plan::PromptPrefillWorkspaceInput {
-                                        activation_dtype,
-                                        cache_dtype,
-                                        device_is_cuda,
-                                        device_is_metal: execution_devices
-                                            .iter()
-                                            .any(candle_core::Device::is_metal),
-                                        block_size,
-                                        query_lens: &query_lens,
-                                        full_context_lens: &full_context_lens,
-                                        max_pages_per_sequence,
-                                        requires_prefix_attention,
-                                        is_causal: !has_noncausal_mm_context,
-                                        causality_known: true,
-                                        has_custom_mask: if execution_devices
-                                            .iter()
-                                            .any(candle_core::Device::is_metal)
-                                        {
-                                            memory_plan.is_some_and(|plan| {
-                                                plan.custom_prefill_mask
-                                                    && !plan.metal_prefill_mask_is_structured
-                                            })
-                                        } else {
-                                            has_noncausal_mm_context
-                                                || memory_plan
-                                                    .is_some_and(|plan| plan.custom_prefill_mask)
-                                        },
-                                        has_noncausal_mm_context,
-                                        has_sliding_window,
-                                        fa3_num_sm_by_layer: &fa3_num_sm_by_layer,
-                                        hnd_by_layer: &_metal_hnd_by_layer,
-                                    },
-                                )
-                            } else {
-                                #[cfg(feature = "metal")]
-                                let decode_bytes = if execution_devices
-                                    .iter()
-                                    .any(candle_core::Device::is_metal)
-                                {
-                                    crate::paged_attention::plan::metal_decode_workspace(
-                                        model_metadata.as_deref().map(|model| {
-                                            model as &dyn crate::paged_attention::ModelConfigLike
-                                        }),
-                                        crate::paged_attention::plan::MetalDecodeWorkspaceInput {
-                                            activation_dtype,
-                                            cache_dtype,
-                                            block_size,
-                                            query_lens: &query_lens,
-                                            context_lens: &full_context_lens,
-                                            hnd_by_layer: &_metal_hnd_by_layer,
-                                            capacity_bound: false,
-                                            has_multimodal_ranges: has_noncausal_mm_context,
-                                            has_custom_mask: memory_plan.is_some_and(|plan| {
-                                                plan.custom_prefill_mask
-                                                    && !plan.metal_prefill_mask_is_structured
-                                            }),
-                                        },
-                                    )
-                                } else {
-                                    Ok(0)
-                                };
-                                #[cfg(not(feature = "metal"))]
-                                let decode_bytes: candle_core::Result<usize> = Ok(0);
-                                decode_bytes.map(|bytes| {
-                                    crate::paged_attention::plan::PromptPrefillWorkspace {
-                                        bytes,
-                                        gather_workspace_bytes: 0,
-                                        attention_is_complete: execution_devices
-                                            .iter()
-                                            .any(candle_core::Device::is_metal),
-                                    }
-                                })
-                            };
-                            let workspace = match workspace_result {
-                                Ok(workspace) => workspace,
-                                Err(err) => {
-                                    rejection = Some(PromptMemoryRejection::Internal(format!(
-                                            "Memory preflight could not establish a safe attention plan: {err}"
-                                        )));
-                                    break;
-                                }
-                            };
-                            let reserve = (|| -> candle_core::Result<_> {
-                                let pipeline = get_mut_arcmutex!(self.pipeline);
-                                let mut has_encoder_input = false;
-                                let mut encoder_activation_bytes = Some(0usize);
-                                let mut return_raw_logits = false;
-                                let mut cold = true;
-                                let mut final_chunk = true;
-                                for (index, seq) in output.scheduled.iter().enumerate() {
-                                    let seq = get_mut_arcmutex!(seq);
-                                    let seq_has_encoder_input = is_prompt
-                                        && (seq.has_images()
-                                            || seq.has_audios()
-                                            || seq.has_videos()
-                                            || !seq.mm_features().is_empty());
-                                    has_encoder_input |= seq_has_encoder_input;
-                                    if seq_has_encoder_input {
-                                        encoder_activation_bytes = match (
-                                            encoder_activation_bytes,
-                                            pipeline.encoder_activation_memory_bytes(&seq)?,
-                                        ) {
-                                            (Some(total), Some(bytes)) => {
-                                                Some(total.checked_add(bytes).ok_or_else(|| {
-                                                    candle_core::Error::msg(
-                                                        "encoder workspace size overflow",
-                                                    )
-                                                })?)
-                                            }
-                                            _ => None,
-                                        };
-                                    }
-                                    return_raw_logits |= seq.return_raw_logits;
-                                    cold &=
-                                        seq.num_computed_tokens() == 0 && seq.token_offset() == 0;
-                                    if let Some(chunk) = output
-                                        .scheduled_prompt_chunks
-                                        .as_ref()
-                                        .and_then(|chunks| chunks.get(index))
-                                    {
-                                        cold &= chunk.start == 0;
-                                        final_chunk &= chunk.end == seq.get_toks().len();
-                                    }
-                                }
-                                let packed = crate::pipeline::text_models_inputs_processor::uses_packed_prefill(
-                                    &query_lens,
-                                    is_prompt && supports_packed_prefill && device_is_cuda
-                                        && crate::using_flash_attn() && !return_raw_logits
-                                        && !has_encoder_input,
-                                    cold,
-                                    final_chunk,
-                                    !has_noncausal_mm_context,
-                                );
-                                let query_tokens =
-                                    memory::forward_query_tokens(&query_lens, packed)?;
-                                #[cfg(feature = "metal")]
-                                let attention_bytes = if is_prompt
-                                    && execution_devices.iter().any(candle_core::Device::is_metal)
-                                {
-                                    workspace.bytes.checked_add(
-                                        crate::paged_attention::plan::metal_cache_write_workspace(
-                                            model_metadata.as_deref().map(|model| {
-                                                model as &dyn crate::paged_attention::ModelConfigLike
-                                            }),
-                                            query_tokens,
-                                            activation_dtype,
-                                        )?,
-                                    )
-                                    .ok_or_else(|| {
-                                        candle_core::Error::msg(
-                                            "prompt attention workspace overflow",
-                                        )
-                                    })?
-                                } else {
-                                    workspace.bytes
-                                };
-                                #[cfg(not(feature = "metal"))]
-                                let attention_bytes = workspace.bytes;
-                                let extra_logit_tokens = memory::extra_logit_tokens(
-                                    query_tokens,
-                                    query_lens.len(),
-                                    is_prompt,
-                                    return_raw_logits,
-                                );
-                                let bytes = memory::forward_workspace_bytes(
-                                    memory_plan,
-                                    memory::ForwardMemoryShape {
-                                        query_tokens,
-                                        sequences: query_lens.len(),
-                                        has_encoder_input,
-                                        encoder_activation_bytes,
-                                        extra_logit_tokens,
-                                    },
-                                    attention_bytes,
-                                    workspace.attention_is_complete,
-                                )?;
-                                Ok((bytes, attention_bytes))
-                            })();
-                            let (workspace_bytes, attention_bytes) = match reserve {
-                                Ok(bytes) => bytes,
-                                Err(err) => {
-                                    rejection = Some(PromptMemoryRejection::Internal(format!("Memory preflight could not establish a forward reserve: {err}")));
-                                    break;
-                                }
-                            };
-                            #[cfg(feature = "cuda")]
-                            let mut cuda_status = if is_prompt {
-                                debug_assert!(cuda_decode_lease.is_none());
-                                self.maintain_cuda_prompt_memory(
-                                    &mut cuda_memory_pool,
-                                    workspace_bytes,
-                                )
-                            } else {
-                                memory::PromptMemoryStatus::default()
-                            };
-                            #[allow(unused_mut)]
-                            let (mut memory_status, mut metal_allocation_limits) =
-                                memory::enforce_memory_goal(
-                                    &execution_devices,
-                                    &primary_device,
-                                    memory_plan
-                                        .map_or(crate::MemoryGoal::Auto, |plan| plan.memory_goal),
-                                    workspace_bytes,
-                                    activation_dtype,
-                                );
-                            #[cfg(feature = "cuda")]
-                            {
-                                while is_prompt
-                                    && memory_status.transient_pressure
-                                    && !memory_status.maintenance_failed
-                                    && !memory_status.insufficient_total_capacity
-                                {
-                                    let reclaimed = get_mut_arcmutex!(self.pipeline)
-                                        .reclaim_cuda_graph_memory(
-                                            cuda_memory::GRAPH_RECLAIM_BATCH_SIZE,
-                                        );
-                                    if reclaimed == 0 {
-                                        break;
-                                    }
-                                    (memory_status, metal_allocation_limits) =
-                                        memory::enforce_memory_goal(
-                                            &execution_devices,
-                                            &primary_device,
-                                            memory_plan.map_or(crate::MemoryGoal::Auto, |plan| {
-                                                plan.memory_goal
-                                            }),
-                                            workspace_bytes,
-                                            activation_dtype,
-                                        );
-                                    cuda_status = self.maintain_cuda_prompt_memory(
-                                        &mut cuda_memory_pool,
-                                        workspace_bytes,
-                                    );
-                                }
-                                memory_status.transient_pressure |= cuda_status.transient_pressure;
-                                memory_status.insufficient_total_capacity |=
-                                    cuda_status.insufficient_total_capacity;
-                                memory_status.maintenance_failed |= cuda_status.maintenance_failed;
-                            }
-                            let previous = output.scheduled.len();
-                            match memory::prompt_batch_memory_action(
-                                if is_prompt { previous } else { 1 },
-                                memory_status.transient_pressure,
-                            ) {
-                                memory::PromptBatchMemoryAction::Proceed => {
-                                    prefix_gather_workspace_limit =
-                                        is_prompt.then_some(workspace.gather_workspace_bytes);
-                                    attention_memory = Some(crate::pipeline::text_models_inputs_processor::AttentionMemoryBudget {
-                                        workspace_bytes: attention_bytes,
-                                        metal_allocation_limits: (!metal_allocation_limits.is_empty()).then(|| Arc::new(metal_allocation_limits)),
-                                    });
-                                    break;
-                                }
-                                memory::PromptBatchMemoryAction::Retain(retained) => {
-                                    let first_omitted_id = output
-                                        .retain_prompt_prefix(retained)
-                                        .expect("reduced prompt batch must omit a tail");
-                                    get_mut_arcmutex!(self.scheduler)
-                                        .defer_prompt_tail(first_omitted_id);
-                                    memory::record_prompt_batch_reduction(previous, retained);
-                                }
-                                memory::PromptBatchMemoryAction::Reject => {
-                                    memory::log_forward_memory_pressure(
-                                        &execution_devices,
-                                        &primary_device,
-                                        memory_plan.map_or(crate::MemoryGoal::Auto, |plan| {
-                                            plan.memory_goal
-                                        }),
-                                        workspace_bytes,
-                                        activation_dtype,
-                                    );
-                                    #[cfg(feature = "cuda")]
-                                    if is_prompt && !memory_status.insufficient_total_capacity {
-                                        cuda_prompt_preemption_workspace = Some(
-                                            cuda_prompt_preemption_workspace
-                                                .map_or(workspace_bytes, |current| {
-                                                    current.component_max(workspace_bytes)
-                                                }),
-                                        );
-                                    }
-                                    rejection = Some(
-                                        if memory_status.insufficient_total_capacity {
-                                            PromptMemoryRejection::InvalidRequest(format!(
-                                                "Forward pass requires {workspace_bytes} of transient workspace and cannot fit after device-memory reclamation"
-                                            ))
-                                        } else if memory_status.maintenance_failed {
-                                            PromptMemoryRejection::Internal(
-                                                "Memory preflight could not verify allocator capacity"
-                                                    .to_string(),
-                                            )
-                                        } else {
-                                            PromptMemoryRejection::Unavailable(format!(
-                                                "Memory pressure prevented forward admission requiring {workspace_bytes} of transient workspace"
-                                            ))
-                                        },
-                                    );
-                                    break;
-                                }
-                            }
-                        }
-                        if let Some(rejection) = rejection {
-                            self.reject_prompt_for_memory(&output.scheduled, rejection)
-                                .await;
-                            continue 'lp;
-                        }
-                    }
-                    if !output.scheduled.is_empty() {
-                        for seq in output.scheduled.iter() {
-                            let mut seq_guard = get_mut_arcmutex!(seq);
-                            if is_prompt {
-                                seq_guard.start_prompt_timing();
-                            } else {
-                                seq_guard.start_completion_timing();
-                            }
-                        }
-
-                        let mut guards = output
-                            .scheduled
-                            .iter_mut()
-                            .map(|seq| seq.lock().unwrap())
-                            .collect::<Vec<_>>();
-
-                        let mut guards_mut =
-                            guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>();
-
-                        let decode_tokens = logger::DecodeTokenSnapshot::capture(
-                            guards_mut.iter().map(|seq| &**seq),
-                        );
-                        let staged_width =
-                            crate::speculative::staging::staged_batch_width(&guards_mut);
-                        let scheduler_visible_prompt_step =
-                            output.scheduled_prompt_chunks.is_some();
-                        let num_computed_before_step = guards_mut
-                            .iter()
-                            .map(|seq| seq.num_computed_tokens())
-                            .collect::<Vec<_>>();
-                        let scheduled_token_counts = guards_mut
-                            .iter()
-                            .enumerate()
-                            .map(|(seq_idx, seq)| {
-                                if is_prompt {
-                                    if let Some(chunk) = output
-                                        .scheduled_prompt_chunks
-                                        .as_ref()
-                                        .and_then(|chunks| chunks.get(seq_idx))
-                                    {
-                                        return chunk.end - chunk.start;
-                                    }
-                                }
-                                let staged = staged_width
-                                    .map(|_| seq.active_staged_speculative_len())
-                                    .unwrap_or_default();
-                                seq.num_uncomputed_tokens().saturating_add(staged)
-                            })
-                            .collect::<Vec<_>>();
-
-                        let res = {
-                            let mut pipeline = get_mut_arcmutex!(self.pipeline);
-
-                            if guards_mut.is_empty() {
-                                Ok(StepSubmission::ready(Duration::ZERO))
-                            } else {
-                                let pipeline_metadata = pipeline.get_metadata();
-                                let model_metadata = pipeline_metadata.model_metadata.as_ref();
-                                let max_paged_context_len = {
-                                    let kv_mgr = get_mut_arcmutex!(kv_cache_manager);
-                                    kv_mgr.num_gpu_blocks().saturating_sub(1).max(1) * block_size
-                                };
-                                let scheduled_prompt_chunks = output.scheduled_prompt_chunks.take();
-                                let prompt_chunk_attention_policy = scheduled_prompt_chunks
-                                    .as_ref()
-                                    .and_then(|chunks| chunks.first())
-                                    .map(|chunk| chunk.attention_policy)
-                                    .unwrap_or(
-                                        crate::paged_attention::block_hash::MultimodalAttentionPolicy::Causal,
-                                    );
-                                let is_final_prompt_chunk =
-                                    scheduled_prompt_chunks.as_ref().is_none_or(|chunks| {
-                                        chunks
-                                            .iter()
-                                            .zip(guards_mut.iter())
-                                            .all(|(chunk, seq)| chunk.end == seq.get_toks().len())
-                                    });
-                                let metadata = PagedAttentionMeta {
-                                    block_size,
-                                    max_paged_context_len,
-                                    sliding_window: pipeline_metadata.sliding_window,
-                                    attention_backend: model_metadata
-                                        .map(|metadata| metadata.attention_backend_kind())
-                                        .unwrap_or(
-                                            crate::paged_attention::AttentionBackendKind::Standard,
-                                        ),
-                                    has_flashinfer_decode_layers: model_metadata
-                                        .is_some_and(|metadata| {
-                                            (0..metadata.num_layers()).any(|layer_idx| {
-                                                metadata.attention_backend_kind_for_layer(layer_idx)
-                                                    == crate::paged_attention::AttentionBackendKind::FlashInfer
-                                            })
-                                        }),
-                                    prefill_attention_heads: model_metadata
-                                        .map(|metadata| metadata.num_attn_heads())
-                                        .unwrap_or(1)
-                                        .max(1),
-                                    prefill_key_value_heads: model_metadata
-                                        .map(|metadata| metadata.num_kv_heads())
-                                        .unwrap_or(1)
-                                        .max(1),
-                                    prefill_head_dim: model_metadata
-                                        .map(|metadata| metadata.k_head_dim())
-                                        .unwrap_or(1)
-                                        .max(1),
-                                    kv_cache_manager: kv_cache_manager.clone(),
-                                    prompt_chunk_size: output.prompt_chunk_size,
-                                    scheduled_prompt_chunks,
-                                    prompt_chunk_attention_policy,
-                                    has_noncausal_mm_context: false,
-                                    prefix_gather_workspace_limit,
-                                    attention_memory,
-                                    mm_prefix_ranges_by_seq_id: HashMap::new(),
-                                    full_mm_prefix_ranges_by_seq_id: HashMap::new(),
-                                    enable_packed_prefill: pipeline.supports_packed_prefill(),
-                                    is_final_prompt_chunk,
-                                    needs_logits: is_final_prompt_chunk
-                                        || guards_mut[0].return_raw_logits,
-                                };
-
-                                let return_raw_logits = guards_mut[0].return_raw_logits;
-                                assert!(
-                                    guards_mut
-                                        .iter()
-                                        .all(|seq| seq.return_raw_logits == return_raw_logits),
-                                    "All sequences must either return raw logits, or not."
-                                );
-
-                                if is_prompt {
-                                    crate::speculative::autotuner::note_interruption();
-                                }
-                                pipeline
-                                    .submit_step(
-                                        &mut guards_mut,
-                                        is_prompt,
-                                        return_raw_logits,
-                                        &mut *get_mut_arcmutex!(self.prefix_cacher),
-                                        self.disable_eos_stop,
-                                        rng.clone(),
-                                        CacheBackendMetadata::PagedAttention { metadata },
-                                        self.logger.as_ref(),
-                                        step_lookahead,
-                                    )
-                                    .await
-                            }
-                        };
-
-                        let submission = handle_pipeline_forward_error!(
-                            "step",
-                            res,
-                            &mut guards_mut,
-                            self.pipeline,
-                            'lp,
-                            self.prefix_cacher
-                        );
-                        drop(guards_mut);
-                        drop(guards);
-
-                        #[cfg(feature = "cuda")]
-                        if submission.cuda_has_tail() {
-                            let mut scheduler = get_mut_arcmutex!(self.scheduler);
-                            scheduler.record_decode_continuation();
-                        }
-
-                        let step_exec_time = match submission.into_inner() {
-                            StepSubmissionKind::Ready(completion) => completion.duration(),
-                            #[cfg(feature = "cuda")]
-                            StepSubmissionKind::Cuda(submission) => {
-                                let completion_result = self
-                                    .complete_cuda_step(
-                                        cuda_completion_worker.as_ref().expect(
-                                            "CUDA decode submission requires a completion worker",
-                                        ),
-                                        submission,
-                                    )
-                                    .await;
-                                let mut completion_guards = output
-                                    .scheduled
-                                    .iter()
-                                    .map(|seq| seq.lock().unwrap())
-                                    .collect::<Vec<_>>();
-                                let mut completion_guards_mut = completion_guards
-                                    .iter_mut()
-                                    .map(|seq| &mut **seq)
-                                    .collect::<Vec<_>>();
-                                let mut completion = handle_pipeline_forward_error!(
-                                    "CUDA decode completion",
-                                    completion_result,
-                                    &mut completion_guards_mut,
-                                    self.pipeline,
-                                    'lp,
-                                    self.prefix_cacher
-                                );
-
-                                for ((seq, before), scheduled) in completion_guards_mut
-                                    .iter_mut()
-                                    .zip(num_computed_before_step.iter().copied())
-                                    .zip(scheduled_token_counts.iter().copied())
-                                {
-                                    if seq.num_computed_tokens() == before {
-                                        seq.advance_num_computed_tokens(scheduled);
-                                    }
-                                }
-                                let commit_rows = completion_guards_mut
-                                    .iter()
-                                    .map(|seq| !seq.is_finished_paged_attn())
-                                    .collect::<Vec<_>>();
-                                let finish_result: candle_core::Result<_> = async {
-                                    let pipeline = get_mut_arcmutex!(self.pipeline);
-                                    if crate::pipeline::sampling::cuda_token_batch_will_finish(
-                                        &*pipeline,
-                                        &completion_guards_mut,
-                                        completion.token_ids(),
-                                        &commit_rows,
-                                        self.disable_eos_stop,
-                                    )? {
-                                        completion.synchronize_tail()?;
-                                    }
-                                    completion
-                                        .finish(
-                                            &*pipeline,
-                                            &mut completion_guards_mut,
-                                            &commit_rows,
-                                            &mut *get_mut_arcmutex!(self.prefix_cacher),
-                                            self.disable_eos_stop,
-                                        )
-                                        .await
-                                }
-                                .await;
-                                let completion = handle_pipeline_forward_error!(
-                                    "CUDA decode finalize",
-                                    finish_result,
-                                    &mut completion_guards_mut,
-                                    self.pipeline,
-                                    'lp,
-                                    self.prefix_cacher
-                                );
-                                let duration = run_start.elapsed();
-                                let tail = completion.into_cuda_tail();
-                                let any_live = completion_guards_mut
-                                    .iter()
-                                    .any(|seq| !seq.is_finished_paged_attn());
-                                drop(completion_guards_mut);
-                                drop(completion_guards);
-
-                                if let Some(tail) = tail {
-                                    if any_live {
-                                        let lease_result = CudaDecodeBatchLease::new(
-                                            output.scheduled.clone(),
-                                            tail,
-                                        );
-                                        let mut error_guards = output
-                                            .scheduled
-                                            .iter()
-                                            .map(|seq| seq.lock().unwrap())
-                                            .collect::<Vec<_>>();
-                                        let mut error_guards_mut = error_guards
-                                            .iter_mut()
-                                            .map(|seq| &mut **seq)
-                                            .collect::<Vec<_>>();
-                                        cuda_decode_lease = Some(handle_pipeline_forward_error!(
-                                            "CUDA decode lease",
-                                            lease_result,
-                                            &mut error_guards_mut,
-                                            self.pipeline,
-                                            'lp,
-                                            self.prefix_cacher
-                                        ));
-                                    } else {
-                                        let drain_result = tail.drain();
-                                        let mut error_guards = output
-                                            .scheduled
-                                            .iter()
-                                            .map(|seq| seq.lock().unwrap())
-                                            .collect::<Vec<_>>();
-                                        let mut error_guards_mut = error_guards
-                                            .iter_mut()
-                                            .map(|seq| &mut **seq)
-                                            .collect::<Vec<_>>();
-                                        handle_pipeline_forward_error!(
-                                            "CUDA decode tail drain",
-                                            drain_result,
-                                            &mut error_guards_mut,
-                                            self.pipeline,
-                                            'lp,
-                                            self.prefix_cacher
-                                        );
-                                        drop(error_guards_mut);
-                                        drop(error_guards);
-                                        self.account_cuda_decode_rows(&output.scheduled);
-                                    }
-                                }
-                                duration
-                            }
-                        };
-
-                        let mut guards = output
-                            .scheduled
-                            .iter()
-                            .map(|seq| seq.lock().unwrap())
-                            .collect::<Vec<_>>();
-                        let mut guards_mut =
-                            guards.iter_mut().map(|seq| &mut **seq).collect::<Vec<_>>();
-                        for ((seq, before), scheduled) in guards_mut
-                            .iter_mut()
-                            .zip(num_computed_before_step.iter().copied())
-                            .zip(scheduled_token_counts.iter().copied())
-                        {
-                            if seq.num_computed_tokens() == before {
-                                seq.advance_num_computed_tokens(scheduled);
-                            }
-                        }
-                        if is_prompt && !scheduler_visible_prompt_step {
-                            for seq in guards_mut.iter_mut() {
-                                if !seq.is_finished_paged_attn()
-                                    && matches!(
-                                        seq.sequence_stepping_type(),
-                                        SeqStepType::PromptAndDecode
-                                    )
-                                {
-                                    seq.set_state(SequenceState::RunningCompletion);
-                                }
-                            }
-                        }
-                        for seq in guards_mut.iter_mut() {
-                            if is_prompt {
-                                seq.finish_prompt_timing(step_exec_time);
-                            } else {
-                                seq.finish_completion_timing(step_exec_time);
-                            }
-                        }
-
-                        if is_prompt {
-                            self.logger
-                                .add_prefill_tokens_processed(scheduled_token_counts.iter().sum());
-                        } else {
-                            decode_tokens.record(&self.logger, guards_mut.iter().map(|seq| &**seq));
-                        }
-
-                        // Capture recurrent states at full-block boundaries so hybrid models can
-                        // reuse recurrent prefix state when paged prefix caching hits. Prompt steps
-                        // only: a chat template re-renders a finished assistant turn differently
-                        // than it was generated, so no later lookup can ever reach a key past the
-                        // end of a prompt. Chunked prefill snapshots inline instead, in
-                        // `snapshot_paged_recurrent_prefix`.
-                        {
-                            let mut pipeline = get_mut_arcmutex!(self.pipeline);
-                            let mut prefix_cacher = get_mut_arcmutex!(self.prefix_cacher);
-                            let prefix_policy = pipeline.speculative_prefix_checkpoint_policy();
-                            if is_prompt
-                                && !scheduler_visible_prompt_step
-                                && pipeline.cache().is_hybrid()
-                                && prefix_cacher.accepts_paged_recurrent_prefix()
-                            {
-                                for seq in guards_mut.iter() {
-                                    if matches!(
-                                        prefix_policy.replay_for(modality_signature(seq)),
-                                        crate::speculative::SpeculativePrefixReplay::Full
-                                    ) {
-                                        continue;
-                                    }
-                                    let encoded_len = seq.num_computed_tokens();
-                                    if encoded_len == 0 || encoded_len % block_size != 0 {
-                                        continue;
-                                    }
-
-                                    let num_blocks = encoded_len / block_size;
-                                    let adapter_key =
-                                        adapter_generation_key(seq.adapter_generation());
-                                    let block_hashes = compute_block_hashes(
-                                        seq.get_toks(),
-                                        block_size,
-                                        seq.mm_features(),
-                                        adapter_key.as_slice(),
-                                    );
-                                    if block_hashes.len() < num_blocks {
-                                        continue;
-                                    }
-                                    let owner = block_hashes[num_blocks - 1];
-                                    if prefix_cacher.has_paged_recurrent_owner(owner) {
-                                        continue;
-                                    }
-                                    if let Err(e) = pipeline.snapshot_paged_recurrent_prefix(
-                                        seq,
-                                        &mut prefix_cacher,
-                                        block_size,
-                                        encoded_len,
-                                    ) {
-                                        tracing::warn!(
-                                            "Failed snapshotting recurrent prefix for sequence {}: {e}",
-                                            seq.id()
-                                        );
-                                    }
-                                }
-                            }
-                        }
-
-                        if self.is_debug {
-                            let ms_from_last_run = run_start.elapsed().as_secs_f64();
-                            let total_len = guards.len();
-                            if total_len > 0 {
-                                let lengths = guards
-                                    .iter()
-                                    .map(|seq| seq.len().to_string())
-                                    .collect::<Vec<_>>()
-                                    .join(", ");
-
-                                let (prompt_lengths, completion_lengths) = if is_prompt {
-                                    (lengths, "".to_string())
-                                } else {
-                                    ("".to_string(), lengths)
-                                };
-
-                                tracing::info!(
-                                    "Prompt[{}] Completion[{}] - {}ms",
-                                    prompt_lengths,
-                                    completion_lengths,
-                                    ms_from_last_run * 1000.,
-                                );
-                            }
-                        }
-                    }
-                    #[cfg(feature = "cuda")]
-                    let reclaim_graphs = if is_prompt {
-                        cuda_memory_pool.after_prompt_step()
-                    } else {
-                        cuda_decode_lease.is_none() && cuda_memory_pool.after_decode_step()
+                    let step = PagedStepSetup {
+                        block_size,
+                        kv_cache_manager,
+                        is_prompt,
+                        step_lookahead,
                     };
-                    #[cfg(feature = "cuda")]
-                    if reclaim_graphs {
-                        debug_assert!(cuda_decode_lease.is_none());
-                        loop {
-                            let reclaimed = get_mut_arcmutex!(self.pipeline)
-                                .reclaim_cuda_graph_memory(cuda_memory::GRAPH_RECLAIM_BATCH_SIZE);
-                            if reclaimed == 0
-                                || !cuda_memory_pool
-                                    .after_graph_reclaim(memory::ForwardWorkspaceBytes::default())
-                                    .graph_pressure
-                            {
-                                break;
-                            }
-                        }
+                    if let StepFlow::Restart = self
+                        .run_paged_attention_step(
+                            &mut state,
+                            output,
+                            preempted_sequence_ids,
+                            step,
+                            run_start,
+                        )
+                        .await
+                    {
+                        continue 'lp;
                     }
                     scheduler = get_mut_arcmutex!(self.scheduler);
                 }
             }
 
             #[cfg(feature = "cuda")]
-            if cuda_decode_lease.is_none() {
+            if state.cuda_decode_lease.is_none() {
                 self.free_finished_scheduler_sequences(&mut *scheduler);
             }
             #[cfg(not(feature = "cuda"))]
             self.free_finished_scheduler_sequences(&mut *scheduler);
         }
+        // Decode graphs capture this thread's cuTile modules, so they go before the thread does.
+        get_mut_arcmutex!(self.pipeline).cleanup_cuda_graphs();
     }
 
     fn build_sequence_recognizer(

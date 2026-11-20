@@ -17,6 +17,9 @@ use crate::bitsandbytes::ffi;
 
 use super::{BnbDType, BnbQuantType};
 
+// 4-bit formats pack two values per byte, so one absmax block spans blocksize / 2 input bytes.
+const NIBBLES_PER_BYTE: usize = 2;
+
 struct DequantizeOp {
     n: usize,
     blocksize: usize,
@@ -154,15 +157,10 @@ impl DequantizeOp {
             }
             BnbQuantType::Fp4 => {
                 let mut out = vec![T::zero(); self.shape.elem_count()];
-                for block_idx in (0..self.n).step_by(self.blocksize) {
-                    let valid_items = if self.n > self.blocksize + block_idx {
-                        self.blocksize
-                    } else {
-                        self.n - block_idx
-                    };
-                    let block_end = block_idx + valid_items;
-
-                    let local_abs_max = absmax[block_idx / self.blocksize];
+                let block_bytes = self.blocksize / NIBBLES_PER_BYTE;
+                for block_idx in (0..self.n).step_by(block_bytes) {
+                    let block_end = (block_idx + block_bytes).min(self.n);
+                    let local_abs_max = absmax[block_idx / block_bytes];
 
                     for i in block_idx..block_end {
                         out[i * 2] =
@@ -177,15 +175,10 @@ impl DequantizeOp {
             }
             BnbQuantType::Nf4 => {
                 let mut out = vec![T::zero(); self.shape.elem_count()];
-                for block_idx in (0..self.n).step_by(self.blocksize) {
-                    let valid_items = if self.n > self.blocksize + block_idx {
-                        self.blocksize
-                    } else {
-                        self.n - block_idx
-                    };
-                    let block_end = block_idx + valid_items;
-
-                    let local_abs_max = absmax[block_idx / (self.blocksize / 2)];
+                let block_bytes = self.blocksize / NIBBLES_PER_BYTE;
+                for block_idx in (0..self.n).step_by(block_bytes) {
+                    let block_end = (block_idx + block_bytes).min(self.n);
+                    let local_abs_max = absmax[block_idx / block_bytes];
 
                     for i in block_idx..block_end {
                         out[i * 2] =
@@ -514,4 +507,56 @@ pub fn dequantize(
             out_ty,
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use candle_core::{Device, Tensor};
+
+    use super::{dequantize, BnbDType, BnbQuantType};
+
+    const BLOCKSIZE: usize = 4;
+    const ABSMAX: [f32; 3] = [1.0, 2.0, 4.0];
+
+    fn dequantize_cpu(byte: u8, quant_ty: BnbQuantType) -> Vec<f32> {
+        let dev = Device::Cpu;
+        let values = ABSMAX.len() * BLOCKSIZE;
+        let input = Tensor::from_vec(vec![byte; values / 2], values / 2, &dev).unwrap();
+        let absmax = Tensor::from_slice(&ABSMAX, ABSMAX.len(), &dev).unwrap();
+        let code = Tensor::zeros(16, candle_core::DType::F32, &dev).unwrap();
+        dequantize(
+            &input,
+            &absmax,
+            &code,
+            (values,).into(),
+            BLOCKSIZE,
+            quant_ty,
+            BnbDType::F32,
+        )
+        .unwrap()
+        .to_vec1::<f32>()
+        .unwrap()
+    }
+
+    #[test]
+    fn nf4_cpu_scales_each_block_by_its_own_absmax() {
+        let out = dequantize_cpu(0xFF, BnbQuantType::Nf4);
+        let expected: Vec<f32> = ABSMAX
+            .iter()
+            .flat_map(|absmax| [*absmax; BLOCKSIZE])
+            .collect();
+        assert_eq!(out, expected);
+    }
+
+    #[test]
+    fn fp4_cpu_scales_each_block_by_its_own_absmax() {
+        let out = dequantize_cpu(0x99, BnbQuantType::Fp4);
+        let unit = out[0];
+        assert_ne!(unit, 0.0);
+        let expected: Vec<f32> = ABSMAX
+            .iter()
+            .flat_map(|absmax| [unit * absmax; BLOCKSIZE])
+            .collect();
+        assert_eq!(out, expected);
+    }
 }

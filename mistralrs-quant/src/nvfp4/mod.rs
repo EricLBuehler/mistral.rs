@@ -10,12 +10,12 @@ use crate::{
 };
 
 mod csf;
-#[cfg(all(feature = "cuda", feature = "cutile"))]
+#[cfg(cuda_cutile)]
 mod decode;
 pub mod embedding;
 #[cfg(feature = "cuda")]
 pub(crate) mod portable;
-#[cfg(all(feature = "cuda", feature = "cutile"))]
+#[cfg(cuda_cutile)]
 pub(crate) mod prepare;
 
 #[cfg(all(feature = "cuda", feature = "cutile", has_nvfp4_cutlass_kernels))]
@@ -91,10 +91,10 @@ pub struct Nvfp4Layer {
     native: Option<cutlass::State>,
 }
 
-#[cfg(all(feature = "cuda", feature = "cutile"))]
+#[cfg(cuda_cutile)]
 const NVFP4_GROUP_FORMAT: &str = "nvfp4";
 
-#[cfg(all(feature = "cuda", feature = "cutile"))]
+#[cfg(cuda_cutile)]
 #[derive(Debug)]
 struct Nvfp4GroupOperand {
     weight: Tensor,
@@ -104,7 +104,7 @@ struct Nvfp4GroupOperand {
     bias: Option<Tensor>,
 }
 
-#[cfg(all(feature = "cuda", feature = "cutile"))]
+#[cfg(cuda_cutile)]
 impl Nvfp4GroupOperand {
     fn gemm_args(&self) -> crate::cutile::Nvfp4GemmArgs<'_> {
         crate::cutile::Nvfp4GemmArgs {
@@ -117,7 +117,7 @@ impl Nvfp4GroupOperand {
 }
 
 /// Expert stacks sharing one calibrated input quantize it once for every gathered projection.
-#[cfg(all(feature = "cuda", feature = "cutile"))]
+#[cfg(cuda_cutile)]
 fn forward_gather_group(
     x: &Tensor,
     entries: &[crate::GroupEntry<'_>],
@@ -322,7 +322,7 @@ impl Nvfp4Layer {
             #[cfg(all(feature = "cuda", feature = "cutile", has_nvfp4_cutlass_kernels))]
             native,
         };
-        #[cfg(all(feature = "cuda", feature = "cutile"))]
+        #[cfg(cuda_cutile)]
         if layer.parts.weight.device().is_cuda() && !layer.portable {
             crate::cutile::register_nvfp4_shape(layer.gemm_args(), layer.parts.dtype)?;
         }
@@ -678,7 +678,7 @@ impl Nvfp4Layer {
         )
     }
 
-    #[cfg(all(feature = "cuda", feature = "cutile"))]
+    #[cfg(cuda_cutile)]
     fn gemm_args(&self) -> crate::cutile::Nvfp4GemmArgs<'_> {
         crate::cutile::Nvfp4GemmArgs {
             weights: &self.parts.weight,
@@ -727,7 +727,7 @@ impl Nvfp4Layer {
         portable::gather(x, indices, self.portable_weights())
     }
 
-    #[cfg(all(feature = "cuda", feature = "cutile"))]
+    #[cfg(cuda_cutile)]
     fn forward_native(&self, x: &Tensor) -> Result<Tensor> {
         #[cfg(has_nvfp4_cutlass_kernels)]
         if let Some(native) = &self.native {
@@ -743,7 +743,7 @@ impl Nvfp4Layer {
         crate::cutile::cutile_nvfp4(x, self.gemm_args())
     }
 
-    #[cfg(all(feature = "cuda", feature = "cutile"))]
+    #[cfg(cuda_cutile)]
     fn forward_quantized_cuda(&self, activation: &crate::QuantizedActivation) -> Result<Tensor> {
         #[cfg(has_nvfp4_cutlass_kernels)]
         if let Some(native) = &self.native {
@@ -1073,7 +1073,7 @@ impl QuantMethod for Nvfp4Layer {
         x: &Tensor,
         kind: crate::GroupKind<'_>,
     ) -> Result<Option<crate::GroupMember>> {
-        #[cfg(all(feature = "cuda", feature = "cutile"))]
+        #[cfg(cuda_cutile)]
         {
             let crate::GroupKind::Gather { indices } = kind else {
                 return Ok(None);
@@ -1113,7 +1113,7 @@ impl QuantMethod for Nvfp4Layer {
                 }),
             }))
         }
-        #[cfg(not(all(feature = "cuda", feature = "cutile")))]
+        #[cfg(not(cuda_cutile))]
         {
             let _ = (x, kind);
             Ok(None)
@@ -1153,7 +1153,7 @@ impl QuantMethod for Nvfp4Layer {
                 "NVFP4 shared activation requires CUDA W4A4 with more than one input row"
             );
         }
-        #[cfg(all(feature = "cuda", feature = "cutile"))]
+        #[cfg(cuda_cutile)]
         {
             let source = x.contiguous()?;
             let k = source.dim(D::Minus1)?;
@@ -1169,7 +1169,7 @@ impl QuantMethod for Nvfp4Layer {
                 self.input_global_scale.unwrap(),
             )
         }
-        #[cfg(not(all(feature = "cuda", feature = "cutile")))]
+        #[cfg(not(cuda_cutile))]
         candle_core::bail!("NVFP4 shared activation requires CUDA and cuTile");
     }
 
@@ -1190,7 +1190,7 @@ impl QuantMethod for Nvfp4Layer {
         {
             candle_core::bail!("NVFP4 shared activation does not match this projection's calibration or input shape");
         }
-        #[cfg(all(feature = "cuda", feature = "cutile"))]
+        #[cfg(cuda_cutile)]
         {
             let output = self.forward_quantized_cuda(activation)?;
             let output = match &self.parts.bias {
@@ -1201,7 +1201,7 @@ impl QuantMethod for Nvfp4Layer {
             *shape.last_mut().unwrap() = self.parts.weight.dim(0)?;
             output.reshape(shape)
         }
-        #[cfg(not(all(feature = "cuda", feature = "cutile")))]
+        #[cfg(not(cuda_cutile))]
         candle_core::bail!("NVFP4 shared activation requires CUDA and cuTile");
     }
 
@@ -1210,7 +1210,7 @@ impl QuantMethod for Nvfp4Layer {
         input: crate::GluInput<'_>,
         activation: crate::GluActivationType,
     ) -> Result<Option<Tensor>> {
-        #[cfg(all(feature = "cuda", feature = "cutile"))]
+        #[cfg(cuda_cutile)]
         {
             let Some((gate, value)) = input.halves()? else {
                 return Ok(None);
@@ -1238,7 +1238,7 @@ impl QuantMethod for Nvfp4Layer {
             )?;
             self.forward_quantized(&quantized).map(Some)
         }
-        #[cfg(not(all(feature = "cuda", feature = "cutile")))]
+        #[cfg(not(cuda_cutile))]
         {
             let _ = (input, activation);
             Ok(None)

@@ -8,11 +8,11 @@ pub mod socket;
 use serde::{Deserialize, Serialize};
 
 const MISTRALRS_NO_NCCL: &str = "MISTRALRS_NO_NCCL";
-#[cfg(all(feature = "cuda", feature = "nccl"))]
+#[cfg(cuda_nccl)]
 const MIN_NCCL_WORLD_SIZE: usize = 2;
-#[cfg(all(feature = "cuda", feature = "nccl"))]
+#[cfg(cuda_nccl)]
 const MISTRALRS_MN_GLOBAL_WORLD_SIZE: &str = "MISTRALRS_MN_GLOBAL_WORLD_SIZE";
-#[cfg(all(feature = "cuda", feature = "nccl"))]
+#[cfg(cuda_nccl)]
 const MISTRALRS_MN_LOCAL_WORLD_SIZE: &str = "MISTRALRS_MN_LOCAL_WORLD_SIZE";
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -77,7 +77,7 @@ pub fn get_global_tp_size_from_devices() -> Result<usize> {
         Ok(config.world_size)
     }
 
-    #[cfg(all(feature = "cuda", feature = "nccl"))]
+    #[cfg(cuda_nccl)]
     {
         // In case we have manual set of TP size
         if let Ok(x) = std::env::var(MISTRALRS_MN_LOCAL_WORLD_SIZE) {
@@ -100,16 +100,16 @@ pub fn use_nccl() -> bool {
         return false;
     }
 
-    #[cfg(all(feature = "cuda", feature = "nccl"))]
+    #[cfg(cuda_nccl)]
     {
         nccl_world_size().is_some_and(|world_size| world_size >= MIN_NCCL_WORLD_SIZE)
     }
 
-    #[cfg(not(all(feature = "cuda", feature = "nccl")))]
+    #[cfg(not(cuda_nccl))]
     false
 }
 
-#[cfg(all(feature = "cuda", feature = "nccl"))]
+#[cfg(cuda_nccl)]
 fn nccl_world_size() -> Option<usize> {
     if let Some(global_world_size) = parse_env_usize(MISTRALRS_MN_GLOBAL_WORLD_SIZE) {
         return Some(global_world_size);
@@ -122,7 +122,7 @@ fn nccl_world_size() -> Option<usize> {
         .map(|count| count as usize)
 }
 
-#[cfg(all(feature = "cuda", feature = "nccl"))]
+#[cfg(cuda_nccl)]
 fn parse_env_usize(name: &str) -> Option<usize> {
     std::env::var(name).ok().map(|value| {
         value
@@ -138,7 +138,7 @@ pub fn use_ring() -> bool {
 // Unified Comm enum
 #[derive(Debug)]
 pub enum Comm {
-    #[cfg(all(feature = "cuda", feature = "nccl"))]
+    #[cfg(cuda_nccl)]
     Nccl(nccl::NcclComm),
     #[cfg(feature = "ring")]
     Ring(ring::RingComm),
@@ -152,7 +152,7 @@ impl Comm {
         rank: usize,
         world_size: usize,
     ) -> Result<Self> {
-        #[cfg(all(feature = "cuda", feature = "nccl"))]
+        #[cfg(cuda_nccl)]
         if use_nccl() {
             return Ok(Self::Nccl(nccl::NcclComm::from_device(
                 id, dev, rank, world_size,
@@ -174,7 +174,7 @@ impl Comm {
 
     pub fn rank(&self) -> usize {
         match self {
-            #[cfg(all(feature = "cuda", feature = "nccl"))]
+            #[cfg(cuda_nccl)]
             Self::Nccl(comm) => comm.rank(),
             #[cfg(feature = "ring")]
             Self::Ring(comm) => comm.rank(),
@@ -184,7 +184,7 @@ impl Comm {
 
     pub fn world_size(&self) -> usize {
         match self {
-            #[cfg(all(feature = "cuda", feature = "nccl"))]
+            #[cfg(cuda_nccl)]
             Self::Nccl(comm) => comm.world_size(),
             #[cfg(feature = "ring")]
             Self::Ring(comm) => comm.world_size(),
@@ -196,14 +196,14 @@ impl Comm {
 // Unified Id enum
 #[derive(Debug, Clone, Copy)]
 pub enum Id {
-    #[cfg(all(feature = "cuda", feature = "nccl"))]
+    #[cfg(cuda_nccl)]
     Nccl(cudarc::nccl::Id),
     Dummy,
 }
 
 impl Id {
     pub fn new() -> Self {
-        #[cfg(all(feature = "cuda", feature = "nccl"))]
+        #[cfg(cuda_nccl)]
         if use_nccl() {
             let id = cudarc::nccl::Id::new().expect("Failed to create `Id`.");
             return Self::Nccl(id);
@@ -212,7 +212,7 @@ impl Id {
     }
 
     pub fn uninit(_internal: [::core::ffi::c_char; 128usize]) -> Self {
-        #[cfg(all(feature = "cuda", feature = "nccl"))]
+        #[cfg(cuda_nccl)]
         if use_nccl() {
             return Self::Nccl(cudarc::nccl::Id::uninit(_internal));
         }
@@ -221,7 +221,7 @@ impl Id {
 
     pub fn internal(&self) -> &[::core::ffi::c_char; 128usize] {
         match self {
-            #[cfg(all(feature = "cuda", feature = "nccl"))]
+            #[cfg(cuda_nccl)]
             Self::Nccl(id) => id.internal(),
             Self::Dummy => {
                 static ZEROED_ID: [::core::ffi::c_char; 128] = [0; 128];
@@ -237,11 +237,11 @@ impl Default for Id {
     }
 }
 
-#[cfg(all(feature = "cuda", feature = "nccl"))]
+#[cfg(cuda_nccl)]
 use candle_core::cuda::cudarc;
 
 // NCCL backend implementation
-#[cfg(all(feature = "cuda", feature = "nccl"))]
+#[cfg(cuda_nccl)]
 mod nccl {
     use candle_core::{cuda::cudarc, Device, Result};
 
@@ -389,7 +389,7 @@ mod dummy {
 // Unified operations that work with the Comm enum
 #[derive(Clone, Debug)]
 pub struct SumAllReduce {
-    #[cfg(all(feature = "cuda", feature = "nccl"))]
+    #[cfg(cuda_nccl)]
     nccl: Option<nccl_ops::SumAllReduce>,
     #[cfg(feature = "ring")]
     ring: Option<ring_ops::SumAllReduce>,
@@ -401,9 +401,9 @@ impl SumAllReduce {
     pub fn new(comm: &std::sync::Arc<Comm>) -> Self {
         let world_size = comm.world_size();
         match &**comm {
-            #[cfg(all(feature = "cuda", feature = "nccl"))]
+            #[cfg(cuda_nccl)]
             Comm::Nccl(_) => Self {
-                #[cfg(all(feature = "cuda", feature = "nccl"))]
+                #[cfg(cuda_nccl)]
                 nccl: Some(nccl_ops::SumAllReduce::new(comm)),
                 #[cfg(feature = "ring")]
                 ring: None,
@@ -412,7 +412,7 @@ impl SumAllReduce {
             },
             #[cfg(feature = "ring")]
             Comm::Ring(_) => Self {
-                #[cfg(all(feature = "cuda", feature = "nccl"))]
+                #[cfg(cuda_nccl)]
                 nccl: None,
                 #[cfg(feature = "ring")]
                 ring: Some(ring_ops::SumAllReduce::new(comm)),
@@ -420,7 +420,7 @@ impl SumAllReduce {
                 world_size,
             },
             Comm::Dummy(_) => Self {
-                #[cfg(all(feature = "cuda", feature = "nccl"))]
+                #[cfg(cuda_nccl)]
                 nccl: None,
                 #[cfg(feature = "ring")]
                 ring: None,
@@ -438,7 +438,7 @@ impl SumAllReduce {
         if self.is_noop() {
             return Ok(xs.clone());
         }
-        #[cfg(all(feature = "cuda", feature = "nccl"))]
+        #[cfg(cuda_nccl)]
         if let Some(ref nccl) = self.nccl {
             return nccl.sum_all_reduce(xs);
         }
@@ -455,7 +455,7 @@ impl SumAllReduce {
 
 #[derive(Clone, Debug)]
 pub struct AllGather {
-    #[cfg(all(feature = "cuda", feature = "nccl"))]
+    #[cfg(cuda_nccl)]
     nccl: Option<nccl_ops::AllGather>,
     #[cfg(feature = "ring")]
     ring: Option<ring_ops::AllGather>,
@@ -465,9 +465,9 @@ pub struct AllGather {
 impl AllGather {
     pub fn new(comm: &std::sync::Arc<Comm>, dim: usize) -> Self {
         match &**comm {
-            #[cfg(all(feature = "cuda", feature = "nccl"))]
+            #[cfg(cuda_nccl)]
             Comm::Nccl(_) => Self {
-                #[cfg(all(feature = "cuda", feature = "nccl"))]
+                #[cfg(cuda_nccl)]
                 nccl: Some(nccl_ops::AllGather::new(comm, dim)),
                 #[cfg(feature = "ring")]
                 ring: None,
@@ -475,14 +475,14 @@ impl AllGather {
             },
             #[cfg(feature = "ring")]
             Comm::Ring(_) => Self {
-                #[cfg(all(feature = "cuda", feature = "nccl"))]
+                #[cfg(cuda_nccl)]
                 nccl: None,
                 #[cfg(feature = "ring")]
                 ring: Some(ring_ops::AllGather::new(comm, dim)),
                 dummy: None,
             },
             Comm::Dummy(_) => Self {
-                #[cfg(all(feature = "cuda", feature = "nccl"))]
+                #[cfg(cuda_nccl)]
                 nccl: None,
                 #[cfg(feature = "ring")]
                 ring: None,
@@ -492,7 +492,7 @@ impl AllGather {
     }
 
     pub fn all_gather(&self, xs: &candle_core::Tensor) -> Result<candle_core::Tensor> {
-        #[cfg(all(feature = "cuda", feature = "nccl"))]
+        #[cfg(cuda_nccl)]
         if let Some(ref nccl) = self.nccl {
             return nccl.all_gather(xs);
         }
@@ -508,7 +508,7 @@ impl AllGather {
 }
 
 // Implementation modules for each backend
-#[cfg(all(feature = "cuda", feature = "nccl"))]
+#[cfg(cuda_nccl)]
 mod nccl_ops {
     use std::{fmt::Debug, sync::Arc};
 

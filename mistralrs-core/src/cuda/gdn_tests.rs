@@ -164,7 +164,6 @@ fn run_case(case: RecurrenceCase, dev: &Device) -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires a CUDA device"]
 fn warp_recurrence_matches_scalar_cuda() -> Result<()> {
     let dev = Device::new_cuda(0)?;
     for case in [
@@ -904,7 +903,6 @@ fn flashinfer_sm90_prefill_matches_sequential_recurrence() -> Result<()> {
 
 #[cfg(feature = "cutile")]
 #[test]
-#[ignore = "requires a CUDA device"]
 fn cutile_prefill_matches_sequential_recurrence() -> Result<()> {
     let dev = Device::new_cuda(0)?;
     for case in [
@@ -1137,7 +1135,6 @@ fn run_speculative_state_commit_case(
 }
 
 #[test]
-#[ignore = "requires a CUDA device"]
 fn speculative_state_commit_matches_prefix_replay_cuda() -> Result<()> {
     let dev = Device::new_cuda(0)?;
     for state_dtype in [DType::F32, DType::BF16, DType::F16] {
@@ -1148,7 +1145,6 @@ fn speculative_state_commit_matches_prefix_replay_cuda() -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires a CUDA device"]
 fn speculative_checkpoint_kernels_match_serial_cuda() -> Result<()> {
     let dev = Device::new_cuda(0)?;
     let batch_size = 3;
@@ -2193,7 +2189,6 @@ fn run_speculative_transition_commit_case(
 }
 
 #[test]
-#[ignore = "requires a CUDA device"]
 fn speculative_transition_commit_matches_prefix_replay_cuda() -> Result<()> {
     let dev = Device::new_cuda(0)?;
     for seq_len in [4, 5, 8] {
@@ -2215,7 +2210,6 @@ fn speculative_transition_commit_matches_prefix_replay_cuda() -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires a CUDA device"]
 fn pending_transition_publish_is_slot_indexed_cuda() -> Result<()> {
     const CAPACITY: usize = 6;
     const MAX_ROWS: usize = 8;
@@ -2327,7 +2321,6 @@ fn causal_conv_reference(
 }
 
 #[test]
-#[ignore = "requires a CUDA device"]
 fn causal_conv1d_strided_nonzero_offset_matches_reference_cuda() -> Result<()> {
     let dev = Device::new_cuda(0)?;
     let batch_size = 3;
@@ -2407,7 +2400,6 @@ fn causal_conv1d_strided_nonzero_offset_matches_reference_cuda() -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires a CUDA device"]
 fn rmsnorm_gated_strided_nonzero_offset_matches_reference_cuda() -> Result<()> {
     let dev = Device::new_cuda(0)?;
     let (batch_size, seq_len, heads, hidden_dim) = (3, 2, 5, 17);
@@ -2553,7 +2545,6 @@ fn assert_gdn_quantized_matches_bf16(
 }
 
 #[test]
-#[ignore = "requires a CUDA device"]
 fn rmsnorm_gated_quantized_matches_bf16_rounding_cuda() -> Result<()> {
     use std::num::NonZeroUsize;
 
@@ -2642,7 +2633,6 @@ fn assert_zero(label: &str, tensor: &Tensor) -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires a CUDA device"]
 fn pooled_causal_conv_padding_rows_are_zero_and_stateless_cuda() -> Result<()> {
     let dev = Device::new_cuda(0)?;
     let capacity = 5usize;
@@ -2733,7 +2723,6 @@ fn pooled_causal_conv_padding_rows_are_zero_and_stateless_cuda() -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires a CUDA device"]
 fn pooled_decomposed_recurrence_padding_rows_are_zero_and_stateless_cuda() -> Result<()> {
     let dev = Device::new_cuda(0)?;
     let capacity = 5usize;
@@ -3010,7 +2999,6 @@ fn run_fused_decode_padding_case(
 }
 
 #[test]
-#[ignore = "requires a CUDA device"]
 fn fused_decode_dispatches_zero_padding_without_touching_state_cuda() -> Result<()> {
     let dev = Device::new_cuda(0)?;
     run_fused_decode_padding_case(

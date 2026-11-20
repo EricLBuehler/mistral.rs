@@ -586,7 +586,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a CUDA device"]
     fn engine_retention_preserves_maintenance_and_last_owner_restoration() -> anyhow::Result<()> {
         let device = Device::new_cuda(0)?;
         let alias = Device::new_cuda(0)?;

@@ -6,6 +6,12 @@ use mistralrs_quant::QuantizedActivation;
 #[cfg(any(feature = "cuda", test))]
 use mistralrs_quant::{ActivationQuantizationScheme, ActivationScaleLayout};
 
+pub(crate) use super::abi::{
+    GDN_CHANNEL_BLOCK_SIZE, GDN_DEFERRED_STATE_DEPTH, GDN_SPEC_CHECKPOINT_MAX_CONV_WIDTH,
+    GDN_SPEC_CHECKPOINT_MAX_K, GDN_SPEC_COMMIT_MAX_K, GDN_SPEC_FUSED_MAX_TOKENS,
+};
+#[cfg(feature = "cuda")]
+use super::abi::{GDN_STATE_DTYPE_BF16, GDN_STATE_DTYPE_F16, GDN_STATE_DTYPE_F32};
 use crate::gdn::GdnGateActivation;
 use crate::kv_cache::RecurrentStateLayout;
 #[cfg(feature = "cuda")]
@@ -44,20 +50,13 @@ const GDN_DECODE_PIPELINED_AMORTIZED_WAVES: usize = 8;
 const GDN_DECODE_VECTOR_ALIGNMENT: usize = 16;
 #[cfg(feature = "cuda")]
 const GDN_DECODE_INPUT_ALIGNMENT: usize = 8;
-pub(crate) const GDN_SPEC_COMMIT_MAX_K: usize = 256;
-pub(crate) const GDN_SPEC_CHECKPOINT_MAX_CONV_WIDTH: usize = 16;
-pub(crate) const GDN_SPEC_CHECKPOINT_MAX_K: usize = 256;
-pub(crate) const GDN_SPEC_FUSED_MAX_TOKENS: usize = 8;
-pub(crate) const GDN_CHANNEL_BLOCK_SIZE: usize = 256;
 #[cfg(any(feature = "cuda", test))]
 pub(crate) const GDN_DEFERRED_DECODE_MIN_BATCH: usize = 8;
 #[cfg(any(feature = "cuda", test))]
 const GDN_DEFERRED_DECODE_OCCUPANCY_MIN_BATCH: usize = 2;
 #[cfg(any(feature = "cuda", test))]
 const GDN_DEFERRED_DECODE_MIN_SM_WAVES: usize = 2;
-pub(crate) const GDN_DEFERRED_STATE_DEPTH: usize = 4;
-#[cfg(feature = "cuda")]
-#[allow(dead_code)]
+#[cfg(all(feature = "cuda", test))]
 const GDN_TRANSITION_STAGE_POINTER_SEGMENTS: usize = 10;
 #[cfg(feature = "cuda")]
 const GDN_TRANSITION_PUBLISH_POINTER_SEGMENTS: usize = 3;
@@ -77,12 +76,6 @@ const GDN_MMA_INPUT_COUNT: usize = 5;
 const GDN_MMA_FUSED_BF16_INPUTS: usize = 3;
 #[cfg(feature = "cuda")]
 const GDN_PREFILL_KERNEL_ENV: &str = "MISTRALRS_GDN_PREFILL_KERNEL";
-#[cfg(feature = "cuda")]
-const GDN_STATE_DTYPE_F16: i32 = 0;
-#[cfg(feature = "cuda")]
-const GDN_STATE_DTYPE_BF16: i32 = 1;
-#[cfg(feature = "cuda")]
-const GDN_STATE_DTYPE_F32: i32 = 2;
 #[cfg(all(feature = "cuda", has_flashinfer_gdn_sm90_kernel))]
 const FLASHINFER_GDN_MIN_SEQ_LEN: usize = 32;
 
@@ -1361,7 +1354,6 @@ enum RecurrenceKernel {
     ValueMajorWarp4,
     ValueMajorWarp8,
     Chunked,
-    #[allow(dead_code)]
     ValueMajorChunked,
 }
 
@@ -1444,11 +1436,7 @@ fn launch_recurrence(
                     stream,
                 )
             };
-            if status != 0 {
-                candle::bail!(
-                    "vmajor_grouped_warp_gated_delta_rule_recurrence failed with status {status}"
-                );
-            }
+            crate::cuda::check_launch("vmajor_grouped_warp_gated_delta_rule_recurrence", status)?;
             return Ok(());
         }
         if matches!(kernel, RecurrenceKernel::ValueMajorChunked) {
@@ -1471,11 +1459,7 @@ fn launch_recurrence(
                     stream,
                 )
             };
-            if status != 0 {
-                candle::bail!(
-                    "vmajor_chunked_gated_delta_rule_recurrence failed with status {status}"
-                );
-            }
+            crate::cuda::check_launch("vmajor_chunked_gated_delta_rule_recurrence", status)?;
             return Ok(());
         }
         let launcher = match kernel {
@@ -1549,8 +1533,7 @@ pub fn warp_gated_delta_rule_recurrence_cuda(
     launch_recurrence(RecurrenceKernel::Warp, inputs, state, slots)
 }
 
-#[cfg(feature = "cuda")]
-#[allow(dead_code)]
+#[cfg(all(feature = "cuda", test))]
 pub fn vmajor_warp_gated_delta_rule_recurrence_cuda(
     inputs: RecurrenceInputs<'_>,
     state: &mut Tensor,
@@ -1625,78 +1608,6 @@ pub fn vmajor_prefill_gated_delta_rule_recurrence_cuda(
         activation_dtype,
         requested,
     )
-}
-
-/// Runs chunked prefill against value-major K=V=128 state.
-#[cfg(feature = "cuda")]
-#[allow(dead_code)]
-pub fn vmajor_chunked_gated_delta_rule_recurrence_cuda(
-    inputs: RecurrenceInputs<'_>,
-    state: &mut Tensor,
-    slots: GdnStateSlots<'_>,
-) -> Result<Tensor> {
-    launch_recurrence(RecurrenceKernel::ValueMajorChunked, inputs, state, slots)
-}
-
-#[cfg(not(feature = "cuda"))]
-#[allow(unused)]
-pub fn gated_delta_rule_recurrence_cuda(
-    _inputs: RecurrenceInputs<'_>,
-    _state: &mut Tensor,
-    _slots: GdnStateSlots<'_>,
-) -> Result<Tensor> {
-    candle_core::bail!("gated_delta_rule_recurrence_cuda requires the cuda feature")
-}
-
-#[cfg(not(feature = "cuda"))]
-#[allow(unused)]
-pub fn chunked_gated_delta_rule_recurrence_cuda(
-    _inputs: RecurrenceInputs<'_>,
-    _state: &mut Tensor,
-    _slots: GdnStateSlots<'_>,
-) -> Result<Tensor> {
-    candle_core::bail!("chunked_gated_delta_rule_recurrence_cuda requires the cuda feature")
-}
-
-#[cfg(not(feature = "cuda"))]
-#[allow(unused)]
-pub fn warp_gated_delta_rule_recurrence_cuda(
-    _inputs: RecurrenceInputs<'_>,
-    _state: &mut Tensor,
-    _slots: GdnStateSlots<'_>,
-) -> Result<Tensor> {
-    candle_core::bail!("warp_gated_delta_rule_recurrence_cuda requires the cuda feature")
-}
-
-#[cfg(not(feature = "cuda"))]
-#[allow(unused)]
-pub fn vmajor_warp_gated_delta_rule_recurrence_cuda(
-    _inputs: RecurrenceInputs<'_>,
-    _state: &mut Tensor,
-    _slots: GdnStateSlots<'_>,
-) -> Result<Tensor> {
-    candle_core::bail!("vmajor_warp_gated_delta_rule_recurrence_cuda requires the cuda feature")
-}
-
-#[cfg(not(feature = "cuda"))]
-#[allow(unused)]
-pub fn vmajor_prefill_gated_delta_rule_recurrence_cuda(
-    _inputs: RecurrenceInputs<'_>,
-    _state: &mut Tensor,
-    _slots: GdnStateSlots<'_>,
-    _activation_dtype: DType,
-) -> Result<Tensor> {
-    candle_core::bail!("vmajor_prefill_gated_delta_rule_recurrence_cuda requires the cuda feature")
-}
-
-#[cfg(not(feature = "cuda"))]
-#[allow(unused)]
-pub fn vmajor_chunked_gated_delta_rule_recurrence_cuda(
-    _inputs: RecurrenceInputs<'_>,
-    _state: &mut Tensor,
-    _slots: GdnStateSlots<'_>,
-) -> Result<Tensor> {
-    candle_core::bail!("vmajor_chunked_gated_delta_rule_recurrence_cuda requires the cuda feature")
 }
 
 /// CUDA-accelerated causal conv1d (both update and full paths).
@@ -1874,19 +1785,6 @@ pub fn causal_conv1d_cuda(
     }
 }
 
-#[cfg(not(feature = "cuda"))]
-#[allow(unused)]
-pub fn causal_conv1d_cuda(
-    _x: &Tensor,
-    _weight: &Tensor,
-    _conv_state: &Tensor,
-    _kernel_size: usize,
-    _is_update: bool,
-    _slots: GdnStateSlots<'_>,
-) -> Result<(Tensor, Tensor)> {
-    candle_core::bail!("causal_conv1d_cuda requires the cuda feature")
-}
-
 #[cfg(feature = "cuda")]
 #[allow(clippy::too_many_arguments)]
 pub fn prepare_recurrence_inputs_cuda(
@@ -2036,32 +1934,36 @@ pub fn prepare_recurrence_inputs_cuda_typed(
                 let q_buf = alloc_rows!($out, bh * token_stride * head_k_dim);
                 let k_buf = alloc_rows!($out, bh * token_stride * head_k_dim);
                 let v_buf = alloc_rows!($out, bh * token_stride * head_v_dim);
-                unsafe {
+                crate::cuda::check_launch("gdn_prepare_recurrence", unsafe {
                     crate::cuda::ffi::gdn_prepare_recurrence(
-                        mixed_s.slice(mixed_offset..).device_ptr(mixed_s.stream()).0
-                            as *const c_void,
-                        b_s.slice(b_offset..).device_ptr(b_s.stream()).0 as *const c_void,
-                        a_s.slice(a_offset..).device_ptr(a_s.stream()).0 as *const c_void,
-                        alog_s.slice(alog_offset..).device_ptr(alog_s.stream()).0 as *const f32,
-                        dtb_s.slice(dtb_offset..).device_ptr(dtb_s.stream()).0 as *const f32,
-                        q_buf.device_ptr(q_buf.stream()).0 as *mut c_void,
-                        k_buf.device_ptr(k_buf.stream()).0 as *mut c_void,
-                        v_buf.device_ptr(v_buf.stream()).0 as *mut c_void,
-                        g_buf.device_ptr(g_buf.stream()).0 as *mut f32,
-                        beta_buf.device_ptr(beta_buf.stream()).0 as *mut f32,
-                        batch_size as i32,
-                        seq_len as i32,
-                        token_stride as i32,
-                        num_k_heads as i32,
-                        num_v_heads as i32,
-                        head_k_dim as i32,
-                        head_v_dim as i32,
-                        i32::from(tiled_v_heads),
-                        dtype_code,
-                        i32::from(out_bf16),
-                        stream,
-                    );
-                }
+                        &crate::cuda::abi::GdnPrepareRecurrenceParams {
+                            mixed_qkv: mixed_s.slice(mixed_offset..).device_ptr(mixed_s.stream()).0
+                                as *const c_void,
+                            b: b_s.slice(b_offset..).device_ptr(b_s.stream()).0 as *const c_void,
+                            a: a_s.slice(a_offset..).device_ptr(a_s.stream()).0 as *const c_void,
+                            a_log: alog_s.slice(alog_offset..).device_ptr(alog_s.stream()).0
+                                as *const f32,
+                            dt_bias: dtb_s.slice(dtb_offset..).device_ptr(dtb_s.stream()).0
+                                as *const f32,
+                            q_out: q_buf.device_ptr(q_buf.stream()).0 as *mut c_void,
+                            k_out: k_buf.device_ptr(k_buf.stream()).0 as *mut c_void,
+                            v_out: v_buf.device_ptr(v_buf.stream()).0 as *mut c_void,
+                            g_out: g_buf.device_ptr(g_buf.stream()).0 as *mut f32,
+                            beta_out: beta_buf.device_ptr(beta_buf.stream()).0 as *mut f32,
+                            batch_size: batch_size as i32,
+                            seq_len: seq_len as i32,
+                            token_stride: token_stride as i32,
+                            num_k_heads: num_k_heads as i32,
+                            num_v_heads: num_v_heads as i32,
+                            head_k_dim: head_k_dim as i32,
+                            head_v_dim: head_v_dim as i32,
+                            tiled_v_heads: i32::from(tiled_v_heads),
+                            dtype: dtype_code,
+                            out_bf16: i32::from(out_bf16),
+                            stream,
+                        },
+                    )
+                })?;
                 let wrap = |buf, last_dim| {
                     Tensor::from((
                         candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(
@@ -2927,10 +2829,10 @@ fn mma_fused_prefill(launch: FusedPrefillRecurrence<'_>) -> Result<FusedPrefillO
     .map(FusedPrefillOutput::TokenMajor)
 }
 
-#[cfg(all(feature = "cuda", feature = "cutile"))]
+#[cfg(cuda_cutile)]
 const CUTILE_GDN_MIN_SEQ_LEN: usize = 64;
 
-#[cfg(all(feature = "cuda", feature = "cutile"))]
+#[cfg(cuda_cutile)]
 fn describe_prefill_launch(launch: &FusedPrefillRecurrence<'_>) -> String {
     let describe = |tensor: &Tensor| {
         format!(
@@ -2963,7 +2865,7 @@ fn describe_prefill_launch(launch: &FusedPrefillRecurrence<'_>) -> String {
     )
 }
 
-#[cfg(all(feature = "cuda", feature = "cutile"))]
+#[cfg(cuda_cutile)]
 fn cutile_prefill_supported(launch: &FusedPrefillRecurrence<'_>) -> Result<bool> {
     if launch.batch_size == 0
         || launch.num_k_heads == 0
@@ -2995,7 +2897,7 @@ fn cutile_prefill_supported(launch: &FusedPrefillRecurrence<'_>) -> Result<bool>
     ))
 }
 
-#[cfg(all(feature = "cuda", feature = "cutile"))]
+#[cfg(cuda_cutile)]
 fn cutile_prefill(launch: FusedPrefillRecurrence<'_>) -> Result<FusedPrefillOutput> {
     let (_, seq_len, _) = launch.mixed_qkv.dims3()?;
     // whole chunks keep every cuTile shape and stride in one divisibility class (one JIT variant)
@@ -3051,14 +2953,6 @@ fn flashinfer_sm90_prefill_dispatch(
         let _ = launch;
         candle_core::bail!("FlashInfer GDN SM90 prefill was not built for this target")
     }
-}
-
-#[cfg(not(feature = "cuda"))]
-#[allow(unused)]
-pub fn try_fused_vmajor_prefill_recurrence_cuda(
-    _launch: FusedPrefillRecurrence<'_>,
-) -> Result<Option<FusedPrefillOutput>> {
-    candle_core::bail!("try_fused_vmajor_prefill_recurrence_cuda requires the cuda feature")
 }
 
 #[cfg(feature = "cuda")]
@@ -3228,32 +3122,36 @@ fn fused_decode_recurrence_cuda_impl(launch: GdnDecodeLaunch<'_>) -> Result<Tens
         let stream = dev.cuda_stream().cu_stream() as i64;
 
         with_slot_indices(slots, |slot_ptr, _| {
-            unsafe {
+            crate::cuda::check_launch("gdn_decode_recurrence", unsafe {
                 crate::cuda::ffi::gdn_decode_recurrence(
-                    mixed_ptr,
-                    b_s.slice(b_offset..).device_ptr(b_s.stream()).0 as *const c_void,
-                    a_s.slice(a_offset..).device_ptr(a_s.stream()).0 as *const c_void,
-                    alog_s.slice(alog_offset..).device_ptr(alog_s.stream()).0 as *const f32,
-                    dtb_s.slice(dtb_offset..).device_ptr(dtb_s.stream()).0 as *const f32,
-                    state_ptr,
-                    output_buf.device_ptr(output_buf.stream()).0 as *mut c_void,
-                    batch_size as i32,
-                    num_k_heads as i32,
-                    num_v_heads as i32,
-                    head_k_dim as i32,
-                    head_v_dim as i32,
-                    i32::from(tiled_v_heads),
-                    b_batch_stride as i64,
-                    b_head_stride as i64,
-                    a_batch_stride as i64,
-                    a_head_stride as i64,
-                    slot_ptr,
-                    decode_kernel as i32,
-                    dtype_code,
-                    state_dtype,
-                    stream,
-                );
-            }
+                    &crate::cuda::abi::GdnDecodeRecurrenceParams {
+                        mixed_qkv: mixed_ptr,
+                        b: b_s.slice(b_offset..).device_ptr(b_s.stream()).0 as *const c_void,
+                        a: a_s.slice(a_offset..).device_ptr(a_s.stream()).0 as *const c_void,
+                        a_log: alog_s.slice(alog_offset..).device_ptr(alog_s.stream()).0
+                            as *const f32,
+                        dt_bias: dtb_s.slice(dtb_offset..).device_ptr(dtb_s.stream()).0
+                            as *const f32,
+                        state: state_ptr,
+                        output: output_buf.device_ptr(output_buf.stream()).0 as *mut c_void,
+                        batch_size: batch_size as i32,
+                        num_k_heads: num_k_heads as i32,
+                        num_v_heads: num_v_heads as i32,
+                        head_k_dim: head_k_dim as i32,
+                        head_v_dim: head_v_dim as i32,
+                        tiled_v_heads: i32::from(tiled_v_heads),
+                        b_batch_stride: b_batch_stride as i64,
+                        b_head_stride: b_head_stride as i64,
+                        a_batch_stride: a_batch_stride as i64,
+                        a_head_stride: a_head_stride as i64,
+                        slot_indices: slot_ptr,
+                        kernel_kind: decode_kernel as i32,
+                        dtype: dtype_code,
+                        state_dtype,
+                        stream,
+                    },
+                )
+            })?;
             Ok(())
         })?;
 
@@ -3274,12 +3172,6 @@ fn fused_decode_recurrence_cuda_impl(launch: GdnDecodeLaunch<'_>) -> Result<Tens
             other
         ),
     }
-}
-
-#[cfg(not(feature = "cuda"))]
-#[allow(unused)]
-pub fn fused_decode_recurrence_cuda(_launch: FusedDecodeRecurrence<'_>) -> Result<Tensor> {
-    candle_core::bail!("fused_decode_recurrence_cuda requires the cuda feature")
 }
 
 #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
@@ -3439,34 +3331,36 @@ pub fn speculative_state_commit_cuda(commit: GdnSpeculativeStateCommit<'_>) -> R
         let dev = mixed_qkv.device().as_cuda_device()?;
         let stream = dev.cuda_stream().cu_stream() as i64;
 
-        unsafe {
+        crate::cuda::check_launch("gdn_speculative_state_commit", unsafe {
             crate::cuda::ffi::gdn_speculative_state_commit(
-                mixed_ptr,
-                convolved_ptr,
-                b_ptr,
-                a_ptr,
-                initial_conv_ptr,
-                initial_recurrent_ptr as *const c_void,
-                a_log_ptr,
-                dt_bias_ptr,
-                conv_pool_ptr,
-                recurrent_pool_ptr,
-                keep_rows_ptr,
-                slot_indices_ptr,
-                batch_size as i32,
-                seq_len as i32,
-                num_k_heads as i32,
-                num_v_heads as i32,
-                head_k_dim as i32,
-                head_v_dim as i32,
-                kernel_size as i32,
-                i32::from(tiled_v_heads),
-                i32::from(value_major),
-                dtype_code,
-                state_dtype,
-                stream,
-            );
-        }
+                &crate::cuda::abi::GdnSpeculativeStateCommitParams {
+                    mixed_qkv: mixed_ptr,
+                    convolved_qkv: convolved_ptr,
+                    b: b_ptr,
+                    a: a_ptr,
+                    initial_conv_state: initial_conv_ptr,
+                    initial_recurrent_state: initial_recurrent_ptr as *const c_void,
+                    a_log: a_log_ptr,
+                    dt_bias: dt_bias_ptr,
+                    conv_state_pool: conv_pool_ptr,
+                    recurrent_state_pool: recurrent_pool_ptr,
+                    keep_rows: keep_rows_ptr,
+                    slot_indices: slot_indices_ptr,
+                    batch_size: batch_size as i32,
+                    seq_len: seq_len as i32,
+                    num_k_heads: num_k_heads as i32,
+                    num_v_heads: num_v_heads as i32,
+                    head_k_dim: head_k_dim as i32,
+                    head_v_dim: head_v_dim as i32,
+                    kernel_size: kernel_size as i32,
+                    tiled_v_heads: i32::from(tiled_v_heads),
+                    value_major: i32::from(value_major),
+                    dtype: dtype_code,
+                    state_dtype,
+                    stream,
+                },
+            )
+        })?;
         Ok(())
     }
 
@@ -3480,13 +3374,7 @@ pub fn speculative_state_commit_cuda(commit: GdnSpeculativeStateCommit<'_>) -> R
     }
 }
 
-#[cfg(not(feature = "cuda"))]
-#[allow(unused)]
-pub fn speculative_state_commit_cuda(_commit: GdnSpeculativeStateCommit<'_>) -> Result<()> {
-    candle_core::bail!("speculative_state_commit_cuda requires the cuda feature")
-}
-
-#[allow(dead_code)]
+#[cfg(feature = "cuda")]
 pub struct GdnPendingSpeculativeConv<'a> {
     pub conv_input: &'a Tensor,
     pub keep_rows: &'a Tensor,
@@ -3494,7 +3382,7 @@ pub struct GdnPendingSpeculativeConv<'a> {
     pub applied_epochs: &'a Tensor,
 }
 
-#[allow(dead_code)]
+#[cfg(feature = "cuda")]
 pub struct GdnSpeculativeConvCheckpoints<'a> {
     pub x: &'a Tensor,
     pub weight: &'a Tensor,
@@ -3506,7 +3394,6 @@ pub struct GdnSpeculativeConvCheckpoints<'a> {
 }
 
 #[cfg(feature = "cuda")]
-#[allow(dead_code)]
 pub fn speculative_conv_checkpoints_cuda(
     context: GdnSpeculativeConvCheckpoints<'_>,
 ) -> Result<Tensor> {
@@ -3686,45 +3573,47 @@ pub fn speculative_conv_checkpoints_cuda(
             )
         };
 
-        unsafe {
+        crate::cuda::check_launch("gdn_speculative_conv_checkpoints", unsafe {
             crate::cuda::ffi::gdn_speculative_conv_checkpoints(
-                x_storage
-                    .slice(x_layout.start_offset()..)
-                    .device_ptr(x_storage.stream())
-                    .0 as *const c_void,
-                weight_storage
-                    .slice(weight_layout.start_offset()..)
-                    .device_ptr(weight_storage.stream())
-                    .0 as *const c_void,
-                state_storage
-                    .slice(state_layout.start_offset()..)
-                    .device_ptr(state_storage.stream())
-                    .0 as *mut c_void,
-                output.device_ptr(output.stream()).0 as *mut c_void,
-                slots_storage
-                    .slice(slots_layout.start_offset()..)
-                    .device_ptr(slots_storage.stream())
-                    .0 as *const u32,
-                batch_size as i32,
-                seq_len as i32,
-                conv_dim as i32,
-                kernel_size as i32,
-                checkpoint_lanes as i32,
-                i32::from(write_checkpoints),
-                pending_conv,
-                pending_keep_rows,
-                pending_epochs,
-                applied_epochs,
-                max_rows as i32,
-                pending_capacity as i32,
-                conv_blocks as i32,
-                x_strides[0] as i64,
-                x_strides[1] as i64,
-                x_strides[2] as i64,
-                dtype_code,
-                stream,
-            );
-        }
+                &crate::cuda::abi::GdnSpeculativeConvCheckpointsParams {
+                    x: x_storage
+                        .slice(x_layout.start_offset()..)
+                        .device_ptr(x_storage.stream())
+                        .0 as *const c_void,
+                    weight: weight_storage
+                        .slice(weight_layout.start_offset()..)
+                        .device_ptr(weight_storage.stream())
+                        .0 as *const c_void,
+                    state_pool: state_storage
+                        .slice(state_layout.start_offset()..)
+                        .device_ptr(state_storage.stream())
+                        .0 as *mut c_void,
+                    output: output.device_ptr(output.stream()).0 as *mut c_void,
+                    active_slots: slots_storage
+                        .slice(slots_layout.start_offset()..)
+                        .device_ptr(slots_storage.stream())
+                        .0 as *const u32,
+                    batch_size: batch_size as i32,
+                    seq_len: seq_len as i32,
+                    conv_dim: conv_dim as i32,
+                    kernel_size: kernel_size as i32,
+                    checkpoint_lanes: checkpoint_lanes as i32,
+                    write_checkpoints: i32::from(write_checkpoints),
+                    pending_conv_input: pending_conv,
+                    pending_keep_rows,
+                    pending_epochs,
+                    conv_applied_epochs: applied_epochs,
+                    max_pending_rows: max_rows as i32,
+                    pending_capacity: pending_capacity as i32,
+                    conv_blocks: conv_blocks as i32,
+                    x_stride_b: x_strides[0] as i64,
+                    x_stride_s: x_strides[1] as i64,
+                    x_stride_c: x_strides[2] as i64,
+                    dtype: dtype_code,
+                    stream,
+                },
+            )
+        })?;
 
         Ok(Tensor::from((
             candle::Storage::Cuda(candle::CudaStorage::wrap_cuda_slice(output, dev.clone())),
@@ -3741,15 +3630,7 @@ pub fn speculative_conv_checkpoints_cuda(
     }
 }
 
-#[cfg(not(feature = "cuda"))]
-#[allow(unused)]
-pub fn speculative_conv_checkpoints_cuda(
-    _context: GdnSpeculativeConvCheckpoints<'_>,
-) -> Result<Tensor> {
-    candle_core::bail!("speculative_conv_checkpoints_cuda requires the cuda feature")
-}
-
-#[allow(dead_code)]
+#[cfg(feature = "cuda")]
 pub struct GdnPendingSpeculativeRecurrence<'a> {
     pub key_banks: &'a Tensor,
     pub key_bank: &'a Tensor,
@@ -3760,7 +3641,7 @@ pub struct GdnPendingSpeculativeRecurrence<'a> {
     pub applied_epochs: &'a Tensor,
 }
 
-#[allow(dead_code)]
+#[cfg(feature = "cuda")]
 pub struct GdnSpeculativeRmsNormGate<'a> {
     pub gate: &'a Tensor,
     pub weight: &'a Tensor,
@@ -3770,7 +3651,7 @@ pub struct GdnSpeculativeRmsNormGate<'a> {
     pub quantization: Option<GdnFp8OutputSpec>,
 }
 
-#[allow(dead_code)]
+#[cfg(feature = "cuda")]
 pub struct GdnSpeculativeRecurrenceCheckpoints<'a> {
     pub mixed_qkv: &'a Tensor,
     pub b: &'a Tensor,
@@ -3791,25 +3672,23 @@ pub struct GdnSpeculativeRecurrenceCheckpoints<'a> {
     pub pending: Option<GdnPendingSpeculativeRecurrence<'a>>,
 }
 
+#[cfg(feature = "cuda")]
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone)]
-#[allow(dead_code)]
 pub struct GdnSpeculativeTransitions {
     pub key: Tensor,
     pub delta: Tensor,
     pub decay: Tensor,
 }
 
-#[allow(dead_code)]
+#[cfg(feature = "cuda")]
+#[cfg_attr(not(test), allow(dead_code))]
 pub struct GdnSpeculativeRecurrenceOutput {
-    #[cfg(feature = "cuda")]
     pub output: GdnPostOpOutput,
-    #[cfg(not(feature = "cuda"))]
-    pub output: Tensor,
     pub transitions: Option<GdnSpeculativeTransitions>,
 }
 
 #[cfg(feature = "cuda")]
-#[allow(dead_code)]
 pub fn speculative_recurrence_checkpoints_cuda(
     context: GdnSpeculativeRecurrenceCheckpoints<'_>,
 ) -> Result<GdnSpeculativeRecurrenceOutput> {
@@ -4195,61 +4074,64 @@ pub fn speculative_recurrence_checkpoints_cuda(
                 scales.device_ptr(scales.stream()).0 as *mut f32
             });
 
-        unsafe {
+        crate::cuda::check_launch("gdn_speculative_recurrence_checkpoints", unsafe {
             crate::cuda::ffi::gdn_speculative_recurrence_checkpoints(
-                mixed_ptr,
-                b_ptr,
-                a_ptr,
-                a_log_ptr,
-                dt_bias_ptr,
-                state_ptr,
-                output_ptr,
-                quantized_output_ptr,
-                output_scales_ptr,
-                fp8_layout.map_or(0, |layout| layout.scale_stride_m as i32),
-                fp8_layout.map_or(GDN_FP8_SCALE_ROW_MAJOR, |layout| layout.scale_layout_code),
-                slots_ptr,
-                gate_ptr,
-                norm_weight_ptr,
-                transition_key_ptr,
-                transition_delta_ptr,
-                transition_decay_ptr,
-                pending_key_banks,
-                pending_key_bank,
-                pending_delta,
-                pending_decay,
-                pending_keep_rows,
-                pending_epochs,
-                recurrent_applied_epochs,
-                max_pending_rows as i32,
-                pending_capacity as i32,
-                i32::from(direct_transitions),
-                b_strides[0],
-                b_strides[1],
-                b_strides[2],
-                a_strides[0],
-                a_strides[1],
-                a_strides[2],
-                gate_strides[0] as i64,
-                gate_strides[1] as i64,
-                gate_strides[2] as i64,
-                gate_strides[3] as i64,
-                batch_size as i32,
-                seq_len as i32,
-                num_k_heads as i32,
-                num_v_heads as i32,
-                head_k_dim as i32,
-                head_v_dim as i32,
-                checkpoint_lanes as i32,
-                i32::from(tiled_v_heads),
-                i32::from(value_major),
-                norm_eps,
-                sigmoid_gate,
-                dtype_code,
-                state_dtype,
-                stream,
-            );
-        }
+                &crate::cuda::abi::GdnSpeculativeRecurrenceCheckpointsParams {
+                    mixed_qkv: mixed_ptr,
+                    b: b_ptr,
+                    a: a_ptr,
+                    a_log: a_log_ptr,
+                    dt_bias: dt_bias_ptr,
+                    state_pool: state_ptr,
+                    output: output_ptr,
+                    quantized_output: quantized_output_ptr,
+                    output_scales: output_scales_ptr,
+                    scale_stride_m: fp8_layout.map_or(0, |layout| layout.scale_stride_m as i32),
+                    scale_layout: fp8_layout
+                        .map_or(GDN_FP8_SCALE_ROW_MAJOR, |layout| layout.scale_layout_code),
+                    active_slots: slots_ptr,
+                    gate: gate_ptr,
+                    norm_weight: norm_weight_ptr,
+                    transition_key: transition_key_ptr,
+                    transition_delta: transition_delta_ptr,
+                    transition_decay: transition_decay_ptr,
+                    pending_key_banks,
+                    pending_key_bank,
+                    pending_delta,
+                    pending_decay,
+                    pending_keep_rows,
+                    pending_epochs,
+                    recurrent_applied_epochs,
+                    max_pending_rows: max_pending_rows as i32,
+                    pending_capacity: pending_capacity as i32,
+                    slot_indexed_transitions: i32::from(direct_transitions),
+                    b_stride_b: b_strides[0],
+                    b_stride_s: b_strides[1],
+                    b_stride_h: b_strides[2],
+                    a_stride_b: a_strides[0],
+                    a_stride_s: a_strides[1],
+                    a_stride_h: a_strides[2],
+                    gate_stride_b: gate_strides[0] as i64,
+                    gate_stride_s: gate_strides[1] as i64,
+                    gate_stride_h: gate_strides[2] as i64,
+                    gate_stride_v: gate_strides[3] as i64,
+                    batch_size: batch_size as i32,
+                    seq_len: seq_len as i32,
+                    num_k_heads: num_k_heads as i32,
+                    num_v_heads: num_v_heads as i32,
+                    head_k_dim: head_k_dim as i32,
+                    head_v_dim: head_v_dim as i32,
+                    checkpoint_lanes: checkpoint_lanes as i32,
+                    tiled_v_heads: i32::from(tiled_v_heads),
+                    value_major: i32::from(value_major),
+                    norm_eps,
+                    sigmoid_gate,
+                    dtype: dtype_code,
+                    state_dtype,
+                    stream,
+                },
+            )
+        })?;
 
         let output = if let (Some(spec), Some(layout)) = (fp8_spec, fp8_layout) {
             let quantized_output = Tensor::from((
@@ -4327,14 +4209,6 @@ pub fn speculative_recurrence_checkpoints_cuda(
             candle_core::bail!("GDN speculative recurrence only supports f16/bf16, got {other:?}")
         }
     }
-}
-
-#[cfg(not(feature = "cuda"))]
-#[allow(unused)]
-pub fn speculative_recurrence_checkpoints_cuda(
-    _context: GdnSpeculativeRecurrenceCheckpoints<'_>,
-) -> Result<GdnSpeculativeRecurrenceOutput> {
-    candle_core::bail!("speculative_recurrence_checkpoints_cuda requires the cuda feature")
 }
 
 #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
@@ -4646,45 +4520,52 @@ pub fn deferred_recurrence_rmsnorm_gate_cuda(
                     &stream,
                     "deferred_cursor",
                     |cursor_ptr| {
-                        unsafe {
-                            crate::cuda::ffi::gdn_deferred_recurrence_rmsnorm_gate_value_major_128(
-                                mixed_qkv_ptr as *const c_void,
-                                b_ptr as *const c_void,
-                                a_ptr as *const c_void,
-                                a_log_ptr as *const f32,
-                                dt_bias_ptr as *const f32,
-                                state_pool_ptr as *mut f32,
-                                output_ptr,
-                                quantized_output_ptr,
-                                output_scales_ptr,
-                                fp8_layout.map_or(0, |layout| layout.scale_stride_m as i32),
-                                fp8_layout.map_or(GDN_FP8_SCALE_ROW_MAJOR, |layout| {
-                                    layout.scale_layout_code
-                                }),
-                                active_slots_ptr as *const u32,
-                                key_ptr as *mut f32,
-                                delta_ptr as *mut f32,
-                                decay_ptr as *mut f32,
-                                cursor_ptr as *mut u32,
-                                gate_ptr as *const c_void,
-                                norm_weight_ptr as *const c_void,
-                                b_strides[0] as i64,
-                                b_strides[1] as i64,
-                                a_strides[0] as i64,
-                                a_strides[1] as i64,
-                                gate_strides[0] as i64,
-                                gate_strides[1] as i64,
-                                gate_strides[2] as i64,
-                                batch_size as i32,
-                                capacity as i32,
-                                num_k_heads as i32,
-                                num_v_heads as i32,
-                                i32::from(tiled_v_heads),
-                                norm_eps as f32,
-                                gate_activation.sigmoid_flag(),
-                                stream.cu_stream() as i64,
-                            );
-                        }
+                        crate::cuda::check_launch(
+                            "gdn_deferred_recurrence_rmsnorm_gate_value_major_128",
+                            unsafe {
+                                crate::cuda::ffi::gdn_deferred_recurrence_rmsnorm_gate_value_major_128(
+                                &crate::cuda::abi::GdnDeferredRecurrenceParams {
+                                    mixed_qkv: mixed_qkv_ptr as *const c_void,
+                                    b: b_ptr as *const c_void,
+                                    a: a_ptr as *const c_void,
+                                    a_log: a_log_ptr as *const f32,
+                                    dt_bias: dt_bias_ptr as *const f32,
+                                    state_pool: state_pool_ptr as *mut f32,
+                                    output: output_ptr,
+                                    quantized_output: quantized_output_ptr,
+                                    output_scales: output_scales_ptr,
+                                    scale_stride_m: fp8_layout
+                                        .map_or(0, |layout| layout.scale_stride_m as i32),
+                                    scale_layout: fp8_layout
+                                        .map_or(GDN_FP8_SCALE_ROW_MAJOR, |layout| {
+                                            layout.scale_layout_code
+                                        }),
+                                    active_slots: active_slots_ptr as *const u32,
+                                    deferred_key: key_ptr as *mut f32,
+                                    deferred_delta: delta_ptr as *mut f32,
+                                    deferred_decay: decay_ptr as *mut f32,
+                                    deferred_cursor: cursor_ptr as *mut u32,
+                                    gate: gate_ptr as *const c_void,
+                                    norm_weight: norm_weight_ptr as *const c_void,
+                                    b_stride_b: b_strides[0] as i64,
+                                    b_stride_h: b_strides[1] as i64,
+                                    a_stride_b: a_strides[0] as i64,
+                                    a_stride_h: a_strides[1] as i64,
+                                    gate_stride_b: gate_strides[0] as i64,
+                                    gate_stride_h: gate_strides[1] as i64,
+                                    gate_stride_v: gate_strides[2] as i64,
+                                    batch_size: batch_size as i32,
+                                    capacity: capacity as i32,
+                                    num_k_heads: num_k_heads as i32,
+                                    num_v_heads: num_v_heads as i32,
+                                    tiled_v_heads: i32::from(tiled_v_heads),
+                                    norm_eps: norm_eps as f32,
+                                    sigmoid_gate: gate_activation.sigmoid_flag(),
+                                    stream: stream.cu_stream() as i64,
+                                },
+                            )
+                            },
+                        )?;
                         Ok(())
                     },
                 )
@@ -4750,14 +4631,6 @@ pub fn deferred_recurrence_rmsnorm_gate_cuda(
         )),
         (batch_size, 1, num_v_heads, head_v_dim),
     ))))
-}
-
-#[cfg(not(feature = "cuda"))]
-#[allow(dead_code)]
-pub fn deferred_recurrence_rmsnorm_gate_cuda(
-    _context: GdnDeferredRecurrence<'_>,
-) -> Result<Tensor> {
-    candle_core::bail!("deferred_recurrence_rmsnorm_gate_cuda requires the cuda feature")
 }
 
 #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
@@ -4939,12 +4812,11 @@ pub fn flush_deferred_state_cuda(context: GdnDeferredStateFlush<'_>) -> Result<(
 }
 
 #[cfg(not(feature = "cuda"))]
-#[allow(dead_code)]
 pub fn flush_deferred_state_cuda(_context: GdnDeferredStateFlush<'_>) -> Result<()> {
     candle_core::bail!("flush_deferred_state_cuda requires the cuda feature")
 }
 
-#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+#[cfg(all(feature = "cuda", test))]
 pub struct GdnSpeculativeTransitionLayer<'a> {
     pub conv_input: &'a Tensor,
     pub key: &'a Tensor,
@@ -4954,7 +4826,7 @@ pub struct GdnSpeculativeTransitionLayer<'a> {
     pub recurrent_state: &'a Tensor,
 }
 
-#[cfg_attr(not(feature = "cuda"), allow(dead_code))]
+#[cfg(all(feature = "cuda", test))]
 pub struct GdnSpeculativeTransitionCommit<'a> {
     pub layers: &'a [GdnSpeculativeTransitionLayer<'a>],
     pub keep_rows: &'a Tensor,
@@ -4969,8 +4841,7 @@ pub struct GdnSpeculativeTransitionCommit<'a> {
     pub state_layout: RecurrentStateLayout,
 }
 
-#[cfg(feature = "cuda")]
-#[allow(dead_code)]
+#[cfg(all(feature = "cuda", test))]
 pub fn speculative_transition_commit_batched_cuda(
     commit: GdnSpeculativeTransitionCommit<'_>,
 ) -> Result<()> {
@@ -5188,15 +5059,7 @@ pub fn speculative_transition_commit_batched_cuda(
     }
 }
 
-#[cfg(not(feature = "cuda"))]
-#[allow(dead_code)]
-pub fn speculative_transition_commit_batched_cuda(
-    _commit: GdnSpeculativeTransitionCommit<'_>,
-) -> Result<()> {
-    candle_core::bail!("speculative_transition_commit_batched_cuda requires the cuda feature")
-}
-
-#[allow(dead_code)]
+#[cfg(all(feature = "cuda", test))]
 pub struct GdnSpeculativeTransitionStageLayer<'a> {
     pub conv_input: &'a Tensor,
     pub key: &'a Tensor,
@@ -5210,7 +5073,7 @@ pub struct GdnSpeculativeTransitionStageLayer<'a> {
     pub pending_epochs: &'a Tensor,
 }
 
-#[allow(dead_code)]
+#[cfg(all(feature = "cuda", test))]
 pub struct GdnSpeculativeTransitionStage<'a> {
     pub layers: &'a [GdnSpeculativeTransitionStageLayer<'a>],
     pub keep_rows: &'a Tensor,
@@ -5222,8 +5085,7 @@ pub struct GdnSpeculativeTransitionStage<'a> {
     pub conv_dim: usize,
 }
 
-#[cfg(feature = "cuda")]
-#[allow(dead_code)]
+#[cfg(all(feature = "cuda", test))]
 pub fn speculative_transition_stage_batched_cuda(
     stage: GdnSpeculativeTransitionStage<'_>,
 ) -> Result<()> {
@@ -5465,14 +5327,6 @@ pub fn speculative_transition_stage_batched_cuda(
     }
 }
 
-#[cfg(not(feature = "cuda"))]
-#[allow(dead_code)]
-pub fn speculative_transition_stage_batched_cuda(
-    _stage: GdnSpeculativeTransitionStage<'_>,
-) -> Result<()> {
-    candle_core::bail!("speculative_transition_stage_batched_cuda requires the cuda feature")
-}
-
 #[cfg_attr(not(feature = "cuda"), allow(dead_code))]
 pub struct GdnPendingTransitionPublishLayer<'a> {
     pub pending_keep_rows: &'a Tensor,
@@ -5621,7 +5475,6 @@ pub fn pending_transition_publish_batched_cuda(
 }
 
 #[cfg(not(feature = "cuda"))]
-#[allow(dead_code)]
 pub fn pending_transition_publish_batched_cuda(
     _publish: GdnPendingTransitionPublish<'_>,
 ) -> Result<()> {
@@ -5908,7 +5761,6 @@ pub fn pending_transition_apply_batched_cuda(apply: GdnPendingTransitionApply<'_
 }
 
 #[cfg(not(feature = "cuda"))]
-#[allow(dead_code)]
 pub fn pending_transition_apply_batched_cuda(_apply: GdnPendingTransitionApply<'_>) -> Result<()> {
     candle_core::bail!("pending_transition_apply_batched_cuda requires the cuda feature")
 }
@@ -5995,33 +5847,33 @@ pub fn rmsnorm_gated_cuda(
         let output_buf = unsafe { dev.alloc::<T>(rows * hidden_dim) }?;
         let stream = dev.cuda_stream().cu_stream() as i64;
 
-        unsafe {
-            crate::cuda::ffi::gdn_rmsnorm_gated(
-                x_s.slice(x_offset..).device_ptr(x_s.stream()).0 as *const c_void,
-                gate_s.slice(gate_offset..).device_ptr(gate_s.stream()).0 as *const c_void,
-                weight_s
+        crate::cuda::check_launch("gdn_rmsnorm_gated", unsafe {
+            crate::cuda::ffi::gdn_rmsnorm_gated(&crate::cuda::abi::GdnRmsNormGatedParams {
+                x: x_s.slice(x_offset..).device_ptr(x_s.stream()).0 as *const c_void,
+                gate: gate_s.slice(gate_offset..).device_ptr(gate_s.stream()).0 as *const c_void,
+                weight: weight_s
                     .slice(weight_offset..)
                     .device_ptr(weight_s.stream())
                     .0 as *const c_void,
-                output_buf.device_ptr(output_buf.stream()).0 as *mut c_void,
-                rows as i32,
-                hidden_dim as i32,
-                dims[1] as i32,
-                dims[2] as i32,
-                x_stride[0] as i64,
-                x_stride[1] as i64,
-                x_stride[2] as i64,
-                x_stride[3] as i64,
-                gate_stride[0] as i64,
-                gate_stride[1] as i64,
-                gate_stride[2] as i64,
-                gate_stride[3] as i64,
-                eps as f32,
-                activation.sigmoid_flag(),
-                dtype_code,
+                output: output_buf.device_ptr(output_buf.stream()).0 as *mut c_void,
+                rows: rows as i32,
+                hidden_dim: hidden_dim as i32,
+                outer_dim_1: dims[1] as i32,
+                outer_dim_2: dims[2] as i32,
+                x_stride_0: x_stride[0] as i64,
+                x_stride_1: x_stride[1] as i64,
+                x_stride_2: x_stride[2] as i64,
+                x_stride_3: x_stride[3] as i64,
+                gate_stride_0: gate_stride[0] as i64,
+                gate_stride_1: gate_stride[1] as i64,
+                gate_stride_2: gate_stride[2] as i64,
+                gate_stride_3: gate_stride[3] as i64,
+                eps: eps as f32,
+                sigmoid_gate: activation.sigmoid_flag(),
+                dtype: dtype_code,
                 stream,
-            );
-        }
+            })
+        })?;
 
         let output_storage = candle::CudaStorage::wrap_cuda_slice(output_buf, dev.clone());
         Ok(Tensor::from((
@@ -6108,41 +5960,43 @@ pub(crate) fn rmsnorm_gated_quantized_cuda(
     let scales = unsafe { dev.alloc::<f32>(layout.scale_elements) }?;
     let stream = dev.cuda_stream().cu_stream() as i64;
 
-    unsafe {
+    crate::cuda::check_launch("gdn_rmsnorm_gated_quantized_bf16", unsafe {
         crate::cuda::ffi::gdn_rmsnorm_gated_quantized_bf16(
-            x_storage
-                .slice(x_layout.start_offset()..)
-                .device_ptr(x_storage.stream())
-                .0 as *const c_void,
-            gate_storage
-                .slice(gate_layout.start_offset()..)
-                .device_ptr(gate_storage.stream())
-                .0 as *const c_void,
-            weight_storage
-                .slice(weight_layout.start_offset()..)
-                .device_ptr(weight_storage.stream())
-                .0 as *const c_void,
-            output.device_ptr(output.stream()).0 as *mut c_void,
-            scales.device_ptr(scales.stream()).0 as *mut f32,
-            normalized_rows as i32,
-            layout.groups as i32,
-            layout.scale_stride_m as i32,
-            layout.scale_layout_code,
-            dims[1] as i32,
-            dims[2] as i32,
-            x_stride[0] as i64,
-            x_stride[1] as i64,
-            x_stride[2] as i64,
-            x_stride[3] as i64,
-            gate_stride[0] as i64,
-            gate_stride[1] as i64,
-            gate_stride[2] as i64,
-            gate_stride[3] as i64,
-            eps as f32,
-            activation.sigmoid_flag(),
-            stream,
-        );
-    }
+            &crate::cuda::abi::GdnRmsNormGatedQuantizedParams {
+                x: x_storage
+                    .slice(x_layout.start_offset()..)
+                    .device_ptr(x_storage.stream())
+                    .0 as *const c_void,
+                gate: gate_storage
+                    .slice(gate_layout.start_offset()..)
+                    .device_ptr(gate_storage.stream())
+                    .0 as *const c_void,
+                weight: weight_storage
+                    .slice(weight_layout.start_offset()..)
+                    .device_ptr(weight_storage.stream())
+                    .0 as *const c_void,
+                output: output.device_ptr(output.stream()).0 as *mut c_void,
+                scales: scales.device_ptr(scales.stream()).0 as *mut f32,
+                rows: normalized_rows as i32,
+                groups: layout.groups as i32,
+                scale_stride_m: layout.scale_stride_m as i32,
+                scale_layout: layout.scale_layout_code,
+                outer_dim_1: dims[1] as i32,
+                outer_dim_2: dims[2] as i32,
+                x_stride_0: x_stride[0] as i64,
+                x_stride_1: x_stride[1] as i64,
+                x_stride_2: x_stride[2] as i64,
+                x_stride_3: x_stride[3] as i64,
+                gate_stride_0: gate_stride[0] as i64,
+                gate_stride_1: gate_stride[1] as i64,
+                gate_stride_2: gate_stride[2] as i64,
+                gate_stride_3: gate_stride[3] as i64,
+                eps: eps as f32,
+                sigmoid_gate: activation.sigmoid_flag(),
+                stream,
+            },
+        )
+    })?;
 
     let output = Tensor::from((
         Storage::Cuda(CudaStorage::wrap_cuda_slice(output, dev.clone())),
@@ -6165,18 +6019,6 @@ pub(crate) fn rmsnorm_gated_quantized_cuda(
         spec.scheme,
         spec.scale_layout,
     )
-}
-
-#[cfg(not(feature = "cuda"))]
-#[allow(unused)]
-pub fn rmsnorm_gated_cuda(
-    _x: &Tensor,
-    _gate: &Tensor,
-    _weight: &Tensor,
-    _eps: f64,
-    _activation: GdnGateActivation,
-) -> Result<Tensor> {
-    candle_core::bail!("rmsnorm_gated_cuda requires the cuda feature")
 }
 
 /// b, a: [total_elements] in f16/bf16
@@ -6273,17 +6115,6 @@ pub fn fused_gdn_gating_cuda(
             other
         ),
     }
-}
-
-#[cfg(not(feature = "cuda"))]
-#[allow(unused)]
-pub fn fused_gdn_gating_cuda(
-    _b: &Tensor,
-    _a: &Tensor,
-    _a_log: &Tensor,
-    _dt_bias: &Tensor,
-) -> Result<(Tensor, Tensor)> {
-    candle_core::bail!("fused_gdn_gating_cuda requires the cuda feature")
 }
 
 #[cfg(test)]

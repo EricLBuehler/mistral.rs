@@ -197,10 +197,7 @@ impl WindowedKvPoolConfig {
         self.slot_capacity() * self.pages_per_sequence
     }
 
-    #[cfg(any(
-        test,
-        all(feature = "cuda", feature = "flash-attn", target_family = "unix")
-    ))]
+    #[cfg(any(test, cuda_flash_attn))]
     pub(crate) fn graph_max_kv_len(&self) -> usize {
         self.pages_per_sequence * self.page_size
     }
@@ -494,45 +491,42 @@ impl WindowedKvBatch {
         &self.cumulative_kv_lens
     }
 
-    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    #[cfg(cuda_flash_attn)]
     pub fn max_query_len(&self) -> usize {
         self.max_query_len
     }
 
-    #[cfg(any(
-        test,
-        all(feature = "cuda", feature = "flash-attn", target_family = "unix")
-    ))]
+    #[cfg(any(test, cuda_flash_attn))]
     pub fn max_kv_len(&self) -> usize {
         self.max_kv_len
     }
 
-    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    #[cfg(cuda_flash_attn)]
     pub(crate) fn block_table_width_for_graph(&self) -> usize {
         self.block_table_width
     }
 
-    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    #[cfg(cuda_flash_attn)]
     pub(crate) fn block_tables_for_graph(&self) -> &[u32] {
         &self.block_tables
     }
 
-    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    #[cfg(cuda_flash_attn)]
     pub(crate) fn slot_mapping_for_graph(&self) -> &[i64] {
         &self.slot_mapping
     }
 
-    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    #[cfg(cuda_flash_attn)]
     pub(crate) fn cumulative_query_lens_for_graph(&self) -> &[u32] {
         &self.cumulative_query_lens
     }
 
-    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    #[cfg(cuda_flash_attn)]
     pub(crate) fn cumulative_kv_lens_for_graph(&self) -> &[u32] {
         &self.cumulative_kv_lens
     }
 
-    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    #[cfg(cuda_flash_attn)]
     pub fn to_tensors(&self, device: &Device) -> Result<WindowedKvBatchTensors> {
         let batch = self.rows.len();
         Ok(WindowedKvBatchTensors {
@@ -561,7 +555,7 @@ impl WindowedKvBatch {
 }
 
 #[derive(Debug)]
-#[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+#[cfg(cuda_flash_attn)]
 pub struct WindowedKvBatchTensors {
     pub block_tables: Tensor,
     pub slot_mapping: Tensor,
@@ -838,7 +832,7 @@ impl WindowedKvPool {
             candle_core::bail!("windowed KV pool source and destination slots alias");
         }
 
-        #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+        #[cfg(cuda_flash_attn)]
         if self.key_cache.device().is_cuda() {
             return self.copy_pool_slot_cuda(source_slot, destination_slot);
         }
@@ -860,7 +854,7 @@ impl WindowedKvPool {
         Ok(())
     }
 
-    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    #[cfg(cuda_flash_attn)]
     fn copy_pool_slot_cuda(&mut self, source_slot: usize, destination_slot: usize) -> Result<()> {
         let pages = self.config.pages_per_sequence();
         let source_start = source_slot * pages;
@@ -967,10 +961,7 @@ impl WindowedKvPool {
         Self::batch_from_rows(rows, block_table_width, None)
     }
 
-    #[cfg(any(
-        test,
-        all(feature = "cuda", feature = "flash-attn", target_family = "unix")
-    ))]
+    #[cfg(any(test, cuda_flash_attn))]
     pub(crate) fn scratch_graph_batch(
         &self,
         queries: &[WindowedKvQuery],
@@ -1381,7 +1372,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(all(feature = "cuda", feature = "flash-attn", target_family = "unix"))]
+    #[cfg(cuda_flash_attn)]
     #[test]
     fn checkpoint_snapshot_and_restore_copy_cuda_slots() -> Result<()> {
         let Ok(device) = Device::new_cuda(0) else {

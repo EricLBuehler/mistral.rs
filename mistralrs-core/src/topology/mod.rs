@@ -94,8 +94,8 @@ impl Topology {
             self.layers
                 .extend(vec![None; range.end - self.layers.len()]);
         }
-        for i in range.start..range.end {
-            self.layers[i] = Some(layer.clone());
+        for slot in self.layers.iter_mut().take(range.end).skip(range.start) {
+            *slot = Some(layer.clone());
         }
         self
     }
@@ -188,8 +188,8 @@ impl Topology {
             Self::with_capacity(capacity)
         };
         for (range, layer) in range_layers {
-            for i in range.start..range.end {
-                this.layers[i] = Some(layer.clone());
+            for slot in this.layers.iter_mut().take(range.end).skip(range.start) {
+                *slot = Some(layer.clone());
             }
         }
         this.patterns = pattern_layers;

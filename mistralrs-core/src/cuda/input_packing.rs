@@ -91,9 +91,7 @@ impl CustomOp1 for CompletionInputPackOp {
         drop(output_guard);
         drop(staged_guards);
         drop(host_guard);
-        if status != 0 {
-            candle_core::bail!("pack_completion_input_u32 failed with status {status}")
-        }
+        crate::cuda::check_launch("pack_completion_input_u32", status)?;
         Ok((
             CudaStorage::wrap_cuda_slice(output, device.clone()),
             (self.batch, row_width).into(),
@@ -152,9 +150,7 @@ impl CustomOp1 for DecodeInputPadOp {
         };
         drop(output_guard);
         drop(input_guard);
-        if status != 0 {
-            candle_core::bail!("pad_decode_input_u32 failed with status {status}")
-        }
+        crate::cuda::check_launch("pad_decode_input_u32", status)?;
         Ok((
             CudaStorage::wrap_cuda_slice(output, device.clone()),
             (self.output_rows, self.width).into(),
@@ -219,7 +215,6 @@ mod tests {
     use candle_core::{Device, IndexOp};
 
     #[test]
-    #[ignore = "requires CUDA"]
     fn packs_current_and_staged_tokens_in_one_launch() -> Result<()> {
         let device = Device::new_cuda(0)?;
         for batch in [1usize, 64, 65] {
@@ -244,7 +239,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires CUDA"]
     fn pads_decode_input_by_aliasing_row_zero_values() -> Result<()> {
         let device = Device::new_cuda(0)?;
         let input = Tensor::new(&[[8u32, 9], [1, 2], [3, 4]], &device)?.narrow(0, 1, 2)?;
