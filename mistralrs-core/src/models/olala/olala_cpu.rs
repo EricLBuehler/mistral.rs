@@ -140,21 +140,38 @@ pub(crate) fn fused_mamba_step(
             let ko = &mut k_new[head * r * d_qk..(head + 1) * r * d_qk];
             let vo = &mut v_new[head * r * d_v..(head + 1) * r * d_v];
 
+            let mut qstate = [[0f32; 4]; 64];
+            #[cfg(target_arch = "aarch64")]
+            so.copy_from_slice(s_h);
             for pp in 0..d_v {
-                let mut qs = [0f32; 4];
-                for d in 0..d_qk {
-                    let mut prev = 0f32;
-                    let mut curr = 0f32;
-                    for rr in 0..r {
-                        prev += ks_h[rr * d_qk + d] * vs_h[rr * d_v + pp];
-                        curr += kb[rr * d_qk + d] * vp[pp * r + rr];
+                #[cfg(target_arch = "aarch64")]
+                let qs = unsafe {
+                    crate::models::olala::olala_neon::mamba_state_scan_p(
+                        so, ks_h, vs_h, &kb, &vp, &qb, alpha, beta, gamma, pp, d_v, d_qk, r,
+                    )
+                };
+                #[cfg(not(target_arch = "aarch64"))]
+                let qs = {
+                    let mut acc = [0f32; 4];
+                    for d in 0..d_qk {
+                        let mut prev = 0f32;
+                        let mut curr = 0f32;
+                        for rr in 0..r {
+                            prev += ks_h[rr * d_qk + d] * vs_h[rr * d_v + pp];
+                            curr += kb[rr * d_qk + d] * vp[pp * r + rr];
+                        }
+                        let sv = alpha * s_h[pp * d_qk + d] + beta * prev + gamma * curr;
+                        so[pp * d_qk + d] = sv;
+                        for rr in 0..r {
+                            acc[rr] += sv * qb[rr * d_qk + d];
+                        }
                     }
-                    let sv = alpha * s_h[pp * d_qk + d] + beta * prev + gamma * curr;
-                    so[pp * d_qk + d] = sv;
-                    for rr in 0..r {
-                        qs[rr] += sv * qb[rr * d_qk + d];
-                    }
-                }
+                    acc
+                };
+                qstate[pp] = qs;
+            }
+            for pp in 0..d_v {
+                let qs = qstate[pp];
                 let mut acc = 0f32;
                 for rr in 0..r {
                     let o = qs[rr] + dsk_s[head] * vp[pp * r + rr];

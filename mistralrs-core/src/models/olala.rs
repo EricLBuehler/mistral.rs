@@ -8,8 +8,9 @@ use mistralrs_quant::{
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
-#[cfg(test)]
 mod olala_cpu;
+#[cfg(target_arch = "aarch64")]
+mod olala_neon;
 #[cfg(test)]
 mod olala_prefill;
 
@@ -447,92 +448,125 @@ impl Model {
         let a_raw = ps.narrow(1, 2 * d_v + 1, 1)?;
         let trap_raw = ps.narrow(1, 2 * d_v + 2, 1)?;
 
-        let bc = pd
-            .narrow(1, 0, 2 * cfg.ssm_group_count * d_qk * r)?
-            .reshape((2 * r, d_qk))?;
-        let ang_raw = pd
-            .narrow(1, 2 * cfg.ssm_group_count * d_qk * r, n_ang)?
-            .reshape((n_ang,))?;
+        // aarch64 CPU uses the NEON state scan (~1.7x decode); its per-step f32 differs
+        // from the tensor path by ~2e-7, which compounds to a small logit drift over 36 layers.
+        // CUDA/Metal and non-aarch64 CPUs keep the exact Candle tensor path.
+        #[cfg(target_arch = "aarch64")]
+        let use_neon = x.device().is_cpu() && std::env::var("OLALA_TENSOR_MAMBA").is_err();
+        #[cfg(not(target_arch = "aarch64"))]
+        let use_neon = false;
 
-        let inv = rms_inv(&bc, eps)?.reshape((2 * r, 1))?;
-        let normed = bc
-            .broadcast_mul(&inv)?
-            .mul(&w.norm_weight)?
-            .reshape((1, 2 * r, d_qk))?;
-
-        let dt = softplus(&dt_raw.add(&w.dt_bias)?)?;
-        let a_neg = softplus(&a_raw)?.neg()?.clamp(f32::MIN, -A_FLOOR)?;
-        let alpha = a_neg.mul(&dt)?.exp()?;
-        let trap = sigmoid(&trap_raw)?;
-        let beta = trap.affine(-1.0, 1.0)?.mul(&dt)?.mul(&alpha)?;
-        let gamma = trap.mul(&dt)?;
-
-        let delta_ang = ang_raw
-            .reshape((1, n_ang))?
-            .tanh()?
-            .affine(f64::from(PI), 0.0)?
-            .broadcast_mul(&dt)?;
-        let ang_new = wrap_angle(&ang_state.add(&delta_ang)?)?;
-        let cos_a = ang_new.cos()?.reshape((h, 1, n_ang))?;
-        let sin_a = ang_new.sin()?.reshape((h, 1, n_ang))?;
-
-        let mut k_b = normed
-            .narrow(1, 0, r)?
-            .broadcast_add(&w.bias.narrow(1, 0, r)?)?;
-        let mut q_b = normed
-            .narrow(1, r, r)?
-            .broadcast_add(&w.bias.narrow(1, r, r)?)?;
-
-        let quarter = n_ang;
-        let half = d_qk / 2;
-        for mat in [&mut k_b, &mut q_b] {
-            let g0 = mat.narrow(2, 0, quarter)?;
-            let g1 = mat.narrow(2, quarter, quarter)?;
-            let g2 = mat.narrow(2, half, quarter)?;
-            let g3 = mat.narrow(2, half + quarter, d_qk - half - quarter)?;
-            let n0 = g0.broadcast_mul(&cos_a)?.sub(&g2.broadcast_mul(&sin_a)?)?;
-            let n2 = g0.broadcast_mul(&sin_a)?.add(&g2.broadcast_mul(&cos_a)?)?;
-            *mat = Tensor::cat(&[n0, g1, n2, g3], 2)?.contiguous()?;
-        }
-
-        let v_proj = x_in
-            .reshape((h, d_v, 1))?
-            .broadcast_mul(&w.mxz.narrow(2, 0, r)?)?;
-        let z_proj = z_in
-            .reshape((h, d_v, 1))?
-            .broadcast_mul(&w.mxz.narrow(2, r, r)?)?;
-
-        let prev_kv = k_state
-            .permute((0, 2, 1))?
-            .contiguous()?
-            .matmul(&v_state.contiguous()?)?
-            .permute((0, 2, 1))?
-            .contiguous()?;
-        let curr_kv = k_b
-            .permute((0, 2, 1))?
-            .contiguous()?
-            .matmul(&v_proj.permute((0, 2, 1))?.contiguous()?)?
-            .permute((0, 2, 1))?
-            .contiguous()?;
-
-        let alpha_b = alpha.reshape((h, 1, 1))?;
-        let beta_b = beta.reshape((h, 1, 1))?;
-        let gamma_b = gamma.reshape((h, 1, 1))?;
-        let s_new = s_state
-            .broadcast_mul(&alpha_b)?
-            .add(&prev_kv.broadcast_mul(&beta_b)?)?
-            .add(&curr_kv.broadcast_mul(&gamma_b)?)?
-            .contiguous()?;
-
-        let qstate = s_new.matmul(&q_b.permute((0, 2, 1))?.contiguous()?)?;
-        let o = qstate.add(&v_proj.broadcast_mul(&w.d_skip.reshape((h, 1, 1))?)?)?;
-        let o = o.mul(&z_proj.silu()?)?;
-        let y = o.mul(&w.mimo_o)?.sum(D::Minus1)?.reshape((h * d_v,))?;
-
-        *s_state = s_new;
-        *k_state = k_b.contiguous()?;
-        *v_state = v_proj.permute((0, 2, 1))?.contiguous()?;
-        *ang_state = ang_new.contiguous()?;
+        let (s_n, k_n, v_n, a_n, y) = if use_neon {
+            let flat = |t: &Tensor| -> Result<Vec<f32>> {
+                t.reshape((t.elem_count(),))?.contiguous()?.to_vec1::<f32>()
+            };
+            olala_cpu::fused_mamba_step(
+                &flat(&ps)?,
+                &flat(&pd)?,
+                &flat(&w.norm_weight)?,
+                &flat(&w.bias)?,
+                &flat(&w.mxz)?,
+                &flat(&w.mimo_o)?,
+                &flat(&w.dt_bias)?,
+                &flat(&w.d_skip)?,
+                &flat(s_state)?,
+                &flat(k_state)?,
+                &flat(v_state)?,
+                &flat(ang_state)?,
+                h,
+                d_v,
+                d_qk,
+                r,
+                n_ang,
+                eps,
+                &self.device,
+            )?
+        } else {
+            let bc = pd
+                .narrow(1, 0, 2 * cfg.ssm_group_count * d_qk * r)?
+                .reshape((2 * r, d_qk))?;
+            let ang_raw = pd
+                .narrow(1, 2 * cfg.ssm_group_count * d_qk * r, n_ang)?
+                .reshape((n_ang,))?;
+            let inv = rms_inv(&bc, eps)?.reshape((2 * r, 1))?;
+            let normed = bc
+                .broadcast_mul(&inv)?
+                .mul(&w.norm_weight)?
+                .reshape((1, 2 * r, d_qk))?;
+            let dt = softplus(&dt_raw.add(&w.dt_bias)?)?;
+            let a_neg = softplus(&a_raw)?.neg()?.clamp(f32::MIN, -A_FLOOR)?;
+            let alpha = a_neg.mul(&dt)?.exp()?;
+            let trap = sigmoid(&trap_raw)?;
+            let beta = trap.affine(-1.0, 1.0)?.mul(&dt)?.mul(&alpha)?;
+            let gamma = trap.mul(&dt)?;
+            let delta_ang = ang_raw
+                .reshape((1, n_ang))?
+                .tanh()?
+                .affine(f64::from(PI), 0.0)?
+                .broadcast_mul(&dt)?;
+            let ang_new = wrap_angle(&ang_state.add(&delta_ang)?)?;
+            let cos_a = ang_new.cos()?.reshape((h, 1, n_ang))?;
+            let sin_a = ang_new.sin()?.reshape((h, 1, n_ang))?;
+            let mut k_b = normed
+                .narrow(1, 0, r)?
+                .broadcast_add(&w.bias.narrow(1, 0, r)?)?;
+            let mut q_b = normed
+                .narrow(1, r, r)?
+                .broadcast_add(&w.bias.narrow(1, r, r)?)?;
+            let quarter = n_ang;
+            let half = d_qk / 2;
+            for mat in [&mut k_b, &mut q_b] {
+                let g0 = mat.narrow(2, 0, quarter)?;
+                let g1 = mat.narrow(2, quarter, quarter)?;
+                let g2 = mat.narrow(2, half, quarter)?;
+                let g3 = mat.narrow(2, half + quarter, d_qk - half - quarter)?;
+                let n0 = g0.broadcast_mul(&cos_a)?.sub(&g2.broadcast_mul(&sin_a)?)?;
+                let n2 = g0.broadcast_mul(&sin_a)?.add(&g2.broadcast_mul(&cos_a)?)?;
+                *mat = Tensor::cat(&[n0, g1, n2, g3], 2)?.contiguous()?;
+            }
+            let v_proj = x_in
+                .reshape((h, d_v, 1))?
+                .broadcast_mul(&w.mxz.narrow(2, 0, r)?)?;
+            let z_proj = z_in
+                .reshape((h, d_v, 1))?
+                .broadcast_mul(&w.mxz.narrow(2, r, r)?)?;
+            let prev_kv = k_state
+                .permute((0, 2, 1))?
+                .contiguous()?
+                .matmul(&v_state.contiguous()?)?
+                .permute((0, 2, 1))?
+                .contiguous()?;
+            let curr_kv = k_b
+                .permute((0, 2, 1))?
+                .contiguous()?
+                .matmul(&v_proj.permute((0, 2, 1))?.contiguous()?)?
+                .permute((0, 2, 1))?
+                .contiguous()?;
+            let alpha_b = alpha.reshape((h, 1, 1))?;
+            let beta_b = beta.reshape((h, 1, 1))?;
+            let gamma_b = gamma.reshape((h, 1, 1))?;
+            let s_new = k_state
+                .zeros_like()?
+                .add(&s_state.broadcast_mul(&alpha_b)?)?
+                .add(&prev_kv.broadcast_mul(&beta_b)?)?
+                .add(&curr_kv.broadcast_mul(&gamma_b)?)?
+                .contiguous()?;
+            let qstate = s_new.matmul(&q_b.permute((0, 2, 1))?.contiguous()?)?;
+            let o = qstate.add(&v_proj.broadcast_mul(&w.d_skip.reshape((h, 1, 1))?)?)?;
+            let o = o.mul(&z_proj.silu()?)?;
+            let y = o.mul(&w.mimo_o)?.sum(D::Minus1)?.reshape((h * d_v,))?;
+            (
+                s_new,
+                k_b.contiguous()?,
+                v_proj.permute((0, 2, 1))?.contiguous()?,
+                ang_new.contiguous()?,
+                y,
+            )
+        };
+        *s_state = s_n;
+        *k_state = k_n;
+        *v_state = v_n;
+        *ang_state = a_n;
 
         w.wo.forward(&y.reshape((1, h * d_v))?)
     }
