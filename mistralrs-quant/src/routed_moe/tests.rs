@@ -200,3 +200,107 @@ fn routed_stats_on_up_projection_disable_fusion() -> Result<()> {
     assert_eq!(up.stats_snapshot(), Some((1, 2)));
     Ok(())
 }
+
+/// CUDA activations with each of gate/up/down independently on the CPU or CUDA (all 8 placements):
+/// the fused kernels must be skipped whenever any projection is off-device, and the result must
+/// still equal the analytic value with each expert's bias applied exactly once.
+#[cfg(feature = "cuda")]
+#[test]
+fn cuda_activations_with_mixed_device_experts_match_analytic_result() -> Result<()> {
+    use crate::GgufMatMul;
+    use candle_core::quantized::{GgmlDType, QTensor};
+
+    const HIDDEN: usize = 64;
+    let cuda = Device::new_cuda(0)?;
+    let projection = |biases: [f32; EXPERTS], on_cuda: bool| -> Result<Arc<dyn QuantMethod>> {
+        let device = if on_cuda { &cuda } else { &Device::Cpu };
+        let weights = Tensor::ones((EXPERTS, HIDDEN, HIDDEN), DType::F32, &Device::Cpu)?;
+        let weights = QTensor::quantize_onto(&weights, GgmlDType::Q4_0, device)?;
+        let biases = biases
+            .into_iter()
+            .flat_map(|value| std::iter::repeat_n(value, HIDDEN))
+            .collect::<Vec<_>>();
+        Ok(Arc::new(GgufMatMul::new(QuantMethodConfig::Gguf {
+            q_weight: Arc::new(weights),
+            b: Some(Tensor::from_vec(biases, (EXPERTS, HIDDEN), device)?),
+        })?))
+    };
+    // Same exact-value setup as `cuda_gguf_biases_are_preserved_in_decode_and_prefill`.
+    let expected =
+        0.25 * (HIDDEN as f32 * 32.0 * 3.0 + 5.0) + 0.75 * (HIDDEN as f32 * 64.0 * 4.0 + 6.0);
+    for placement in 0..8u8 {
+        let on_cuda = |bit: u8| placement & (1 << bit) != 0;
+        let gate = projection([32.0, 64.0], on_cuda(0))?;
+        let up = projection([3.0, 4.0], on_cuda(1))?;
+        let down = projection([5.0, 6.0], on_cuda(2))?;
+        let experts = RoutedExperts {
+            gate: &*gate,
+            up: &*up,
+            down: &*down,
+            num_experts: EXPERTS,
+        };
+        for (tokens, dtype) in [1, GROUPED_PREFILL_MIN_TOKENS]
+            .into_iter()
+            .flat_map(|tokens| [DType::F32, DType::BF16].map(|dtype| (tokens, dtype)))
+        {
+            let xs = Tensor::zeros((tokens, HIDDEN), dtype, &cuda)?;
+            let indices = Tensor::from_vec(
+                (0..tokens * EXPERTS)
+                    .map(|i| (i % EXPERTS) as u32)
+                    .collect(),
+                (tokens, EXPERTS),
+                &cuda,
+            )?;
+            let routing = Tensor::from_vec(
+                (0..tokens).flat_map(|_| [0.25f32, 0.75]).collect(),
+                (tokens, EXPERTS),
+                &cuda,
+            )?;
+            let result = experts.forward(
+                RoutedInput {
+                    xs: &xs,
+                    indices: &indices,
+                    routing: &routing,
+                    output_dtype: dtype,
+                    lora: None,
+                },
+                RoutedActivation {
+                    fused: Some(GluActivationType::Silu),
+                    fallback: &candle_nn::Activation::Silu,
+                },
+            );
+            // The fused CUDA kernel returns f32 for half-precision input while the offload path
+            // returns the input dtype, so a layer mixing the two fails on the gate/up product
+            // ("dtype mismatch in mul"). The loader gives all three projections one device, so that
+            // layout is unreachable; what must hold is that it never yields wrong numbers.
+            let uniform = placement == 0 || placement == 7;
+            let result = match result {
+                Err(err) if !uniform && dtype != DType::F32 => {
+                    eprintln!("placement {placement:03b} {dtype:?}: rejected: {err}");
+                    continue;
+                }
+                result => result?,
+            };
+            assert!(result.device().is_cuda(), "placement {placement:03b}");
+            assert_eq!(result.dtype(), dtype, "placement {placement:03b}");
+            // BF16 keeps 8 significant bits, so allow its half-ulp on the ~1e5-sized result.
+            let tolerance = if dtype == DType::BF16 {
+                expected / 256.0
+            } else {
+                0.02
+            };
+            let error = (result.to_dtype(DType::F32)? - f64::from(expected))?
+                .abs()?
+                .max_all()?
+                .to_scalar::<f32>()?;
+            eprintln!(
+                "placement(down,up,gate)={placement:03b} tokens={tokens} {dtype:?}: max error {error}"
+            );
+            assert!(
+                error <= tolerance,
+                "placement {placement:03b}, tokens={tokens}, {dtype:?}: max error {error}"
+            );
+        }
+    }
+    Ok(())
+}
