@@ -13,8 +13,15 @@ use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use crate::{QuantMethod, QuantMethodConfig, UnquantLinear};
 
 /// Default byte budget for the repacked per-expert matmul cache on one stacked expert tensor
-/// (e.g. one MoE layer's gate_proj across all experts). Override with
-/// `MISTRALRS_CPU_MOE_EXPERT_CACHE_BYTES`; `0` disables retention entirely (build every call).
+/// (e.g. one MoE layer's gate_proj across all experts). This is a per-cache-instance budget, not
+/// a process-wide total: every `ExpertMatMuls` (one per GGUF-quantized stacked expert tensor)
+/// enforces it independently, so a model with N such tensors can retain up to N times this many
+/// bytes in aggregate (e.g. 10 MoE layers' gate_proj tensors at the 64 MiB default is up to ~640
+/// MiB resident across the model, not 64 MiB total). `MISTRALRS_CPU_MOE_EXPERT_CACHE_BYTES`
+/// overrides the default used by every instance; `0` disables retention entirely (build every
+/// call). A caller holding a clone of an evicted entry's `QMatMul` keeps its storage alive past
+/// eviction, so process RSS can briefly exceed the sum of per-instance budgets, and will in any
+/// case include model weights, KV cache, and other allocations this budget says nothing about.
 const DEFAULT_EXPERT_CACHE_BYTES: usize = 64 * 1024 * 1024;
 const EXPERT_CACHE_BYTES_ENV: &str = "MISTRALRS_CPU_MOE_EXPERT_CACHE_BYTES";
 
@@ -50,17 +57,20 @@ struct ExpertCacheMeta {
     bytes: usize,
 }
 
-/// Per-expert quantized matmuls for one stacked expert tensor, built lazily and bounded to a
-/// process-wide byte budget (see `DEFAULT_EXPERT_CACHE_BYTES`).
+/// Per-expert quantized matmuls for one stacked expert tensor, built lazily and bounded to this
+/// instance's own byte budget (see `DEFAULT_EXPERT_CACHE_BYTES`; each `ExpertMatMuls` enforces its
+/// budget independently, so this is not a cap shared across a model's other MoE layers).
 ///
 /// Construction is single-flight per expert: a thread that finds its expert `Building` waits on
 /// `ready` instead of repacking the same bytes again. Different experts build fully concurrently,
 /// since the mutex is only held for state transitions, never across `build()` or the matmul
-/// itself. Eviction is plain LRU over the experts currently `Ready`; an expert whose repacked size
-/// alone exceeds the budget still runs, it just isn't retained afterward. Accounting drops a slot
-/// from the budget the instant it's evicted, even though a caller already holding a clone of that
-/// `QMatMul` keeps its backing storage alive until it finishes using it, so live memory can
-/// transiently exceed the budget by whatever a single in-flight expert needs.
+/// itself. Eviction is LRU by access recency (both a miss that inserts and a hit that returns an
+/// already-`Ready` entry move it to the MRU end of `lru`) over the experts currently `Ready`; an
+/// expert whose repacked size alone exceeds the budget still runs, it just isn't retained
+/// afterward. Accounting drops a slot from the budget the instant it's evicted, even though a
+/// caller already holding a clone of that `QMatMul` keeps its backing storage alive until it
+/// finishes using it, so live memory can transiently exceed the budget by whatever a single
+/// in-flight expert needs.
 #[derive(Debug, Default)]
 pub(crate) struct ExpertMatMuls {
     meta: Mutex<Option<ExpertCacheMeta>>,
@@ -103,7 +113,14 @@ impl ExpertMatMuls {
         loop {
             let meta = guard.as_mut().expect("initialized above");
             match &meta.slots[expert] {
-                ExpertSlot::Ready(matmul, _) => return Ok(matmul.clone()),
+                ExpertSlot::Ready(matmul, _) => {
+                    let matmul = matmul.clone();
+                    if let Some(pos) = meta.lru.iter().position(|&e| e == expert) {
+                        meta.lru.remove(pos);
+                    }
+                    meta.lru.push_back(expert);
+                    return Ok(matmul);
+                }
                 ExpertSlot::Building => {
                     guard = self.ready.wait(guard).unwrap();
                     continue;
@@ -395,26 +412,64 @@ mod tests {
         unquant.gather_forward(x, ids)
     }
 
-    /// Elementwise `abs(actual - expected) <= atol + rtol * abs(expected)`, reporting max
-    /// abs/rel error on failure instead of just a single aggregate diff.
+    /// Classifies a single (actual, expected) pair before any finite-only arithmetic runs on it.
+    /// `abs_err > atol + rtol * e.abs()` is false whenever either operand is NaN, so a plain
+    /// tolerance check silently passes NaN/Inf mismatches instead of catching them; this makes
+    /// non-finite values an explicit comparison outcome instead of falling through unexamined.
+    /// An expected value that is itself NaN or infinite only matches an actual with the same
+    /// classification (NaN-for-NaN, same-signed-Inf-for-Inf); expected finite values reject any
+    /// non-finite actual outright.
+    fn finite_mismatch(a: f32, e: f32) -> Option<&'static str> {
+        if e.is_nan() {
+            if a.is_nan() {
+                None
+            } else {
+                Some("expected NaN but actual is not NaN")
+            }
+        } else if e.is_infinite() {
+            if a.is_infinite() && a.signum() == e.signum() {
+                None
+            } else {
+                Some("expected infinite value but actual does not match its sign/finiteness")
+            }
+        } else if a.is_nan() {
+            Some("actual is NaN but expected is finite")
+        } else if a.is_infinite() {
+            Some("actual is infinite but expected is finite")
+        } else {
+            None
+        }
+    }
+
+    /// Elementwise `abs(actual - expected) <= atol + rtol * abs(expected)` for finite pairs, with
+    /// NaN/Inf handled explicitly via `finite_mismatch` rather than left to fall through the
+    /// tolerance arithmetic. Reports max abs/rel error over the finite elements on failure,
+    /// instead of just a single aggregate diff.
     fn assert_allclose(actual: &Tensor, expected: &Tensor, atol: f32, rtol: f32) -> Result<()> {
         assert_eq!(actual.dims(), expected.dims());
         let actual = actual.flatten_all()?.to_vec1::<f32>()?;
         let expected = expected.flatten_all()?.to_vec1::<f32>()?;
         let mut max_abs_err = 0f32;
         let mut max_rel_err = 0f32;
-        let mut first_violation: Option<(usize, f32, f32)> = None;
+        let mut first_violation: Option<(usize, f32, f32, &'static str)> = None;
         for (i, (&a, &e)) in actual.iter().zip(expected.iter()).enumerate() {
-            let abs_err = (a - e).abs();
-            max_abs_err = max_abs_err.max(abs_err);
-            max_rel_err = max_rel_err.max(abs_err / e.abs().max(1e-12));
-            if abs_err > atol + rtol * e.abs() && first_violation.is_none() {
-                first_violation = Some((i, a, e));
+            let reason = if let Some(reason) = finite_mismatch(a, e) {
+                Some(reason)
+            } else {
+                let abs_err = (a - e).abs();
+                max_abs_err = max_abs_err.max(abs_err);
+                max_rel_err = max_rel_err.max(abs_err / e.abs().max(1e-12));
+                (abs_err > atol + rtol * e.abs()).then_some("tolerance exceeded")
+            };
+            if let Some(reason) = reason {
+                if first_violation.is_none() {
+                    first_violation = Some((i, a, e, reason));
+                }
             }
         }
-        if let Some((idx, a, e)) = first_violation {
+        if let Some((idx, a, e, reason)) = first_violation {
             panic!(
-                "allclose violated at index {idx}: actual={a} expected={e} \
+                "allclose violated at index {idx} ({reason}): actual={a} expected={e} \
                  (max_abs_err={max_abs_err}, max_rel_err={max_rel_err}, atol={atol}, rtol={rtol})"
             );
         }
@@ -547,12 +602,21 @@ mod tests {
     }
 
     fn allclose(actual: &Tensor, expected: &Tensor, atol: f32, rtol: f32) -> Result<bool> {
+        assert_eq!(actual.dims(), expected.dims());
         let actual = actual.flatten_all()?.to_vec1::<f32>()?;
         let expected = expected.flatten_all()?.to_vec1::<f32>()?;
-        Ok(actual
-            .iter()
-            .zip(expected.iter())
-            .all(|(&a, &e)| (a - e).abs() <= atol + rtol * e.abs()))
+        // A matched non-finite pair (e.g. both NaN) is a match without a tolerance check: the
+        // arithmetic itself (NaN - NaN, Inf - Inf) would otherwise produce NaN and read as "not
+        // close" even though the classification matched.
+        Ok(actual.iter().zip(expected.iter()).all(|(&a, &e)| {
+            if let Some(_mismatch) = finite_mismatch(a, e) {
+                false
+            } else if e.is_nan() || e.is_infinite() {
+                true
+            } else {
+                (a - e).abs() <= atol + rtol * e.abs()
+            }
+        }))
     }
 
     #[test]
@@ -576,6 +640,130 @@ mod tests {
             "LOOSE allclose failed to distinguish deliberately wrong expert routing"
         );
         Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // assert_allclose / finite_mismatch fault injection
+    //
+    // Before this fix, `assert_allclose` compared with `abs_err > atol + rtol * e.abs()`
+    // directly: NaN comparisons are always false in IEEE 754, so any actual/expected pair
+    // involving NaN made `abs_err` itself NaN, `abs_err > ...` false, and the assertion silently
+    // reported success. Each test below panics the pre-fix implementation would not have raised.
+    // -----------------------------------------------------------------------
+
+    fn expect_assert_allclose_panics(actual: &Tensor, expected: &Tensor, atol: f32, rtol: f32) {
+        let actual = actual.clone();
+        let expected = expected.clone();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            assert_allclose(&actual, &expected, atol, rtol)
+        }));
+        assert!(
+            result.is_err(),
+            "assert_allclose should have panicked on this non-finite/mismatched input but did not"
+        );
+    }
+
+    #[test]
+    fn assert_allclose_rejects_actual_nan_vs_finite_expected() -> Result<()> {
+        let device = Device::Cpu;
+        let actual = Tensor::new(&[1.0f32, f32::NAN, 3.0], &device)?;
+        let expected = Tensor::new(&[1.0f32, 2.0, 3.0], &device)?;
+        expect_assert_allclose_panics(&actual, &expected, TIGHT_ATOL, TIGHT_RTOL);
+        Ok(())
+    }
+
+    #[test]
+    fn assert_allclose_rejects_actual_inf_vs_finite_expected() -> Result<()> {
+        let device = Device::Cpu;
+        let actual = Tensor::new(&[1.0f32, f32::INFINITY, 3.0], &device)?;
+        let expected = Tensor::new(&[1.0f32, 2.0, 3.0], &device)?;
+        expect_assert_allclose_panics(&actual, &expected, TIGHT_ATOL, TIGHT_RTOL);
+        Ok(())
+    }
+
+    #[test]
+    fn assert_allclose_rejects_finite_actual_vs_nan_expected() -> Result<()> {
+        let device = Device::Cpu;
+        let actual = Tensor::new(&[1.0f32, 2.0, 3.0], &device)?;
+        let expected = Tensor::new(&[1.0f32, f32::NAN, 3.0], &device)?;
+        expect_assert_allclose_panics(&actual, &expected, TIGHT_ATOL, TIGHT_RTOL);
+        Ok(())
+    }
+
+    #[test]
+    fn assert_allclose_rejects_positive_inf_vs_negative_inf() -> Result<()> {
+        let device = Device::Cpu;
+        let actual = Tensor::new(&[f32::INFINITY], &device)?;
+        let expected = Tensor::new(&[f32::NEG_INFINITY], &device)?;
+        expect_assert_allclose_panics(&actual, &expected, TIGHT_ATOL, TIGHT_RTOL);
+        Ok(())
+    }
+
+    #[test]
+    #[should_panic]
+    fn assert_allclose_rejects_mismatched_shapes() {
+        let device = Device::Cpu;
+        let actual = Tensor::new(&[1.0f32, 2.0], &device).unwrap();
+        let expected = Tensor::new(&[1.0f32, 2.0, 3.0], &device).unwrap();
+        assert_allclose(&actual, &expected, TIGHT_ATOL, TIGHT_RTOL).unwrap();
+    }
+
+    #[test]
+    fn assert_allclose_rejects_incorrect_near_zero_values() -> Result<()> {
+        let device = Device::Cpu;
+        // Expected values near zero; actual is off by far more than atol + rtol * |expected|.
+        let actual = Tensor::new(&[0.5f32, 1e-6, -1e-6], &device)?;
+        let expected = Tensor::new(&[0.0f32, 1e-6, -1e-6], &device)?;
+        expect_assert_allclose_panics(&actual, &expected, TIGHT_ATOL, TIGHT_RTOL);
+        Ok(())
+    }
+
+    #[test]
+    fn assert_allclose_rejects_a_deliberately_corrupted_expert_output() -> Result<()> {
+        let device = Device::Cpu;
+        let qtensor = random_qtensor(GgmlDType::Q4K, EXPERTS, N_OUT, K, &device)?;
+        let x = det_tensor((2, 1, K), 210, &device)?;
+        let ids = Tensor::new(&[[0u32, 5], [5, 2]], &device)?;
+        let expected = reference(&qtensor, &x, &ids)?;
+        let cache = ExpertMatMuls::default();
+        let actual = selected_experts_forward(&qtensor, Some(&cache), &x, &ids)?
+            .expect("layout is supported");
+
+        // Simulate a corrupted expert output (e.g. a kernel that read garbage/uninitialized
+        // memory) by injecting a NaN into one element, rather than a merely out-of-tolerance one.
+        let mut corrupted = actual.flatten_all()?.to_vec1::<f32>()?;
+        corrupted[0] = f32::NAN;
+        let corrupted = Tensor::from_vec(corrupted, actual.dims(), &device)?;
+
+        expect_assert_allclose_panics(&corrupted, &expected, LOOSE_ATOL, LOOSE_RTOL);
+        Ok(())
+    }
+
+    #[test]
+    fn assert_allclose_accepts_valid_finite_values_within_tolerance() -> Result<()> {
+        let device = Device::Cpu;
+        let qtensor = random_qtensor(GgmlDType::Q4K, EXPERTS, N_OUT, K, &device)?;
+        let x = det_tensor((2, 1, K), 211, &device)?;
+        let ids = Tensor::new(&[[0u32, 5], [5, 2]], &device)?;
+        let expected = reference(&qtensor, &x, &ids)?;
+        let cache = ExpertMatMuls::default();
+        let actual = selected_experts_forward(&qtensor, Some(&cache), &x, &ids)?
+            .expect("layout is supported");
+        assert_allclose(&actual, &expected, LOOSE_ATOL, LOOSE_RTOL)
+    }
+
+    #[test]
+    fn assert_allclose_accepts_matching_non_finite_classification() -> Result<()> {
+        let device = Device::Cpu;
+        let actual = Tensor::new(
+            &[1.0f32, f32::NAN, f32::INFINITY, f32::NEG_INFINITY],
+            &device,
+        )?;
+        let expected = Tensor::new(
+            &[1.0f32, f32::NAN, f32::INFINITY, f32::NEG_INFINITY],
+            &device,
+        )?;
+        assert_allclose(&actual, &expected, TIGHT_ATOL, TIGHT_RTOL)
     }
 
     #[test]
@@ -696,6 +884,130 @@ mod tests {
             "expert 0 should be evicted for expert 1"
         );
         assert!(cache.is_ready(1));
+        Ok(())
+    }
+
+    /// Cache holds exactly 2 experts: insert A, insert B, access A (a hit), insert C. A must
+    /// survive (it was touched most recently before C landed), C must be cached (just inserted),
+    /// and B must be evicted (least recently used). Then a repeat access to A must stay a hit
+    /// (no reconstruction) and an access to B must reconstruct (it was evicted). Construction
+    /// counters, not timing, make this deterministic: against the pre-fix code, where a cache hit
+    /// never touched `lru`, B (not A) would have survived since eviction only followed insertion
+    /// order (pop_front), so this test would have failed with "A must remain cached" before the
+    /// `get_or_build` fix.
+    #[test]
+    fn access_updates_lru_recency_abac() -> Result<()> {
+        let device = Device::Cpu;
+        let qtensor = random_qtensor(GgmlDType::Q4K, EXPERTS, N_OUT, K, &device)?;
+        let one_expert_bytes =
+            qmatmul_retained_bytes(&build_counting(Arc::new(AtomicUsize::new(0)), &qtensor, 0));
+        let cache = ExpertMatMuls::default();
+        cache.set_budget_for_test(one_expert_bytes * 2 + one_expert_bytes / 2);
+
+        const A: usize = 0;
+        const B: usize = 1;
+        const C: usize = 2;
+
+        let a_builds = Arc::new(AtomicUsize::new(0));
+        cache.get_or_build(EXPERTS, A, || {
+            Ok(build_counting(a_builds.clone(), &qtensor, A))
+        })?;
+        let b_builds = Arc::new(AtomicUsize::new(0));
+        cache.get_or_build(EXPERTS, B, || {
+            Ok(build_counting(b_builds.clone(), &qtensor, B))
+        })?;
+        assert!(cache.is_ready(A) && cache.is_ready(B));
+
+        // Access A: a hit, must promote it to MRU without rebuilding.
+        cache.get_or_build(EXPERTS, A, || {
+            panic!("A is cached, accessing it must not rebuild");
+            #[allow(unreachable_code)]
+            Ok(build_counting(a_builds.clone(), &qtensor, A))
+        })?;
+        assert_eq!(a_builds.load(Ordering::SeqCst), 1);
+
+        let c_builds = Arc::new(AtomicUsize::new(0));
+        cache.get_or_build(EXPERTS, C, || {
+            Ok(build_counting(c_builds.clone(), &qtensor, C))
+        })?;
+
+        assert!(
+            cache.is_ready(A),
+            "A must remain cached: it was accessed most recently before C was inserted"
+        );
+        assert!(cache.is_ready(C), "C must be cached: it was just inserted");
+        assert!(
+            !cache.is_ready(B),
+            "B must be evicted: it is the least recently used entry"
+        );
+
+        // A is still resident: accessing it again must not reconstruct.
+        cache.get_or_build(EXPERTS, A, || {
+            panic!("A should still be cached and must not rebuild");
+            #[allow(unreachable_code)]
+            Ok(build_counting(a_builds.clone(), &qtensor, A))
+        })?;
+        assert_eq!(a_builds.load(Ordering::SeqCst), 1);
+
+        // B was evicted: accessing it again must reconstruct.
+        let b_rebuilds = Arc::new(AtomicUsize::new(0));
+        cache.get_or_build(EXPERTS, B, || {
+            Ok(build_counting(b_rebuilds.clone(), &qtensor, B))
+        })?;
+        assert_eq!(
+            b_rebuilds.load(Ordering::SeqCst),
+            1,
+            "B must have been reconstructed after eviction"
+        );
+        Ok(())
+    }
+
+    /// Extends the A/B/A/C scenario to repeated hits and a second eviction: an entry refreshed by
+    /// several hits in a row keeps surviving evictions until something more recently touched than
+    /// it exists. Insertion order alone (the pre-fix behavior) would evict expert 0 on the very
+    /// first new insertion here, not the second.
+    #[test]
+    fn eviction_follows_recency_after_repeated_hits() -> Result<()> {
+        let device = Device::Cpu;
+        let qtensor = random_qtensor(GgmlDType::Q4K, EXPERTS, N_OUT, K, &device)?;
+        let one_expert_bytes =
+            qmatmul_retained_bytes(&build_counting(Arc::new(AtomicUsize::new(0)), &qtensor, 0));
+        let cache = ExpertMatMuls::default();
+        cache.set_budget_for_test(one_expert_bytes * 3 + one_expert_bytes / 2);
+
+        for expert in 0..3 {
+            cache.get_or_build(EXPERTS, expert, || {
+                Ok(build_counting(
+                    Arc::new(AtomicUsize::new(0)),
+                    &qtensor,
+                    expert,
+                ))
+            })?;
+        }
+        // lru order is now [0, 1, 2] (0 is LRU).
+        for _ in 0..5 {
+            cache.get_or_build(EXPERTS, 0, || {
+                panic!("expert 0 is cached, repeated access must not rebuild it");
+                #[allow(unreachable_code)]
+                Ok(build_counting(Arc::new(AtomicUsize::new(0)), &qtensor, 0))
+            })?;
+        }
+        // repeated hits promote 0 to MRU each time: order is now [1, 2, 0].
+        cache.get_or_build(EXPERTS, 3, || {
+            Ok(build_counting(Arc::new(AtomicUsize::new(0)), &qtensor, 3))
+        })?;
+        assert!(!cache.is_ready(1), "1 is now LRU and must be evicted first");
+        assert!(cache.is_ready(0) && cache.is_ready(2) && cache.is_ready(3));
+
+        cache.get_or_build(EXPERTS, 4, || {
+            Ok(build_counting(Arc::new(AtomicUsize::new(0)), &qtensor, 4))
+        })?;
+        assert!(!cache.is_ready(2), "2 is now LRU and must be evicted next");
+        assert!(
+            cache.is_ready(0),
+            "0 must still be resident: its repeated accesses kept promoting it past both evictions"
+        );
+        assert!(cache.is_ready(3) && cache.is_ready(4));
         Ok(())
     }
 
@@ -1109,6 +1421,50 @@ mod tests {
             );
         }
 
+        Ok(())
+    }
+
+    /// Isolates `get_or_build`'s own hit-path cost (the mutex lock, slot match, and (post-fix)
+    /// the `lru` scan/remove/push_back) from matmul/repacking cost, which the shape-level bench
+    /// above cannot do cleanly on containers where candle's own CPU matmul/thread-pool has
+    /// unrelated scaling issues at high core counts. No `build()` ever runs here: every call is a
+    /// guaranteed cache hit against a cache pre-populated up to its budget, so this measures
+    /// exactly the cost this PR's LRU fix adds to the hot path. Run with `--ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bench_cache_hit_latency_pure() -> Result<()> {
+        let device = Device::Cpu;
+        let (n_experts, n_out, k) = (128usize, 768usize, 2048usize);
+        let qtensor = random_qtensor(GgmlDType::Q4K, n_experts, n_out, k, &device)?;
+        let one_expert_bytes =
+            qmatmul_retained_bytes(&build_counting(Arc::new(AtomicUsize::new(0)), &qtensor, 0));
+        let resident = 40usize;
+        let cache = ExpertMatMuls::default();
+        cache.set_budget_for_test(one_expert_bytes * resident + one_expert_bytes / 2);
+        for expert in 0..resident {
+            cache.get_or_build(n_experts, expert, || {
+                Ok(build_counting(
+                    Arc::new(AtomicUsize::new(0)),
+                    &qtensor,
+                    expert,
+                ))
+            })?;
+        }
+
+        let iters = 2_000_000u64;
+        let start = std::time::Instant::now();
+        for i in 0..iters {
+            let expert = (i as usize) % resident;
+            cache.get_or_build(n_experts, expert, || {
+                panic!("cache is fully warm, every call here must be a hit")
+            })?;
+        }
+        let elapsed = start.elapsed();
+        println!(
+            "pure_cache_hits: {iters} calls over {resident} resident experts in {elapsed:?} \
+             ({:.1} ns/call)",
+            elapsed.as_nanos() as f64 / iters as f64
+        );
         Ok(())
     }
 }
