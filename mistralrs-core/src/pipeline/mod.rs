@@ -76,11 +76,12 @@ pub use loaders::{
     AutoNormalLoader, DeviceMappedModelLoader, DiffusionLoaderType, DiffusionModel,
     DiffusionModelLoader, EmbeddingGemmaLoader, EmbeddingLoaderType, EmbeddingModel,
     EmbeddingModelLoader, EmbeddingModelPaths, EmbeddingModule, EmbeddingModulePaths,
-    EmbeddingModuleType, FluxLoader, GemmaLoader, Idefics2Loader, LLaVALoader, LLaVANextLoader,
-    LlamaLoader, Loader, LocalModelPaths, MistralLoader, MixtralLoader, ModelDownload, ModelKind,
-    ModelPaths, MultimodalLoaderType, MultimodalModel, MultimodalModelLoader, NormalLoaderType,
-    NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Phi3VLoader,
-    PrettyName, QuantizationKind, Qwen2Loader, Qwen3EmbeddingLoader, Starcoder2Loader, TokenSource,
+    EmbeddingModuleType, FluxLoader, GemmaLoader, Idefics2Loader, Inkling2LoopLoader, LLaVALoader,
+    LLaVANextLoader, LlamaLoader, Loader, LocalModelPaths, MistralLoader, MixtralLoader,
+    ModelDownload, ModelKind, ModelPaths, MultimodalLoaderType, MultimodalModel,
+    MultimodalModelLoader, NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader,
+    Phi2Loader, Phi3Loader, Phi3VLoader, PrettyName, QuantizationKind, Qwen2Loader,
+    Qwen3EmbeddingLoader, Starcoder2Loader, TokenSource,
 };
 #[cfg(test)]
 pub(crate) use loaders::{

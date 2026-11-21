@@ -56,9 +56,9 @@ use serde::Deserialize;
 use tokio::sync::Mutex;
 
 pub use normal_loaders::{
-    AutoNormalLoader, GemmaLoader, LlamaLoader, MistralLoader, MixtralLoader, NormalLoaderType,
-    NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader, Phi3Loader, Qwen2Loader,
-    Starcoder2Loader,
+    AutoNormalLoader, GemmaLoader, Inkling2LoopLoader, LlamaLoader, MistralLoader, MixtralLoader,
+    NormalLoaderType, NormalLoadingMetadata, NormalModel, NormalModelLoader, Phi2Loader,
+    Phi3Loader, Qwen2Loader, Starcoder2Loader,
 };
 
 pub use multimodal_loaders::{

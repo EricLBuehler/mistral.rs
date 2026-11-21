@@ -1,8 +1,8 @@
 use crate::NormalLoaderType;
 use std::{error::Error, fmt, str::FromStr};
 
-pub(crate) const GGUF_NORMAL_LOADER_COUNT: usize = 28;
-pub(crate) const CANONICAL_GGUF_ARCHITECTURE_COUNT: usize = 28;
+pub(crate) const GGUF_NORMAL_LOADER_COUNT: usize = 29;
+pub(crate) const CANONICAL_GGUF_ARCHITECTURE_COUNT: usize = 29;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum CanonicalGgufArchitecture {
@@ -34,6 +34,7 @@ pub(crate) enum CanonicalGgufArchitecture {
     Lfm2,
     Lfm2Moe,
     Lfm3,
+    Inkling2Loop,
 }
 
 impl CanonicalGgufArchitecture {
@@ -67,6 +68,7 @@ impl CanonicalGgufArchitecture {
             Self::Lfm2 => "lfm2",
             Self::Lfm2Moe => "lfm2moe",
             Self::Lfm3 => "lfm3",
+            Self::Inkling2Loop => "inkling2_loop",
         }
     }
 }
@@ -110,6 +112,7 @@ impl FromStr for CanonicalGgufArchitecture {
             "lfm2" => Ok(Self::Lfm2),
             "lfm2moe" => Ok(Self::Lfm2Moe),
             "lfm3" => Ok(Self::Lfm3),
+            "inkling2_loop" | "inkling2" => Ok(Self::Inkling2Loop),
             _ => Err(NormalGgufRegistryError::UnknownArchitecture(
                 value.to_string(),
             )),
@@ -475,6 +478,7 @@ const HUNYUAN_MOE_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::HunYuanMoEV
 const LFM2_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Lfm2];
 const LFM2_MOE_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Lfm2Moe];
 const LFM3_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Lfm3];
+const INKLING2_LOOP_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Inkling2Loop];
 
 pub(crate) const GGUF_SCHEMAS: &[GgufSchema; CANONICAL_GGUF_ARCHITECTURE_COUNT] = &[
     GgufSchema {
@@ -701,6 +705,14 @@ pub(crate) const GGUF_SCHEMAS: &[GgufSchema; CANONICAL_GGUF_ARCHITECTURE_COUNT] 
         required_tensors: SHORTCONV_TENSORS,
         unsupported_metadata: NO_REQUIREMENTS,
     },
+    GgufSchema {
+        architecture: CanonicalGgufArchitecture::Inkling2Loop,
+        compatible_loaders: INKLING2_LOOP_LOADERS,
+        rope_pairing: RopePairing::HalfSplit,
+        required_metadata: NO_REQUIREMENTS,
+        required_tensors: NO_REQUIREMENTS,
+        unsupported_metadata: NO_REQUIREMENTS,
+    },
 ];
 
 pub(crate) const NORMAL_MODEL_ADAPTERS: &[NativeModelAdapter; GGUF_NORMAL_LOADER_COUNT] = &[
@@ -922,6 +934,11 @@ pub(crate) const NORMAL_MODEL_ADAPTERS: &[NativeModelAdapter; GGUF_NORMAL_LOADER
             GgufLayout::PerLayerInventory,
             GgufLayout::SqueezedShortConv,
         ],
+    },
+    NativeModelAdapter {
+        loader: NormalLoaderType::Inkling2Loop,
+        architectures: &[CanonicalGgufArchitecture::Inkling2Loop],
+        layouts: &[GgufLayout::Direct],
     },
 ];
 
