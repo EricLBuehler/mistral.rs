@@ -65,6 +65,9 @@ struct CpuAttnCtx<'a, T> {
     k: TensorView<'a, T>,
     v: TensorView<'a, T>,
     mask: Option<MaskInfo<'a>>,
+    /// Per-head softmax sink logits, f32. A sink is one more denominator term that carries no
+    /// value, so it sets the initial running max and sum of a row.
+    sinks: Option<&'a [f32]>,
     scale: f32,
     max_bias: f32,
     logit_softcap: f32,
@@ -152,6 +155,18 @@ where
         _ => None,
     };
 
+    // The sink tensor is per head and tiny; copying it to f32 keeps the kernel free of dtype
+    // and storage-guard plumbing.
+    let sinks: Option<Vec<f32>> = match &sdpa_params.sinks {
+        Some(sinks) => Some(
+            sinks
+                .flatten_all()?
+                .to_dtype(DType::F32)?
+                .to_vec1::<f32>()?,
+        ),
+        None => None,
+    };
+
     let q = TensorView::new(q_data, q)?;
     let k = TensorView::new(k_data, k)?;
     let v = TensorView::new(v_data, v)?;
@@ -161,11 +176,23 @@ where
         }
         _ => None,
     };
+    if sinks.is_some() && q.dims[1] != 1 {
+        candle_core::bail!("CPU attention with sinks is decode-only; prefill uses the tensor path");
+    }
+    // Sinks are per query head; a different shape would silently drop them.
+    if sinks.as_ref().is_some_and(|sinks| sinks.len() != q.dims[2]) {
+        candle_core::bail!(
+            "CPU attention sinks: expected {} values, got {}",
+            q.dims[2],
+            sinks.as_ref().map_or(0, Vec::len)
+        );
+    }
     let ctx = CpuAttnCtx {
         q,
         k,
         v,
         mask,
+        sinks: sinks.as_deref(),
         scale: sdpa_params.softmax_scale,
         max_bias: 0.0,
         logit_softcap: sdpa_params.softcap.unwrap_or(0.0),
