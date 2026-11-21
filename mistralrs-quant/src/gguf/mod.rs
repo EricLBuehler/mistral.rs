@@ -9,6 +9,11 @@ pub mod fast_mmq;
 pub mod fast_mmvq;
 #[cfg(feature = "cuda")]
 mod ffi;
+mod iq;
+#[cfg(test)]
+mod iq_golden;
+pub mod iq_tables;
+
 #[cfg(feature = "cuda")]
 pub(crate) mod gated_mix;
 mod group;
