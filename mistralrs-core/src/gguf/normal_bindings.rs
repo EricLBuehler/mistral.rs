@@ -16,6 +16,11 @@ pub(crate) fn build_normal_bindings(
         return super::qwen_multimodal_bindings::build_qwen35_text_bindings(archive);
     }
     let mut bindings = GgufBindingMap::new();
+    if architecture == CanonicalGgufArchitecture::Olala {
+        bind_root_tensors(archive, loader, architecture, &mut bindings);
+        bind_olala(archive, &mut bindings)?;
+        return Ok(bindings);
+    }
     let block_count = native_block_count(archive, architecture)?;
     bind_root_tensors(archive, loader, architecture, &mut bindings);
     for name in archive.tensors().keys() {
@@ -115,6 +120,63 @@ fn bind_root_tensors(
 }
 
 #[allow(clippy::too_many_arguments)]
+
+fn bind_olala(archive: &GgufArchive, bindings: &mut GgufBindingMap) -> Result<()> {
+    for name in archive.tensors().keys() {
+        let Some(rest) = name.strip_prefix("blk.") else {
+            continue;
+        };
+        let Some((layer, role)) = rest.split_once('.') else {
+            continue;
+        };
+        let Ok(layer) = layer.parse::<usize>() else {
+            continue;
+        };
+        let p = format!("model.layers.{layer}");
+        let target = match role {
+            "geo_mixer_scale" => format!("{p}.geo_mixer_scale"),
+            "geo_mixer_bias" => format!("{p}.geo_mixer_bias"),
+            "geo_mlp_scale" => format!("{p}.geo_mlp_scale"),
+            "geo_mlp_bias" => format!("{p}.geo_mlp_bias"),
+            "ssm_in.weight" => format!("{p}.mixer.ssm_in.weight"),
+            "ssm_in_dyn.weight" => format!("{p}.mixer.ssm_in_dyn.weight"),
+            "ssm_b_bias" => format!("{p}.mixer.ssm_b_bias"),
+            "ssm_c_bias" => format!("{p}.mixer.ssm_c_bias"),
+            "ssm_b_norm.weight" => format!("{p}.mixer.ssm_b_norm.weight"),
+            "ssm_c_norm.weight" => format!("{p}.mixer.ssm_c_norm.weight"),
+            "ssm_mimo_x" => format!("{p}.mixer.ssm_mimo_x"),
+            "ssm_mimo_z" => format!("{p}.mixer.ssm_mimo_z"),
+            "ssm_mimo_o" => format!("{p}.mixer.ssm_mimo_o"),
+            "ssm_dt_bias" => format!("{p}.mixer.ssm_dt_bias"),
+            "ssm_d" => format!("{p}.mixer.ssm_d"),
+            "attn_output.weight" => format!("{p}.mixer.attn_output.weight"),
+            "attn_q.weight" => format!("{p}.mixer.attn_q.weight"),
+            "attn_wa_k.weight" => format!("{p}.mixer.attn_wa_k.weight"),
+            "attn_wa_v.weight" => format!("{p}.mixer.attn_wa_v.weight"),
+            "attn_wb_k.weight" => format!("{p}.mixer.attn_wb_k.weight"),
+            "attn_wb_v.weight" => format!("{p}.mixer.attn_wb_v.weight"),
+            "attn_shift_k.weight" => format!("{p}.mixer.attn_shift_k.weight"),
+            "attn_shift_v.weight" => format!("{p}.mixer.attn_shift_v.weight"),
+            "attn_lambda.weight" => format!("{p}.mixer.attn_lambda.weight"),
+            "attn_gate.weight" => format!("{p}.mixer.attn_gate.weight"),
+            "attn_q_norm.weight" => format!("{p}.mixer.attn_q_norm.weight"),
+            "attn_k_norm.weight" => format!("{p}.mixer.attn_k_norm.weight"),
+            "attn_softmax_scaler" => format!("{p}.mixer.attn_softmax_scaler"),
+            "ffn_gate_inp.weight" => format!("{p}.moe.gate_inp.weight"),
+            "exp_probs_b" => format!("{p}.moe.exp_probs_b"),
+            "ffn_latent_down.weight" => format!("{p}.moe.latent_down.weight"),
+            "ffn_latent_up.weight" => format!("{p}.moe.latent_up.weight"),
+            "ffn_up_exps.weight" => format!("{p}.moe.up_exps.weight"),
+            "ffn_down_exps.weight" => format!("{p}.moe.down_exps.weight"),
+            "ffn_up_shexp.weight" => format!("{p}.moe.up_shexp.weight"),
+            "ffn_down_shexp.weight" => format!("{p}.moe.down_shexp.weight"),
+            _ => continue,
+        };
+        bindings.insert(target, GgufTensorBinding::tensor(name));
+    }
+    Ok(())
+}
+
 fn bind_block_tensor(
     archive: &GgufArchive,
     loader: &NormalLoaderType,
