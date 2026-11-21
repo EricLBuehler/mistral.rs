@@ -50,7 +50,7 @@ struct Fp8BlockwiseDequantize {
 }
 
 impl Fp8BlockwiseDequantize {
-    fn dispatch_dequant_blockwise<T: WithDType>(
+    fn dispatch_dequant_blockwise<T: WithDType + num_traits::FromPrimitive + num_traits::Float>(
         &self,
         weight: &[F8E4M3],
         scale: &[f32],
@@ -90,9 +90,13 @@ impl Fp8BlockwiseDequantize {
                         let output_pos = weight_y * output_width + weight_x;
 
                         // SAFETY: We know each thread will only update indepedant values!
+                        //
+                        // The scale and the value are both f32, so the product is f32. A
+                        // scalar f64 conversion here stops the loop vectorising.
                         unsafe {
                             *res_ptr.wrapping_add(output_pos) =
-                                T::from_f64((weight[weight_pos].to_f32() * scale) as f64);
+                                T::from_f32(weight[weight_pos].to_f32() * scale)
+                                    .unwrap_or_else(T::nan);
                         }
                     }
                 }

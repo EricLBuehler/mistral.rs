@@ -4242,6 +4242,7 @@ dependencies = [
  "libc",
  "memmap2",
  "mistralrs-metal-compile",
+ "num-traits",
  "objc2-foundation",
  "objc2-metal",
  "paste",
