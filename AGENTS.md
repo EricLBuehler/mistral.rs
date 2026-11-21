@@ -29,7 +29,7 @@ Mistral.rs supports multiple model types and advanced features via dedicated cra
 - **Multimodal Models**
   - Crate: `mistralrs-vision`
   - CLI: `mistralrs run -m <model>` (auto-detects multimodal models)
-  - Docs: `docs/src/content/docs/explanation/multimodal-pipeline.md`, `docs/src/content/docs/reference/supported-models.md`
+  - Docs: `docs/src/content/docs/developer/multimodal-pipeline.md`, `docs/src/content/docs/reference/supported-models.md`
 - **Diffusion Models**
   - CLI: `mistralrs run -m <model>` (auto-detects diffusion models)
   - Docs: `docs/src/content/docs/reference/supported-models.md`
@@ -42,7 +42,6 @@ Mistral.rs supports multiple model types and advanced features via dedicated cra
   - Conversion Script: `scripts/convert_awq_marlin.py`
 - **Paged Attention**
   - Crate: `mistralrs-paged-attn`
-  - Docs: `docs/src/content/docs/explanation/paged-attention.md`, `docs/src/content/docs/guides/perf/use-paged-attention.md`
 - **Adapters & LoRA/X-LoRA**
   - Docs: `docs/src/content/docs/guides/customize/lora-adapters.md`
 - **Mixture of Experts (AnyMoE)**
