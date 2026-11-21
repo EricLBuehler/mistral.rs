@@ -593,4 +593,19 @@ mod tests {
         );
         assert_eq!(matcher.get_call(&both).unwrap().len(), 2);
     }
+
+    #[test]
+    fn mistral_nemo_parallel_calls_are_all_returned() {
+        let tools = vec![test_tool("get_weather"), test_tool("get_time")];
+        let matcher = ToolCallingMatcher::new(ToolChoice::Auto, Some(&tools)).unwrap();
+        let message = r#"[TOOL_CALLS][{"name":"get_weather","arguments":{"city":"Paris"}}, {"name":"get_time","arguments":{"zone":"UTC"}}]"#;
+        assert_eq!(
+            matcher.prefix_could_be_tool(message).unwrap(),
+            (false, true)
+        );
+        let calls = matcher.get_call(message).unwrap();
+        let names: Vec<_> = calls.iter().map(|c| c.function.name.as_str()).collect();
+        assert_eq!(names, ["get_weather", "get_time"]);
+        assert_eq!(calls[1].function.arguments, r#"{"zone":"UTC"}"#);
+    }
 }
