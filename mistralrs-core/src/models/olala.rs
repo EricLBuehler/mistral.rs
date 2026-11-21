@@ -10,6 +10,8 @@ use std::sync::{Arc, Mutex};
 
 #[cfg(test)]
 mod olala_cpu;
+#[cfg(test)]
+mod olala_prefill;
 
 use crate::{
     paged_attention::ModelConfigMetadata,
