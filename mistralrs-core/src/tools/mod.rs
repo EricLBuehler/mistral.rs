@@ -375,17 +375,21 @@ fn coerce_arguments_by_schema(
 }
 
 fn coerce_param_value(raw: &str, param_type: &str) -> Value {
-    if raw.eq_ignore_ascii_case("null") {
-        return Value::Null;
-    }
     let param_type = param_type.trim().to_ascii_lowercase();
     let integer_like = ["int", "uint", "long", "short", "unsigned"]
         .iter()
         .any(|prefix| param_type.starts_with(prefix));
     let number_like = param_type.starts_with("num") || param_type.starts_with("float");
+    let boolean_like = matches!(param_type.as_str(), "boolean" | "bool" | "binary");
     let structured = matches!(param_type.as_str(), "object" | "array" | "arr" | "sequence")
         || param_type.starts_with("dict")
         || param_type.starts_with("list");
+    // A declared string parameter keeps a literal "null" as text; only the other types, where
+    // the schema can't otherwise represent absence, coerce it to JSON null.
+    let is_string_type = !(integer_like || number_like || boolean_like || structured);
+    if !is_string_type && raw.eq_ignore_ascii_case("null") {
+        return Value::Null;
+    }
     if integer_like {
         raw.trim()
             .parse::<i64>()
@@ -398,7 +402,7 @@ fn coerce_param_value(raw: &str, param_type: &str) -> Value {
             .map(Value::from)
             .or_else(|_| trimmed.parse::<f64>().map(Value::from))
             .unwrap_or_else(|_| Value::String(raw.to_string()))
-    } else if matches!(param_type.as_str(), "boolean" | "bool" | "binary") {
+    } else if boolean_like {
         Value::Bool(raw.trim().eq_ignore_ascii_case("true"))
     } else if structured {
         serde_json::from_str(raw.trim()).unwrap_or_else(|_| Value::String(raw.to_string()))
@@ -568,6 +572,24 @@ mod tests {
         assert_eq!(args["units"], "\"C\"");
         assert_eq!(args["detailed"], true);
         assert_eq!(args["coords"], json!([1, 2]));
+    }
+
+    #[test]
+    fn string_param_literal_null_is_not_coerced_to_json_null() {
+        let mut tool = test_tool("echo");
+        tool.function.parameters = Some(
+            serde_json::from_value(json!({
+                "type": "object",
+                "properties": {"note": {"type": "string"}}
+            }))
+            .unwrap(),
+        );
+        let matcher = ToolCallingMatcher::new(ToolChoice::Auto, Some(&[tool])).unwrap();
+        let calls = matcher
+            .get_call(r#"{"name":"echo","parameters":{"note":"null"}}"#)
+            .unwrap();
+        let args: Value = serde_json::from_str(&calls[0].function.arguments).unwrap();
+        assert_eq!(args["note"], json!("null"));
     }
 
     #[test]
