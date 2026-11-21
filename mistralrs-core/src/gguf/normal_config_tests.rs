@@ -81,6 +81,7 @@ fn is_moe(loader: &NormalLoaderType) -> bool {
             | NormalLoaderType::HunYuanMoEV1
             | NormalLoaderType::Qwen3Next
             | NormalLoaderType::Lfm2Moe
+            | NormalLoaderType::Kolibri1
     )
 }
 
@@ -283,7 +284,10 @@ fn fixture(
         }
     }
 
-    if matches!(loader, NormalLoaderType::Gemma2 | NormalLoaderType::GptOss) {
+    if matches!(
+        loader,
+        NormalLoaderType::Gemma2 | NormalLoaderType::GptOss | NormalLoaderType::Kolibri1
+    ) {
         insert_u32(
             &mut metadata,
             architecture,
@@ -397,6 +401,9 @@ fn assert_native_config_deserializes(loader: &NormalLoaderType, config: JsonValu
         }
         NormalLoaderType::Lfm2 | NormalLoaderType::Lfm2Moe => {
             assert_deserializes::<models::lfm2::Config>(loader, config)
+        }
+        NormalLoaderType::Kolibri1 => {
+            assert_deserializes::<models::kolibri1::Config>(loader, config)
         }
         NormalLoaderType::Lfm3 => assert_deserializes::<models::lfm3::Config>(loader, config),
     }
