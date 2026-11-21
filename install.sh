@@ -1134,6 +1134,9 @@ activate_install() {
     activation_backup=""
     mkdir -p "$BIN_DIR" || return 1
     if [ -e "$PREBUILT_DIR" ]; then
+        if [ -f "$PREBUILT_DIR/shell-rcs" ]; then
+            cp "$PREBUILT_DIR/shell-rcs" "$activation_stage/shell-rcs" || return 1
+        fi
         activation_backup=$(mktemp -d "$HOME/.mistralrs-backup.XXXXXX") || return 1
         rmdir "$activation_backup" || return 1
         ACTIVATION_PENDING=1
@@ -1393,6 +1396,10 @@ append_source_line() {
     if ! grep -Fqx "$source_line" "$rc"; then
         printf '\n%s\n' "$source_line" >> "$rc"
         PATH_RCS="${PATH_RCS}${PATH_RCS:+, }$(tildify "$rc")"
+    fi
+    rc_path="$(cd "$(dirname "$rc")" && pwd)/$(basename "$rc")"
+    if ! grep -Fqx "$rc_path" "$PREBUILT_DIR/shell-rcs" 2>/dev/null; then
+        printf '%s\n' "$rc_path" >> "$PREBUILT_DIR/shell-rcs"
     fi
 }
 
