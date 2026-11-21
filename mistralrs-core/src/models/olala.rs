@@ -2,8 +2,8 @@
 
 use candle_core::{DType, Device, Result, Tensor, D};
 use mistralrs_quant::{
-    apply_immediate_isq, weight_source_load_device, QuantMethod, QuantMethodConfig,
-    ReplicatedLayer, Shard, ShardedVarBuilder, UnquantLinear,
+    apply_immediate_isq, forward_group, weight_source_load_device, GroupKind, QuantMethod,
+    QuantMethodConfig, ReplicatedLayer, Shard, ShardedVarBuilder, UnquantLinear,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
@@ -195,6 +195,11 @@ fn softplus(x: &Tensor) -> Result<Tensor> {
     let neg_abs = x.abs()?.neg()?;
     let soft = neg_abs.exp()?.affine(1.0, 1.0)?.log()?;
     x.clamp(0.0, f32::MAX)?.add(&soft)
+}
+
+fn group_forward(x: &Tensor, members: &[&Arc<dyn QuantMethod>]) -> Result<Option<Vec<Tensor>>> {
+    let refs: Vec<&dyn QuantMethod> = members.iter().map(|m| m.as_ref()).collect();
+    forward_group(x, &refs, GroupKind::Dense)
 }
 
 fn load_expert_projection(
@@ -423,8 +428,11 @@ impl Model {
         let n_ang = cfg.num_rope_angles;
         let eps = cfg.rms_norm_eps as f32;
 
-        let ps = w.ssm_in.forward(x)?.reshape((h, 2 * d_v + 3))?;
-        let pd = w.ssm_in_dyn.forward(x)?;
+        let (ps, pd) = match group_forward(x, &[&w.ssm_in, &w.ssm_in_dyn])? {
+            Some(v) => (v[0].clone(), v[1].clone()),
+            None => (w.ssm_in.forward(x)?, w.ssm_in_dyn.forward(x)?),
+        };
+        let ps = ps.reshape((h, 2 * d_v + 3))?;
         let z_in = ps.narrow(1, 0, d_v)?;
         let x_in = ps.narrow(1, d_v, d_v)?;
         let dt_raw = ps.narrow(1, 2 * d_v, 1)?;
@@ -538,15 +546,25 @@ impl Model {
         let snr = hs / hn;
         let eps = cfg.rms_norm_eps as f32;
 
-        let q = w.wq.forward(x)?.reshape((h, dh))?;
-        let ak = w.wa_k.forward(x)?.reshape((hn, r))?;
-        let av = w.wa_v.forward(x)?.reshape((hn, r))?;
-        let bk = w.wb_k.forward(x)?.reshape((r, dh))?;
-        let bv = w.wb_v.forward(x)?.reshape((r, dh))?;
-        let sk = w.ws_k.forward(x)?.reshape((hn,))?;
-        let sv = w.ws_v.forward(x)?.reshape((hn,))?;
-        let ell = w.wlambda.forward(x)?.reshape((hn,))?;
-        let gate = w.wgate.forward(x)?.reshape((hs, dh))?;
+        let members: [&Arc<dyn QuantMethod>; 9] = [
+            &w.wq, &w.wa_k, &w.wa_v, &w.wb_k, &w.wb_v, &w.ws_k, &w.ws_v, &w.wlambda, &w.wgate,
+        ];
+        let outs = group_forward(x, &members)?;
+        let proj = |i: usize, layer: &Arc<dyn QuantMethod>| -> Result<Tensor> {
+            match &outs {
+                Some(v) => Ok(v[i].clone()),
+                None => layer.forward(x),
+            }
+        };
+        let q = proj(0, &w.wq)?.reshape((h, dh))?;
+        let ak = proj(1, &w.wa_k)?.reshape((hn, r))?;
+        let av = proj(2, &w.wa_v)?.reshape((hn, r))?;
+        let bk = proj(3, &w.wb_k)?.reshape((r, dh))?;
+        let bv = proj(4, &w.wb_v)?.reshape((r, dh))?;
+        let sk = proj(5, &w.ws_k)?.reshape((hn,))?;
+        let sv = proj(6, &w.ws_v)?.reshape((hn,))?;
+        let ell = proj(7, &w.wlambda)?.reshape((hn,))?;
+        let gate = proj(8, &w.wgate)?.reshape((hs, dh))?;
 
         let k0 = ak.matmul(&bk)?.affine(1.0 / r as f64, 0.0)?;
         let v0 = av.matmul(&bv)?.affine(1.0 / r as f64, 0.0)?;
@@ -619,8 +637,10 @@ impl Model {
         let cfg = &self.config;
         let k = cfg.expert_used_count;
         let n_exp = cfg.expert_count;
-        let latent = w.latent_down.forward(x)?;
-        let logits = w.gate_inp.forward(x)?;
+        let (latent, logits) = match group_forward(x, &[&w.latent_down, &w.gate_inp])? {
+            Some(v) => (v[0].clone(), v[1].clone()),
+            None => (w.latent_down.forward(x)?, w.gate_inp.forward(x)?),
+        };
 
         // Router math stays in f32 (mandatory for top-k parity). Compute the bias-adjusted
         // scores in the same loop that selects the experts, avoiding a second full
