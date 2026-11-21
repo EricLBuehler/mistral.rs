@@ -1,7 +1,10 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
 use candle_core::{DType, Device, Result, Tensor, D};
-use mistralrs_quant::{QuantMethod, ReplicatedLayer, ShardedVarBuilder};
+use mistralrs_quant::{
+    apply_immediate_isq, weight_source_load_device, QuantMethod, QuantMethodConfig,
+    ReplicatedLayer, Shard, ShardedVarBuilder, UnquantLinear,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
@@ -137,8 +140,8 @@ struct MoeWeights {
     exp_probs_b: Tensor,
     latent_down: Arc<dyn QuantMethod>,
     latent_up: Arc<dyn QuantMethod>,
-    up_exps: Tensor,
-    down_exps: Tensor,
+    up_exps: Arc<dyn QuantMethod>,
+    down_exps: Arc<dyn QuantMethod>,
     up_shexp: Arc<dyn QuantMethod>,
     down_shexp: Arc<dyn QuantMethod>,
 }
@@ -192,6 +195,27 @@ fn softplus(x: &Tensor) -> Result<Tensor> {
     let neg_abs = x.abs()?.neg()?;
     let soft = neg_abs.exp()?.affine(1.0, 1.0)?.log()?;
     x.clamp(0.0, f32::MAX)?.add(&soft)
+}
+
+fn load_expert_projection(
+    vb: &ShardedVarBuilder,
+    name: &str,
+    shape: (usize, usize, usize),
+) -> Result<Arc<dyn QuantMethod>> {
+    let projection_vb = vb.pp(name);
+    if let Some(source) = vb.weight_source() {
+        let load_device = weight_source_load_device(&projection_vb);
+        if let Some(layer) =
+            source.load_linear(&projection_vb.prefix(), &load_device, Shard::default())?
+        {
+            return apply_immediate_isq(layer, projection_vb);
+        }
+    }
+    let weight = projection_vb.get(shape, "weight")?;
+    let layer = Arc::new(UnquantLinear::new(QuantMethodConfig::Unquantized(
+        candle_nn::Linear::new(weight, None),
+    ))?) as Arc<dyn QuantMethod>;
+    apply_immediate_isq(layer, projection_vb)
 }
 
 impl Model {
@@ -248,8 +272,16 @@ impl Model {
                 exp_probs_b: load_vec(&format!("{p}.moe.exp_probs_b"), n_exp)?,
                 latent_down: linear(h, latent, vb.pp(format!("{p}.moe.latent_down")))?,
                 latent_up: linear(latent, h, vb.pp(format!("{p}.moe.latent_up")))?,
-                up_exps: load_mat3(&format!("{p}.moe.up_exps.weight"), n_exp, ff_exp, latent)?,
-                down_exps: load_mat3(&format!("{p}.moe.down_exps.weight"), n_exp, latent, ff_exp)?,
+                up_exps: load_expert_projection(
+                    &vb,
+                    &format!("{p}.moe.up_exps"),
+                    (n_exp, ff_exp, latent),
+                )?,
+                down_exps: load_expert_projection(
+                    &vb,
+                    &format!("{p}.moe.down_exps"),
+                    (n_exp, latent, ff_exp),
+                )?,
                 up_shexp: linear(h, ff_sh, vb.pp(format!("{p}.moe.up_shexp")))?,
                 down_shexp: linear(ff_sh, h, vb.pp(format!("{p}.moe.down_shexp")))?,
             };
@@ -589,25 +621,30 @@ impl Model {
         let n_exp = cfg.expert_count;
         let latent = w.latent_down.forward(x)?;
         let logits = w.gate_inp.forward(x)?;
-        let score = sigmoid(&logits)?.broadcast_add(&w.exp_probs_b.reshape((1, n_exp))?)?;
 
-        let score_v = score.reshape((n_exp,))?.to_vec1::<f32>()?;
+        // Router math stays in f32 (mandatory for top-k parity). Compute the bias-adjusted
+        // scores in the same loop that selects the experts, avoiding a second full
+        // device->host materialization.
+        let logits_v = logits.reshape((n_exp,))?.to_vec1::<f32>()?;
+        let bias_v = w.exp_probs_b.reshape((n_exp,))?.to_vec1::<f32>()?;
         let mut selected = Vec::with_capacity(k);
         let mut used = vec![false; n_exp];
         for _ in 0..k {
             let mut best = 0usize;
             let mut best_v = f32::NEG_INFINITY;
             for e in 0..n_exp {
-                if !used[e] && score_v[e] > best_v {
-                    best_v = score_v[e];
-                    best = e;
+                if !used[e] {
+                    let score = 1.0 / (1.0 + (-logits_v[e]).exp()) + bias_v[e];
+                    if score > best_v {
+                        best_v = score;
+                        best = e;
+                    }
                 }
             }
             used[best] = true;
             selected.push(best);
         }
 
-        let logits_v = logits.reshape((n_exp,))?.to_vec1::<f32>()?;
         let mut weights: Vec<f32> = selected
             .iter()
             .map(|&e| 1.0 / (1.0 + (-logits_v[e]).exp()))
@@ -621,18 +658,15 @@ impl Model {
         let latent_dim = latent.dim(1)?;
         let indices = Tensor::from_vec(
             selected.iter().map(|&e| e as u32).collect::<Vec<_>>(),
-            (k,),
+            (1, k),
             &self.device,
         )?;
-        let weights_t = Tensor::from_vec(weights, (k, 1, 1), &self.device)?;
-        let up = w.up_exps.index_select(&indices, 0)?; // (k, ff_exp, latent)
-        let down = w.down_exps.index_select(&indices, 0)?; // (k, latent, ff_exp)
-        let latent_b = latent
-            .reshape((1, 1, latent_dim))?
-            .broadcast_as((k, 1, latent_dim))?;
-        let h = latent_b.matmul(&up.transpose(1, 2)?)?.relu()?.sqr()?;
-        let out = h.matmul(&down.transpose(1, 2)?)?;
-        let routed = out.broadcast_mul(&weights_t)?.sum(0)?; // (1, latent)
+        let weights_t = Tensor::from_vec(weights, (1, k, 1), &self.device)?;
+        let x3 = latent.reshape((1, 1, latent_dim))?;
+        let up = w.up_exps.gather_forward(&x3, &indices)?; // (1, k, ff_exp)
+        let h = up.relu()?.sqr()?;
+        let out = w.down_exps.gather_forward(&h, &indices)?; // (1, k, latent)
+        let routed = out.broadcast_mul(&weights_t)?.sum(1)?; // (1, latent)
         let routed = w.latent_up.forward(&routed)?;
 
         let sh = w.up_shexp.forward(x)?.relu()?.sqr()?;
