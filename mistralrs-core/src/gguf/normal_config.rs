@@ -2786,44 +2786,28 @@ fn build_inkling2_loop(metadata: &MetadataView<'_>) -> SynthesisResult<JsonValue
     let block_count = metadata.required_usize("block_count")?;
     let hidden_size = metadata.required_usize("embedding_length")?;
     let vocab_size = metadata.required_usize("vocab_size")?;
-    let num_attention_heads = metadata
-        .optional_usize("attention.head_count")?
-        .unwrap_or_else(|| {
-            metadata
-                .value("attention.head_count")
-                .and_then(|v| match v {
-                    candle_core::quantized::gguf_file::Value::Array(a) => {
-                        a.first().and_then(|x| match x {
-                            candle_core::quantized::gguf_file::Value::U32(n) => Some(*n as usize),
-                            candle_core::quantized::gguf_file::Value::I32(n) => Some(*n as usize),
-                            candle_core::quantized::gguf_file::Value::U64(n) => Some(*n as usize),
-                            candle_core::quantized::gguf_file::Value::I64(n) => Some(*n as usize),
-                            _ => None,
-                        })
-                    }
-                    _ => None,
-                })
-                .unwrap_or(0)
-        });
-    let num_key_value_heads = metadata
-        .optional_usize("attention.head_count_kv")?
-        .unwrap_or_else(|| {
-            metadata
-                .value("attention.head_count_kv")
-                .and_then(|v| match v {
-                    candle_core::quantized::gguf_file::Value::Array(a) => {
-                        a.first().and_then(|x| match x {
-                            candle_core::quantized::gguf_file::Value::U32(n) => Some(*n as usize),
-                            candle_core::quantized::gguf_file::Value::I32(n) => Some(*n as usize),
-                            candle_core::quantized::gguf_file::Value::U64(n) => Some(*n as usize),
-                            candle_core::quantized::gguf_file::Value::I64(n) => Some(*n as usize),
-                            _ => None,
-                        })
-                    }
-                    _ => None,
-                })
-                .unwrap_or(0)
-        });
+    let head_count_raw = metadata.value("attention.head_count");
+    let num_attention_heads = match head_count_raw {
+        Some(candle_core::quantized::gguf_file::Value::Array(a)) => a.first().and_then(|x| match x {
+            candle_core::quantized::gguf_file::Value::U32(n) => Some(*n as usize),
+            candle_core::quantized::gguf_file::Value::I32(n) => Some(*n as usize),
+            candle_core::quantized::gguf_file::Value::U64(n) => Some(*n as usize),
+            candle_core::quantized::gguf_file::Value::I64(n) => Some(*n as usize),
+            _ => None,
+        }).unwrap_or(0),
+        _ => metadata.optional_usize("attention.head_count")?.unwrap_or(0),
+    };
+    let kv_head_count_raw = metadata.value("attention.head_count_kv");
+    let num_key_value_heads = match kv_head_count_raw {
+        Some(candle_core::quantized::gguf_file::Value::Array(a)) => a.first().and_then(|x| match x {
+            candle_core::quantized::gguf_file::Value::U32(n) => Some(*n as usize),
+            candle_core::quantized::gguf_file::Value::I32(n) => Some(*n as usize),
+            candle_core::quantized::gguf_file::Value::U64(n) => Some(*n as usize),
+            candle_core::quantized::gguf_file::Value::I64(n) => Some(*n as usize),
+            _ => None,
+        }).unwrap_or(0),
+        _ => metadata.optional_usize("attention.head_count_kv")?.unwrap_or(0),
+    };
     let head_dim = metadata
         .optional_usize("attention.key_length")?
         .or(metadata.optional_usize("attention.value_length")?)

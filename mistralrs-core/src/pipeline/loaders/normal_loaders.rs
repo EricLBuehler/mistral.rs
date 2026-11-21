@@ -7129,19 +7129,25 @@ impl DeviceMappedModelLoader for Inkling2LoopLoader {
         let cfg: crate::models::inkling2_loop::Config = serde_json::from_str(config)?;
         let h = cfg.hidden_size;
         let per = (h * h * 6) * dtype.size_in_bytes() / weight_pack_factor;
-        Ok(vec![per; cfg.num_hidden_layers])
+        let logical = cfg.num_hidden_layers - (cfg.loop_config.core_end - cfg.loop_config.core_start)
+            + (cfg.loop_config.core_end - cfg.loop_config.core_start) * cfg.loop_config.num_passes;
+        Ok(vec![per; logical])
     }
 
     fn num_layers(&self, config: &str) -> Result<usize> {
         let cfg: crate::models::inkling2_loop::Config = serde_json::from_str(config)?;
-        Ok(cfg.num_hidden_layers)
+        let logical = cfg.num_hidden_layers - (cfg.loop_config.core_end - cfg.loop_config.core_start)
+            + (cfg.loop_config.core_end - cfg.loop_config.core_start) * cfg.loop_config.num_passes;
+        Ok(logical)
     }
 
     fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
         let cfg: crate::models::inkling2_loop::Config = serde_json::from_str(config)?;
+        let logical = cfg.num_hidden_layers - (cfg.loop_config.core_end - cfg.loop_config.core_start)
+            + (cfg.loop_config.core_end - cfg.loop_config.core_start) * cfg.loop_config.num_passes;
         Ok(Box::new(ModelConfigMetadata {
             max_seq_len: cfg.max_position_embeddings,
-            num_layers: cfg.num_hidden_layers,
+            num_layers: logical,
             hidden_size: cfg.hidden_size,
             num_kv_heads: cfg.num_key_value_heads,
             num_attn_heads: cfg.num_attention_heads,

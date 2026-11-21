@@ -1247,9 +1247,26 @@ fn bind_inkling2_loop_block(
         ("ffn_gate_inp", "bias") => Some(format!("{p}.mlp.router.bias")),
         ("exp_probs_b", "bias") => Some(format!("{p}.mlp.exp_probs_b.bias")),
         ("ffn_down_exps", "weight") => Some(format!("{p}.mlp.experts.down_proj.weight")),
-        ("ffn_down_exps", "scale") => Some(format!("{p}.mlp.experts.down_proj.scale")),
-        ("ffn_gate_up_exps", "weight") => Some(format!("{p}.mlp.experts.gate_up_proj.weight")),
-        ("ffn_gate_up_exps", "scale") => Some(format!("{p}.mlp.experts.gate_up_proj.scale")),
+        ("ffn_down_exps", "scale") => return Ok(()),
+        ("ffn_gate_up_exps", "weight") => {
+            let shape = archive.tensor_info(source)?.shape();
+            if shape.len() != 3 || !shape[1].is_multiple_of(2) {
+                bail!("fused expert gate/up tensor `{source}` has invalid shape {shape:?}");
+            }
+            let intermediate = shape[1] / 2;
+            bind_slices(
+                bindings,
+                source,
+                1,
+                shape[1],
+                [
+                    (format!("{p}.mlp.experts.gate_proj.weight"), intermediate),
+                    (format!("{p}.mlp.experts.up_proj.weight"), intermediate),
+                ],
+            );
+            return Ok(());
+        }
+        ("ffn_gate_up_exps", "scale") => return Ok(()),
         ("ffn_post_conv", "weight") => Some(format!("{p}.mlp.post_conv.weight")),
         ("ffn_res_query", "weight") => Some(format!("{p}.mlp.res_query.weight")),
         ("loop_msg_query", "weight") => Some(format!("{p}.loop.msg_query.weight")),
