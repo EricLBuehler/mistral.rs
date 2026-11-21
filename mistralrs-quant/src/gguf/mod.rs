@@ -65,6 +65,7 @@ pub struct GgufMatMul {
     pub(crate) w: QMatMul,
     pub(crate) b: Option<Tensor>,
     stats: crate::ImatrixLayerStats,
+    expert_matmuls: cpu::ExpertMatMuls,
     #[cfg(all(feature = "cuda", has_marlin_kernels))]
     packed_affine: OnceLock<Option<Arc<packed_affine::PackedAffine>>>,
     #[cfg(all(feature = "cuda", has_marlin_kernels))]
@@ -167,6 +168,7 @@ impl GgufMatMul {
             w,
             b,
             stats,
+            expert_matmuls: cpu::ExpertMatMuls::default(),
             #[cfg(all(feature = "cuda", has_marlin_kernels))]
             packed_affine: OnceLock::new(),
             #[cfg(all(feature = "cuda", has_marlin_kernels))]
@@ -564,27 +566,53 @@ impl QuantMethod for GgufMatMul {
         // - indices: (n_tokens, n_experts_per_tok)
         // - weights (self): (n_experts, out_features, in_features)
         // For CPU and Metal: use dequantize-then-matmul approach
+        //
+        // If the expert weights were offloaded to a different device than the activations
+        // (e.g. a topology placing experts on CPU), run on the weights' device and move the
+        // result back to the activations' device.
+        let x_device = x.device().clone();
+        let x_dtype = x.dtype();
+        let offload_device = self
+            .get_qtensor()
+            .map(|qt| qt.device())
+            .filter(|device| !device.same_device(&x_device));
+        let (x, indices) = match &offload_device {
+            Some(device) => (
+                x.to_device(device)?.to_dtype(candle_core::DType::F32)?,
+                indices.to_device(device)?,
+            ),
+            None => (x.clone(), indices.clone()),
+        };
+        let (x, indices) = (&x, &indices);
+
         #[cfg(feature = "cuda")]
         let res = if x.device().is_cuda() {
             cuda::qmatmul_indexed_moe_forward(&self.w, x, indices)?
         } else {
-            cpu::cpu_indexed_moe_forward(&self.w, x, indices)?
+            cpu::cpu_indexed_moe_forward_cached(&self.w, Some(&self.expert_matmuls), x, indices)?
         };
 
         #[cfg(not(feature = "cuda"))]
-        let res = cpu::cpu_indexed_moe_forward(&self.w, x, indices)?;
+        let res =
+            cpu::cpu_indexed_moe_forward_cached(&self.w, Some(&self.expert_matmuls), x, indices)?;
 
-        if let Some(b) = &self.b {
+        let res = if let Some(b) = &self.b {
             if b.rank() == 2 {
                 let mut shape = indices.dims().to_vec();
                 shape.push(b.dim(1)?);
                 let bias = b
                     .index_select(&indices.flatten_all()?, 0)?
                     .reshape(Shape::from(shape))?;
-                res.broadcast_add(&bias)
+                res.broadcast_add(&bias)?
             } else {
-                res.broadcast_add(b)
+                res.broadcast_add(b)?
             }
+        } else {
+            res
+        };
+
+        if offload_device.is_some() {
+            res.to_device(&x_device)?.to_dtype(x_dtype)
         } else {
             Ok(res)
         }
@@ -1286,6 +1314,41 @@ mod tests {
         for dtype in [GgmlDType::Q6K, GgmlDType::Q8_0] {
             assert_embedding_matches_dequantized_gather(&device, dtype)?;
         }
+        Ok(())
+    }
+
+    /// Experts offloaded to CPU (e.g. via a topology) must still work when the activations are on
+    /// CUDA: the result matches an all-CPU run and comes back on the activations' device and dtype.
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn gather_forward_raw_runs_cpu_experts_with_cuda_activations() -> Result<()> {
+        let Ok(cuda) = Device::new_cuda(0) else {
+            return Ok(());
+        };
+        let cpu = Device::Cpu;
+        let (experts, n_out, k, tokens) = (4usize, 8usize, 256usize, 2usize);
+        let weight = Tensor::randn(0f32, 1f32, (experts, n_out, k), &cpu)?;
+        let layer = GgufMatMul::from_qtensor(QTensor::quantize(&weight, GgmlDType::Q4K)?, None);
+        let x_cpu = Tensor::randn(0f32, 1f32, (tokens, 1, k), &cpu)?
+            .to_dtype(DType::BF16)?
+            .to_dtype(DType::F32)?;
+        let ids_cpu = Tensor::new(&[[0u32, 3], [2, 1]], &cpu)?;
+        let expected = layer.gather_forward_raw(&x_cpu, &ids_cpu)?;
+
+        let x = x_cpu.to_dtype(DType::BF16)?.to_device(&cuda)?;
+        let ids = ids_cpu.to_device(&cuda)?;
+        let out = layer.gather_forward_raw(&x, &ids)?;
+
+        assert!(out.device().is_cuda());
+        assert_eq!(out.dtype(), DType::BF16);
+        assert_eq!(out.dims(), expected.dims());
+        let out = out.to_device(&cpu)?.to_dtype(DType::F32)?;
+        let max_abs = expected.abs()?.max_all()?.to_scalar::<f32>()?;
+        let max_diff = (out - expected)?.abs()?.max_all()?.to_scalar::<f32>()?;
+        assert!(
+            max_diff <= 0.02 * max_abs,
+            "max diff {max_diff} vs max magnitude {max_abs}"
+        );
         Ok(())
     }
 }

@@ -3,13 +3,274 @@
 //! This dequantizes the weights and delegates to UnquantLinear's gather_forward.
 
 use candle_core::{
-    quantized::{QMatMul, QTensor},
-    Result, Tensor,
+    quantized::{ggml_file::qtensor_from_ggml, QMatMul, QTensor},
+    DType, Module, Result, Tensor,
 };
 use candle_nn::Linear;
-use std::sync::Arc;
+use std::collections::VecDeque;
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 use crate::{QuantMethod, QuantMethodConfig, UnquantLinear};
+
+/// Default byte budget for the repacked per-expert matmul cache on one stacked expert tensor
+/// (e.g. one MoE layer's gate_proj across all experts). This is a per-cache-instance budget, not
+/// a process-wide total: every `ExpertMatMuls` (one per GGUF-quantized stacked expert tensor)
+/// enforces it independently, so a model with N such tensors can retain up to N times this many
+/// bytes in aggregate (e.g. 10 MoE layers' gate_proj tensors at the 64 MiB default is up to ~640
+/// MiB resident across the model, not 64 MiB total). `MISTRALRS_CPU_MOE_EXPERT_CACHE_BYTES`
+/// overrides the default used by every instance; `0` disables retention entirely (build every
+/// call). A caller holding a clone of an evicted entry's `QMatMul` keeps its storage alive past
+/// eviction, so process RSS can briefly exceed the sum of per-instance budgets, and will in any
+/// case include model weights, KV cache, and other allocations this budget says nothing about.
+const DEFAULT_EXPERT_CACHE_BYTES: usize = 64 * 1024 * 1024;
+const EXPERT_CACHE_BYTES_ENV: &str = "MISTRALRS_CPU_MOE_EXPERT_CACHE_BYTES";
+
+fn expert_cache_budget_bytes() -> usize {
+    static BUDGET: OnceLock<usize> = OnceLock::new();
+    *BUDGET.get_or_init(|| {
+        std::env::var(EXPERT_CACHE_BYTES_ENV)
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(DEFAULT_EXPERT_CACHE_BYTES)
+    })
+}
+
+fn qmatmul_retained_bytes(m: &QMatMul) -> usize {
+    match m {
+        QMatMul::QTensor(t) => t.storage_size_in_bytes(),
+        QMatMul::Tensor(t) | QMatMul::TensorF16(t) => t.elem_count() * t.dtype().size_in_bytes(),
+    }
+}
+
+#[derive(Debug, Default)]
+enum ExpertSlot {
+    #[default]
+    Empty,
+    Building,
+    Ready(QMatMul, usize),
+}
+
+#[derive(Debug, Default)]
+struct ExpertCacheMeta {
+    slots: Vec<ExpertSlot>,
+    lru: VecDeque<usize>,
+    bytes: usize,
+}
+
+/// Per-expert quantized matmuls for one stacked expert tensor, built lazily and bounded to this
+/// instance's own byte budget (see `DEFAULT_EXPERT_CACHE_BYTES`; each `ExpertMatMuls` enforces its
+/// budget independently, so this is not a cap shared across a model's other MoE layers).
+///
+/// Construction is single-flight per expert: a thread that finds its expert `Building` waits on
+/// `ready` instead of repacking the same bytes again. Different experts build fully concurrently,
+/// since the mutex is only held for state transitions, never across `build()` or the matmul
+/// itself. Eviction is LRU by access recency (both a miss that inserts and a hit that returns an
+/// already-`Ready` entry move it to the MRU end of `lru`) over the experts currently `Ready`; an
+/// expert whose repacked size alone exceeds the budget still runs, it just isn't retained
+/// afterward. Accounting drops a slot from the budget the instant it's evicted, even though a
+/// caller already holding a clone of that `QMatMul` keeps its backing storage alive until it
+/// finishes using it, so live memory can transiently exceed the budget by whatever a single
+/// in-flight expert needs.
+#[derive(Debug, Default)]
+pub(crate) struct ExpertMatMuls {
+    meta: Mutex<Option<ExpertCacheMeta>>,
+    ready: Condvar,
+    #[cfg(test)]
+    budget_override: OnceLock<usize>,
+}
+
+impl ExpertMatMuls {
+    #[cfg(test)]
+    fn set_budget_for_test(&self, bytes: usize) {
+        self.budget_override
+            .set(bytes)
+            .expect("budget must be set before first use in tests");
+    }
+
+    fn budget_bytes(&self) -> usize {
+        #[cfg(test)]
+        if let Some(bytes) = self.budget_override.get() {
+            return *bytes;
+        }
+        expert_cache_budget_bytes()
+    }
+
+    fn get_or_build(
+        &self,
+        n_experts: usize,
+        expert: usize,
+        build: impl FnOnce() -> Result<QMatMul>,
+    ) -> Result<QMatMul> {
+        let budget = self.budget_bytes();
+        let mut guard = self.meta.lock().unwrap();
+        if guard.is_none() {
+            *guard = Some(ExpertCacheMeta {
+                slots: (0..n_experts).map(|_| ExpertSlot::Empty).collect(),
+                lru: VecDeque::new(),
+                bytes: 0,
+            });
+        }
+        loop {
+            let meta = guard.as_mut().expect("initialized above");
+            match &meta.slots[expert] {
+                ExpertSlot::Ready(matmul, _) => {
+                    let matmul = matmul.clone();
+                    if let Some(pos) = meta.lru.iter().position(|&e| e == expert) {
+                        meta.lru.remove(pos);
+                    }
+                    meta.lru.push_back(expert);
+                    return Ok(matmul);
+                }
+                ExpertSlot::Building => {
+                    guard = self.ready.wait(guard).unwrap();
+                    continue;
+                }
+                ExpertSlot::Empty => {
+                    meta.slots[expert] = ExpertSlot::Building;
+                    break;
+                }
+            }
+        }
+        drop(guard);
+
+        let outcome = build();
+
+        let mut guard = self.meta.lock().unwrap();
+        let meta = guard.as_mut().expect("initialized above, never cleared");
+        let result = match outcome {
+            Ok(matmul) => {
+                let bytes = qmatmul_retained_bytes(&matmul);
+                if bytes > budget {
+                    meta.slots[expert] = ExpertSlot::Empty;
+                } else {
+                    while meta.bytes + bytes > budget {
+                        let Some(victim) = meta.lru.pop_front() else {
+                            break;
+                        };
+                        if let ExpertSlot::Ready(_, victim_bytes) =
+                            std::mem::replace(&mut meta.slots[victim], ExpertSlot::Empty)
+                        {
+                            meta.bytes -= victim_bytes;
+                        }
+                    }
+                    meta.slots[expert] = ExpertSlot::Ready(matmul.clone(), bytes);
+                    meta.lru.push_back(expert);
+                    meta.bytes += bytes;
+                }
+                Ok(matmul)
+            }
+            Err(e) => {
+                meta.slots[expert] = ExpertSlot::Empty;
+                Err(e)
+            }
+        };
+        drop(guard);
+        self.ready.notify_all();
+        result
+    }
+
+    #[cfg(test)]
+    fn cached_bytes(&self) -> usize {
+        self.meta
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|meta| meta.bytes)
+            .unwrap_or(0)
+    }
+
+    #[cfg(test)]
+    fn is_ready(&self, expert: usize) -> bool {
+        self.meta
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|meta| matches!(meta.slots[expert], ExpertSlot::Ready(..)))
+    }
+}
+
+fn selected_experts_forward(
+    qtensor: &QTensor,
+    cache: Option<&ExpertMatMuls>,
+    x: &Tensor,
+    ids: &Tensor,
+) -> Result<Option<Tensor>> {
+    let Ok((n_experts, n_out, k)) = qtensor.shape().dims3() else {
+        return Ok(None);
+    };
+    let Ok((tokens, x_t, x_k)) = x.dims3() else {
+        return Ok(None);
+    };
+    let Ok((ids_tokens, topk)) = ids.dims2() else {
+        return Ok(None);
+    };
+    if !x.device().is_cpu()
+        || x.dtype() != DType::F32
+        || x_k != k
+        || ids_tokens != tokens
+        || (x_t != 1 && x_t != topk)
+    {
+        return Ok(None);
+    }
+    let dtype = qtensor.dtype();
+    let expert_elems = n_out * k;
+    if expert_elems % dtype.block_size() != 0 {
+        return Ok(None);
+    }
+    let expert_bytes = expert_elems / dtype.block_size() * dtype.type_size();
+    let data = qtensor.data()?;
+    if data.len() != n_experts * expert_bytes {
+        return Ok(None);
+    }
+
+    let ids_flat = ids.to_dtype(DType::U32)?.flatten_all()?.to_vec1::<u32>()?;
+    let mut by_expert: Vec<Vec<u32>> = vec![Vec::new(); n_experts];
+    for (assignment, &id) in ids_flat.iter().enumerate() {
+        let id = id as usize;
+        if id >= n_experts {
+            candle_core::bail!("expert index {id} out of range for {n_experts} experts");
+        }
+        by_expert[id].push(assignment as u32);
+    }
+
+    let device = x.device();
+    let x_rows = x.reshape((tokens * x_t, k))?;
+    let mut outputs = Vec::new();
+    let mut order: Vec<u32> = Vec::with_capacity(ids_flat.len());
+    for (expert, assignments) in by_expert.iter().enumerate() {
+        if assignments.is_empty() {
+            continue;
+        }
+        let build = || {
+            let bytes = &data[expert * expert_bytes..(expert + 1) * expert_bytes];
+            QMatMul::from_qtensor(qtensor_from_ggml(dtype, bytes, vec![n_out, k], device)?)
+        };
+        let matmul = match cache {
+            Some(cache) => cache.get_or_build(n_experts, expert, build)?,
+            None => build()?,
+        };
+        let rows: Vec<u32> = assignments
+            .iter()
+            .map(|&a| {
+                let (token, slot) = (a as usize / topk, a as usize % topk);
+                (token * x_t + if x_t == 1 { 0 } else { slot }) as u32
+            })
+            .collect();
+        let rows = Tensor::from_vec(rows, assignments.len(), device)?;
+        outputs.push(matmul.forward(&x_rows.index_select(&rows, 0)?)?);
+        order.extend_from_slice(assignments);
+    }
+
+    let mut inverse = vec![0u32; order.len()];
+    for (position, &assignment) in order.iter().enumerate() {
+        inverse[assignment as usize] = position as u32;
+    }
+    let inverse = Tensor::from_vec(inverse, order.len(), device)?;
+    Tensor::cat(&outputs, 0)?
+        .index_select(&inverse, 0)?
+        .reshape((tokens, topk, n_out))
+        .map(Some)
+}
 
 /// Perform indexed MoE forward pass on a QTensor by dequantizing and using UnquantLinear.
 ///
@@ -20,8 +281,9 @@ use crate::{QuantMethod, QuantMethodConfig, UnquantLinear};
 ///
 /// # Returns
 /// Output tensor [batch, topk, n]
-pub fn qtensor_indexed_moe_forward(
+pub(crate) fn qtensor_indexed_moe_forward(
     qtensor: &Arc<QTensor>,
+    cache: Option<&ExpertMatMuls>,
     x: &Tensor,
     ids: &Tensor,
 ) -> Result<Tensor> {
@@ -69,6 +331,10 @@ pub fn qtensor_indexed_moe_forward(
         }
     }
 
+    if let Some(out) = selected_experts_forward(qtensor, cache, x, ids)? {
+        return Ok(out);
+    }
+
     let device = x.device();
 
     // Dequantize all weights to f32
@@ -92,13 +358,1113 @@ pub fn qtensor_indexed_moe_forward(
 /// # Returns
 /// Output tensor [batch, topk, n]
 pub fn cpu_indexed_moe_forward(qmatmul: &QMatMul, x: &Tensor, ids: &Tensor) -> Result<Tensor> {
+    cpu_indexed_moe_forward_cached(qmatmul, None, x, ids)
+}
+
+pub(crate) fn cpu_indexed_moe_forward_cached(
+    qmatmul: &QMatMul,
+    cache: Option<&ExpertMatMuls>,
+    x: &Tensor,
+    ids: &Tensor,
+) -> Result<Tensor> {
     match qmatmul {
-        QMatMul::QTensor(qtensor) => qtensor_indexed_moe_forward(qtensor, x, ids),
+        QMatMul::QTensor(qtensor) => qtensor_indexed_moe_forward(qtensor, cache, x, ids),
         QMatMul::Tensor(t) | QMatMul::TensorF16(t) => {
             // For non-quantized tensors, use UnquantLinear directly
             let unquant =
                 UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(t.clone(), None)))?;
             unquant.gather_forward(x, ids)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use candle_core::{quantized::GgmlDType, Device};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
+    use std::thread;
+
+    use super::*;
+
+    const EXPERTS: usize = 6;
+    const N_OUT: usize = 8;
+    const K: usize = 256;
+
+    // `reference()` dequantizes to f32 and runs a plain f32 matmul. The optimized path instead
+    // runs candle's quantized `k_quants::matmul`, which (for every k-quant type, not just this
+    // PR's path) requantizes the f32 activations to the weight's `VecDotType` block format before
+    // the dot product, same as llama.cpp's CPU kernels. That activation requantization, not
+    // anything this PR changed, is what the two sides disagree on, and it's largest in relative
+    // terms exactly where dot products cancel toward zero. LOOSE_* bounds that for our (EXPERTS,
+    // N_OUT, K) test sizes with margin (see `measure_max_errors_per_dtype`, run with
+    // `--ignored --nocapture`); TIGHT_* is for comparisons that stay on one side of that boundary
+    // (cached vs uncached, pre- vs post-eviction), which should be reduction-order noise only.
+    const LOOSE_ATOL: f32 = 1.0;
+    const LOOSE_RTOL: f32 = 0.2;
+    const TIGHT_ATOL: f32 = 1e-4;
+    const TIGHT_RTOL: f32 = 1e-4;
+
+    fn reference(qtensor: &QTensor, x: &Tensor, ids: &Tensor) -> Result<Tensor> {
+        let weights = qtensor.dequantize(x.device())?;
+        let unquant =
+            UnquantLinear::new(QuantMethodConfig::Unquantized(Linear::new(weights, None)))?;
+        unquant.gather_forward(x, ids)
+    }
+
+    /// Classifies a single (actual, expected) pair before any finite-only arithmetic runs on it.
+    /// `abs_err > atol + rtol * e.abs()` is false whenever either operand is NaN, so a plain
+    /// tolerance check silently passes NaN/Inf mismatches instead of catching them; this makes
+    /// non-finite values an explicit comparison outcome instead of falling through unexamined.
+    /// An expected value that is itself NaN or infinite only matches an actual with the same
+    /// classification (NaN-for-NaN, same-signed-Inf-for-Inf); expected finite values reject any
+    /// non-finite actual outright.
+    fn finite_mismatch(a: f32, e: f32) -> Option<&'static str> {
+        if e.is_nan() {
+            if a.is_nan() {
+                None
+            } else {
+                Some("expected NaN but actual is not NaN")
+            }
+        } else if e.is_infinite() {
+            if a.is_infinite() && a.signum() == e.signum() {
+                None
+            } else {
+                Some("expected infinite value but actual does not match its sign/finiteness")
+            }
+        } else if a.is_nan() {
+            Some("actual is NaN but expected is finite")
+        } else if a.is_infinite() {
+            Some("actual is infinite but expected is finite")
+        } else {
+            None
+        }
+    }
+
+    /// Elementwise `abs(actual - expected) <= atol + rtol * abs(expected)` for finite pairs, with
+    /// NaN/Inf handled explicitly via `finite_mismatch` rather than left to fall through the
+    /// tolerance arithmetic. Reports max abs/rel error over the finite elements on failure,
+    /// instead of just a single aggregate diff.
+    fn assert_allclose(actual: &Tensor, expected: &Tensor, atol: f32, rtol: f32) -> Result<()> {
+        assert_eq!(actual.dims(), expected.dims());
+        let actual = actual.flatten_all()?.to_vec1::<f32>()?;
+        let expected = expected.flatten_all()?.to_vec1::<f32>()?;
+        let mut max_abs_err = 0f32;
+        let mut max_rel_err = 0f32;
+        let mut first_violation: Option<(usize, f32, f32, &'static str)> = None;
+        for (i, (&a, &e)) in actual.iter().zip(expected.iter()).enumerate() {
+            let reason = if let Some(reason) = finite_mismatch(a, e) {
+                Some(reason)
+            } else {
+                let abs_err = (a - e).abs();
+                max_abs_err = max_abs_err.max(abs_err);
+                max_rel_err = max_rel_err.max(abs_err / e.abs().max(1e-12));
+                (abs_err > atol + rtol * e.abs()).then_some("tolerance exceeded")
+            };
+            if let Some(reason) = reason {
+                if first_violation.is_none() {
+                    first_violation = Some((i, a, e, reason));
+                }
+            }
+        }
+        if let Some((idx, a, e, reason)) = first_violation {
+            panic!(
+                "allclose violated at index {idx} ({reason}): actual={a} expected={e} \
+                 (max_abs_err={max_abs_err}, max_rel_err={max_rel_err}, atol={atol}, rtol={rtol})"
+            );
+        }
+        Ok(())
+    }
+
+    /// Deterministic, reproducible stand-in for `Tensor::randn`: candle's CPU RNG can't be
+    /// seeded (`Device::Cpu::set_seed` errors), and these tests must not be flaky.
+    fn deterministic_values(n: usize, seed: u64) -> Vec<f32> {
+        let mut state = seed ^ 0x9E3779B97F4A7C15;
+        (0..n)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                (((state >> 11) as f64 / (1u64 << 53) as f64) * 2.0 - 1.0) as f32
+            })
+            .collect()
+    }
+
+    fn det_tensor(
+        dims: impl Into<candle_core::Shape>,
+        seed: u64,
+        device: &Device,
+    ) -> Result<Tensor> {
+        let dims = dims.into();
+        Tensor::from_vec(deterministic_values(dims.elem_count(), seed), dims, device)
+    }
+
+    fn random_qtensor(
+        dtype: GgmlDType,
+        n_experts: usize,
+        n_out: usize,
+        k: usize,
+        device: &Device,
+    ) -> Result<QTensor> {
+        let seed = dtype.type_size() as u64 * 1_000_003 + (n_experts * n_out * k) as u64;
+        let weight = det_tensor((n_experts, n_out, k), seed, device)?;
+        QTensor::quantize(&weight, dtype)
+    }
+
+    fn run(x_t: usize, dtype: GgmlDType) -> Result<()> {
+        let device = Device::Cpu;
+        let qtensor = random_qtensor(dtype, EXPERTS, N_OUT, K, &device)?;
+        let x = det_tensor((3, x_t, K), 201, &device)?;
+        let ids = Tensor::new(&[[0u32, 5], [5, 2], [2, 0]], &device)?;
+        let expected = reference(&qtensor, &x, &ids)?;
+
+        let cache = ExpertMatMuls::default();
+        let mut cached_outputs = Vec::new();
+        for _ in 0..2 {
+            let actual = selected_experts_forward(&qtensor, Some(&cache), &x, &ids)?
+                .expect("layout is supported");
+            assert_allclose(&actual, &expected, LOOSE_ATOL, LOOSE_RTOL)?;
+            cached_outputs.push(actual);
+        }
+        // Cold and warm cache must return identical results, not just both-close-to-reference.
+        assert_allclose(
+            &cached_outputs[0],
+            &cached_outputs[1],
+            TIGHT_ATOL,
+            TIGHT_RTOL,
+        )?;
+        let uncached =
+            selected_experts_forward(&qtensor, None, &x, &ids)?.expect("layout is supported");
+        assert_allclose(&uncached, &expected, LOOSE_ATOL, LOOSE_RTOL)?;
+        assert_allclose(&uncached, &cached_outputs[0], TIGHT_ATOL, TIGHT_RTOL)
+    }
+
+    #[test]
+    fn selected_experts_match_full_dequantize_shared_input() -> Result<()> {
+        run(1, GgmlDType::Q4K)
+    }
+
+    #[test]
+    fn selected_experts_match_full_dequantize_per_slot_input() -> Result<()> {
+        run(2, GgmlDType::Q4K)
+    }
+
+    #[test]
+    fn selected_experts_match_full_dequantize_q6k() -> Result<()> {
+        run(1, GgmlDType::Q6K)
+    }
+
+    #[test]
+    fn selected_experts_match_full_dequantize_q8_0() -> Result<()> {
+        run(1, GgmlDType::Q8_0)
+    }
+
+    #[test]
+    fn selected_experts_reject_out_of_range_ids() -> Result<()> {
+        let device = Device::Cpu;
+        let qtensor = random_qtensor(GgmlDType::Q4K, EXPERTS, N_OUT, K, &device)?;
+        let x = det_tensor((1, 1, K), 209, &device)?;
+        let ids = Tensor::new(&[[EXPERTS as u32, 0]], &device)?;
+        assert!(selected_experts_forward(&qtensor, None, &x, &ids).is_err());
+        Ok(())
+    }
+
+    /// Not a correctness assertion; run with `cargo test -p mistralrs-quant --lib \
+    /// measure_max_errors_per_dtype -- --nocapture --ignored` to recheck the ATOL/RTOL margins
+    /// above against fresh random weights.
+    #[test]
+    #[ignore]
+    fn measure_max_errors_per_dtype() -> Result<()> {
+        let device = Device::Cpu;
+        for dtype in [GgmlDType::Q4K, GgmlDType::Q6K, GgmlDType::Q8_0] {
+            let mut max_abs = 0f32;
+            let mut max_rel = 0f32;
+            for seed in 0..20u64 {
+                let weight = Tensor::randn(0f32, 1f32, (EXPERTS, N_OUT, K), &device)?
+                    .affine((seed as f64 + 1.0) * 0.37, 0.0)?;
+                let qtensor = QTensor::quantize(&weight, dtype)?;
+                let x = Tensor::randn(0f32, 1f32, (3, 2, K), &device)?;
+                let ids = Tensor::new(&[[0u32, 5], [5, 2], [2, 0]], &device)?;
+                let expected = reference(&qtensor, &x, &ids)?;
+                let actual = selected_experts_forward(&qtensor, None, &x, &ids)?.unwrap();
+                let a = actual.flatten_all()?.to_vec1::<f32>()?;
+                let e = expected.flatten_all()?.to_vec1::<f32>()?;
+                for (a, e) in a.iter().zip(e.iter()) {
+                    let abs_err = (a - e).abs();
+                    let rel_err = abs_err / e.abs().max(1e-12);
+                    max_abs = max_abs.max(abs_err);
+                    max_rel = max_rel.max(rel_err);
+                }
+            }
+            println!("{dtype:?}: max_abs_err={max_abs} max_rel_err={max_rel}");
+        }
+        Ok(())
+    }
+
+    fn allclose(actual: &Tensor, expected: &Tensor, atol: f32, rtol: f32) -> Result<bool> {
+        assert_eq!(actual.dims(), expected.dims());
+        let actual = actual.flatten_all()?.to_vec1::<f32>()?;
+        let expected = expected.flatten_all()?.to_vec1::<f32>()?;
+        // A matched non-finite pair (e.g. both NaN) is a match without a tolerance check: the
+        // arithmetic itself (NaN - NaN, Inf - Inf) would otherwise produce NaN and read as "not
+        // close" even though the classification matched.
+        Ok(actual.iter().zip(expected.iter()).all(|(&a, &e)| {
+            if let Some(_mismatch) = finite_mismatch(a, e) {
+                false
+            } else if e.is_nan() || e.is_infinite() {
+                true
+            } else {
+                (a - e).abs() <= atol + rtol * e.abs()
+            }
+        }))
+    }
+
+    #[test]
+    fn selected_experts_detect_wrong_accumulation() -> Result<()> {
+        let device = Device::Cpu;
+        let qtensor = random_qtensor(GgmlDType::Q4K, EXPERTS, N_OUT, K, &device)?;
+        let x = det_tensor((3, 1, K), 202, &device)?;
+        let ids = Tensor::new(&[[0u32, 5], [5, 2], [2, 0]], &device)?;
+        let expected = reference(&qtensor, &x, &ids)?;
+
+        // Deliberately wrong routing: swap the two expert columns for every token. Compare the
+        // optimized (cached) path against the correct reference using the same LOOSE bound real
+        // callers get; it must still catch this, not just the within-quantized-domain TIGHT one.
+        let wrong_ids = Tensor::new(&[[5u32, 0], [2, 5], [0, 2]], &device)?;
+        let cache = ExpertMatMuls::default();
+        let wrong = selected_experts_forward(&qtensor, Some(&cache), &x, &wrong_ids)?
+            .expect("layout is supported");
+
+        assert!(
+            !allclose(&wrong, &expected, LOOSE_ATOL, LOOSE_RTOL)?,
+            "LOOSE allclose failed to distinguish deliberately wrong expert routing"
+        );
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // assert_allclose / finite_mismatch fault injection
+    //
+    // Before this fix, `assert_allclose` compared with `abs_err > atol + rtol * e.abs()`
+    // directly: NaN comparisons are always false in IEEE 754, so any actual/expected pair
+    // involving NaN made `abs_err` itself NaN, `abs_err > ...` false, and the assertion silently
+    // reported success. Each test below panics the pre-fix implementation would not have raised.
+    // -----------------------------------------------------------------------
+
+    fn expect_assert_allclose_panics(actual: &Tensor, expected: &Tensor, atol: f32, rtol: f32) {
+        let actual = actual.clone();
+        let expected = expected.clone();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            assert_allclose(&actual, &expected, atol, rtol)
+        }));
+        assert!(
+            result.is_err(),
+            "assert_allclose should have panicked on this non-finite/mismatched input but did not"
+        );
+    }
+
+    #[test]
+    fn assert_allclose_rejects_actual_nan_vs_finite_expected() -> Result<()> {
+        let device = Device::Cpu;
+        let actual = Tensor::new(&[1.0f32, f32::NAN, 3.0], &device)?;
+        let expected = Tensor::new(&[1.0f32, 2.0, 3.0], &device)?;
+        expect_assert_allclose_panics(&actual, &expected, TIGHT_ATOL, TIGHT_RTOL);
+        Ok(())
+    }
+
+    #[test]
+    fn assert_allclose_rejects_actual_inf_vs_finite_expected() -> Result<()> {
+        let device = Device::Cpu;
+        let actual = Tensor::new(&[1.0f32, f32::INFINITY, 3.0], &device)?;
+        let expected = Tensor::new(&[1.0f32, 2.0, 3.0], &device)?;
+        expect_assert_allclose_panics(&actual, &expected, TIGHT_ATOL, TIGHT_RTOL);
+        Ok(())
+    }
+
+    #[test]
+    fn assert_allclose_rejects_finite_actual_vs_nan_expected() -> Result<()> {
+        let device = Device::Cpu;
+        let actual = Tensor::new(&[1.0f32, 2.0, 3.0], &device)?;
+        let expected = Tensor::new(&[1.0f32, f32::NAN, 3.0], &device)?;
+        expect_assert_allclose_panics(&actual, &expected, TIGHT_ATOL, TIGHT_RTOL);
+        Ok(())
+    }
+
+    #[test]
+    fn assert_allclose_rejects_positive_inf_vs_negative_inf() -> Result<()> {
+        let device = Device::Cpu;
+        let actual = Tensor::new(&[f32::INFINITY], &device)?;
+        let expected = Tensor::new(&[f32::NEG_INFINITY], &device)?;
+        expect_assert_allclose_panics(&actual, &expected, TIGHT_ATOL, TIGHT_RTOL);
+        Ok(())
+    }
+
+    #[test]
+    #[should_panic]
+    fn assert_allclose_rejects_mismatched_shapes() {
+        let device = Device::Cpu;
+        let actual = Tensor::new(&[1.0f32, 2.0], &device).unwrap();
+        let expected = Tensor::new(&[1.0f32, 2.0, 3.0], &device).unwrap();
+        assert_allclose(&actual, &expected, TIGHT_ATOL, TIGHT_RTOL).unwrap();
+    }
+
+    #[test]
+    fn assert_allclose_rejects_incorrect_near_zero_values() -> Result<()> {
+        let device = Device::Cpu;
+        // Expected values near zero; actual is off by far more than atol + rtol * |expected|.
+        let actual = Tensor::new(&[0.5f32, 1e-6, -1e-6], &device)?;
+        let expected = Tensor::new(&[0.0f32, 1e-6, -1e-6], &device)?;
+        expect_assert_allclose_panics(&actual, &expected, TIGHT_ATOL, TIGHT_RTOL);
+        Ok(())
+    }
+
+    #[test]
+    fn assert_allclose_rejects_a_deliberately_corrupted_expert_output() -> Result<()> {
+        let device = Device::Cpu;
+        let qtensor = random_qtensor(GgmlDType::Q4K, EXPERTS, N_OUT, K, &device)?;
+        let x = det_tensor((2, 1, K), 210, &device)?;
+        let ids = Tensor::new(&[[0u32, 5], [5, 2]], &device)?;
+        let expected = reference(&qtensor, &x, &ids)?;
+        let cache = ExpertMatMuls::default();
+        let actual = selected_experts_forward(&qtensor, Some(&cache), &x, &ids)?
+            .expect("layout is supported");
+
+        // Simulate a corrupted expert output (e.g. a kernel that read garbage/uninitialized
+        // memory) by injecting a NaN into one element, rather than a merely out-of-tolerance one.
+        let mut corrupted = actual.flatten_all()?.to_vec1::<f32>()?;
+        corrupted[0] = f32::NAN;
+        let corrupted = Tensor::from_vec(corrupted, actual.dims(), &device)?;
+
+        expect_assert_allclose_panics(&corrupted, &expected, LOOSE_ATOL, LOOSE_RTOL);
+        Ok(())
+    }
+
+    #[test]
+    fn assert_allclose_accepts_valid_finite_values_within_tolerance() -> Result<()> {
+        let device = Device::Cpu;
+        let qtensor = random_qtensor(GgmlDType::Q4K, EXPERTS, N_OUT, K, &device)?;
+        let x = det_tensor((2, 1, K), 211, &device)?;
+        let ids = Tensor::new(&[[0u32, 5], [5, 2]], &device)?;
+        let expected = reference(&qtensor, &x, &ids)?;
+        let cache = ExpertMatMuls::default();
+        let actual = selected_experts_forward(&qtensor, Some(&cache), &x, &ids)?
+            .expect("layout is supported");
+        assert_allclose(&actual, &expected, LOOSE_ATOL, LOOSE_RTOL)
+    }
+
+    #[test]
+    fn assert_allclose_accepts_matching_non_finite_classification() -> Result<()> {
+        let device = Device::Cpu;
+        let actual = Tensor::new(
+            &[1.0f32, f32::NAN, f32::INFINITY, f32::NEG_INFINITY],
+            &device,
+        )?;
+        let expected = Tensor::new(
+            &[1.0f32, f32::NAN, f32::INFINITY, f32::NEG_INFINITY],
+            &device,
+        )?;
+        assert_allclose(&actual, &expected, TIGHT_ATOL, TIGHT_RTOL)
+    }
+
+    #[test]
+    fn repeated_and_reordered_expert_selection_match_reference() -> Result<()> {
+        let device = Device::Cpu;
+        let qtensor = random_qtensor(GgmlDType::Q4K, EXPERTS, N_OUT, K, &device)?;
+        let x = det_tensor((4, 2, K), 203, &device)?;
+        // Repeated indices within a token, and different relative orderings across tokens.
+        let ids = Tensor::new(&[[3u32, 3], [1, 4], [4, 1], [0, 0]], &device)?;
+        let expected = reference(&qtensor, &x, &ids)?;
+        let cache = ExpertMatMuls::default();
+        let actual = selected_experts_forward(&qtensor, Some(&cache), &x, &ids)?
+            .expect("layout is supported");
+        assert_allclose(&actual, &expected, LOOSE_ATOL, LOOSE_RTOL)
+    }
+
+    #[test]
+    fn near_zero_and_large_magnitude_outputs_match_reference() -> Result<()> {
+        let device = Device::Cpu;
+        // Scale weights up/down to exercise both large-magnitude and near-zero outputs.
+        let weight = det_tensor((EXPERTS, N_OUT, K), 204, &device)?;
+        let weight = Tensor::cat(
+            &[
+                (weight.narrow(0, 0, 3)? * 1000.0)?,
+                (weight.narrow(0, 3, 3)? * 1e-4)?,
+            ],
+            0,
+        )?;
+        let qtensor = QTensor::quantize(&weight, GgmlDType::Q4K)?;
+        let x = det_tensor((2, 2, K), 205, &device)?;
+        let ids = Tensor::new(&[[0u32, 3], [4, 1]], &device)?;
+        let expected = reference(&qtensor, &x, &ids)?;
+        let cache = ExpertMatMuls::default();
+        let actual = selected_experts_forward(&qtensor, Some(&cache), &x, &ids)?
+            .expect("layout is supported");
+        // The activation-requantization noise LOOSE_* bounds scales with weight magnitude; this
+        // test deliberately uses a 1000x/1e-4x dynamic range, so it needs its own wider margin.
+        assert_allclose(&actual, &expected, 10.0, 0.3)
+    }
+
+    // -----------------------------------------------------------------------
+    // Cache memory budget
+    // -----------------------------------------------------------------------
+
+    fn build_counting(counter: Arc<AtomicUsize>, qtensor: &QTensor, expert: usize) -> QMatMul {
+        counter.fetch_add(1, Ordering::SeqCst);
+        let dtype = qtensor.dtype();
+        let expert_bytes = N_OUT * K / dtype.block_size() * dtype.type_size();
+        let data = qtensor.data().unwrap();
+        let bytes = &data[expert * expert_bytes..(expert + 1) * expert_bytes];
+        QMatMul::from_qtensor(
+            qtensor_from_ggml(dtype, bytes, vec![N_OUT, K], &Device::Cpu).unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn cache_stays_within_configured_budget() -> Result<()> {
+        let device = Device::Cpu;
+        let qtensor = random_qtensor(GgmlDType::Q4K, EXPERTS, N_OUT, K, &device)?;
+        let one_expert_bytes = {
+            let m = build_counting(Arc::new(AtomicUsize::new(0)), &qtensor, 0);
+            qmatmul_retained_bytes(&m)
+        };
+        let cache = ExpertMatMuls::default();
+        cache.set_budget_for_test(one_expert_bytes * 2 + one_expert_bytes / 2);
+
+        for expert in 0..EXPERTS {
+            let counter = Arc::new(AtomicUsize::new(0));
+            cache.get_or_build(EXPERTS, expert, || {
+                Ok(build_counting(counter.clone(), &qtensor, expert))
+            })?;
+            assert!(
+                cache.cached_bytes() <= one_expert_bytes * 2 + one_expert_bytes / 2,
+                "cache exceeded its configured budget after expert {expert}"
+            );
+        }
+        // Only the two most recently built experts should still be resident.
+        assert!(!cache.is_ready(0));
+        assert!(cache.is_ready(EXPERTS - 1));
+        assert!(cache.is_ready(EXPERTS - 2));
+        Ok(())
+    }
+
+    #[test]
+    fn repeated_selection_hits_cache_without_rebuilding() -> Result<()> {
+        let device = Device::Cpu;
+        let qtensor = random_qtensor(GgmlDType::Q4K, EXPERTS, N_OUT, K, &device)?;
+        let cache = ExpertMatMuls::default();
+        let counter = Arc::new(AtomicUsize::new(0));
+        for _ in 0..5 {
+            cache.get_or_build(EXPERTS, 2, || {
+                Ok(build_counting(counter.clone(), &qtensor, 2))
+            })?;
+        }
+        assert_eq!(counter.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn new_expert_evicts_least_recently_used() -> Result<()> {
+        let device = Device::Cpu;
+        let qtensor = random_qtensor(GgmlDType::Q4K, EXPERTS, N_OUT, K, &device)?;
+        let one_expert_bytes =
+            qmatmul_retained_bytes(&build_counting(Arc::new(AtomicUsize::new(0)), &qtensor, 0));
+        let cache = ExpertMatMuls::default();
+        cache.set_budget_for_test(one_expert_bytes + one_expert_bytes / 2);
+
+        cache.get_or_build(EXPERTS, 0, || {
+            Ok(build_counting(Arc::new(AtomicUsize::new(0)), &qtensor, 0))
+        })?;
+        assert!(cache.is_ready(0));
+        cache.get_or_build(EXPERTS, 1, || {
+            Ok(build_counting(Arc::new(AtomicUsize::new(0)), &qtensor, 1))
+        })?;
+        assert!(
+            !cache.is_ready(0),
+            "expert 0 should be evicted for expert 1"
+        );
+        assert!(cache.is_ready(1));
+        Ok(())
+    }
+
+    /// Cache holds exactly 2 experts: insert A, insert B, access A (a hit), insert C. A must
+    /// survive (it was touched most recently before C landed), C must be cached (just inserted),
+    /// and B must be evicted (least recently used). Then a repeat access to A must stay a hit
+    /// (no reconstruction) and an access to B must reconstruct (it was evicted). Construction
+    /// counters, not timing, make this deterministic: against the pre-fix code, where a cache hit
+    /// never touched `lru`, B (not A) would have survived since eviction only followed insertion
+    /// order (pop_front), so this test would have failed with "A must remain cached" before the
+    /// `get_or_build` fix.
+    #[test]
+    fn access_updates_lru_recency_abac() -> Result<()> {
+        let device = Device::Cpu;
+        let qtensor = random_qtensor(GgmlDType::Q4K, EXPERTS, N_OUT, K, &device)?;
+        let one_expert_bytes =
+            qmatmul_retained_bytes(&build_counting(Arc::new(AtomicUsize::new(0)), &qtensor, 0));
+        let cache = ExpertMatMuls::default();
+        cache.set_budget_for_test(one_expert_bytes * 2 + one_expert_bytes / 2);
+
+        const A: usize = 0;
+        const B: usize = 1;
+        const C: usize = 2;
+
+        let a_builds = Arc::new(AtomicUsize::new(0));
+        cache.get_or_build(EXPERTS, A, || {
+            Ok(build_counting(a_builds.clone(), &qtensor, A))
+        })?;
+        let b_builds = Arc::new(AtomicUsize::new(0));
+        cache.get_or_build(EXPERTS, B, || {
+            Ok(build_counting(b_builds.clone(), &qtensor, B))
+        })?;
+        assert!(cache.is_ready(A) && cache.is_ready(B));
+
+        // Access A: a hit, must promote it to MRU without rebuilding.
+        cache.get_or_build(EXPERTS, A, || {
+            panic!("A is cached, accessing it must not rebuild");
+            #[allow(unreachable_code)]
+            Ok(build_counting(a_builds.clone(), &qtensor, A))
+        })?;
+        assert_eq!(a_builds.load(Ordering::SeqCst), 1);
+
+        let c_builds = Arc::new(AtomicUsize::new(0));
+        cache.get_or_build(EXPERTS, C, || {
+            Ok(build_counting(c_builds.clone(), &qtensor, C))
+        })?;
+
+        assert!(
+            cache.is_ready(A),
+            "A must remain cached: it was accessed most recently before C was inserted"
+        );
+        assert!(cache.is_ready(C), "C must be cached: it was just inserted");
+        assert!(
+            !cache.is_ready(B),
+            "B must be evicted: it is the least recently used entry"
+        );
+
+        // A is still resident: accessing it again must not reconstruct.
+        cache.get_or_build(EXPERTS, A, || {
+            panic!("A should still be cached and must not rebuild");
+            #[allow(unreachable_code)]
+            Ok(build_counting(a_builds.clone(), &qtensor, A))
+        })?;
+        assert_eq!(a_builds.load(Ordering::SeqCst), 1);
+
+        // B was evicted: accessing it again must reconstruct.
+        let b_rebuilds = Arc::new(AtomicUsize::new(0));
+        cache.get_or_build(EXPERTS, B, || {
+            Ok(build_counting(b_rebuilds.clone(), &qtensor, B))
+        })?;
+        assert_eq!(
+            b_rebuilds.load(Ordering::SeqCst),
+            1,
+            "B must have been reconstructed after eviction"
+        );
+        Ok(())
+    }
+
+    /// Extends the A/B/A/C scenario to repeated hits and a second eviction: an entry refreshed by
+    /// several hits in a row keeps surviving evictions until something more recently touched than
+    /// it exists. Insertion order alone (the pre-fix behavior) would evict expert 0 on the very
+    /// first new insertion here, not the second.
+    #[test]
+    fn eviction_follows_recency_after_repeated_hits() -> Result<()> {
+        let device = Device::Cpu;
+        let qtensor = random_qtensor(GgmlDType::Q4K, EXPERTS, N_OUT, K, &device)?;
+        let one_expert_bytes =
+            qmatmul_retained_bytes(&build_counting(Arc::new(AtomicUsize::new(0)), &qtensor, 0));
+        let cache = ExpertMatMuls::default();
+        cache.set_budget_for_test(one_expert_bytes * 3 + one_expert_bytes / 2);
+
+        for expert in 0..3 {
+            cache.get_or_build(EXPERTS, expert, || {
+                Ok(build_counting(
+                    Arc::new(AtomicUsize::new(0)),
+                    &qtensor,
+                    expert,
+                ))
+            })?;
+        }
+        // lru order is now [0, 1, 2] (0 is LRU).
+        for _ in 0..5 {
+            cache.get_or_build(EXPERTS, 0, || {
+                panic!("expert 0 is cached, repeated access must not rebuild it");
+                #[allow(unreachable_code)]
+                Ok(build_counting(Arc::new(AtomicUsize::new(0)), &qtensor, 0))
+            })?;
+        }
+        // repeated hits promote 0 to MRU each time: order is now [1, 2, 0].
+        cache.get_or_build(EXPERTS, 3, || {
+            Ok(build_counting(Arc::new(AtomicUsize::new(0)), &qtensor, 3))
+        })?;
+        assert!(!cache.is_ready(1), "1 is now LRU and must be evicted first");
+        assert!(cache.is_ready(0) && cache.is_ready(2) && cache.is_ready(3));
+
+        cache.get_or_build(EXPERTS, 4, || {
+            Ok(build_counting(Arc::new(AtomicUsize::new(0)), &qtensor, 4))
+        })?;
+        assert!(!cache.is_ready(2), "2 is now LRU and must be evicted next");
+        assert!(
+            cache.is_ready(0),
+            "0 must still be resident: its repeated accesses kept promoting it past both evictions"
+        );
+        assert!(cache.is_ready(3) && cache.is_ready(4));
+        Ok(())
+    }
+
+    #[test]
+    fn evicted_expert_reconstructs_to_the_same_result() -> Result<()> {
+        let device = Device::Cpu;
+        let qtensor = random_qtensor(GgmlDType::Q4K, EXPERTS, N_OUT, K, &device)?;
+        let x = det_tensor((1, 1, K), 206, &device)?;
+        let ids = Tensor::new(&[[0u32, 1]], &device)?;
+        let expected = reference(&qtensor, &x, &ids)?;
+
+        let one_expert_bytes =
+            qmatmul_retained_bytes(&build_counting(Arc::new(AtomicUsize::new(0)), &qtensor, 0));
+        let cache = ExpertMatMuls::default();
+        cache.set_budget_for_test(one_expert_bytes + one_expert_bytes / 2);
+
+        let first = selected_experts_forward(&qtensor, Some(&cache), &x, &ids)?.unwrap();
+        assert_allclose(&first, &expected, LOOSE_ATOL, LOOSE_RTOL)?;
+        // Force eviction of expert 0 by touching every other expert.
+        for expert in 2..EXPERTS {
+            cache.get_or_build(EXPERTS, expert, || {
+                Ok(build_counting(
+                    Arc::new(AtomicUsize::new(0)),
+                    &qtensor,
+                    expert,
+                ))
+            })?;
+        }
+        assert!(!cache.is_ready(0));
+        let second = selected_experts_forward(&qtensor, Some(&cache), &x, &ids)?.unwrap();
+        assert_allclose(&second, &first, TIGHT_ATOL, TIGHT_RTOL)?;
+        assert_allclose(&second, &expected, LOOSE_ATOL, LOOSE_RTOL)
+    }
+
+    #[test]
+    fn budget_smaller_than_one_expert_is_safe() -> Result<()> {
+        let device = Device::Cpu;
+        let qtensor = random_qtensor(GgmlDType::Q4K, EXPERTS, N_OUT, K, &device)?;
+        let x = det_tensor((1, 1, K), 207, &device)?;
+        let ids = Tensor::new(&[[0u32, 1]], &device)?;
+        let expected = reference(&qtensor, &x, &ids)?;
+
+        let cache = ExpertMatMuls::default();
+        cache.set_budget_for_test(1);
+        let actual = selected_experts_forward(&qtensor, Some(&cache), &x, &ids)?.unwrap();
+        assert_allclose(&actual, &expected, LOOSE_ATOL, LOOSE_RTOL)?;
+        assert_eq!(cache.cached_bytes(), 0);
+        assert!(!cache.is_ready(0) && !cache.is_ready(1));
+        Ok(())
+    }
+
+    #[test]
+    fn zero_budget_never_retains_anything() -> Result<()> {
+        let device = Device::Cpu;
+        let qtensor = random_qtensor(GgmlDType::Q4K, EXPERTS, N_OUT, K, &device)?;
+        let cache = ExpertMatMuls::default();
+        cache.set_budget_for_test(0);
+        for expert in 0..EXPERTS {
+            cache.get_or_build(EXPERTS, expert, || {
+                Ok(build_counting(
+                    Arc::new(AtomicUsize::new(0)),
+                    &qtensor,
+                    expert,
+                ))
+            })?;
+        }
+        assert_eq!(cache.cached_bytes(), 0);
+        for expert in 0..EXPERTS {
+            assert!(!cache.is_ready(expert));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn independent_model_instances_have_independent_caches() -> Result<()> {
+        let device = Device::Cpu;
+        let qtensor = random_qtensor(GgmlDType::Q4K, EXPERTS, N_OUT, K, &device)?;
+        let cache_a = ExpertMatMuls::default();
+        let cache_b = ExpertMatMuls::default();
+        cache_a.get_or_build(EXPERTS, 0, || {
+            Ok(build_counting(Arc::new(AtomicUsize::new(0)), &qtensor, 0))
+        })?;
+        assert!(cache_a.is_ready(0));
+        assert!(!cache_b.is_ready(0));
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Concurrency
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn concurrent_same_expert_builds_exactly_once() -> Result<()> {
+        let device = Device::Cpu;
+        let qtensor = Arc::new(random_qtensor(GgmlDType::Q4K, EXPERTS, N_OUT, K, &device)?);
+        let cache = Arc::new(ExpertMatMuls::default());
+        let counter = Arc::new(AtomicUsize::new(0));
+        let n_threads = 8;
+        let barrier = Arc::new(Barrier::new(n_threads));
+
+        let handles: Vec<_> = (0..n_threads)
+            .map(|_| {
+                let cache = cache.clone();
+                let counter = counter.clone();
+                let qtensor = qtensor.clone();
+                let barrier = barrier.clone();
+                thread::spawn(move || {
+                    barrier.wait();
+                    cache
+                        .get_or_build(EXPERTS, 3, || {
+                            Ok(build_counting(counter.clone(), &qtensor, 3))
+                        })
+                        .unwrap();
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        assert_eq!(
+            counter.load(Ordering::SeqCst),
+            1,
+            "expert should be built exactly once under concurrent access"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn concurrent_different_experts_build_independently() -> Result<()> {
+        let device = Device::Cpu;
+        let qtensor = Arc::new(random_qtensor(GgmlDType::Q4K, EXPERTS, N_OUT, K, &device)?);
+        let cache = Arc::new(ExpertMatMuls::default());
+        let n_threads = 4;
+        // Every build() blocks on this barrier until all n_threads have entered build(),
+        // which can only happen if the cache lets distinct experts build concurrently
+        // (a global lock held across build() would deadlock this).
+        let entered = Arc::new(Barrier::new(n_threads));
+
+        let handles: Vec<_> = (0..n_threads)
+            .map(|expert| {
+                let cache = cache.clone();
+                let qtensor = qtensor.clone();
+                let entered = entered.clone();
+                thread::spawn(move || {
+                    cache
+                        .get_or_build(EXPERTS, expert, || {
+                            entered.wait();
+                            Ok(build_counting(
+                                Arc::new(AtomicUsize::new(0)),
+                                &qtensor,
+                                expert,
+                            ))
+                        })
+                        .unwrap();
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        for expert in 0..n_threads {
+            assert!(cache.is_ready(expert));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn concurrent_reads_of_a_cached_expert_all_succeed() -> Result<()> {
+        let device = Device::Cpu;
+        let qtensor = Arc::new(random_qtensor(GgmlDType::Q4K, EXPERTS, N_OUT, K, &device)?);
+        let cache = Arc::new(ExpertMatMuls::default());
+        cache.get_or_build(EXPERTS, 0, || {
+            Ok(build_counting(Arc::new(AtomicUsize::new(0)), &qtensor, 0))
+        })?;
+
+        let n_threads = 8;
+        let barrier = Arc::new(Barrier::new(n_threads));
+        let handles: Vec<_> = (0..n_threads)
+            .map(|_| {
+                let cache = cache.clone();
+                let qtensor = qtensor.clone();
+                let barrier = barrier.clone();
+                thread::spawn(move || {
+                    barrier.wait();
+                    cache
+                        .get_or_build(EXPERTS, 0, || {
+                            panic!("already cached, should not rebuild");
+                            #[allow(unreachable_code)]
+                            Ok(build_counting(Arc::new(AtomicUsize::new(0)), &qtensor, 0))
+                        })
+                        .unwrap();
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn eviction_does_not_disturb_an_in_flight_reference() -> Result<()> {
+        let device = Device::Cpu;
+        let qtensor = random_qtensor(GgmlDType::Q4K, EXPERTS, N_OUT, K, &device)?;
+        let x = det_tensor((1, 1, K), 208, &device)?;
+
+        let one_expert_bytes =
+            qmatmul_retained_bytes(&build_counting(Arc::new(AtomicUsize::new(0)), &qtensor, 0));
+        let cache = ExpertMatMuls::default();
+        cache.set_budget_for_test(one_expert_bytes + one_expert_bytes / 2);
+
+        let held = cache.get_or_build(EXPERTS, 0, || {
+            Ok(build_counting(Arc::new(AtomicUsize::new(0)), &qtensor, 0))
+        })?;
+        let x_rows = x.reshape((1, K))?;
+        let expected_row = Module::forward(&held, &x_rows)?;
+
+        // Evict expert 0 from the cache while `held` keeps it alive.
+        cache.get_or_build(EXPERTS, 1, || {
+            Ok(build_counting(Arc::new(AtomicUsize::new(0)), &qtensor, 1))
+        })?;
+        assert!(!cache.is_ready(0));
+
+        // The already-obtained handle must still compute the same answer as before eviction.
+        let out = Module::forward(&held, &x_rows)?;
+        assert_allclose(&out, &expected_row, TIGHT_ATOL, TIGHT_RTOL)
+    }
+
+    #[test]
+    fn failed_build_is_retryable() -> Result<()> {
+        let device = Device::Cpu;
+        let qtensor = random_qtensor(GgmlDType::Q4K, EXPERTS, N_OUT, K, &device)?;
+        let cache = ExpertMatMuls::default();
+
+        let err = cache.get_or_build(EXPERTS, 0, || {
+            candle_core::bail!("deliberate build failure")
+        });
+        assert!(err.is_err());
+        assert!(!cache.is_ready(0));
+
+        let ok = cache.get_or_build(EXPERTS, 0, || {
+            Ok(build_counting(Arc::new(AtomicUsize::new(0)), &qtensor, 0))
+        });
+        assert!(ok.is_ok());
+        assert!(cache.is_ready(0));
+        Ok(())
+    }
+
+    #[test]
+    fn concurrent_requests_with_a_small_budget_do_not_corrupt_state() -> Result<()> {
+        let device = Device::Cpu;
+        let qtensor = Arc::new(random_qtensor(GgmlDType::Q4K, EXPERTS, N_OUT, K, &device)?);
+        let one_expert_bytes =
+            qmatmul_retained_bytes(&build_counting(Arc::new(AtomicUsize::new(0)), &qtensor, 0));
+        let cache = Arc::new(ExpertMatMuls::default());
+        cache.set_budget_for_test(one_expert_bytes + one_expert_bytes / 2);
+
+        let n_threads = 16;
+        let barrier = Arc::new(Barrier::new(n_threads));
+        let handles: Vec<_> = (0..n_threads)
+            .map(|i| {
+                let cache = cache.clone();
+                let qtensor = qtensor.clone();
+                let barrier = barrier.clone();
+                thread::spawn(move || {
+                    let expert = i % EXPERTS;
+                    barrier.wait();
+                    cache
+                        .get_or_build(EXPERTS, expert, || {
+                            Ok(build_counting(
+                                Arc::new(AtomicUsize::new(0)),
+                                &qtensor,
+                                expert,
+                            ))
+                        })
+                        .unwrap();
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+        assert!(
+            cache.cached_bytes() <= one_expert_bytes * 2 + one_expert_bytes,
+            "cache exceeded its budget after concurrent load: {} bytes",
+            cache.cached_bytes()
+        );
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Performance (not correctness; `--ignored --nocapture`, one run per thread count)
+    // -----------------------------------------------------------------------
+
+    fn peak_rss_kb() -> u64 {
+        std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|status| {
+                status.lines().find_map(|line| {
+                    line.strip_prefix("VmHWM:")
+                        .and_then(|rest| rest.split_whitespace().next())
+                        .and_then(|kb| kb.parse().ok())
+                })
+            })
+            .unwrap_or(0)
+    }
+
+    /// Microbenchmark at Qwen3-30B-A3B's MoE projection shape (hidden=2048,
+    /// moe_intermediate=768, 128 experts, top-8 routing), Q4_K_M, decode-style batch=1 calls
+    /// with rotating synthetic routing. This times only `cpu_indexed_moe_forward_cached`'s own
+    /// matmul, not a full model's decode step (no attention, sampling, KV cache, etc), so
+    /// "calls/s" here is a lower bound on how much this one projection's cost improves, not a
+    /// claim about end-to-end tokens/s. Run with and without `CANDLE_NUM_THREADS=8` set:
+    /// `CANDLE_NUM_THREADS=8 cargo test -p mistralrs-quant --release --lib \
+    ///   gguf::cpu::tests::bench_expert_cache_qwen3_30b_a3b_shapes -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_expert_cache_qwen3_30b_a3b_shapes() -> Result<()> {
+        let device = Device::Cpu;
+        let (experts, n_out, k, topk) = (128usize, 768usize, 2048usize, 8usize);
+        let threads = std::env::var("CANDLE_NUM_THREADS").unwrap_or_else(|_| "default".into());
+        println!("threads={threads} (physical cores if \"default\")");
+
+        let rss_before_weights = peak_rss_kb();
+        let qtensor = random_qtensor(GgmlDType::Q4K, experts, n_out, k, &device)?;
+        println!(
+            "weight tensor: {experts} experts, {n_out}x{k}, peak_rss_delta_kb={}",
+            peak_rss_kb().saturating_sub(rss_before_weights)
+        );
+
+        // IID-uniform top-k draw per step (rejection sampling for distinctness), not a cyclic
+        // round robin: a round robin defeats LRU outright (every entry is evicted exactly once
+        // per full period, right before its next use), which is a known LRU pathology, not a
+        // realistic token-to-expert routing pattern.
+        let route = |step: usize| -> Vec<u32> {
+            let mut chosen = Vec::with_capacity(topk);
+            let mut draw = 0u64;
+            while chosen.len() < topk {
+                let v = deterministic_values(1, 7_000_000 + step as u64 * 10_000 + draw)[0];
+                draw += 1;
+                let idx = (((v + 1.0) * 0.5 * experts as f32) as usize).min(experts - 1) as u32;
+                if !chosen.contains(&idx) {
+                    chosen.push(idx);
+                }
+            }
+            chosen
+        };
+
+        // (1) original fallback: full dequantize-and-gather on every call. Few steps: this
+        // dequantizes the whole (experts, n_out, k) tensor to f32 every time. Skippable: on at
+        // least one high core-count container this hung inside candle's own dequantize/matmul
+        // thread pool, unrelated to anything this PR touches (see bench write-up).
+        if std::env::var("BENCH_SKIP_FALLBACK").is_err() {
+            let rss_before = peak_rss_kb();
+            let steps = 5;
+            let start = std::time::Instant::now();
+            for step in 0..steps {
+                let x = det_tensor((1, 1, k), 9_000 + step as u64, &device)?;
+                let ids = Tensor::from_vec(route(step), (1, topk), &device)?;
+                reference(&qtensor, &x, &ids)?;
+            }
+            let elapsed = start.elapsed();
+            println!(
+                "original_fallback threads={threads}: {steps} calls in {elapsed:?} \
+                 ({:.3} calls/s), peak_rss_delta_kb={}",
+                steps as f64 / elapsed.as_secs_f64(),
+                peak_rss_kb().saturating_sub(rss_before)
+            );
+        }
+
+        // (2) unbounded cache: the df4db50 behavior (every touched expert stays forever).
+        {
+            let cache = ExpertMatMuls::default();
+            cache.set_budget_for_test(usize::MAX);
+            let rss_before = peak_rss_kb();
+            let steps = 300;
+            let start = std::time::Instant::now();
+            for step in 0..steps {
+                let x = det_tensor((1, 1, k), 9_000 + step as u64, &device)?;
+                let ids = Tensor::from_vec(route(step), (1, topk), &device)?;
+                selected_experts_forward(&qtensor, Some(&cache), &x, &ids)?;
+            }
+            let elapsed = start.elapsed();
+            println!(
+                "unbounded_cache threads={threads}: {steps} calls in {elapsed:?} \
+                 ({:.1} calls/s), resident_bytes={}, peak_rss_delta_kb={}",
+                steps as f64 / elapsed.as_secs_f64(),
+                cache.cached_bytes(),
+                peak_rss_kb().saturating_sub(rss_before)
+            );
+        }
+
+        // (3) new bounded cache, default 64 MiB budget.
+        {
+            let cache = ExpertMatMuls::default();
+            let rss_before = peak_rss_kb();
+            let steps = 300;
+            let start = std::time::Instant::now();
+            for step in 0..steps {
+                let x = det_tensor((1, 1, k), 9_000 + step as u64, &device)?;
+                let ids = Tensor::from_vec(route(step), (1, topk), &device)?;
+                selected_experts_forward(&qtensor, Some(&cache), &x, &ids)?;
+            }
+            let elapsed = start.elapsed();
+            println!(
+                "bounded_cache_default_budget threads={threads}: {steps} calls in {elapsed:?} \
+                 ({:.1} calls/s), resident_bytes={}, peak_rss_delta_kb={}",
+                steps as f64 / elapsed.as_secs_f64(),
+                cache.cached_bytes(),
+                peak_rss_kb().saturating_sub(rss_before)
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Isolates `get_or_build`'s own hit-path cost (the mutex lock, slot match, and (post-fix)
+    /// the `lru` scan/remove/push_back) from matmul/repacking cost, which the shape-level bench
+    /// above cannot do cleanly on containers where candle's own CPU matmul/thread-pool has
+    /// unrelated scaling issues at high core counts. No `build()` ever runs here: every call is a
+    /// guaranteed cache hit against a cache pre-populated up to its budget, so this measures
+    /// exactly the cost this PR's LRU fix adds to the hot path. Run with `--ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bench_cache_hit_latency_pure() -> Result<()> {
+        let device = Device::Cpu;
+        let (n_experts, n_out, k) = (128usize, 768usize, 2048usize);
+        let qtensor = random_qtensor(GgmlDType::Q4K, n_experts, n_out, k, &device)?;
+        let one_expert_bytes =
+            qmatmul_retained_bytes(&build_counting(Arc::new(AtomicUsize::new(0)), &qtensor, 0));
+        let resident = 40usize;
+        let cache = ExpertMatMuls::default();
+        cache.set_budget_for_test(one_expert_bytes * resident + one_expert_bytes / 2);
+        for expert in 0..resident {
+            cache.get_or_build(n_experts, expert, || {
+                Ok(build_counting(
+                    Arc::new(AtomicUsize::new(0)),
+                    &qtensor,
+                    expert,
+                ))
+            })?;
+        }
+
+        let iters = 2_000_000u64;
+        let start = std::time::Instant::now();
+        for i in 0..iters {
+            let expert = (i as usize) % resident;
+            cache.get_or_build(n_experts, expert, || {
+                panic!("cache is fully warm, every call here must be a hit")
+            })?;
+        }
+        let elapsed = start.elapsed();
+        println!(
+            "pure_cache_hits: {iters} calls over {resident} resident experts in {elapsed:?} \
+             ({:.1} ns/call)",
+            elapsed.as_nanos() as f64 / iters as f64
+        );
+        Ok(())
     }
 }
