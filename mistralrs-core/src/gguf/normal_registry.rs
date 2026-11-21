@@ -1,8 +1,8 @@
 use crate::NormalLoaderType;
 use std::{error::Error, fmt, str::FromStr};
 
-pub(crate) const GGUF_NORMAL_LOADER_COUNT: usize = 28;
-pub(crate) const CANONICAL_GGUF_ARCHITECTURE_COUNT: usize = 28;
+pub(crate) const GGUF_NORMAL_LOADER_COUNT: usize = 29;
+pub(crate) const CANONICAL_GGUF_ARCHITECTURE_COUNT: usize = 29;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum CanonicalGgufArchitecture {
@@ -34,6 +34,7 @@ pub(crate) enum CanonicalGgufArchitecture {
     Lfm2,
     Lfm2Moe,
     Lfm3,
+    Olala,
 }
 
 impl CanonicalGgufArchitecture {
@@ -67,6 +68,7 @@ impl CanonicalGgufArchitecture {
             Self::Lfm2 => "lfm2",
             Self::Lfm2Moe => "lfm2moe",
             Self::Lfm3 => "lfm3",
+            Self::Olala => "olala",
         }
     }
 }
@@ -110,6 +112,7 @@ impl FromStr for CanonicalGgufArchitecture {
             "lfm2" => Ok(Self::Lfm2),
             "lfm2moe" => Ok(Self::Lfm2Moe),
             "lfm3" => Ok(Self::Lfm3),
+            "olala" => Ok(Self::Olala),
             _ => Err(NormalGgufRegistryError::UnknownArchitecture(
                 value.to_string(),
             )),
@@ -401,6 +404,19 @@ const LFM3_METADATA: &[&str] = &[
     "{arch}.rope.freq_base",
     "{arch}.rope.freq_base_swa",
 ];
+const OLALA_METADATA: &[&str] = &[
+    "{arch}.ssm.inner_size",
+    "{arch}.ssm.state_size",
+    "{arch}.ssm.time_step_rank",
+    "{arch}.mamba_mimo_dim",
+    "{arch}.num_signal_heads",
+    "{arch}.num_noise_heads",
+    "{arch}.tpa_rank",
+    "{arch}.expert_count",
+    "{arch}.expert_used_count",
+    "{arch}.moe_latent_size",
+    "{arch}.layer_types",
+];
 const LFM2_MOE_METADATA: &[&str] = &[
     "{arch}.shortconv.l_cache",
     "{arch}.expert_count",
@@ -439,6 +455,14 @@ const QWEN35_MOE_TENSORS: &[&str] = &[
 ];
 const QWEN35_TENSORS: &[&str] = &[".ssm_a", ".ssm_conv1d.", ".ssm_alpha.", ".ssm_beta."];
 const SHORTCONV_TENSORS: &[&str] = &[".shortconv.conv.", ".shortconv.in_proj."];
+const OLALA_TENSORS: &[&str] = &[
+    ".ssm_in.weight",
+    ".ssm_in_dyn.weight",
+    ".ffn_latent_down.weight",
+    ".ffn_latent_up.weight",
+    ".ffn_up_exps.weight",
+    ".geo_mixer_scale",
+];
 
 const GLM_MROPE_UNSUPPORTED: &[&str] = &["{arch}.rope.dimension_sections"];
 
@@ -475,6 +499,7 @@ const HUNYUAN_MOE_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::HunYuanMoEV
 const LFM2_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Lfm2];
 const LFM2_MOE_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Lfm2Moe];
 const LFM3_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Lfm3];
+const OLALA_LOADERS: &[NormalLoaderType] = &[NormalLoaderType::Olala];
 
 pub(crate) const GGUF_SCHEMAS: &[GgufSchema; CANONICAL_GGUF_ARCHITECTURE_COUNT] = &[
     GgufSchema {
@@ -691,6 +716,14 @@ pub(crate) const GGUF_SCHEMAS: &[GgufSchema; CANONICAL_GGUF_ARCHITECTURE_COUNT] 
         rope_pairing: RopePairing::HalfSplit,
         required_metadata: LFM2_MOE_METADATA,
         required_tensors: SHORTCONV_TENSORS,
+        unsupported_metadata: NO_REQUIREMENTS,
+    },
+    GgufSchema {
+        architecture: CanonicalGgufArchitecture::Olala,
+        compatible_loaders: OLALA_LOADERS,
+        rope_pairing: RopePairing::HalfSplit,
+        required_metadata: OLALA_METADATA,
+        required_tensors: OLALA_TENSORS,
         unsupported_metadata: NO_REQUIREMENTS,
     },
     GgufSchema {
@@ -913,6 +946,11 @@ pub(crate) const NORMAL_MODEL_ADAPTERS: &[NativeModelAdapter; GGUF_NORMAL_LOADER
             GgufLayout::PerLayerInventory,
             GgufLayout::SqueezedShortConv,
         ],
+    },
+    NativeModelAdapter {
+        loader: NormalLoaderType::Olala,
+        architectures: &[CanonicalGgufArchitecture::Olala],
+        layouts: &[GgufLayout::Direct, GgufLayout::PerLayerInventory],
     },
     NativeModelAdapter {
         loader: NormalLoaderType::Lfm3,

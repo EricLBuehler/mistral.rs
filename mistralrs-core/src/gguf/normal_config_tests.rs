@@ -186,6 +186,53 @@ fn fixture(
         );
     }
 
+    if loader == &NormalLoaderType::Olala {
+        insert_u32(&mut metadata, architecture, "ssm.inner_size", 1_024);
+        insert_u32(&mut metadata, architecture, "ssm.state_size", 64);
+        insert_u32(&mut metadata, architecture, "ssm.time_step_rank", 16);
+        insert_u32(&mut metadata, architecture, "ssm.group_count", 1);
+        insert_u32(&mut metadata, architecture, "mamba_mimo_dim", 4);
+        insert_u32(&mut metadata, architecture, "mamba_headdim", 32);
+        insert_u32(&mut metadata, architecture, "num_signal_heads", 6);
+        insert_u32(&mut metadata, architecture, "num_noise_heads", 2);
+        insert_u32(&mut metadata, architecture, "tpa_rank", 2);
+        insert_u32(&mut metadata, architecture, "num_rope_angles", 16);
+        insert_u32(&mut metadata, architecture, "moe_latent_size", 128);
+        insert_u32(&mut metadata, architecture, "expert_count", 8);
+        insert_u32(&mut metadata, architecture, "expert_used_count", 2);
+        insert_u32(
+            &mut metadata,
+            architecture,
+            "expert_feed_forward_length",
+            256,
+        );
+        insert_u32(
+            &mut metadata,
+            architecture,
+            "expert_shared_feed_forward_length",
+            512,
+        );
+        insert_f32(&mut metadata, architecture, "expert_weights_scale", 2.45);
+        insert_f32(&mut metadata, architecture, "gate_bias", 1.15);
+        insert_f32(&mut metadata, architecture, "attn_logit_softcapping", 150.0);
+        metadata.insert(
+            format!("{}.layer_types", architecture.as_str()),
+            GgufValue::String("MMMMVMMMMV".to_string()),
+        );
+        tensors.extend(
+            [
+                "blk.0.ssm_in.weight",
+                "blk.0.ssm_in_dyn.weight",
+                "blk.0.ffn_latent_down.weight",
+                "blk.0.ffn_latent_up.weight",
+                "blk.0.ffn_up_exps.weight",
+                "blk.0.geo_mixer_scale",
+            ]
+            .into_iter()
+            .map(str::to_string),
+        );
+    }
+
     if matches!(
         loader,
         NormalLoaderType::Qwen3Next
@@ -398,6 +445,7 @@ fn assert_native_config_deserializes(loader: &NormalLoaderType, config: JsonValu
         NormalLoaderType::Lfm2 | NormalLoaderType::Lfm2Moe => {
             assert_deserializes::<models::lfm2::Config>(loader, config)
         }
+        NormalLoaderType::Olala => assert_deserializes::<models::olala::Config>(loader, config),
         NormalLoaderType::Lfm3 => assert_deserializes::<models::lfm3::Config>(loader, config),
     }
 }

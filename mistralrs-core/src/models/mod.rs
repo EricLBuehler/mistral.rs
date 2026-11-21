@@ -16,6 +16,7 @@ pub(crate) mod lfm3;
 pub(crate) mod llama;
 pub(crate) mod mistral;
 pub(crate) mod mixtral;
+pub(crate) mod olala;
 pub(crate) mod phi2;
 pub(crate) mod phi3;
 pub(crate) mod phi3_5_moe;
