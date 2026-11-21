@@ -8,6 +8,9 @@ use mistralrs_quant::{
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
+#[cfg(test)]
+mod olala_cpu;
+
 use crate::{
     paged_attention::ModelConfigMetadata,
     pipeline::{EitherCache, IsqModel, NormalModel},
