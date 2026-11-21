@@ -243,7 +243,7 @@ impl GemmaLarkBuilder {
     /// Append shared terminal and generic rules used by all branches.
     pub(super) fn emit_shared_rules(&mut self) {
         self.rules.extend([
-            r##"gemma_string: <|"|> /[^<]*/ <|"|>"##.to_string(),
+            super::gemma4::gemma4_string_rule(),
             r#"number: /-?(0|[1-9][0-9]*)(\.[0-9]+)?/"#.to_string(),
             r#"integer: /-?(0|[1-9][0-9]*)/"#.to_string(),
             r#"boolean_val: "true" | "false""#.to_string(),
