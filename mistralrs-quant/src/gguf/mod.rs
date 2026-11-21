@@ -906,6 +906,39 @@ impl QuantizedSerde for GgufMatMul {
 mod tests {
     use super::*;
 
+    // Empirically covers BF16 input rounding plus Q4K weight dequantization noise.
+    #[cfg(feature = "cuda")]
+    const BF16_Q4K_ATOL: f32 = 0.05;
+    #[cfg(feature = "cuda")]
+    const BF16_Q4K_RTOL: f32 = 0.05;
+
+    /// Elementwise `abs(actual - expected) <= atol + rtol * abs(expected)`, reporting the
+    /// worst-case absolute and relative error and how many elements exceeded tolerance.
+    #[cfg(feature = "cuda")]
+    fn elementwise_tolerance_report(
+        actual: &[Vec<Vec<f32>>],
+        expected: &[Vec<Vec<f32>>],
+        atol: f32,
+        rtol: f32,
+    ) -> (f32, f32, usize) {
+        let mut max_abs_err = 0f32;
+        let mut max_rel_err = 0f32;
+        let mut exceed = 0usize;
+        for (a_row, e_row) in actual.iter().zip(expected.iter()) {
+            for (a_slot, e_slot) in a_row.iter().zip(e_row.iter()) {
+                for (a, e) in a_slot.iter().zip(e_slot.iter()) {
+                    let abs_err = (a - e).abs();
+                    max_abs_err = max_abs_err.max(abs_err);
+                    max_rel_err = max_rel_err.max(abs_err / e.abs().max(1e-6));
+                    if abs_err > atol + rtol * e.abs() {
+                        exceed += 1;
+                    }
+                }
+            }
+        }
+        (max_abs_err, max_rel_err, exceed)
+    }
+
     #[test]
     fn from_raw_uqff_rejects_weight_shorter_than_shape() {
         // 4x64 F32 needs 1024 bytes, so a 16-byte weight must be rejected.
@@ -1339,17 +1372,22 @@ mod tests {
         assert!(out.device().is_cuda());
         assert_eq!(out.dtype(), DType::BF16);
         assert_eq!(out.dims(), expected.dims());
-        let out = out.to_device(&cpu)?.to_dtype(DType::F32)?;
-        let max_abs = expected.abs()?.max_all()?.to_scalar::<f32>()?;
-        let max_diff = (out - expected)?.abs()?.max_all()?.to_scalar::<f32>()?;
-        assert!(
-            max_diff <= 0.02 * max_abs,
-            "max diff {max_diff} vs max magnitude {max_abs}"
+        let out = out
+            .to_device(&cpu)?
+            .to_dtype(DType::F32)?
+            .to_vec3::<f32>()?;
+        let expected = expected.to_vec3::<f32>()?;
+        let (max_abs_err, max_rel_err, exceed) =
+            elementwise_tolerance_report(&out, &expected, BF16_Q4K_ATOL, BF16_Q4K_RTOL);
+        assert_eq!(
+            exceed, 0,
+            "{exceed} elements exceeded tolerance (max_abs_err={max_abs_err}, max_rel_err={max_rel_err})"
         );
         Ok(())
     }
 
-    /// A per-expert bias living on the activations' device (not the offload device) must not panic.
+    /// A per-expert bias living on the activations' device (not the offload device) must land on
+    /// the right expert/token and match an all-CPU reference, not just avoid a panic.
     #[cfg(feature = "cuda")]
     #[test]
     fn gather_forward_raw_moves_bias_to_offload_device() -> Result<()> {
@@ -1359,18 +1397,137 @@ mod tests {
         let cpu = Device::Cpu;
         let (experts, n_out, k, tokens) = (4usize, 8usize, 256usize, 2usize);
         let weight = Tensor::randn(0f32, 1f32, (experts, n_out, k), &cpu)?;
-        let bias = Tensor::randn(0f32, 1f32, (experts, n_out), &cuda)?;
-        let layer =
-            GgufMatMul::from_qtensor(QTensor::quantize(&weight, GgmlDType::Q4K)?, Some(bias));
-
-        let x = Tensor::randn(0f32, 1f32, (tokens, 1, k), &cpu)?
+        let bias_cpu = Tensor::randn(0f32, 1f32, (experts, n_out), &cpu)?;
+        let x_cpu = Tensor::randn(0f32, 1f32, (tokens, 1, k), &cpu)?
             .to_dtype(DType::BF16)?
-            .to_device(&cuda)?;
-        let ids = Tensor::new(&[[0u32, 3], [2, 1]], &cuda)?;
+            .to_dtype(DType::F32)?;
+        let ids_cpu = Tensor::new(&[[0u32, 3], [2, 1]], &cpu)?;
+
+        // Block quantization is deterministic, so quantizing `weight` twice yields identical
+        // bytes; QTensor has no Clone, so that stands in for sharing one quantized tensor.
+        let reference_layer = GgufMatMul::from_qtensor(
+            QTensor::quantize(&weight, GgmlDType::Q4K)?,
+            Some(bias_cpu.clone()),
+        );
+        let expected = reference_layer
+            .gather_forward_raw(&x_cpu, &ids_cpu)?
+            .to_vec3::<f32>()?;
+
+        // Same weight and bias values, but the bias now lives on CUDA while the quantized
+        // weight (and thus the offload device picked from it) stays on CPU.
+        let bias_cuda = bias_cpu.to_device(&cuda)?;
+        let layer =
+            GgufMatMul::from_qtensor(QTensor::quantize(&weight, GgmlDType::Q4K)?, Some(bias_cuda));
+        let x = x_cpu.to_dtype(DType::BF16)?.to_device(&cuda)?;
+        let ids = ids_cpu.to_device(&cuda)?;
         let out = layer.gather_forward_raw(&x, &ids)?;
 
         assert!(out.device().is_cuda());
         assert_eq!(out.dtype(), DType::BF16);
+        let out = out
+            .to_device(&cpu)?
+            .to_dtype(DType::F32)?
+            .to_vec3::<f32>()?;
+        let (max_abs_err, max_rel_err, exceed) =
+            elementwise_tolerance_report(&out, &expected, BF16_Q4K_ATOL, BF16_Q4K_RTOL);
+        assert_eq!(
+            exceed, 0,
+            "{exceed} elements exceeded tolerance (max_abs_err={max_abs_err}, max_rel_err={max_rel_err})"
+        );
+        Ok(())
+    }
+
+    /// Weights are exactly zero after quantization, so the expected output is exactly the
+    /// selected expert's bias row: isolates expert/token bias selection from matmul numerics.
+    #[test]
+    fn gather_forward_raw_bias_matches_per_expert_reference() -> Result<()> {
+        let device = Device::Cpu;
+        let (experts, out_features, in_features) = (4usize, 6usize, TEST_EMBEDDING_DIM);
+        let weight = Tensor::zeros((experts, out_features, in_features), DType::F32, &device)?;
+        #[rustfmt::skip]
+        let bias_values: [f32; 24] = [
+            0.0, -0.5, 1000.0, 0.001, -1000.0, 2.0,
+            -3.0, 0.0, 0.25, -0.25, 50.0, -50.0,
+            7.5, -7.5, 1e-4, -1e-4, 3.0, -3.0,
+            10.0, -10.0, 0.0, 123.456, -123.456, 1.0,
+        ];
+        let bias = Tensor::from_vec(bias_values.to_vec(), (experts, out_features), &device)?;
+        let layer =
+            GgufMatMul::from_qtensor(QTensor::quantize(&weight, GgmlDType::Q4K)?, Some(bias));
+
+        let x = Tensor::randn(0f32, 1f32, (3, 1, in_features), &device)?;
+        // token 0 picks experts [0, 3], token 1 picks [2, 1], token 2 repeats expert 0 twice.
+        let indices = Tensor::new(&[[0u32, 3], [2, 1], [0, 0]], &device)?;
+        let expert_ids = [[0usize, 3], [2, 1], [0, 0]];
+
+        let out = layer.gather_forward_raw(&x, &indices)?.to_vec3::<f32>()?;
+
+        const ATOL: f32 = 1e-4;
+        const RTOL: f32 = 1e-4;
+        let mut max_abs_err = 0f32;
+        let mut max_rel_err = 0f32;
+        let mut exceed = 0usize;
+        for (t, row) in expert_ids.iter().enumerate() {
+            for (k, &expert) in row.iter().enumerate() {
+                for f in 0..out_features {
+                    let expected = bias_values[expert * out_features + f];
+                    let actual = out[t][k][f];
+                    let abs_err = (actual - expected).abs();
+                    max_abs_err = max_abs_err.max(abs_err);
+                    max_rel_err = max_rel_err.max(abs_err / expected.abs().max(1e-6));
+                    if abs_err > ATOL + RTOL * expected.abs() {
+                        exceed += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            exceed, 0,
+            "{exceed} elements exceeded tolerance (max_abs_err={max_abs_err}, max_rel_err={max_rel_err})"
+        );
+        Ok(())
+    }
+
+    /// Dropping the bias (or applying it twice, or to the wrong expert) must fail the reference
+    /// comparison above; this exercises the comparison itself, not production code.
+    #[test]
+    fn gather_forward_raw_bias_reference_detects_missing_or_duplicated_bias() -> Result<()> {
+        let device = Device::Cpu;
+        let (experts, out_features, in_features) = (4usize, 2usize, TEST_EMBEDDING_DIM);
+        let weight = Tensor::zeros((experts, out_features, in_features), DType::F32, &device)?;
+        let bias_values = [1.0f32, -2.0, 3.0, -4.0, 5.0, -6.0, 7.0, -8.0];
+        let bias = Tensor::from_vec(bias_values.to_vec(), (experts, out_features), &device)?;
+        let layer_with_bias =
+            GgufMatMul::from_qtensor(QTensor::quantize(&weight, GgmlDType::Q4K)?, Some(bias));
+        let layer_without_bias =
+            GgufMatMul::from_qtensor(QTensor::quantize(&weight, GgmlDType::Q4K)?, None);
+
+        let x = Tensor::randn(0f32, 1f32, (1, 1, in_features), &device)?;
+        let indices = Tensor::new(&[[0u32, 1]], &device)?;
+
+        let with_bias = layer_with_bias
+            .gather_forward_raw(&x, &indices)?
+            .to_vec3::<f32>()?;
+        let without_bias = layer_without_bias
+            .gather_forward_raw(&x, &indices)?
+            .to_vec3::<f32>()?;
+        let doubled: Vec<Vec<Vec<f32>>> = with_bias
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|slot| slot.iter().map(|v| v * 2.0).collect())
+                    .collect()
+            })
+            .collect();
+
+        assert_ne!(
+            with_bias, without_bias,
+            "omitted bias must change the output"
+        );
+        assert_ne!(
+            with_bias, doubled,
+            "a doubled bias must not match the real output"
+        );
         Ok(())
     }
 }
