@@ -985,4 +985,130 @@ mod tests {
         );
         Ok(())
     }
+
+    // -----------------------------------------------------------------------
+    // Performance (not correctness; `--ignored --nocapture`, one run per thread count)
+    // -----------------------------------------------------------------------
+
+    fn peak_rss_kb() -> u64 {
+        std::fs::read_to_string("/proc/self/status")
+            .ok()
+            .and_then(|status| {
+                status.lines().find_map(|line| {
+                    line.strip_prefix("VmHWM:")
+                        .and_then(|rest| rest.split_whitespace().next())
+                        .and_then(|kb| kb.parse().ok())
+                })
+            })
+            .unwrap_or(0)
+    }
+
+    /// Microbenchmark at Qwen3-30B-A3B's MoE projection shape (hidden=2048,
+    /// moe_intermediate=768, 128 experts, top-8 routing), Q4_K_M, decode-style batch=1 calls
+    /// with rotating synthetic routing. This times only `cpu_indexed_moe_forward_cached`'s own
+    /// matmul, not a full model's decode step (no attention, sampling, KV cache, etc), so
+    /// "calls/s" here is a lower bound on how much this one projection's cost improves, not a
+    /// claim about end-to-end tokens/s. Run with and without `CANDLE_NUM_THREADS=8` set:
+    /// `CANDLE_NUM_THREADS=8 cargo test -p mistralrs-quant --release --lib \
+    ///   gguf::cpu::tests::bench_expert_cache_qwen3_30b_a3b_shapes -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_expert_cache_qwen3_30b_a3b_shapes() -> Result<()> {
+        let device = Device::Cpu;
+        let (experts, n_out, k, topk) = (128usize, 768usize, 2048usize, 8usize);
+        let threads = std::env::var("CANDLE_NUM_THREADS").unwrap_or_else(|_| "default".into());
+        println!("threads={threads} (physical cores if \"default\")");
+
+        let rss_before_weights = peak_rss_kb();
+        let qtensor = random_qtensor(GgmlDType::Q4K, experts, n_out, k, &device)?;
+        println!(
+            "weight tensor: {experts} experts, {n_out}x{k}, peak_rss_delta_kb={}",
+            peak_rss_kb().saturating_sub(rss_before_weights)
+        );
+
+        // IID-uniform top-k draw per step (rejection sampling for distinctness), not a cyclic
+        // round robin: a round robin defeats LRU outright (every entry is evicted exactly once
+        // per full period, right before its next use), which is a known LRU pathology, not a
+        // realistic token-to-expert routing pattern.
+        let route = |step: usize| -> Vec<u32> {
+            let mut chosen = Vec::with_capacity(topk);
+            let mut draw = 0u64;
+            while chosen.len() < topk {
+                let v = deterministic_values(1, 7_000_000 + step as u64 * 10_000 + draw)[0];
+                draw += 1;
+                let idx = (((v + 1.0) * 0.5 * experts as f32) as usize).min(experts - 1) as u32;
+                if !chosen.contains(&idx) {
+                    chosen.push(idx);
+                }
+            }
+            chosen
+        };
+
+        // (1) original fallback: full dequantize-and-gather on every call. Few steps: this
+        // dequantizes the whole (experts, n_out, k) tensor to f32 every time. Skippable: on at
+        // least one high core-count container this hung inside candle's own dequantize/matmul
+        // thread pool, unrelated to anything this PR touches (see bench write-up).
+        if std::env::var("BENCH_SKIP_FALLBACK").is_err() {
+            let rss_before = peak_rss_kb();
+            let steps = 5;
+            let start = std::time::Instant::now();
+            for step in 0..steps {
+                let x = det_tensor((1, 1, k), 9_000 + step as u64, &device)?;
+                let ids = Tensor::from_vec(route(step), (1, topk), &device)?;
+                reference(&qtensor, &x, &ids)?;
+            }
+            let elapsed = start.elapsed();
+            println!(
+                "original_fallback threads={threads}: {steps} calls in {elapsed:?} \
+                 ({:.3} calls/s), peak_rss_delta_kb={}",
+                steps as f64 / elapsed.as_secs_f64(),
+                peak_rss_kb().saturating_sub(rss_before)
+            );
+        }
+
+        // (2) unbounded cache: the df4db50 behavior (every touched expert stays forever).
+        {
+            let cache = ExpertMatMuls::default();
+            cache.set_budget_for_test(usize::MAX);
+            let rss_before = peak_rss_kb();
+            let steps = 300;
+            let start = std::time::Instant::now();
+            for step in 0..steps {
+                let x = det_tensor((1, 1, k), 9_000 + step as u64, &device)?;
+                let ids = Tensor::from_vec(route(step), (1, topk), &device)?;
+                selected_experts_forward(&qtensor, Some(&cache), &x, &ids)?;
+            }
+            let elapsed = start.elapsed();
+            println!(
+                "unbounded_cache threads={threads}: {steps} calls in {elapsed:?} \
+                 ({:.1} calls/s), resident_bytes={}, peak_rss_delta_kb={}",
+                steps as f64 / elapsed.as_secs_f64(),
+                cache.cached_bytes(),
+                peak_rss_kb().saturating_sub(rss_before)
+            );
+        }
+
+        // (3) new bounded cache, default 64 MiB budget.
+        {
+            let cache = ExpertMatMuls::default();
+            let rss_before = peak_rss_kb();
+            let steps = 300;
+            let start = std::time::Instant::now();
+            for step in 0..steps {
+                let x = det_tensor((1, 1, k), 9_000 + step as u64, &device)?;
+                let ids = Tensor::from_vec(route(step), (1, topk), &device)?;
+                selected_experts_forward(&qtensor, Some(&cache), &x, &ids)?;
+            }
+            let elapsed = start.elapsed();
+            println!(
+                "bounded_cache_default_budget threads={threads}: {steps} calls in {elapsed:?} \
+                 ({:.1} calls/s), resident_bytes={}, peak_rss_delta_kb={}",
+                steps as f64 / elapsed.as_secs_f64(),
+                cache.cached_bytes(),
+                peak_rss_kb().saturating_sub(rss_before)
+            );
+        }
+
+        Ok(())
+    }
 }
