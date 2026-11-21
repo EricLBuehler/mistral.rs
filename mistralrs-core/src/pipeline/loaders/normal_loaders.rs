@@ -7068,14 +7068,6 @@ impl NormalModelLoader for OlalaLoader {
     }
 }
 
-fn cfg_max_seq_len(config: &str) -> Result<usize> {
-    let cfg: serde_json::Value = serde_json::from_str(config)?;
-    Ok(cfg
-        .get("max_position_embeddings")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(32768) as usize)
-}
-
 impl IsqModelLoader for OlalaLoader {
     fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
         Ok(vec![Regex::new(
