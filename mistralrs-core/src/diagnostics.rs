@@ -207,6 +207,37 @@ fn collect_devices(sys: &System) -> Vec<DeviceInfo> {
         }
     }
 
+    #[cfg(feature = "vulkan")]
+    if let Ok(adapters) = candle_core::vulkan_backend::enumerate_adapters() {
+        for info in adapters {
+            // Software implementations (lavapipe) are listed so that a missing GPU
+            // driver is visible, but they are not usable without an explicit opt-in.
+            let kind = if info.is_software() {
+                "vulkan (software)"
+            } else {
+                "vulkan"
+            };
+            devices.push(DeviceInfo {
+                kind: kind.to_string(),
+                ordinal: Some(info.index),
+                name: Some(format!(
+                    "{} [{} {}, Vulkan {}.{}]",
+                    info.name,
+                    info.driver_name,
+                    info.driver_info,
+                    info.api_version.0,
+                    info.api_version.1
+                )),
+                total_memory_bytes: Some(info.device_local_bytes),
+                available_memory_bytes: None,
+                compute_capability: None,
+                flash_attn_compatible: Some(false),
+                flash_attn_v3_compatible: None,
+                unified_memory: Some(info.unified_memory),
+            });
+        }
+    }
+
     devices
 }
 

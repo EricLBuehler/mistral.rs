@@ -148,6 +148,7 @@ metal = [
 flash-attn = ["cuda", "dep:mistralrs-flash-attn", "mistralrs-flash-attn/cuda"]
 flash-attn-v3 = ["cuda", "dep:candle-flash-attn-v3"]
 accelerate = ["candle-core/accelerate", "candle-nn/accelerate", "mistralrs-quant/accelerate"]
+vulkan = ["candle-core/vulkan", "candle-nn/vulkan", "mistralrs-quant/vulkan"]
 mkl = ["candle-core/mkl", "candle-nn/mkl"]
 nccl = ["cuda", "mistralrs-quant/nccl"]
 utoipa = ["dep:utoipa"]

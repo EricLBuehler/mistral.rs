@@ -623,9 +623,15 @@ impl<'a> EmbeddingTable<'a> {
                             .as_ref()
                             .is_some_and(|index| index.device().same_device(device))
             }
-            TableStorage::Device { .. } => {
+            TableStorage::Device { data, .. } => {
+                // Vulkan: GGUF block tables gather natively (`QTensor::embedding`).
+                let vulkan = cfg!(feature = "vulkan")
+                    && device.is_vulkan()
+                    && matches!(data, TableBytes::QTensor(_))
+                    && matches!(self.codec, RowCodec::Gguf(_))
+                    && matches!(self.row_scale, RowScale::None | RowScale::Value(_));
                 self.device().is_some_and(|d| d.same_device(device))
-                    && (device.is_cpu() || cuda || metal)
+                    && (device.is_cpu() || cuda || metal || vulkan)
             }
         }
     }
@@ -645,6 +651,18 @@ impl<'a> EmbeddingTable<'a> {
         if device.is_metal() && matches!(self.storage, TableStorage::Device { .. }) {
             let ids = ids.to_device(&device)?;
             return metal::gather(self, &ids, out)?.reshape(shape);
+        }
+        #[cfg(feature = "vulkan")]
+        if device.is_vulkan() && self.gathers_on(&device) {
+            if let TableStorage::Device {
+                data: TableBytes::QTensor(q),
+                ..
+            } = self.storage
+            {
+                let ids = ids.to_device(&device)?.flatten_all()?;
+                return scale_rows(q.embedding(&ids)?, self.host_multiplier(out), out.dtype)?
+                    .reshape(shape);
+            }
         }
         if let (
             RowCodec::Dense(_),

@@ -147,6 +147,6 @@ fn pooled_kernels_cover(pool: &RecurrentStatePool, batch_kind: RecurrentBatchKin
                 && matches!(pool.conv_state.dtype(), DType::F16 | DType::BF16)
                 && matches!(pool.recurrent_state.dim(2), Ok(64 | 128))
         }
-        Device::Cpu => false,
+        Device::Cpu | Device::Vulkan(_) => false,
     }
 }

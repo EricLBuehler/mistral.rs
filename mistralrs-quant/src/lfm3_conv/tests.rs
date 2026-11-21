@@ -187,3 +187,27 @@ fn metal_prefill_decode_and_cached_chunks_match_reference() -> Result<()> {
 fn cuda_prefill_decode_and_cached_chunks_match_reference() -> Result<()> {
     check_backend(&Device::new_cuda(0)?)
 }
+
+#[cfg(feature = "vulkan")]
+#[test]
+fn vulkan_prefill_decode_and_cached_chunks_match_reference() -> Result<()> {
+    let device = match Device::new_vulkan(0) {
+        Ok(device) => device,
+        Err(e) => {
+            eprintln!("skipping vulkan test: {e}");
+            return Ok(());
+        }
+    };
+    check_backend(&device)?;
+    // f16/bf16 take the recorded CPU round-trip; the f32 cases must run natively, so
+    // every recorded fallback for this op must come from a launch-free (non-f32) case.
+    let stats = candle_core::vulkan_backend::stats();
+    let fallbacks = stats
+        .cpu_fallbacks_by_op
+        .iter()
+        .find(|(name, _)| name == "lfm3_causal_conv1d")
+        .map_or(0, |(_, n)| *n);
+    // check_backend runs 2 widths x 2 bias x 2 state x 5 calls per dtype.
+    assert_eq!(fallbacks, 2 * 40, "f32 must not fall back: {stats}");
+    Ok(())
+}

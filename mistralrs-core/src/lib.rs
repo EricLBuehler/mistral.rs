@@ -122,11 +122,16 @@ mod tools;
 mod topology;
 mod utils;
 mod vision_models;
+mod vulkan;
 mod xlora_models;
 
 pub use diagnostics::{
     check_hf_gated_access, collect_system_info, run_doctor, BuildInfo, CpuInfo, DeviceInfo,
     DoctorCheck, DoctorReport, DoctorStatus, HfConnectivityInfo, MemoryInfo, SystemInfo,
+};
+pub use vulkan::{
+    auto_vulkan_device, default_vulkan_ordinal, new_vulkan_device, reset_vulkan_execution_stats,
+    vulkan_execution_report, VULKAN_DEVICE_ENV, VULKAN_FALLBACK_ENV,
 };
 mod tuning;
 pub use tuning::{

@@ -13,14 +13,23 @@ use crate::{EmbeddingRequest, EmbeddingRequestBuilder, RequestLike, TextMessages
 // Re-export for convenience
 pub use mistralrs_core::{AddModelConfig, ModelStatus, Pipeline, SchedulerConfig};
 
-/// Gets the best device, cpu, cuda if compiled with CUDA, or Metal
+/// Gets the best device: Metal if compiled with Metal, else CUDA if compiled with CUDA, else
+/// Vulkan if compiled with Vulkan (adapter from `MISTRALRS_VULKAN_DEVICE`, default 0), else CPU.
+///
+/// To select a specific Vulkan adapter, pass `mistralrs::new_vulkan_device(ordinal)?` to the
+/// builder's `with_device`; that never falls back to the CPU.
 pub fn best_device(force_cpu: bool) -> Result<Device> {
     if force_cpu {
         return Ok(Device::Cpu);
     }
     #[cfg(not(feature = "metal"))]
     {
-        Device::cuda_if_available(0)
+        let device = Device::cuda_if_available(0)?;
+        #[cfg(feature = "vulkan")]
+        if device.is_cpu() {
+            return mistralrs_core::auto_vulkan_device();
+        }
+        Ok(device)
     }
     #[cfg(feature = "metal")]
     {

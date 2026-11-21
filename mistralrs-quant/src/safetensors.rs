@@ -350,6 +350,11 @@ fn convert_dummy(view: &st::TensorView<'_>, device: &Device) -> Result<Tensor> {
         Device::Metal(_) => {
             return Err(Error::Msg("Metal support not compiled".to_string()));
         }
+        Device::Vulkan(_) => {
+            return Err(Error::Msg(format!(
+                "loading {dtype:?} safetensors data directly onto Vulkan is not supported"
+            )));
+        }
     };
 
     Ok(Tensor::from((storage, shape)))
