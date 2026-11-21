@@ -67,11 +67,24 @@ pub enum GgufTensorBinding {
         input: Box<Self>,
         dtype: DType,
     },
+    /// Multiply each leading-dim slab of the input by a matching per-slab scale.
+    ScaledBy {
+        input: Box<Self>,
+        scale: Box<Self>,
+    },
 }
 
 impl GgufTensorBinding {
     pub fn tensor(name: impl Into<String>) -> Self {
         Self::Tensor(name.into())
+    }
+
+    /// Scale a stacked `[n, ...]` weight by a companion `[n]` scale tensor.
+    pub fn scaled_by(name: impl Into<String>, scale: impl Into<String>) -> Self {
+        Self::ScaledBy {
+            input: Box::new(Self::tensor(name)),
+            scale: Box::new(Self::tensor(scale)),
+        }
     }
 
     pub fn mxfp4_blocks(name: impl Into<String>) -> Self {
@@ -171,7 +184,8 @@ impl GgufTensorBinding {
             | Self::Affine { input, .. }
             | Self::Log { input }
             | Self::InverseSoftplus { input }
-            | Self::Cast { input, .. } => input.mark_uploaded(archive),
+            | Self::Cast { input, .. }
+            | Self::ScaledBy { input, .. } => input.mark_uploaded(archive),
             Self::Concat { inputs, .. }
             | Self::Stack { inputs, .. }
             | Self::Interleave { inputs, .. } => {
@@ -198,7 +212,8 @@ impl GgufTensorBinding {
             | Self::Affine { input, .. }
             | Self::Log { input }
             | Self::InverseSoftplus { input }
-            | Self::Cast { input, .. } => input.text_layer_index(),
+            | Self::Cast { input, .. }
+            | Self::ScaledBy { input, .. } => input.text_layer_index(),
             Self::Concat { inputs, .. }
             | Self::Stack { inputs, .. }
             | Self::Interleave { inputs, .. } => {
@@ -493,6 +508,22 @@ impl GgufWeightSource {
             GgufTensorBinding::Cast { input, dtype } => {
                 self.materialize_binding(input, device)?.to_dtype(*dtype)
             }
+            GgufTensorBinding::ScaledBy { input, scale } => {
+                let weight = self.materialize_binding(input, device)?;
+                let scale = self
+                    .materialize_binding(scale, device)?
+                    .to_dtype(weight.dtype())?;
+                let n = scale.elem_count();
+                if weight.dim(0)? != n {
+                    candle_core::bail!(
+                        "per-slab scale has {n} entries but weight has {} slabs",
+                        weight.dim(0)?
+                    );
+                }
+                let mut shape = vec![n];
+                shape.extend(vec![1; weight.rank() - 1]);
+                weight.broadcast_mul(&scale.reshape(shape)?)
+            }
         }
     }
 
@@ -739,7 +770,8 @@ impl GgufWeightSource {
             | GgufTensorBinding::Affine { input, .. }
             | GgufTensorBinding::Log { input }
             | GgufTensorBinding::InverseSoftplus { input }
-            | GgufTensorBinding::Cast { input, .. } => self.binding_is_dense(input),
+            | GgufTensorBinding::Cast { input, .. }
+            | GgufTensorBinding::ScaledBy { input, .. } => self.binding_is_dense(input),
             GgufTensorBinding::Concat { inputs, .. }
             | GgufTensorBinding::Stack { inputs, .. }
             | GgufTensorBinding::Interleave { inputs, .. } => {
@@ -763,7 +795,9 @@ impl GgufWeightSource {
                     info.dtype().candle_dtype().map(Some)
                 }
             }
-            GgufTensorBinding::Slice { input, .. } => self.structural_quant_dtype(input),
+            GgufTensorBinding::Slice { input, .. } | GgufTensorBinding::ScaledBy { input, .. } => {
+                self.structural_quant_dtype(input)
+            }
             GgufTensorBinding::Concat { inputs, .. } => {
                 let mut dtype = None;
                 for input in inputs {
@@ -1227,6 +1261,10 @@ fn validate_binding_storage(
         | GgufTensorBinding::Cast { input, .. } => {
             validate_binding_storage(archive, input, native_name)?;
         }
+        GgufTensorBinding::ScaledBy { input, scale } => {
+            validate_binding_storage(archive, input, native_name)?;
+            validate_binding_storage(archive, scale, native_name)?;
+        }
         GgufTensorBinding::Concat { inputs, .. }
         | GgufTensorBinding::Stack { inputs, .. }
         | GgufTensorBinding::Interleave { inputs, .. } => {
@@ -1241,6 +1279,7 @@ fn validate_binding_storage(
 fn infer_binding_shape(archive: &GgufArchive, binding: &GgufTensorBinding) -> Result<Vec<usize>> {
     match binding {
         GgufTensorBinding::Tensor(name) => Ok(archive.tensor_info(name)?.shape().to_vec()),
+        GgufTensorBinding::ScaledBy { input, .. } => infer_binding_shape(archive, input),
         GgufTensorBinding::Mxfp4Blocks(name) => infer_mxfp4_component_shape(archive, name, false),
         GgufTensorBinding::Mxfp4Scales(name) => infer_mxfp4_component_shape(archive, name, true),
         GgufTensorBinding::Slice {
@@ -1427,7 +1466,8 @@ fn infer_binding_dtype(
         GgufTensorBinding::Slice { input, .. }
         | GgufTensorBinding::Transpose { input, .. }
         | GgufTensorBinding::Permute { input, .. }
-        | GgufTensorBinding::Reshape { input, .. } => {
+        | GgufTensorBinding::Reshape { input, .. }
+        | GgufTensorBinding::ScaledBy { input, .. } => {
             infer_binding_dtype(archive, input, source_dtype)
         }
         GgufTensorBinding::Concat { inputs, .. }
