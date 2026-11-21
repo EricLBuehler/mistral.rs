@@ -137,7 +137,7 @@ struct AttentionWeights {
 
 struct MoeWeights {
     gate_inp: Arc<dyn QuantMethod>,
-    exp_probs_b: Tensor,
+    exp_probs_b: Vec<f32>,
     latent_down: Arc<dyn QuantMethod>,
     latent_up: Arc<dyn QuantMethod>,
     up_exps: Arc<dyn QuantMethod>,
@@ -274,7 +274,10 @@ impl Model {
             let p = format!("model.layers.{i}");
             let moe = MoeWeights {
                 gate_inp: linear(h, n_exp, vb.pp(format!("{p}.moe.gate_inp")))?,
-                exp_probs_b: load_vec(&format!("{p}.moe.exp_probs_b"), n_exp)?,
+                exp_probs_b: load_vec(&format!("{p}.moe.exp_probs_b"), n_exp)?
+                    .reshape((n_exp,))?
+                    .contiguous()?
+                    .to_vec1::<f32>()?,
                 latent_down: linear(h, latent, vb.pp(format!("{p}.moe.latent_down")))?,
                 latent_up: linear(latent, h, vb.pp(format!("{p}.moe.latent_up")))?,
                 up_exps: load_expert_projection(
@@ -646,7 +649,7 @@ impl Model {
         // scores in the same loop that selects the experts, avoiding a second full
         // device->host materialization.
         let logits_v = logits.reshape((n_exp,))?.to_vec1::<f32>()?;
-        let bias_v = w.exp_probs_b.reshape((n_exp,))?.to_vec1::<f32>()?;
+        let bias_v = &w.exp_probs_b;
         let mut selected = Vec::with_capacity(k);
         let mut used = vec![false; n_exp];
         for _ in 0..k {
