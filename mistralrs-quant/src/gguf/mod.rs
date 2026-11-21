@@ -564,6 +564,22 @@ impl QuantMethod for GgufMatMul {
         // - indices: (n_tokens, n_experts_per_tok)
         // - weights (self): (n_experts, out_features, in_features)
         // For CPU and Metal: use dequantize-then-matmul approach
+        // Offloaded experts (topology) run on their own device, then the result moves back.
+        let x_device = x.device().clone();
+        let x_dtype = x.dtype();
+        let offload_device = self
+            .get_qtensor()
+            .map(|qt| qt.device())
+            .filter(|device| !device.same_device(&x_device));
+        let (x, indices) = match &offload_device {
+            Some(device) => (
+                x.to_device(device)?.to_dtype(candle_core::DType::F32)?,
+                indices.to_device(device)?,
+            ),
+            None => (x.clone(), indices.clone()),
+        };
+        let (x, indices) = (&x, &indices);
+
         #[cfg(feature = "cuda")]
         let res = if x.device().is_cuda() {
             cuda::qmatmul_indexed_moe_forward(&self.w, x, indices)?
@@ -574,17 +590,27 @@ impl QuantMethod for GgufMatMul {
         #[cfg(not(feature = "cuda"))]
         let res = cpu::cpu_indexed_moe_forward(&self.w, x, indices)?;
 
-        if let Some(b) = &self.b {
+        let res = if let Some(b) = &self.b {
+            let b = match &offload_device {
+                Some(device) if !b.device().same_device(device) => b.to_device(device)?,
+                _ => b.clone(),
+            };
             if b.rank() == 2 {
                 let mut shape = indices.dims().to_vec();
                 shape.push(b.dim(1)?);
                 let bias = b
                     .index_select(&indices.flatten_all()?, 0)?
                     .reshape(Shape::from(shape))?;
-                res.broadcast_add(&bias)
+                res.broadcast_add(&bias)?
             } else {
-                res.broadcast_add(b)
+                res.broadcast_add(&b)?
             }
+        } else {
+            res
+        };
+
+        if offload_device.is_some() {
+            res.to_device(&x_device)?.to_dtype(x_dtype)
         } else {
             Ok(res)
         }
@@ -879,6 +905,256 @@ impl QuantizedSerde for GgufMatMul {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- indexed-MoE (`gather_forward_raw`) fixtures: deterministic data + independent reference ----
+
+    type Rows3 = Vec<Vec<Vec<f32>>>;
+
+    const MOE_EXPERTS: usize = 4;
+    const MOE_OUT: usize = 8;
+    const MOE_IN: usize = 256;
+    const MOE_TOPK: usize = 3;
+    /// Different experts per token, with repeats inside a token and across tokens.
+    const MOE_IDS: [[u32; MOE_TOPK]; 5] = [[0, 3, 2], [2, 2, 1], [1, 0, 0], [3, 3, 3], [0, 1, 2]];
+    /// Per-token activation magnitude: tiny, unit and large rows in one batch.
+    const MOE_TOKEN_SCALE: [f32; 5] = [1e-2, 1.0, 30.0, 1.0, 0.1];
+    /// Per-expert weight magnitude: expert 3 gives near-zero outputs next to expert 2's large ones.
+    const MOE_EXPERT_SCALE: [f32; MOE_EXPERTS] = [1.0, 0.25, 4.0, 1e-3];
+    /// Per-expert bias magnitude, so a bias taken from the wrong expert is visible.
+    const MOE_BIAS_SCALE: [f32; MOE_EXPERTS] = [1.0, 50.0, 1000.0, 1e-3];
+
+    /// splitmix64-style value in [-1, 1); tests must not depend on a thread RNG.
+    fn det(seed: u64, i: usize) -> f32 {
+        let mut z = seed.wrapping_add((i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        ((z >> 40) as f32 / (1u64 << 24) as f32) * 2.0 - 1.0
+    }
+
+    fn moe_weights() -> Vec<f32> {
+        (0..MOE_EXPERTS * MOE_OUT * MOE_IN)
+            .map(|i| det(1, i) * MOE_EXPERT_SCALE[i / (MOE_OUT * MOE_IN)])
+            .collect()
+    }
+
+    /// Activations `(tokens, xt, MOE_IN)`; `xt` is 1 (shared per token) or `MOE_TOPK` (per route).
+    fn moe_activations(xt: usize) -> Vec<f32> {
+        (0..MOE_IDS.len() * xt * MOE_IN)
+            .map(|i| det(2, i) * MOE_TOKEN_SCALE[i / (xt * MOE_IN)])
+            .collect()
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum BiasKind {
+        None,
+        /// `(experts, out)`, selected per routed expert.
+        PerExpert,
+        /// `(out,)`, added to every route.
+        Broadcast,
+    }
+
+    fn moe_bias_values(kind: BiasKind) -> Vec<f32> {
+        match kind {
+            BiasKind::None => Vec::new(),
+            BiasKind::PerExpert => (0..MOE_EXPERTS * MOE_OUT)
+                .map(|i| det(3, i) * MOE_BIAS_SCALE[i / MOE_OUT])
+                .collect(),
+            BiasKind::Broadcast => (0..MOE_OUT).map(|i| det(4, i) * 2.0).collect(),
+        }
+    }
+
+    fn moe_bias_tensor(kind: BiasKind, device: &Device) -> Result<Option<Tensor>> {
+        let values = moe_bias_values(kind);
+        match kind {
+            BiasKind::None => Ok(None),
+            BiasKind::PerExpert => {
+                Tensor::from_vec(values, (MOE_EXPERTS, MOE_OUT), device).map(Some)
+            }
+            BiasKind::Broadcast => Tensor::from_vec(values, MOE_OUT, device).map(Some),
+        }
+    }
+
+    /// Quantizes the fixture weights onto `weight_device`; returns the dequantized weights (the
+    /// exact values the layer holds) and the layer.
+    fn moe_layer(
+        weight_device: &Device,
+        kind: BiasKind,
+        bias_device: &Device,
+    ) -> Result<(Vec<f32>, GgufMatMul)> {
+        let weight = Tensor::from_vec(moe_weights(), (MOE_EXPERTS, MOE_OUT, MOE_IN), &Device::Cpu)?;
+        let qt = QTensor::quantize_onto(&weight, GgmlDType::Q4K, weight_device)?;
+        let deq = qt
+            .dequantize(weight_device)?
+            .to_device(&Device::Cpu)?
+            .flatten_all()?
+            .to_vec1::<f32>()?;
+        Ok((
+            deq,
+            GgufMatMul::from_qtensor(qt, moe_bias_tensor(kind, bias_device)?),
+        ))
+    }
+
+    fn moe_ids(device: &Device) -> Result<Tensor> {
+        Tensor::new(&MOE_IDS, device)
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum BiasFault {
+        None,
+        Missing,
+        Doubled,
+        WrongExpert,
+    }
+
+    /// Plain nested-loop f64 reference: `sum_k W[e][n][k] * x[k] + bias`, from dequantized weights.
+    fn moe_reference(deq: &[f32], kind: BiasKind, x: &[f32], xt: usize, fault: BiasFault) -> Rows3 {
+        let bias = moe_bias_values(kind);
+        MOE_IDS
+            .iter()
+            .enumerate()
+            .map(|(t, routes)| {
+                routes
+                    .iter()
+                    .enumerate()
+                    .map(|(slot, &expert)| {
+                        let expert = expert as usize;
+                        let x_row = (t * xt + if xt == 1 { 0 } else { slot }) * MOE_IN;
+                        let x_row = &x[x_row..x_row + MOE_IN];
+                        (0..MOE_OUT)
+                            .map(|n| {
+                                let w_row = (expert * MOE_OUT + n) * MOE_IN;
+                                let dot: f64 = deq[w_row..w_row + MOE_IN]
+                                    .iter()
+                                    .zip(x_row)
+                                    .map(|(w, x)| f64::from(*w) * f64::from(*x))
+                                    .sum();
+                                let bias_expert = if fault == BiasFault::WrongExpert {
+                                    (expert + 1) % MOE_EXPERTS
+                                } else {
+                                    expert
+                                };
+                                let b = match kind {
+                                    BiasKind::None => 0.0,
+                                    BiasKind::PerExpert => bias[bias_expert * MOE_OUT + n],
+                                    BiasKind::Broadcast => bias[n],
+                                };
+                                let b = match fault {
+                                    BiasFault::Missing => 0.0,
+                                    BiasFault::Doubled => 2.0 * f64::from(b),
+                                    _ => f64::from(b),
+                                };
+                                (dot + b) as f32
+                            })
+                            .collect()
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Worst-case error of rounding the activations to 8 bits (Q8_K on CPU, Q8_1 on CUDA): each
+    /// element moves by at most `max|x| / 254`, so a dot product moves by at most
+    /// `max|x| / 254 * sum|w|`. Returned per output element, in the layout of `moe_reference`.
+    fn moe_q8_error_bound(deq: &[f32], x: &[f32], xt: usize) -> Rows3 {
+        MOE_IDS
+            .iter()
+            .enumerate()
+            .map(|(t, routes)| {
+                routes
+                    .iter()
+                    .enumerate()
+                    .map(|(slot, &expert)| {
+                        let x_row = (t * xt + if xt == 1 { 0 } else { slot }) * MOE_IN;
+                        let x_max = x[x_row..x_row + MOE_IN]
+                            .iter()
+                            .fold(0f64, |m, v| m.max(f64::from(v.abs())));
+                        (0..MOE_OUT)
+                            .map(|n| {
+                                let w_row = (expert as usize * MOE_OUT + n) * MOE_IN;
+                                let w_l1: f64 = deq[w_row..w_row + MOE_IN]
+                                    .iter()
+                                    .map(|w| f64::from(w.abs()))
+                                    .sum();
+                                (x_max / 254.0 * w_l1) as f32
+                            })
+                            .collect()
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Half-ulp relative rounding of the output dtype.
+    fn output_rtol(dtype: DType) -> f32 {
+        match dtype {
+            DType::BF16 => 1.0 / 256.0,
+            DType::F16 => 1.0 / 2048.0,
+            _ => 1e-5,
+        }
+    }
+
+    /// Absolute slack for f32 accumulation order when the bound itself is ~0.
+    const ACC_FLOOR: f32 = 1e-6;
+
+    struct ErrorStats {
+        max_abs: f32,
+        /// Over elements with `abs(expected) >= 1`, where a relative error is meaningful.
+        max_rel: f32,
+        /// Largest `err / (bound + rtol * abs(expected) + floor)`: 1.0 means the tolerance is used up.
+        max_tolerance_used: f32,
+        exceed: usize,
+        total: usize,
+    }
+
+    /// Elementwise `abs(actual - expected) <= bound + rtol * abs(expected) + floor`.
+    fn compare_rows(actual: &Rows3, expected: &Rows3, bound: &Rows3, rtol: f32) -> ErrorStats {
+        assert_eq!(actual.len(), expected.len(), "token count");
+        assert_eq!(bound.len(), expected.len(), "bound token count");
+        let mut stats = ErrorStats {
+            max_abs: 0.0,
+            max_rel: 0.0,
+            max_tolerance_used: 0.0,
+            exceed: 0,
+            total: 0,
+        };
+        for ((a_row, e_row), b_row) in actual.iter().zip(expected).zip(bound) {
+            assert_eq!(a_row.len(), e_row.len(), "routes per token");
+            assert_eq!(b_row.len(), e_row.len(), "bound routes per token");
+            for ((a_slot, e_slot), b_slot) in a_row.iter().zip(e_row).zip(b_row) {
+                assert_eq!(a_slot.len(), e_slot.len(), "output features");
+                assert_eq!(b_slot.len(), e_slot.len(), "bound output features");
+                for ((a, e), b) in a_slot.iter().zip(e_slot).zip(b_slot) {
+                    let err = (a - e).abs();
+                    let allowed = b + rtol * e.abs() + ACC_FLOOR;
+                    stats.total += 1;
+                    stats.max_abs = stats.max_abs.max(err);
+                    if e.abs() >= 1.0 {
+                        stats.max_rel = stats.max_rel.max(err / e.abs());
+                    }
+                    stats.max_tolerance_used = stats.max_tolerance_used.max(err / allowed);
+                    // NaN or inf output (err is NaN/inf) must fail, not slip through a comparison.
+                    if !err.is_finite() || err > allowed {
+                        stats.exceed += 1;
+                    }
+                }
+            }
+        }
+        stats
+    }
+
+    fn assert_rows_close(label: &str, actual: &Rows3, expected: &Rows3, bound: &Rows3, rtol: f32) {
+        let s = compare_rows(actual, expected, bound, rtol);
+        eprintln!(
+            "{label}: max_abs_err={:.3e} max_rel_err(|e|>=1)={:.3e} tolerance_used={:.3} exceed={}/{} (rtol={rtol})",
+            s.max_abs, s.max_rel, s.max_tolerance_used, s.exceed, s.total
+        );
+        assert_eq!(
+            s.exceed, 0,
+            "{label}: {} of {} elements outside tolerance",
+            s.exceed, s.total
+        );
+    }
 
     #[test]
     fn from_raw_uqff_rejects_weight_shorter_than_shape() {
@@ -1285,6 +1561,337 @@ mod tests {
         let device = Device::new_metal(0)?;
         for dtype in [GgmlDType::Q6K, GgmlDType::Q8_0] {
             assert_embedding_matches_dequantized_gather(&device, dtype)?;
+        }
+        Ok(())
+    }
+
+    /// Weights are exactly zero after quantization, so the expected output is exactly the
+    /// selected expert's bias row: isolates expert/token bias selection from matmul numerics.
+    #[test]
+    fn gather_forward_raw_bias_matches_per_expert_reference() -> Result<()> {
+        let device = Device::Cpu;
+        let (experts, out_features, in_features) = (4usize, 6usize, TEST_EMBEDDING_DIM);
+        let weight = Tensor::zeros((experts, out_features, in_features), DType::F32, &device)?;
+        #[rustfmt::skip]
+        let bias_values: [f32; 24] = [
+            0.0, -0.5, 1000.0, 0.001, -1000.0, 2.0,
+            -3.0, 0.0, 0.25, -0.25, 50.0, -50.0,
+            7.5, -7.5, 1e-4, -1e-4, 3.0, -3.0,
+            10.0, -10.0, 0.0, 123.456, -123.456, 1.0,
+        ];
+        let bias = Tensor::from_vec(bias_values.to_vec(), (experts, out_features), &device)?;
+        let layer =
+            GgufMatMul::from_qtensor(QTensor::quantize(&weight, GgmlDType::Q4K)?, Some(bias));
+
+        let x = Tensor::randn(0f32, 1f32, (3, 1, in_features), &device)?;
+        // token 0 picks experts [0, 3], token 1 picks [2, 1], token 2 repeats expert 0 twice.
+        let indices = Tensor::new(&[[0u32, 3], [2, 1], [0, 0]], &device)?;
+        let expert_ids = [[0usize, 3], [2, 1], [0, 0]];
+
+        let out = layer.gather_forward_raw(&x, &indices)?.to_vec3::<f32>()?;
+
+        const ATOL: f32 = 1e-4;
+        const RTOL: f32 = 1e-4;
+        let mut max_abs_err = 0f32;
+        let mut max_rel_err = 0f32;
+        let mut exceed = 0usize;
+        for (t, row) in expert_ids.iter().enumerate() {
+            for (k, &expert) in row.iter().enumerate() {
+                for f in 0..out_features {
+                    let expected = bias_values[expert * out_features + f];
+                    let actual = out[t][k][f];
+                    let abs_err = (actual - expected).abs();
+                    max_abs_err = max_abs_err.max(abs_err);
+                    max_rel_err = max_rel_err.max(abs_err / expected.abs().max(1e-6));
+                    if abs_err > ATOL + RTOL * expected.abs() {
+                        exceed += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            exceed, 0,
+            "{exceed} elements exceeded tolerance (max_abs_err={max_abs_err}, max_rel_err={max_rel_err})"
+        );
+        Ok(())
+    }
+
+    /// The old check, `max_diff <= 0.02 * max_abs`, accepted a wrong small output next to a large
+    /// one; the elementwise comparison must reject it, and must reject NaN/inf outright.
+    #[test]
+    fn compare_rows_is_elementwise_and_rejects_non_finite() {
+        let expected: Rows3 = vec![vec![vec![1000.0, 0.01]]];
+        let bound: Rows3 = vec![vec![vec![0.0, 0.0]]];
+        let wrong_small: Rows3 = vec![vec![vec![1000.0, 0.51]]];
+        let max_abs = 1000.0f32;
+        let max_diff = 0.5f32;
+        assert!(
+            max_diff <= 0.02 * max_abs,
+            "the old global check accepts this"
+        );
+        assert_eq!(
+            compare_rows(&wrong_small, &expected, &bound, 1e-5).exceed,
+            1
+        );
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let actual: Rows3 = vec![vec![vec![1000.0, bad]]];
+            assert_eq!(compare_rows(&actual, &expected, &bound, 1e-5).exceed, 1);
+        }
+        let exact: Rows3 = vec![vec![vec![1000.0, 0.01]]];
+        assert_eq!(compare_rows(&exact, &expected, &bound, 1e-5).exceed, 0);
+    }
+
+    /// CPU experts, f32 activations: output matches an independent f64 reference for every bias
+    /// layout, shared and per-route activations, repeated and different expert selections.
+    #[test]
+    fn gather_forward_raw_cpu_matches_independent_reference() -> Result<()> {
+        let cpu = Device::Cpu;
+        for kind in [BiasKind::None, BiasKind::PerExpert, BiasKind::Broadcast] {
+            for xt in [1, MOE_TOPK] {
+                let (deq, layer) = moe_layer(&cpu, kind, &cpu)?;
+                let x_values = moe_activations(xt);
+                let x = Tensor::from_vec(x_values.clone(), (MOE_IDS.len(), xt, MOE_IN), &cpu)?;
+                let out = layer.gather_forward_raw(&x, &moe_ids(&cpu)?)?;
+                assert_eq!(out.dtype(), DType::F32);
+                assert_eq!(out.dims(), [MOE_IDS.len(), MOE_TOPK, MOE_OUT]);
+                let expected = moe_reference(&deq, kind, &x_values, xt, BiasFault::None);
+                assert_rows_close(
+                    &format!("cpu {kind:?} xt={xt}"),
+                    &out.to_vec3::<f32>()?,
+                    &expected,
+                    &moe_q8_error_bound(&deq, &x_values, xt),
+                    output_rtol(DType::F32),
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// The comparison above must reject the output when the reference omits the bias, applies it
+    /// twice, or takes it from the wrong expert; otherwise it would not prove bias correctness.
+    #[test]
+    fn gather_forward_raw_bias_faults_fail_the_reference_comparison() -> Result<()> {
+        let cpu = Device::Cpu;
+        for kind in [BiasKind::PerExpert, BiasKind::Broadcast] {
+            let (deq, layer) = moe_layer(&cpu, kind, &cpu)?;
+            let x_values = moe_activations(1);
+            let x = Tensor::from_vec(x_values.clone(), (MOE_IDS.len(), 1, MOE_IN), &cpu)?;
+            let actual = layer
+                .gather_forward_raw(&x, &moe_ids(&cpu)?)?
+                .to_vec3::<f32>()?;
+            let faults: &[BiasFault] = if kind == BiasKind::PerExpert {
+                &[
+                    BiasFault::Missing,
+                    BiasFault::Doubled,
+                    BiasFault::WrongExpert,
+                ]
+            } else {
+                &[BiasFault::Missing, BiasFault::Doubled]
+            };
+            for &fault in faults {
+                let wrong = moe_reference(&deq, kind, &x_values, 1, fault);
+                let bound = moe_q8_error_bound(&deq, &x_values, 1);
+                let s = compare_rows(&actual, &wrong, &bound, output_rtol(DType::F32));
+                eprintln!(
+                    "fault {kind:?}/{fault:?}: exceed={}/{} max_abs_err={:.3e}",
+                    s.exceed, s.total, s.max_abs
+                );
+                assert!(s.exceed > 0, "{kind:?}/{fault:?} was not detected");
+            }
+        }
+        Ok(())
+    }
+
+    // ---- device dispatch (CUDA builds). These call `Device::new_cuda(0)?`, like the other CUDA
+    // tests in this crate: with `--features cuda` and no usable GPU they FAIL instead of passing
+    // without having run anything.
+
+    /// Result of one `gather_forward_raw` call plus the independent reference for the same inputs.
+    #[cfg(feature = "cuda")]
+    struct GatherRun {
+        out_dtype: DType,
+        actual: Rows3,
+        expected: Rows3,
+        bound: Rows3,
+        /// Same weights run natively on the CPU with f32 activations, rounded to the activation
+        /// dtype; only when the experts live on the CPU.
+        cpu_rounded: Option<Rows3>,
+    }
+
+    #[cfg(feature = "cuda")]
+    fn run_gather(
+        act: &Device,
+        weights: &Device,
+        bias_device: &Device,
+        kind: BiasKind,
+        dtype: DType,
+        xt: usize,
+    ) -> Result<GatherRun> {
+        let cpu = Device::Cpu;
+        let (deq, layer) = moe_layer(weights, kind, bias_device)?;
+        // Round the activations to `dtype` once so the reference sees exactly what the layer sees.
+        let x_rounded = Tensor::from_vec(moe_activations(xt), (MOE_IDS.len(), xt, MOE_IN), &cpu)?
+            .to_dtype(dtype)?;
+        let x_f32 = x_rounded.to_dtype(DType::F32)?;
+        let x_values = x_f32.flatten_all()?.to_vec1::<f32>()?;
+        let out = layer.gather_forward_raw(&x_rounded.to_device(act)?, &moe_ids(act)?)?;
+        assert!(
+            out.device().same_device(act),
+            "output must be back on the activation device"
+        );
+        assert_eq!(out.dims(), [MOE_IDS.len(), MOE_TOPK, MOE_OUT]);
+        let out_dtype = out.dtype();
+        let actual = out
+            .to_device(&cpu)?
+            .to_dtype(DType::F32)?
+            .to_vec3::<f32>()?;
+        let cpu_rounded = if weights.is_cpu() {
+            let (_, cpu_layer) = moe_layer(&cpu, kind, &cpu)?;
+            Some(
+                cpu_layer
+                    .gather_forward_raw(&x_f32, &moe_ids(&cpu)?)?
+                    .to_dtype(dtype)?
+                    .to_dtype(DType::F32)?
+                    .to_vec3::<f32>()?,
+            )
+        } else {
+            None
+        };
+        Ok(GatherRun {
+            out_dtype,
+            actual,
+            expected: moe_reference(&deq, kind, &x_values, xt, BiasFault::None),
+            bound: moe_q8_error_bound(&deq, &x_values, xt),
+            cpu_rounded,
+        })
+    }
+
+    /// CUDA activations, CPU experts: every bias layout and placement, BF16/F16 activations,
+    /// matches the independent reference, returns on CUDA in the activation dtype, and is
+    /// bit-identical to running the same layer on the CPU (the device hops add no error).
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn gather_forward_raw_cuda_activations_cpu_experts_match_reference() -> Result<()> {
+        let cuda = Device::new_cuda(0)?;
+        let cpu = Device::Cpu;
+        for dtype in [DType::BF16, DType::F16] {
+            for kind in [BiasKind::None, BiasKind::PerExpert, BiasKind::Broadcast] {
+                let bias_devices: &[&Device] = if kind == BiasKind::None {
+                    &[&cpu]
+                } else {
+                    &[&cpu, &cuda]
+                };
+                for bias_device in bias_devices {
+                    for xt in [1, MOE_TOPK] {
+                        let label = format!(
+                            "cuda-act/cpu-experts {dtype:?} {kind:?} bias_on_cuda={} xt={xt}",
+                            bias_device.is_cuda()
+                        );
+                        let run = run_gather(&cuda, &cpu, bias_device, kind, dtype, xt)?;
+                        assert_eq!(run.out_dtype, dtype, "{label}: output dtype");
+                        assert_rows_close(
+                            &label,
+                            &run.actual,
+                            &run.expected,
+                            &run.bound,
+                            output_rtol(dtype),
+                        );
+                        assert_eq!(
+                            Some(&run.actual),
+                            run.cpu_rounded.as_ref(),
+                            "{label}: device transfer changed the numbers"
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Experts already on the activation device keep the fused CUDA kernel (no offload hop).
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn gather_forward_raw_cuda_activations_cuda_experts_match_reference() -> Result<()> {
+        let cuda = Device::new_cuda(0)?;
+        for dtype in [DType::BF16, DType::F16] {
+            for kind in [BiasKind::None, BiasKind::PerExpert, BiasKind::Broadcast] {
+                for xt in [1, MOE_TOPK] {
+                    let label = format!("cuda-act/cuda-experts {dtype:?} {kind:?} xt={xt}");
+                    let run = run_gather(&cuda, &cuda, &cuda, kind, dtype, xt)?;
+                    eprintln!("{label}: output dtype {:?}", run.out_dtype);
+                    assert_rows_close(
+                        &label,
+                        &run.actual,
+                        &run.expected,
+                        &run.bound,
+                        output_rtol(run.out_dtype),
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// CPU activations, CUDA experts: runs on the experts' device and returns f32 on the CPU.
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn gather_forward_raw_cpu_activations_cuda_experts_match_reference() -> Result<()> {
+        let cuda = Device::new_cuda(0)?;
+        let cpu = Device::Cpu;
+        for kind in [BiasKind::None, BiasKind::PerExpert, BiasKind::Broadcast] {
+            let bias_devices: &[&Device] = if kind == BiasKind::None {
+                &[&cpu]
+            } else {
+                &[&cpu, &cuda]
+            };
+            for bias_device in bias_devices {
+                for xt in [1, MOE_TOPK] {
+                    let label = format!(
+                        "cpu-act/cuda-experts {kind:?} bias_on_cuda={} xt={xt}",
+                        bias_device.is_cuda()
+                    );
+                    let run = run_gather(&cpu, &cuda, bias_device, kind, DType::F32, xt)?;
+                    assert_eq!(run.out_dtype, DType::F32, "{label}: output dtype");
+                    assert_rows_close(
+                        &label,
+                        &run.actual,
+                        &run.expected,
+                        &run.bound,
+                        output_rtol(DType::F32),
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Activations on cuda:0, experts on cuda:1: the same offload hop, device to device.
+    #[cfg(feature = "cuda")]
+    #[test]
+    #[ignore = "requires two CUDA devices"]
+    fn gather_forward_raw_cuda0_activations_cuda1_experts_match_reference() -> Result<()> {
+        let (cuda0, cuda1) = (Device::new_cuda(0)?, Device::new_cuda(1)?);
+        for bias_device in [&cuda0, &cuda1] {
+            let label = format!(
+                "cuda0-act/cuda1-experts bias_on_cuda1={}",
+                bias_device.same_device(&cuda1)
+            );
+            let run = run_gather(
+                &cuda0,
+                &cuda1,
+                bias_device,
+                BiasKind::PerExpert,
+                DType::BF16,
+                1,
+            )?;
+            assert_eq!(run.out_dtype, DType::BF16, "{label}: output dtype");
+            assert_rows_close(
+                &label,
+                &run.actual,
+                &run.expected,
+                &run.bound,
+                output_rtol(DType::BF16),
+            );
         }
         Ok(())
     }

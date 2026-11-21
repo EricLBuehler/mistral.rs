@@ -70,6 +70,15 @@ impl RoutedExperts<'_> {
         let Device::Cuda(dev) = forward.xs_flat.device() else {
             return None;
         };
+        // fused kernels read expert weights directly, so they need them on the activations' device
+        if !self.members().iter().all(|member| {
+            member
+                .dtype_and_device()
+                .1
+                .same_device(forward.xs_flat.device())
+        }) {
+            return None;
+        }
         let grouped = forward.shape.num_tokens >= GROUPED_PREFILL_MIN_TOKENS
             || self.grouped_mmq_shape(forward).is_some_and(|shape| {
                 shape.reuses_weights(crate::cuda_device::cuda_device_info(dev))
