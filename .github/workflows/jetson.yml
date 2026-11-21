@@ -1,0 +1,56 @@
+name: jetson-orin
+on:
+  push:
+    branches: [jetson]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04-arm          # glibc 2.35, runs fine on the Jetson's Ubuntu 24.04
+    timeout-minutes: 360
+    env:
+      CUDA_COMPUTE_CAP: "87"           # Orin
+      CUDAFORGE_THREADS: "1"           # 16 GB runner: keep the GPU compilers few
+      CARGO_BUILD_JOBS: "1"
+      RUSTFLAGS: "-C target-cpu=cortex-a78ae"
+      LIBRARY_PATH: /usr/local/cuda/lib64/stubs
+    steps:
+      - name: Free disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache || true
+          df -h /
+      - uses: actions/checkout@v4
+      - name: Swap + memory log
+        run: |
+          sudo fallocate -l 12G /swapfile2 && sudo chmod 600 /swapfile2
+          sudo mkswap /swapfile2 && sudo swapon /swapfile2
+          free -h; df -h /
+      - name: CUDA 13.2 (same Arm "sbsa" flavour as JetPack 7.2)
+        run: |
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/sbsa/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cuda-toolkit-13-2 patchelf clang libclang-dev pkg-config libssl-dev
+          echo /usr/local/cuda/bin >> "$GITHUB_PATH"
+          df -h /
+      - uses: dtolnay/rust-toolchain@stable
+      - run: rustc --version && rustc --print target-cpus --target aarch64-unknown-linux-gnu | grep a78
+      - name: Build
+        run: |
+          (while true; do free -m | awk 'NR==2{print "MEM used="$3"MB avail="$7"MB"}'; sleep 60; done) &
+          cargo build --release --locked -p mistralrs-cli --features "cuda flash-attn cutile"
+      - name: Bundle CUDA runtime libs (never libcuda, the Jetson's driver provides it)
+        run: |
+          set -eux
+          bin=target/release/mistralrs
+          mkdir -p package/lib
+          ldd "$bin" | awk '/=> \//{print $3}' \
+            | grep -E 'libcudart|libcublas|libcurand|libnvrtc|libnvJit|libnvjit' \
+            | sort -u | xargs -r -I{} cp -Lv {} package/lib/ || true
+          cp "$bin" package/mistralrs
+          patchelf --set-rpath '$ORIGIN/lib' package/mistralrs
+          tar czf mistralrs-cuda132-sm87-aarch64.tar.gz -C package .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mistralrs-cuda132-sm87-aarch64
+          path: mistralrs-cuda132-sm87-aarch64.tar.gz
