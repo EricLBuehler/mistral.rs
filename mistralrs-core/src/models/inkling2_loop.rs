@@ -215,11 +215,19 @@ fn load_rms_norm(vb: ShardedVarBuilder, size: usize, eps: f64) -> Result<RmsNorm
     RmsNorm::new_gemma(size, eps, vb)
 }
 
-fn load_linear(vb: ShardedVarBuilder, in_dim: usize, out_dim: usize) -> Result<Arc<dyn QuantMethod>> {
+fn load_linear(
+    vb: ShardedVarBuilder,
+    in_dim: usize,
+    out_dim: usize,
+) -> Result<Arc<dyn QuantMethod>> {
     mistralrs_quant::linear_no_bias(in_dim, out_dim, &None, vb)
 }
 
-fn try_get(vb: &ShardedVarBuilder, shape: impl Into<candle_core::Shape>, name: &str) -> Option<Tensor> {
+fn try_get(
+    vb: &ShardedVarBuilder,
+    shape: impl Into<candle_core::Shape>,
+    name: &str,
+) -> Option<Tensor> {
     vb.get(shape, name).ok()
 }
 
@@ -272,8 +280,16 @@ impl Model {
             let kv = num_kv_heads * hd;
             let q_dim = num_heads * hd;
 
-            let attn_norm = load_rms_norm(vb_l.pp("input_layernorm"), cfg.hidden_size, cfg.rms_norm_eps)?;
-            let ffn_norm = load_rms_norm(vb_l.pp("post_attention_layernorm"), cfg.hidden_size, cfg.rms_norm_eps)?;
+            let attn_norm = load_rms_norm(
+                vb_l.pp("input_layernorm"),
+                cfg.hidden_size,
+                cfg.rms_norm_eps,
+            )?;
+            let ffn_norm = load_rms_norm(
+                vb_l.pp("post_attention_layernorm"),
+                cfg.hidden_size,
+                cfg.rms_norm_eps,
+            )?;
 
             let sa = vb_l.pp("self_attn");
             let q_inp_norm = try_get(&sa.pp("q_inp_norm"), (cfg.hidden_size,), "weight")
@@ -292,40 +308,112 @@ impl Model {
             let o_proj = load_linear(sa.pp("o_proj"), q_dim, cfg.hidden_size)?;
             let gate_proj = load_linear(sa.pp("gate_proj"), cfg.hidden_size, q_dim)?;
             let rel = load_linear(sa.pp("rel"), cfg.hidden_size, cfg.d_rel * num_heads)?;
-            let rel_bias = sa.pp("rel_bias").get((cfg.d_rel, cfg.rel_extent), "weight")
-                .or_else(|_| sa.pp("rel_bias").get((cfg.rel_extent, cfg.d_rel), "weight").and_then(|t| t.t()))
-                .or_else(|_| sa.pp("rel_bias").get((cfg.d_rel, cfg.rel_extent + 1), "weight"))?;
-            let rel_clip = sa.pp("rel_clip").get((cfg.d_rel, num_heads), "weight")
-                .or_else(|_| sa.pp("rel_clip").get((num_heads, cfg.d_rel), "weight").and_then(|t| t.t()))?;
-            let q_clip = sa.pp("q_clip").get((hd, num_heads), "weight")
-                .or_else(|_| sa.pp("q_clip").get((num_heads, hd), "weight").and_then(|t| t.t()))?;
+            let rel_bias = sa
+                .pp("rel_bias")
+                .get((cfg.d_rel, cfg.rel_extent), "weight")
+                .or_else(|_| {
+                    sa.pp("rel_bias")
+                        .get((cfg.rel_extent, cfg.d_rel), "weight")
+                        .and_then(|t| t.t())
+                })
+                .or_else(|_| {
+                    sa.pp("rel_bias")
+                        .get((cfg.d_rel, cfg.rel_extent + 1), "weight")
+                })?;
+            let rel_clip = sa
+                .pp("rel_clip")
+                .get((cfg.d_rel, num_heads), "weight")
+                .or_else(|_| {
+                    sa.pp("rel_clip")
+                        .get((num_heads, cfg.d_rel), "weight")
+                        .and_then(|t| t.t())
+                })?;
+            let q_clip = sa
+                .pp("q_clip")
+                .get((hd, num_heads), "weight")
+                .or_else(|_| {
+                    sa.pp("q_clip")
+                        .get((num_heads, hd), "weight")
+                        .and_then(|t| t.t())
+                })?;
             let sink_proj = load_linear(sa.pp("sink_proj"), cfg.hidden_size, num_heads)?;
-            let k_conv = sa.pp("k_conv").get((cfg.sconv_kernel_size, kv), "weight")
-                .or_else(|_| sa.pp("k_conv").get((kv, 1, cfg.sconv_kernel_size), "weight").and_then(|t| t.squeeze(1)?.t()))?;
-            let v_conv = sa.pp("v_conv").get((cfg.sconv_kernel_size, kv), "weight")
-                .or_else(|_| sa.pp("v_conv").get((kv, 1, cfg.sconv_kernel_size), "weight").and_then(|t| t.squeeze(1)?.t()))?;
-            let attn_post_conv = sa.pp("post_conv").get((cfg.sconv_kernel_size, cfg.hidden_size), "weight")
-                .or_else(|_| sa.pp("post_conv").get((cfg.hidden_size, 1, cfg.sconv_kernel_size), "weight").and_then(|t| t.squeeze(1)?.t()))?;
-            let k_conv_proj = if !is_swa && try_get(&sa.pp("k_conv_proj"), (32, cfg.hidden_size), "weight").is_some() {
+            let k_conv = sa
+                .pp("k_conv")
+                .get((cfg.sconv_kernel_size, kv), "weight")
+                .or_else(|_| {
+                    sa.pp("k_conv")
+                        .get((kv, 1, cfg.sconv_kernel_size), "weight")
+                        .and_then(|t| t.squeeze(1)?.t())
+                })?;
+            let v_conv = sa
+                .pp("v_conv")
+                .get((cfg.sconv_kernel_size, kv), "weight")
+                .or_else(|_| {
+                    sa.pp("v_conv")
+                        .get((kv, 1, cfg.sconv_kernel_size), "weight")
+                        .and_then(|t| t.squeeze(1)?.t())
+                })?;
+            let attn_post_conv = sa
+                .pp("post_conv")
+                .get((cfg.sconv_kernel_size, cfg.hidden_size), "weight")
+                .or_else(|_| {
+                    sa.pp("post_conv")
+                        .get((cfg.hidden_size, 1, cfg.sconv_kernel_size), "weight")
+                        .and_then(|t| t.squeeze(1)?.t())
+                })?;
+            let k_conv_proj = if !is_swa
+                && try_get(&sa.pp("k_conv_proj"), (32, cfg.hidden_size), "weight").is_some()
+            {
                 Some(load_linear(sa.pp("k_conv_proj"), cfg.hidden_size, 32)?)
-            } else { None };
-            let v_conv_proj = if !is_swa && try_get(&sa.pp("v_conv_proj"), (32, cfg.hidden_size), "weight").is_some() {
+            } else {
+                None
+            };
+            let v_conv_proj = if !is_swa
+                && try_get(&sa.pp("v_conv_proj"), (32, cfg.hidden_size), "weight").is_some()
+            {
                 Some(load_linear(sa.pp("v_conv_proj"), cfg.hidden_size, 32)?)
-            } else { None };
+            } else {
+                None
+            };
             let res_query = try_get(&sa.pp("res_query"), (cfg.hidden_size,), "weight")
                 .or_else(|| try_get(&sa.pp("res_query"), (3, cfg.hidden_size), "weight"));
 
             let attn = Attention {
-                q_proj, k_proj, v_proj, o_proj, gate_proj, rel, rel_bias, rel_clip, q_clip, sink_proj,
-                attn_norm, q_inp_norm, k_inp_norm, v_inp_norm,
-                k_conv, v_conv, k_conv_proj, v_conv_proj, attn_post_conv, res_query,
-                num_heads, num_kv_heads, head_dim: hd, d_rel: cfg.d_rel, rel_extent: cfg.rel_extent,
-                is_swa, sliding_window: cfg.sliding_window,
+                q_proj,
+                k_proj,
+                v_proj,
+                o_proj,
+                gate_proj,
+                rel,
+                rel_bias,
+                rel_clip,
+                q_clip,
+                sink_proj,
+                attn_norm,
+                q_inp_norm,
+                k_inp_norm,
+                v_inp_norm,
+                k_conv,
+                v_conv,
+                k_conv_proj,
+                v_conv_proj,
+                attn_post_conv,
+                res_query,
+                num_heads,
+                num_kv_heads,
+                head_dim: hd,
+                d_rel: cfg.d_rel,
+                rel_extent: cfg.rel_extent,
+                is_swa,
+                sliding_window: cfg.sliding_window,
             };
 
             let mlp_vb = vb_l.pp("mlp");
             let router = load_linear(mlp_vb.pp("router"), cfg.hidden_size, cfg.n_routed_experts)?;
-            let exp_probs_b = mlp_vb.pp("exp_probs_b").get((cfg.n_routed_experts,), "bias").ok();
+            let exp_probs_b = mlp_vb
+                .pp("exp_probs_b")
+                .get((cfg.n_routed_experts,), "bias")
+                .ok();
             let moe_cfg = MoEExpertsConfig {
                 num_experts: cfg.n_routed_experts,
                 num_experts_per_tok: cfg.num_experts_per_tok,
@@ -343,9 +431,18 @@ impl Model {
                 crate::layers::Activation::Silu,
             )?;
             let moe = Moe {
-                router, exp_probs_b, experts,
-                post_conv: mlp_vb.pp("post_conv").get((cfg.sconv_kernel_size, cfg.hidden_size), "weight")
-                    .or_else(|_| mlp_vb.pp("post_conv").get((cfg.hidden_size, 1, cfg.sconv_kernel_size), "weight").and_then(|t| t.squeeze(1)?.t()))?,
+                router,
+                exp_probs_b,
+                experts,
+                post_conv: mlp_vb
+                    .pp("post_conv")
+                    .get((cfg.sconv_kernel_size, cfg.hidden_size), "weight")
+                    .or_else(|_| {
+                        mlp_vb
+                            .pp("post_conv")
+                            .get((cfg.hidden_size, 1, cfg.sconv_kernel_size), "weight")
+                            .and_then(|t| t.squeeze(1)?.t())
+                    })?,
                 res_query: mlp_vb.pp("res_query").get((cfg.hidden_size,), "weight")?,
                 num_experts_per_tok: cfg.num_experts_per_tok,
                 route_scale: cfg.route_scale as f32,
@@ -353,22 +450,50 @@ impl Model {
 
             let loop_layer = if i >= cfg.loop_config.core_start && i < cfg.loop_config.core_end {
                 let ll = vb_l.pp("loop");
-                let msg_query = ll.pp("msg_query").get((4, cfg.hidden_size), "weight")
+                let msg_query = ll
+                    .pp("msg_query")
+                    .get((4, cfg.hidden_size), "weight")
                     .or_else(|_| ll.pp("msg_query").get((3, cfg.hidden_size), "weight"))?;
                 let mk = |name: &str| -> Result<LoopCtrl> {
                     Ok(LoopCtrl {
-                        down: load_linear(ll.pp(format!("{name}_ctrl_down")), 2 * cfg.hidden_size, cfg.loop_config.gate_rank)?,
-                        gain: load_linear(ll.pp(format!("{name}_ctrl_gain")), cfg.loop_config.gate_rank, cfg.hidden_size)?,
-                        forget: load_linear(ll.pp(format!("{name}_ctrl_forget")), cfg.loop_config.gate_rank, cfg.hidden_size)?,
+                        down: load_linear(
+                            ll.pp(format!("{name}_ctrl_down")),
+                            2 * cfg.hidden_size,
+                            cfg.loop_config.gate_rank,
+                        )?,
+                        gain: load_linear(
+                            ll.pp(format!("{name}_ctrl_gain")),
+                            cfg.loop_config.gate_rank,
+                            cfg.hidden_size,
+                        )?,
+                        forget: load_linear(
+                            ll.pp(format!("{name}_ctrl_forget")),
+                            cfg.loop_config.gate_rank,
+                            cfg.hidden_size,
+                        )?,
                     })
                 };
-                Some(LoopLayer { msg_query, q: mk("q")?, k: mk("k")?, v: mk("v")?, ffn: mk("ffn")? })
-            } else { None };
+                Some(LoopLayer {
+                    msg_query,
+                    q: mk("q")?,
+                    k: mk("k")?,
+                    v: mk("v")?,
+                    ffn: mk("ffn")?,
+                })
+            } else {
+                None
+            };
 
-            layers.push(DecoderLayer { attn, moe, ffn_norm, loop_layer });
+            layers.push(DecoderLayer {
+                attn,
+                moe,
+                ffn_norm,
+                loop_layer,
+            });
         }
 
-        let logical_layers = cfg.num_hidden_layers - (cfg.loop_config.core_end - cfg.loop_config.core_start)
+        let logical_layers = cfg.num_hidden_layers
+            - (cfg.loop_config.core_end - cfg.loop_config.core_start)
             + (cfg.loop_config.core_end - cfg.loop_config.core_start) * cfg.loop_config.num_passes;
         let cache = EitherCache::Normal(crate::pipeline::NormalCache::new(
             logical_layers,
@@ -376,7 +501,12 @@ impl Model {
         ));
 
         Ok(Self {
-            embed_tokens, embedding_norm, layers, norm, output_res_query, lm_head,
+            embed_tokens,
+            embedding_norm,
+            layers,
+            norm,
+            output_res_query,
+            lm_head,
             cfg: ModelConfigMetadata {
                 max_seq_len: cfg.max_position_embeddings,
                 num_layers: logical_layers,
@@ -389,7 +519,9 @@ impl Model {
                 kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
             },
             device: normal_loading_metadata.real_device.clone(),
-            cache, max_seq_len: cfg.max_position_embeddings, mapper,
+            cache,
+            max_seq_len: cfg.max_position_embeddings,
+            mapper,
             loop_config: cfg.loop_config.clone(),
             rms_eps: cfg.rms_norm_eps,
             qk_clip: cfg.qk_l2_clip_threshold as f32,
@@ -405,7 +537,9 @@ impl Model {
 }
 
 fn softcap(x: &Tensor, cap: f64) -> Result<Tensor> {
-    if cap <= 0.0 { return Ok(x.clone()); }
+    if cap <= 0.0 {
+        return Ok(x.clone());
+    }
     let scaled = (x / cap)?;
     let t = scaled.tanh()?;
     t * cap
@@ -462,36 +596,69 @@ fn l2_clip(x: &Tensor, clip_w: &Tensor, threshold: f32) -> Result<Tensor> {
 }
 
 impl Model {
-    fn logical_layer_order(&self) -> Vec<(usize, usize)> {
-        // (physical_layer, logical_cache_idx)
+    fn logical_layer_order(&self) -> Vec<(usize, usize, usize)> {
+        // (physical_layer, logical_cache_idx, pass_idx; pass_idx=0 for pre/postlude)
         let mut out = Vec::new();
         let mut logical = 0usize;
         for i in 0..self.loop_config.core_start {
-            out.push((i, logical));
+            out.push((i, logical, 0));
             logical += 1;
         }
-        let core_len = self.loop_config.core_end - self.loop_config.core_start;
-        for _pass in 0..self.loop_config.num_passes {
+        for pass in 0..self.loop_config.num_passes {
             for i in self.loop_config.core_start..self.loop_config.core_end {
-                out.push((i, logical));
+                out.push((i, logical, pass));
                 logical += 1;
             }
         }
         for i in self.loop_config.core_end..self.layers.len() {
-            out.push((i, logical));
+            out.push((i, logical, 0));
             logical += 1;
         }
-        let _ = core_len;
         out
     }
 
+    fn attn_res_mix(&self, blocks: &[Tensor], cur: &Tensor, query: &Tensor) -> Result<Tensor> {
+        if blocks.is_empty() {
+            return Ok(cur.clone());
+        }
+        let q = query.to_dtype(DType::F32)?;
+        let q = if q.rank() == 1 { q.unsqueeze(0)? } else { q };
+        let n = blocks.len();
+        let q = if q.dim(0)? == n {
+            q
+        } else {
+            q.narrow(0, 0, n.min(q.dim(0)?))?
+        };
+        let cur_f = cur.to_dtype(DType::F32)?;
+        let mut stack = Vec::with_capacity(n + 1);
+        for b in blocks {
+            stack.push(b.to_dtype(DType::F32)?);
+        }
+        stack.push(cur_f.clone());
+        let stacked = Tensor::stack(&stack, D::Minus2)?; // [b,s,n+1,h]
+        let logits = stacked
+            .broadcast_matmul(&q.unsqueeze(D::Minus1)?)?
+            .squeeze(D::Minus1)?; // [b,s,n+1]
+        let scale = 1.0f64 / (self.hidden_size as f64).sqrt();
+        let logits = (logits * scale)?;
+        let w = candle_nn::ops::softmax_last_dim(&logits)?;
+        let out = stacked
+            .broadcast_mul(&w.unsqueeze(D::Minus1)?)?
+            .sum(D::Minus2)?;
+        out.to_dtype(cur.dtype())
+    }
+
     fn apply_loop_ctrl(&self, ctrl: &LoopCtrl, cur: &Tensor, msg: &Tensor) -> Result<Tensor> {
-        let gate_in = Tensor::cat(&[&rms_norm(cur, self.rms_eps)?, &rms_norm(msg, self.rms_eps)?], D::Minus1)?;
+        let gate_in = Tensor::cat(
+            &[&rms_norm(cur, self.rms_eps)?, &rms_norm(msg, self.rms_eps)?],
+            D::Minus1,
+        )?;
         let gate = ctrl.down.forward(&gate_in)?;
         let gain = ctrl.gain.forward(&gate.tanh()?)?;
         let forget = ctrl.forget.forward(&gate.tanh()?)?;
         let keep = (Tensor::ones_like(&forget)? - &forget)?;
-        cur.broadcast_mul(&keep)?.broadcast_add(&msg.broadcast_mul(&gain)?)
+        cur.broadcast_mul(&keep)?
+            .broadcast_add(&msg.broadcast_mul(&gain)?)
     }
 
     fn forward_attn(
@@ -499,49 +666,146 @@ impl Model {
         layer: &DecoderLayer,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
-        seqlen_offsets: &[usize],
+        _seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
         _flash_params: &FlashParams,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
         let attn = &layer.attn;
         let normed = attn.attn_norm.forward(xs)?;
-        let q_in = if let Some(n) = &attn.q_inp_norm { n.forward(&normed)? } else { normed.clone() };
-        let k_in = if let Some(n) = &attn.k_inp_norm { n.forward(&normed)? } else { normed.clone() };
-        let v_in = if let Some(n) = &attn.v_inp_norm { n.forward(&normed)? } else { normed.clone() };
+        let q_in = if let Some(n) = &attn.q_inp_norm {
+            n.forward(&normed)?
+        } else {
+            normed.clone()
+        };
+        let k_in = if let Some(n) = &attn.k_inp_norm {
+            n.forward(&normed)?
+        } else {
+            normed.clone()
+        };
+        let v_in = if let Some(n) = &attn.v_inp_norm {
+            n.forward(&normed)?
+        } else {
+            normed.clone()
+        };
 
         let mut q = attn.q_proj.forward(&q_in)?;
         let mut k = attn.k_proj.forward(&k_in)?;
         let mut v = attn.v_proj.forward(&v_in)?;
 
-        q = q.reshape((b_sz, q_len, attn.num_heads, attn.head_dim))?.transpose(1, 2)?;
-        k = k.reshape((b_sz, q_len, attn.num_kv_heads, attn.head_dim))?.transpose(1, 2)?;
-        v = v.reshape((b_sz, q_len, attn.num_kv_heads, attn.head_dim))?.transpose(1, 2)?;
+        q = q
+            .reshape((b_sz, q_len, attn.num_heads, attn.head_dim))?
+            .transpose(1, 2)?;
+        k = k
+            .reshape((b_sz, q_len, attn.num_kv_heads, attn.head_dim))?
+            .transpose(1, 2)?;
+        v = v
+            .reshape((b_sz, q_len, attn.num_kv_heads, attn.head_dim))?
+            .transpose(1, 2)?;
+
+        // qk clip
+        q = self.clip_head_dim(&q, &attn.q_clip, self.qk_clip)?;
+        k = self
+            .clip_head_dim(
+                &k,
+                &Tensor::zeros((1,), DType::F32, q.device())?,
+                self.qk_clip,
+            )
+            .unwrap_or(k);
+        v = rms_norm(&v.contiguous()?, self.rms_eps)?;
 
         (k, v) = kv_cache.append(&k, &v)?;
 
-        // repeat kv
         let n_rep = attn.num_heads / attn.num_kv_heads;
-        let k = if n_rep > 1 {
+        let k_rep = if n_rep > 1 {
             let (b, h, s, d) = k.dims4()?;
-            k.unsqueeze(2)?.expand((b, h, n_rep, s, d))?.reshape((b, h * n_rep, s, d))?
-        } else { k };
-        let v = if n_rep > 1 {
+            k.unsqueeze(2)?
+                .expand((b, h, n_rep, s, d))?
+                .reshape((b, h * n_rep, s, d))?
+        } else {
+            k.clone()
+        };
+        let v_rep = if n_rep > 1 {
             let (b, h, s, d) = v.dims4()?;
-            v.unsqueeze(2)?.expand((b, h, n_rep, s, d))?.reshape((b, h * n_rep, s, d))?
-        } else { v };
+            v.unsqueeze(2)?
+                .expand((b, h, n_rep, s, d))?
+                .reshape((b, h * n_rep, s, d))?
+        } else {
+            v.clone()
+        };
 
-        let mut att = (q.to_dtype(DType::F32)?.matmul(&k.to_dtype(DType::F32)?.t()?)? / (attn.head_dim as f64).sqrt())?;
+        let mut att = (q
+            .to_dtype(DType::F32)?
+            .contiguous()?
+            .matmul(&k_rep.to_dtype(DType::F32)?.contiguous()?.t()?)?
+            / (attn.head_dim as f64).sqrt())?;
+
+        // sinks: add as extra logit column, then softmax, then drop
+        let sinks = attn
+            .sink_proj
+            .forward(&q_in)?
+            .reshape((b_sz, q_len, attn.num_heads))?
+            .transpose(1, 2)?; // [b,h,s]
+        let sinks = sinks.to_dtype(DType::F32)?.unsqueeze(D::Minus1)?; // [b,h,s,1]
+        let att = Tensor::cat(&[&att, &sinks], D::Minus1)?;
+
+        let kv_len = k_rep.dim(2)?;
         if let Some(mask) = attention_mask {
-            att = att.broadcast_add(mask)?;
+            let mask = mask.to_dtype(DType::F32)?;
+            let zeros = Tensor::zeros((b_sz, 1, q_len, 1), DType::F32, mask.device())?;
+            let mask = Tensor::cat(
+                &[
+                    &mask.broadcast_as((b_sz, attn.num_heads, q_len, kv_len))?,
+                    &zeros.broadcast_as((b_sz, attn.num_heads, q_len, 1))?,
+                ],
+                D::Minus1,
+            )?;
+            att = att.broadcast_add(&mask)?;
+        } else if q_len > 1 {
+            let mask: Vec<u8> = (0..q_len)
+                .flat_map(|i| (0..kv_len).map(move |j| u8::from(j > (kv_len - q_len + i))))
+                .collect();
+            let mask = Tensor::from_vec(mask, (1, 1, q_len, kv_len), att.device())?;
+            let att_kv = crate::layers_masker::masked_fill(
+                &att.narrow(D::Minus1, 0, kv_len)?,
+                &mask,
+                f32::NEG_INFINITY,
+            )?;
+            let att_sink = att.narrow(D::Minus1, kv_len, 1)?;
+            att = Tensor::cat(&[&att_kv, &att_sink], D::Minus1)?;
         }
         let att = candle_nn::ops::softmax_last_dim(&att)?;
-        let mut y = att.matmul(&v.to_dtype(DType::F32)?)?.to_dtype(xs.dtype())?;
-        y = y.transpose(1, 2)?.reshape((b_sz, q_len, attn.num_heads * attn.head_dim))?;
+        let kv_len = k_rep.dim(2)?;
+        let att = att.narrow(D::Minus1, 0, kv_len)?;
+        let mut y = att
+            .matmul(&v_rep.to_dtype(DType::F32)?.contiguous()?)?
+            .to_dtype(xs.dtype())?;
+        y = y
+            .transpose(1, 2)?
+            .reshape((b_sz, q_len, attn.num_heads * attn.head_dim))?;
         let gate = attn.gate_proj.forward(&normed)?;
         let gate = candle_nn::ops::silu(&gate)?;
         y = y.broadcast_mul(&gate)?;
         attn.o_proj.forward(&y)
+    }
+
+    fn clip_head_dim(&self, x: &Tensor, clip_w: &Tensor, threshold: f32) -> Result<Tensor> {
+        if threshold <= 0.0 {
+            return Ok(x.clone());
+        }
+        let x_f = x.to_dtype(DType::F32)?;
+        let norm = x_f.sqr()?.sum_keepdim(D::Minus1)?.sqrt()?; // [b,h,s,1]
+        let cw = clip_w.to_dtype(DType::F32)?;
+        let cw = if cw.dims().len() == 2 && cw.dim(0)? == x.dim(3)? && cw.dim(1)? == x.dim(1)? {
+            cw.t()?.unsqueeze(0)?.unsqueeze(2)? // [1,h,1,d]
+        } else if cw.dims().len() == 2 && cw.dim(0)? == x.dim(1)? && cw.dim(1)? == x.dim(3)? {
+            cw.unsqueeze(0)?.unsqueeze(2)?
+        } else {
+            return Ok(x.clone());
+        };
+        let scale = (cw.broadcast_mul(&norm)? / (threshold as f64))?;
+        let scale = (scale + 1.0)?.recip()?;
+        x_f.broadcast_mul(&scale)?.to_dtype(x.dtype())
     }
 
     fn forward_moe(&self, layer: &DecoderLayer, xs: &Tensor) -> Result<Tensor> {
@@ -559,15 +823,27 @@ impl Model {
         let probs_v = probs.to_vec2::<f32>()?;
         for row in probs_v {
             let mut idx: Vec<usize> = (0..row.len()).collect();
-            idx.sort_by(|&a, &c| row[c].partial_cmp(&row[a]).unwrap_or(std::cmp::Ordering::Equal));
+            idx.sort_by(|&a, &c| {
+                row[c]
+                    .partial_cmp(&row[a])
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
             let mut sel = idx[..topk].to_vec();
             let mut w: Vec<f32> = sel.iter().map(|&i| row[i]).collect();
             let sum: f32 = w.iter().sum();
-            if sum > 0.0 { for x in &mut w { *x /= sum; } }
-            for (i,wv) in sel.iter().zip(w.iter()) { topk_idx.push(*i as u32); topk_vals.push(*wv); }
+            if sum > 0.0 {
+                for x in &mut w {
+                    *x /= sum;
+                }
+            }
+            for (i, wv) in sel.iter().zip(w.iter()) {
+                topk_idx.push(*i as u32);
+                topk_vals.push(*wv);
+            }
         }
         let topk_ids = Tensor::from_vec(topk_idx, (b * s, topk), xs.device())?;
-        let topk_weights = Tensor::from_vec(topk_vals, (b * s, topk), xs.device())?.to_dtype(xs.dtype())?;
+        let topk_weights =
+            Tensor::from_vec(topk_vals, (b * s, topk), xs.device())?.to_dtype(xs.dtype())?;
         let y = layer.moe.experts.forward(&flat, topk_weights, &topk_ids)?;
         let y = y.reshape((b, s, h))?;
         Ok(y)
@@ -592,7 +868,8 @@ impl NormalModel for Model {
         let mut xs = self.embed_tokens.forward(input_ids)?;
         xs = self.embedding_norm.forward(&xs)?;
 
-        let cache = &mut self.cache.normal().0;
+        let mut cache_guard = self.cache.normal();
+        let cache = &mut cache_guard.0;
         let mask_cache = ctx.mask_cache(cache);
         let attention_mask = CausalMasker.make_causal_mask(
             input_ids,
@@ -603,33 +880,55 @@ impl NormalModel for Model {
 
         let order = self.logical_layer_order();
         let mut cur = xs;
+        let mut blocks: Vec<Tensor> = Vec::new();
         let mut core_msg: Option<Tensor> = None;
-        for (_ord_idx, (phys, logical)) in order.iter().enumerate() {
+        for (_ord_idx, (phys, logical, _pass)) in order.iter().enumerate() {
             let layer = &self.layers[*phys];
             let is_core = *phys >= self.loop_config.core_start && *phys < self.loop_config.core_end;
 
             let mut attn_in = cur.clone();
-            if let Some(ll) = &layer.loop_layer {
-                let msg = core_msg.clone().unwrap_or(cur.clone());
-                attn_in = self.apply_loop_ctrl(&ll.q, &attn_in, &msg)?;
+            if is_core {
+                if let Some(ll) = &layer.loop_layer {
+                    let msg = core_msg.clone().unwrap_or(cur.clone());
+                    attn_in = self.apply_loop_ctrl(&ll.q, &attn_in, &msg)?;
+                }
             }
             let mask = attention_mask.as_option_tensor();
-            let attn_out = self.forward_attn(layer, &attn_in, mask, &[], &mut cache[*logical], &flash_params)?;
-            cur = (cur + attn_out)?;
+            let attn_out = self.forward_attn(
+                layer,
+                &attn_in,
+                mask,
+                &[],
+                &mut cache[*logical],
+                &flash_params,
+            )?;
+            cur = (&cur + attn_out)?;
 
-            let mut moe_in = cur.clone();
-            if let Some(ll) = &layer.loop_layer {
-                let msg = core_msg.clone().unwrap_or(cur.clone());
-                moe_in = self.apply_loop_ctrl(&ll.ffn, &moe_in, &msg)?;
+            if let Some(rq) = &layer.attn.res_query {
+                if (*phys) % self.attn_res_block_size == 0 {
+                    blocks.push(cur.clone());
+                } else {
+                    cur = self.attn_res_mix(&blocks, &cur, rq)?;
+                }
+            }
+
+            let residual = cur.clone();
+            let mut moe_in = self.attn_res_mix(&blocks, &cur, &layer.moe.res_query)?;
+            if is_core {
+                if let Some(ll) = &layer.loop_layer {
+                    let msg = core_msg.clone().unwrap_or(moe_in.clone());
+                    moe_in = self.apply_loop_ctrl(&ll.ffn, &moe_in, &msg)?;
+                }
             }
             let moe_out = self.forward_moe(layer, &moe_in)?;
-            cur = (cur + moe_out)?;
+            cur = (&residual + moe_out)?;
 
             if is_core {
                 core_msg = Some(cur.clone());
             }
         }
 
+        let cur = self.attn_res_mix(&blocks, &cur, &self.output_res_query)?;
         let cur = self.norm.forward(&cur)?;
         let logits = self.lm_head.forward(&cur)?;
         let logits = softcap(&logits, self.final_logit_softcapping)?;
@@ -652,11 +951,21 @@ impl NormalModel for Model {
         candle_core::bail!("inkling2_loop xlora not supported")
     }
 
-    fn is_xlora(&self) -> bool { false }
-    fn device(&self) -> &Device { &self.device }
-    fn cache(&self) -> &EitherCache { &self.cache }
-    fn max_seq_len(&self) -> usize { self.max_seq_len }
-    fn config(&self) -> &ModelConfigMetadata { &self.cfg }
+    fn is_xlora(&self) -> bool {
+        false
+    }
+    fn device(&self) -> &Device {
+        &self.device
+    }
+    fn cache(&self) -> &EitherCache {
+        &self.cache
+    }
+    fn max_seq_len(&self) -> usize {
+        self.max_seq_len
+    }
+    fn config(&self) -> &ModelConfigMetadata {
+        &self.cfg
+    }
 }
 
 impl AnyMoeBaseModelMixin for Model {}
