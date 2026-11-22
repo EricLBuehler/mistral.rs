@@ -1,6 +1,13 @@
 #![allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, OnceLock};
+static DIST_CACHE: OnceLock<Mutex<HashMap<(usize, usize, usize, usize), Tensor>>> = OnceLock::new();
+#[allow(clippy::type_complexity)]
+fn dist_cache_mut() -> &'static Mutex<HashMap<(usize, usize, usize, usize), Tensor>> {
+    DIST_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+// removed duplicate Device import
 
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::Module;
@@ -9,7 +16,7 @@ use mistralrs_quant::{QuantMethod, ShardedVarBuilder};
 use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
-    layers::{embedding, CausalMasker, MatMul, RmsNorm, Sdpa},
+    layers::{embedding, RmsNorm},
     moe::{ExpertProjNames, MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
@@ -151,7 +158,7 @@ struct Attention {
     rel_clip: Tensor,
     q_clip: Tensor,
     sink_proj: Arc<dyn QuantMethod>,
-    attn_norm: RmsNorm,
+    attn_norm: Option<RmsNorm>,
     q_inp_norm: Option<RmsNorm>,
     k_inp_norm: Option<RmsNorm>,
     v_inp_norm: Option<RmsNorm>,
@@ -185,6 +192,10 @@ struct DecoderLayer {
     moe: Moe,
     ffn_norm: RmsNorm,
     loop_layer: Option<LoopLayer>,
+    conv_k: Mutex<Tensor>,
+    conv_v: Mutex<Tensor>,
+    conv_attn_post: Mutex<Tensor>,
+    conv_ffn_post: Mutex<Tensor>,
 }
 
 pub struct Model {
@@ -209,6 +220,7 @@ pub struct Model {
     final_logit_softcapping: f64,
     sconv_l_cache: usize,
     hidden_size: usize,
+    dist_cache: Mutex<std::collections::HashMap<(usize, usize, usize, usize), Tensor>>,
 }
 
 fn load_rms_norm(vb: ShardedVarBuilder, size: usize, eps: f64) -> Result<RmsNorm> {
@@ -280,27 +292,53 @@ impl Model {
             let kv = num_kv_heads * hd;
             let q_dim = num_heads * hd;
 
-            let attn_norm = load_rms_norm(
-                vb_l.pp("input_layernorm"),
-                cfg.hidden_size,
-                cfg.rms_norm_eps,
-            )?;
             let ffn_norm = load_rms_norm(
                 vb_l.pp("post_attention_layernorm"),
                 cfg.hidden_size,
                 cfg.rms_norm_eps,
             )?;
+            let attn_norm =
+                if try_get(&vb_l.pp("input_layernorm"), (cfg.hidden_size,), "weight").is_some() {
+                    Some(load_rms_norm(
+                        vb_l.pp("input_layernorm"),
+                        cfg.hidden_size,
+                        cfg.rms_norm_eps,
+                    )?)
+                } else {
+                    None
+                };
 
             let sa = vb_l.pp("self_attn");
-            let q_inp_norm = try_get(&sa.pp("q_inp_norm"), (cfg.hidden_size,), "weight")
-                .map(|_| load_rms_norm(sa.pp("q_inp_norm"), cfg.hidden_size, cfg.rms_norm_eps))
-                .transpose()?;
-            let k_inp_norm = try_get(&sa.pp("k_inp_norm"), (cfg.hidden_size,), "weight")
-                .map(|_| load_rms_norm(sa.pp("k_inp_norm"), cfg.hidden_size, cfg.rms_norm_eps))
-                .transpose()?;
-            let v_inp_norm = try_get(&sa.pp("v_inp_norm"), (cfg.hidden_size,), "weight")
-                .map(|_| load_rms_norm(sa.pp("v_inp_norm"), cfg.hidden_size, cfg.rms_norm_eps))
-                .transpose()?;
+            let q_inp_norm =
+                if try_get(&sa.pp("q_inp_norm"), (cfg.hidden_size,), "weight").is_some() {
+                    Some(load_rms_norm(
+                        sa.pp("q_inp_norm"),
+                        cfg.hidden_size,
+                        cfg.rms_norm_eps,
+                    )?)
+                } else {
+                    None
+                };
+            let k_inp_norm =
+                if try_get(&sa.pp("k_inp_norm"), (cfg.hidden_size,), "weight").is_some() {
+                    Some(load_rms_norm(
+                        sa.pp("k_inp_norm"),
+                        cfg.hidden_size,
+                        cfg.rms_norm_eps,
+                    )?)
+                } else {
+                    None
+                };
+            let v_inp_norm =
+                if try_get(&sa.pp("v_inp_norm"), (cfg.hidden_size,), "weight").is_some() {
+                    Some(load_rms_norm(
+                        sa.pp("v_inp_norm"),
+                        cfg.hidden_size,
+                        cfg.rms_norm_eps,
+                    )?)
+                } else {
+                    None
+                };
 
             let q_proj = load_linear(sa.pp("q_proj"), cfg.hidden_size, q_dim)?;
             let k_proj = load_linear(sa.pp("k_proj"), cfg.hidden_size, kv)?;
@@ -339,27 +377,27 @@ impl Model {
             let sink_proj = load_linear(sa.pp("sink_proj"), cfg.hidden_size, num_heads)?;
             let k_conv = sa
                 .pp("k_conv")
-                .get((cfg.sconv_kernel_size, kv), "weight")
+                .get((kv, cfg.sconv_kernel_size), "weight")
                 .or_else(|_| {
                     sa.pp("k_conv")
-                        .get((kv, 1, cfg.sconv_kernel_size), "weight")
-                        .and_then(|t| t.squeeze(1)?.t())
+                        .get((cfg.sconv_kernel_size, kv), "weight")
+                        .and_then(|t| t.t())
                 })?;
             let v_conv = sa
                 .pp("v_conv")
-                .get((cfg.sconv_kernel_size, kv), "weight")
+                .get((kv, cfg.sconv_kernel_size), "weight")
                 .or_else(|_| {
                     sa.pp("v_conv")
-                        .get((kv, 1, cfg.sconv_kernel_size), "weight")
-                        .and_then(|t| t.squeeze(1)?.t())
+                        .get((cfg.sconv_kernel_size, kv), "weight")
+                        .and_then(|t| t.t())
                 })?;
             let attn_post_conv = sa
                 .pp("post_conv")
-                .get((cfg.sconv_kernel_size, cfg.hidden_size), "weight")
+                .get((cfg.hidden_size, cfg.sconv_kernel_size), "weight")
                 .or_else(|_| {
                     sa.pp("post_conv")
-                        .get((cfg.hidden_size, 1, cfg.sconv_kernel_size), "weight")
-                        .and_then(|t| t.squeeze(1)?.t())
+                        .get((cfg.sconv_kernel_size, cfg.hidden_size), "weight")
+                        .and_then(|t| t.t())
                 })?;
             let k_conv_proj = if !is_swa
                 && try_get(&sa.pp("k_conv_proj"), (32, cfg.hidden_size), "weight").is_some()
@@ -436,12 +474,12 @@ impl Model {
                 experts,
                 post_conv: mlp_vb
                     .pp("post_conv")
-                    .get((cfg.sconv_kernel_size, cfg.hidden_size), "weight")
+                    .get((cfg.hidden_size, cfg.sconv_kernel_size), "weight")
                     .or_else(|_| {
                         mlp_vb
                             .pp("post_conv")
-                            .get((cfg.hidden_size, 1, cfg.sconv_kernel_size), "weight")
-                            .and_then(|t| t.squeeze(1)?.t())
+                            .get((cfg.sconv_kernel_size, cfg.hidden_size), "weight")
+                            .and_then(|t| t.t())
                     })?,
                 res_query: mlp_vb.pp("res_query").get((cfg.hidden_size,), "weight")?,
                 num_experts_per_tok: cfg.num_experts_per_tok,
@@ -484,11 +522,19 @@ impl Model {
                 None
             };
 
+            let dev = vb_m.device();
+            let sconv = cfg.sconv_kernel_size.saturating_sub(1);
+            let zeros_kv = Tensor::zeros((1, kv, sconv), DType::F32, dev)?;
+            let zeros_h = Tensor::zeros((1, cfg.hidden_size, sconv), DType::F32, dev)?;
             layers.push(DecoderLayer {
                 attn,
                 moe,
                 ffn_norm,
                 loop_layer,
+                conv_k: Mutex::new(zeros_kv.clone()),
+                conv_v: Mutex::new(zeros_kv),
+                conv_attn_post: Mutex::new(zeros_h.clone()),
+                conv_ffn_post: Mutex::new(zeros_h),
             });
         }
 
@@ -509,7 +555,7 @@ impl Model {
             lm_head,
             cfg: ModelConfigMetadata {
                 max_seq_len: cfg.max_position_embeddings,
-                num_layers: logical_layers,
+                num_layers: logical_layers * 2,
                 hidden_size: cfg.hidden_size,
                 num_kv_heads: cfg.num_key_value_heads,
                 num_attn_heads: cfg.num_attention_heads,
@@ -532,6 +578,7 @@ impl Model {
             final_logit_softcapping: cfg.final_logit_softcapping,
             sconv_l_cache: cfg.sconv_kernel_size,
             hidden_size: cfg.hidden_size,
+            dist_cache: Mutex::new(std::collections::HashMap::new()),
         })
     }
 }
@@ -596,27 +643,6 @@ fn l2_clip(x: &Tensor, clip_w: &Tensor, threshold: f32) -> Result<Tensor> {
 }
 
 impl Model {
-    fn logical_layer_order(&self) -> Vec<(usize, usize, usize)> {
-        // (physical_layer, logical_cache_idx, pass_idx; pass_idx=0 for pre/postlude)
-        let mut out = Vec::new();
-        let mut logical = 0usize;
-        for i in 0..self.loop_config.core_start {
-            out.push((i, logical, 0));
-            logical += 1;
-        }
-        for pass in 0..self.loop_config.num_passes {
-            for i in self.loop_config.core_start..self.loop_config.core_end {
-                out.push((i, logical, pass));
-                logical += 1;
-            }
-        }
-        for i in self.loop_config.core_end..self.layers.len() {
-            out.push((i, logical, 0));
-            logical += 1;
-        }
-        out
-    }
-
     fn attn_res_mix(&self, blocks: &[Tensor], cur: &Tensor, query: &Tensor) -> Result<Tensor> {
         if blocks.is_empty() {
             return Ok(cur.clone());
@@ -624,10 +650,12 @@ impl Model {
         let q = query.to_dtype(DType::F32)?;
         let q = if q.rank() == 1 { q.unsqueeze(0)? } else { q };
         let n = blocks.len();
-        let q = if q.dim(0)? == n {
-            q
+        let qn = n + 1;
+        let q = if q.dim(0)? >= qn {
+            q.narrow(0, 0, qn)?
         } else {
-            q.narrow(0, 0, n.min(q.dim(0)?))?
+            let pad = Tensor::zeros((qn - q.dim(0)?, q.dim(1)?), q.dtype(), q.device())?;
+            Tensor::cat(&[&q, &pad], 0)?
         };
         let cur_f = cur.to_dtype(DType::F32)?;
         let mut stack = Vec::with_capacity(n + 1);
@@ -635,9 +663,12 @@ impl Model {
             stack.push(b.to_dtype(DType::F32)?);
         }
         stack.push(cur_f.clone());
-        let stacked = Tensor::stack(&stack, D::Minus2)?; // [b,s,n+1,h]
+        let stacked = Tensor::stack(&stack, 2)?; // [b,s,n+1,h]
+        let (_qn, hq) = q.dims2()?;
         let logits = stacked
-            .broadcast_matmul(&q.unsqueeze(D::Minus1)?)?
+            .unsqueeze(D::Minus1)?
+            .broadcast_mul(&q.reshape((1, 1, _qn, hq, 1))?)?
+            .sum(D::Minus2)?
             .squeeze(D::Minus1)?; // [b,s,n+1]
         let scale = 1.0f64 / (self.hidden_size as f64).sqrt();
         let logits = (logits * scale)?;
@@ -661,37 +692,190 @@ impl Model {
             .broadcast_add(&msg.broadcast_mul(&gain)?)
     }
 
+    fn convolve(
+        &self,
+        cur: &Tensor,             // [b, s, c]
+        weight: &Tensor,          // [c, k]
+        dynamic: Option<&Tensor>, // [b,s,k*n_heads]
+        state: &Mutex<Tensor>,
+    ) -> Result<Tensor> {
+        let mut st = state.lock().unwrap();
+        let new_state = (&*st).clone();
+        let (res, new_state) = {
+            let _st = &mut *st;
+            self.convolve_impl(cur, weight, dynamic, _st)?
+        };
+        *st = new_state.clone();
+        Ok(res)
+    }
+
+    fn convolve_impl(
+        &self,
+        cur: &Tensor,
+        weight: &Tensor,
+        dynamic: Option<&Tensor>,
+        state: &mut Tensor,
+    ) -> Result<(Tensor, Tensor)> {
+        let (b, s, c) = cur.dims3()?;
+        let k = weight.dim(1)?;
+        let cur_t = cur.transpose(1, 2)?; // [b,c,s]
+        let mut st = state;
+        if st.dim(0)? != b || st.dim(1)? != c || st.dim(2)? != k.saturating_sub(1) {
+            *st = Tensor::zeros((b, c, k.saturating_sub(1)), cur_t.dtype(), cur_t.device())?;
+        }
+        let st_ref = st.clone();
+        let w = weight.to_dtype(cur_t.dtype())?;
+        let _ = &st_ref;
+        let (mut out, new_state, x_full_for_dyn) = if k > 1 && s == 1 {
+            let x_full = Tensor::cat(&[&st, &cur_t], 2)?; // [b,c,k]
+            let _ = ();
+            let out = x_full
+                .broadcast_mul(&w.unsqueeze(0)?)?
+                .sum(D::Minus1)?
+                .unsqueeze(2)?;
+            let ns = x_full.narrow(2, 1, k - 1)?;
+            (out, ns, Some(x_full))
+        } else if k > 1 {
+            let x_full = Tensor::cat(&[&st, &cur_t], 2)?;
+            let total = x_full.dim(2)?;
+            let _ = total;
+            let ns = x_full.narrow(2, total - (k - 1), k - 1)?;
+            let w3 = w.reshape((c, 1, k))?;
+            let out = x_full.conv1d(&w3, 0, 1, 1, c)?;
+            (out, ns, Some(x_full))
+        } else {
+            let out = cur_t.broadcast_mul(&w.unsqueeze(0)?)?;
+            (out, st.clone(), None)
+        };
+        if let Some(dyn_t) = dynamic {
+            let dyn_dim = dyn_t.dim(D::Minus1)?;
+            if dyn_dim % k == 0 {
+                let n_heads = dyn_dim / k;
+                if n_heads > 0 && c % n_heads == 0 {
+                    let cph = c / n_heads;
+                    let dyn_r = dyn_t
+                        .to_dtype(cur_t.dtype())?
+                        .reshape((b, s, n_heads, k))?
+                        .permute((0, 2, 3, 1))?; // [b,h,k,s]
+                    let x_full = x_full_for_dyn
+                        .as_ref()
+                        .cloned()
+                        .unwrap_or_else(|| st.clone());
+                    let x_full = x_full.contiguous()?;
+                    if s == 1 {
+                        let x_rev = x_full.flip(&[2])?; // [b,c,k], lag l -> window k-1-l
+                        let x_rev = x_rev.reshape((b, n_heads, cph, k))?;
+                        let tap = dyn_r.squeeze(3)?; // [b,h,k]
+                        let term = x_rev.broadcast_mul(&tap.unsqueeze(2)?)?.sum(D::Minus1)?; // [b,h,cph]
+                        out = (&out + term.reshape((b, c, 1))?)?;
+                    } else {
+                        for lag in 0..k {
+                            let tap = dyn_r.narrow(2, lag, 1)?; // [b,h,1,s]
+                            let window = x_full.narrow(2, k - 1 - lag, s)?; // [b,c,s]
+                            let window = window.reshape((b, n_heads, cph, s))?;
+                            let term = window.broadcast_mul(&tap)?.reshape((b, c, s))?;
+                            out = (&out + term)?;
+                        }
+                    }
+                }
+            }
+        }
+        let scale = 1.0f64 / (((if dynamic.is_some() { 2 } else { 1 } * k) + 1) as f64).sqrt();
+        let res = ((&cur_t + &out)? * scale)?;
+        Ok((res.transpose(1, 2)?, new_state))
+    }
+
     fn forward_attn(
         &self,
         layer: &DecoderLayer,
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
-        _seqlen_offsets: &[usize],
+        seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
         _flash_params: &FlashParams,
+        phys: usize,
+        _logical: usize,
+        msgs: Option<&[Tensor; 4]>,
+        loop_layer: Option<&LoopLayer>,
     ) -> Result<Tensor> {
         let (b_sz, q_len, _) = xs.dims3()?;
         let attn = &layer.attn;
-        let normed = attn.attn_norm.forward(xs)?;
-        let q_in = if let Some(n) = &attn.q_inp_norm {
-            n.forward(&normed)?
+        let mut inputs = [xs.clone(), xs.clone(), xs.clone()];
+        if let (Some(msgs), Some(ll)) = (msgs, loop_layer) {
+            inputs[0] = self.apply_loop_ctrl(&ll.q, &inputs[0], &msgs[0])?;
+            inputs[1] = self.apply_loop_ctrl(&ll.k, &inputs[1], &msgs[1])?;
+            inputs[2] = self.apply_loop_ctrl(&ll.v, &inputs[2], &msgs[2])?;
+        }
+        let (q_in, k_in, v_in) = if attn.is_swa && msgs.is_some() {
+            let q = if let Some(n) = &attn.attn_norm {
+                n.forward(&inputs[0])?
+            } else {
+                inputs[0].clone()
+            };
+            let k = if let Some(n) = &attn.attn_norm {
+                n.forward(&inputs[1])?
+            } else {
+                inputs[1].clone()
+            };
+            let v = if let Some(n) = &attn.attn_norm {
+                n.forward(&inputs[2])?
+            } else {
+                inputs[2].clone()
+            };
+            (q, k, v)
+        } else if attn.is_swa {
+            let nrm = if let Some(n) = &attn.attn_norm {
+                n.forward(&inputs[0])?
+            } else {
+                inputs[0].clone()
+            };
+            (nrm.clone(), nrm.clone(), nrm)
         } else {
-            normed.clone()
-        };
-        let k_in = if let Some(n) = &attn.k_inp_norm {
-            n.forward(&normed)?
-        } else {
-            normed.clone()
-        };
-        let v_in = if let Some(n) = &attn.v_inp_norm {
-            n.forward(&normed)?
-        } else {
-            normed.clone()
+            let q = if let Some(n) = &attn.q_inp_norm {
+                n.forward(&inputs[0])?
+            } else {
+                inputs[0].clone()
+            };
+            let k = if let Some(n) = &attn.k_inp_norm {
+                n.forward(&inputs[1])?
+            } else {
+                inputs[1].clone()
+            };
+            let v = if let Some(n) = &attn.v_inp_norm {
+                n.forward(&inputs[2])?
+            } else {
+                inputs[2].clone()
+            };
+            (q, k, v)
         };
 
-        let mut q = attn.q_proj.forward(&q_in)?;
-        let mut k = attn.k_proj.forward(&k_in)?;
-        let mut v = attn.v_proj.forward(&v_in)?;
+        let q_pre = attn.q_proj.forward(&q_in)?;
+        let k_pre = attn.k_proj.forward(&k_in)?;
+        let v_pre = attn.v_proj.forward(&v_in)?;
+        let mut q = q_pre;
+        let mut k = k_pre;
+        let mut v = v_pre;
+        let k_dyn = if !attn.is_swa {
+            attn.k_conv_proj
+                .as_ref()
+                .map(|p| p.forward(&k_in))
+                .transpose()?
+        } else {
+            None
+        };
+        let v_dyn = if !attn.is_swa {
+            attn.v_conv_proj
+                .as_ref()
+                .map(|p| p.forward(&v_in))
+                .transpose()?
+        } else {
+            None
+        };
+        k = self.convolve(&k, &attn.k_conv, k_dyn.as_ref(), &layer.conv_k)?;
+        v = self.convolve(&v, &attn.v_conv, v_dyn.as_ref(), &layer.conv_v)?;
+        let mut k = k;
+        let mut v = v;
+        let _ = (&k, &v);
 
         q = q
             .reshape((b_sz, q_len, attn.num_heads, attn.head_dim))?
@@ -714,7 +898,21 @@ impl Model {
             .unwrap_or(k);
         v = rms_norm(&v.contiguous()?, self.rms_eps)?;
 
-        (k, v) = kv_cache.append(&k, &v)?;
+        if !attn.is_swa {
+            let pos: Vec<f32> = (0..q_len)
+                .map(|i| (seqlen_offsets.first().copied().unwrap_or(0) + i + 1) as f32)
+                .collect();
+            let tau = Tensor::from_vec(pos, (1, 1, q_len, 1), q.device())?.to_dtype(DType::F32)?;
+            let tau = ((tau / (self.log_scale_floor as f64))?
+                .clamp(1.0f64, f64::INFINITY)?
+                .log()?
+                * (self.log_scale_alpha as f64))?;
+            let tau = (tau + 1.0f64)?;
+            let tau = tau.to_dtype(q.dtype())?;
+            q = q.broadcast_mul(&tau)?;
+        }
+
+        let (k, v) = kv_cache.append(&k, &v)?;
 
         let n_rep = attn.num_heads / attn.num_kv_heads;
         let k_rep = if n_rep > 1 {
@@ -740,16 +938,87 @@ impl Model {
             .matmul(&k_rep.to_dtype(DType::F32)?.contiguous()?.t()?)?
             / (attn.head_dim as f64).sqrt())?;
 
-        // sinks: add as extra logit column, then softmax, then drop
-        let sinks = attn
+        // relative bias: R = rel(q_in), table = rel_bias^T @ R, subtract sinks, gather by distance
+        let mut r = attn.rel.forward(&q_in)?;
+        r = r
+            .reshape((b_sz, q_len, attn.num_heads, attn.d_rel))?
+            .transpose(1, 2)?
+            .contiguous()?;
+        r = self.clip_head_dim(&r, &attn.rel_clip, self.rel_clip)?;
+        if !attn.is_swa {
+            let pos: Vec<f32> = (0..q_len)
+                .map(|i| (seqlen_offsets.first().copied().unwrap_or(0) + i + 1) as f32)
+                .collect();
+            let tau = Tensor::from_vec(pos, (1, 1, q_len, 1), q.device())?.to_dtype(DType::F32)?;
+            let tau = ((tau / (self.log_scale_floor as f64))?
+                .clamp(1.0f64, f64::INFINITY)?
+                .log()?
+                * (self.log_scale_alpha as f64))?;
+            let tau = (tau + 1.0f64)?.to_dtype(r.dtype())?;
+            r = r.broadcast_mul(&tau)?;
+        }
+        let sinks_logits = attn
             .sink_proj
             .forward(&q_in)?
             .reshape((b_sz, q_len, attn.num_heads))?
-            .transpose(1, 2)?; // [b,h,s]
-        let sinks = sinks.to_dtype(DType::F32)?.unsqueeze(D::Minus1)?; // [b,h,s,1]
-        let att = Tensor::cat(&[&att, &sinks], D::Minus1)?;
+            .transpose(1, 2)?
+            .to_dtype(DType::F32)?; // [b,h,q]
+                                    // table: [b,h,q,rel_extent] = R[b,h,q,d_rel] @ rel_bias[d_rel,rel_extent]
+        let rb = attn.rel_bias.to_dtype(DType::F32)?;
+        let rb = if rb.dim(0)? == attn.d_rel {
+            rb
+        } else {
+            rb.t()?
+        }; // [d_rel, extent]
+        let r_f = r.to_dtype(DType::F32)?; // [b,h,q,d_rel]
+        let rb3 =
+            rb.unsqueeze(0)?
+                .broadcast_as((b_sz * attn.num_heads, attn.d_rel, attn.rel_extent))?;
+        let table = r_f
+            .reshape((b_sz * attn.num_heads, q_len, attn.d_rel))?
+            .matmul(&rb3)?
+            .reshape((b_sz, attn.num_heads, q_len, attn.rel_extent))?;
+        // ref: subtract sink from table, pass zero sink to build_attn => equivalent to sink logit
+        let sink4 = sinks_logits.unsqueeze(D::Minus1)?;
+        let table = table.broadcast_sub(&sink4)?;
+        att = att.broadcast_sub(&sink4)?;
 
         let kv_len = k_rep.dim(2)?;
+        let q_off = seqlen_offsets.first().copied().unwrap_or(0);
+        let extent = attn.rel_extent;
+        let key = (q_len, kv_len, q_off, extent);
+        let dist_t = {
+            let mut cache = dist_cache_mut().lock().unwrap();
+            if let Some(t) = cache.get(&key) {
+                t.clone()
+            } else {
+                let mut dist: Vec<u32> = Vec::with_capacity(q_len * kv_len);
+                for qi in 0..q_len {
+                    let qpos = (q_off + qi) as i64;
+                    for kj in 0..kv_len {
+                        let kpos = kj as i64;
+                        let d = (qpos - kpos).abs().min(extent as i64 - 1).max(0) as u32;
+                        dist.push(d);
+                    }
+                }
+                let t = Tensor::from_vec(dist, (q_len, kv_len), q.device())?;
+                cache.insert(key, t.clone());
+                t
+            }
+        }; // [q,kv]
+           // gather table[b,h,q,extent] by dist -> [b,h,q,kv]
+        let table_flat = table.reshape((b_sz * attn.num_heads, q_len, attn.rel_extent))?;
+        let idx = dist_t
+            .unsqueeze(0)?
+            .broadcast_as((b_sz * attn.num_heads, q_len, kv_len))?
+            .contiguous()?;
+        let rel =
+            table_flat
+                .gather(&idx, D::Minus1)?
+                .reshape((b_sz, attn.num_heads, q_len, kv_len))?;
+        att = (att + rel)?;
+
+        let zero_sink = Tensor::zeros((b_sz, attn.num_heads, q_len, 1), DType::F32, att.device())?;
         if let Some(mask) = attention_mask {
             let mask = mask.to_dtype(DType::F32)?;
             let zeros = Tensor::zeros((b_sz, 1, q_len, 1), DType::F32, mask.device())?;
@@ -760,22 +1029,19 @@ impl Model {
                 ],
                 D::Minus1,
             )?;
+            att = Tensor::cat(&[&att, &zero_sink], D::Minus1)?;
             att = att.broadcast_add(&mask)?;
         } else if q_len > 1 {
             let mask: Vec<u8> = (0..q_len)
                 .flat_map(|i| (0..kv_len).map(move |j| u8::from(j > (kv_len - q_len + i))))
                 .collect();
             let mask = Tensor::from_vec(mask, (1, 1, q_len, kv_len), att.device())?;
-            let att_kv = crate::layers_masker::masked_fill(
-                &att.narrow(D::Minus1, 0, kv_len)?,
-                &mask,
-                f32::NEG_INFINITY,
-            )?;
-            let att_sink = att.narrow(D::Minus1, kv_len, 1)?;
-            att = Tensor::cat(&[&att_kv, &att_sink], D::Minus1)?;
+            let att_kv = crate::layers_masker::masked_fill(&att, &mask, f32::NEG_INFINITY)?;
+            att = Tensor::cat(&[&att_kv, &zero_sink], D::Minus1)?;
+        } else {
+            att = Tensor::cat(&[&att, &zero_sink], D::Minus1)?;
         }
         let att = candle_nn::ops::softmax_last_dim(&att)?;
-        let kv_len = k_rep.dim(2)?;
         let att = att.narrow(D::Minus1, 0, kv_len)?;
         let mut y = att
             .matmul(&v_rep.to_dtype(DType::F32)?.contiguous()?)?
@@ -783,10 +1049,10 @@ impl Model {
         y = y
             .transpose(1, 2)?
             .reshape((b_sz, q_len, attn.num_heads * attn.head_dim))?;
-        let gate = attn.gate_proj.forward(&normed)?;
-        let gate = candle_nn::ops::silu(&gate)?;
+        let gate = candle_nn::ops::sigmoid(&attn.gate_proj.forward(&q_in)?)?;
         y = y.broadcast_mul(&gate)?;
-        attn.o_proj.forward(&y)
+        let y = attn.o_proj.forward(&y)?;
+        self.convolve(&y, &attn.attn_post_conv, None, &layer.conv_attn_post)
     }
 
     fn clip_head_dim(&self, x: &Tensor, clip_w: &Tensor, threshold: f32) -> Result<Tensor> {
@@ -828,7 +1094,7 @@ impl Model {
                     .partial_cmp(&row[a])
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
-            let mut sel = idx[..topk].to_vec();
+            let sel = idx[..topk].to_vec();
             let mut w: Vec<f32> = sel.iter().map(|&i| row[i]).collect();
             let sum: f32 = w.iter().sum();
             if sum > 0.0 {
@@ -844,9 +1110,7 @@ impl Model {
         let topk_ids = Tensor::from_vec(topk_idx, (b * s, topk), xs.device())?;
         let topk_weights =
             Tensor::from_vec(topk_vals, (b * s, topk), xs.device())?.to_dtype(xs.dtype())?;
-        let y = layer.moe.experts.forward(&flat, topk_weights, &topk_ids)?;
-        let y = y.reshape((b, s, h))?;
-        Ok(y)
+        layer.moe.experts.forward(&normed, topk_weights, &topk_ids)
     }
 }
 
@@ -864,75 +1128,163 @@ impl NormalModel for Model {
         input_ids: &Tensor,
         ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
+        let this = self;
         let flash_params = ctx.flash_params().clone();
-        let mut xs = self.embed_tokens.forward(input_ids)?;
+        let mut xs = self
+            .embed_tokens
+            .embedding_forward(input_ids, candle_core::DType::F32.into())?;
+        if xs.rank() == 2 {
+            xs = xs.unsqueeze(1)?;
+        }
         xs = self.embedding_norm.forward(&xs)?;
 
-        let mut cache_guard = self.cache.normal();
-        let cache = &mut cache_guard.0;
-        let mask_cache = ctx.mask_cache(cache);
-        let attention_mask = CausalMasker.make_causal_mask(
-            input_ids,
-            &mask_cache,
-            xs.dtype(),
-            &crate::layers::CausalMaskConfig::default(),
-        )?;
+        let cache = &mut self.cache.normal().0;
 
-        let order = self.logical_layer_order();
+        let kv_caches: &mut [KvCache] = cache;
+        let start = self.loop_config.core_start;
+        let end = self.loop_config.core_end;
+        let n_passes = self.loop_config.num_passes;
         let mut cur = xs;
         let mut blocks: Vec<Tensor> = Vec::new();
-        let mut core_msg: Option<Tensor> = None;
-        for (_ord_idx, (phys, logical, _pass)) in order.iter().enumerate() {
-            let layer = &self.layers[*phys];
-            let is_core = *phys >= self.loop_config.core_start && *phys < self.loop_config.core_end;
 
+        let build_layer = |this: &Self,
+                           phys: usize,
+                           logical: usize,
+                           cur: &mut Tensor,
+                           blocks: &mut Vec<Tensor>,
+                           msgs: Option<&[Tensor; 4]>,
+                           ll: Option<&LoopLayer>,
+                           kv_caches: &mut [KvCache],
+                           flash_params: &FlashParams,
+                           attention_mask: Option<&Tensor>|
+         -> Result<()> {
+            let layer = &this.layers[phys];
+            let kv_cache: &mut KvCache = &mut kv_caches[phys];
             let mut attn_in = cur.clone();
-            if is_core {
-                if let Some(ll) = &layer.loop_layer {
-                    let msg = core_msg.clone().unwrap_or(cur.clone());
-                    attn_in = self.apply_loop_ctrl(&ll.q, &attn_in, &msg)?;
-                }
+            if let (Some(msgs), Some(ll)) = (msgs, ll) {
+                attn_in = this.apply_loop_ctrl(&ll.q, &attn_in, &msgs[0])?;
             }
-            let mask = attention_mask.as_option_tensor();
-            let attn_out = self.forward_attn(
+            if let Some(rq) = &layer.attn.res_query {
+                attn_in = this.attn_res_mix(blocks, &attn_in, rq)?;
+            }
+            let attn_out = this.forward_attn(
                 layer,
                 &attn_in,
-                mask,
+                attention_mask,
                 &[],
-                &mut cache[*logical],
-                &flash_params,
+                kv_cache,
+                flash_params,
+                phys,
+                logical,
+                msgs,
+                ll,
             )?;
-            cur = (&cur + attn_out)?;
-
-            if let Some(rq) = &layer.attn.res_query {
-                if (*phys) % self.attn_res_block_size == 0 {
-                    blocks.push(cur.clone());
-                } else {
-                    cur = self.attn_res_mix(&blocks, &cur, rq)?;
-                }
+            let _ = kv_cache;
+            *cur = (&*cur + attn_out)?;
+            if phys % this.attn_res_block_size == 0 {
+                blocks.push(cur.clone());
             }
 
             let residual = cur.clone();
-            let mut moe_in = self.attn_res_mix(&blocks, &cur, &layer.moe.res_query)?;
-            if is_core {
-                if let Some(ll) = &layer.loop_layer {
-                    let msg = core_msg.clone().unwrap_or(moe_in.clone());
-                    moe_in = self.apply_loop_ctrl(&ll.ffn, &moe_in, &msg)?;
-                }
+            let mut moe_in = this.attn_res_mix(blocks, cur, &layer.moe.res_query)?;
+            if let (Some(msgs), Some(ll)) = (msgs, ll) {
+                moe_in = this.apply_loop_ctrl(&ll.ffn, &moe_in, &msgs[3])?;
             }
-            let moe_out = self.forward_moe(layer, &moe_in)?;
-            cur = (&residual + moe_out)?;
+            let moe_out = this.forward_moe(layer, &moe_in)?;
+            let moe_out =
+                this.convolve(&moe_out, &layer.moe.post_conv, None, &layer.conv_ffn_post)?;
+            *cur = (&residual + moe_out)?;
+            Ok(())
+        };
 
-            if is_core {
-                core_msg = Some(cur.clone());
+        let mut logical = 0usize;
+        for phys in 0..start {
+            build_layer(
+                self,
+                phys,
+                logical,
+                &mut cur,
+                &mut blocks,
+                None,
+                None,
+                kv_caches,
+                &flash_params,
+                None,
+            )?;
+            logical += 1;
+        }
+
+        let prelude = cur.clone();
+        let prelude_blocks = blocks.clone();
+        for pass in 0..n_passes {
+            let (bank, bank_out) = if pass > 0 {
+                let bank = if blocks.len() > prelude_blocks.len() + 1 {
+                    blocks[prelude_blocks.len() + 1..].to_vec()
+                } else {
+                    Vec::new()
+                };
+                let bo = cur.clone();
+                cur = prelude.clone();
+                blocks = prelude_blocks.clone();
+                (bank, Some(bo))
+            } else {
+                (Vec::new(), None)
+            };
+            for phys in start..end {
+                let layer = &self.layers[phys];
+                let msgs = if pass > 0 {
+                    let bo = bank_out.as_ref().unwrap();
+                    let ll = layer.loop_layer.as_ref().unwrap();
+                    let mut m = Vec::with_capacity(4);
+                    for i in 0..4 {
+                        let q = ll
+                            .msg_query
+                            .narrow(0, i.min(ll.msg_query.dim(0)? - 1), 1)?
+                            .squeeze(0)?;
+                        m.push(self.attn_res_mix(&bank, bo, &q)?);
+                    }
+                    Some([m[0].clone(), m[1].clone(), m[2].clone(), m[3].clone()])
+                } else {
+                    None
+                };
+                let ll = layer.loop_layer.as_ref();
+                build_layer(
+                    self,
+                    phys,
+                    logical,
+                    &mut cur,
+                    &mut blocks,
+                    msgs.as_ref(),
+                    ll,
+                    kv_caches,
+                    &flash_params,
+                    None,
+                )?;
+                logical += 1;
             }
+        }
+        for phys in end..self.layers.len() {
+            build_layer(
+                self,
+                phys,
+                logical,
+                &mut cur,
+                &mut blocks,
+                None,
+                None,
+                kv_caches,
+                &flash_params,
+                None,
+            )?;
+            logical += 1;
         }
 
         let cur = self.attn_res_mix(&blocks, &cur, &self.output_res_query)?;
         let cur = self.norm.forward(&cur)?;
         let logits = self.lm_head.forward(&cur)?;
         let logits = softcap(&logits, self.final_logit_softcapping)?;
-        extract_logits(&logits, ctx.context_lens().to_vec())
+        let logits = extract_logits(&logits, ctx.context_lens().to_vec())?;
+        Ok(logits)
     }
 
     fn xlora_forward(

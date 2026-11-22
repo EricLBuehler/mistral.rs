@@ -1215,7 +1215,7 @@ mod tests {
 fn bind_inkling2_loop_block(
     archive: &GgufArchive,
     p: &str,
-    _layer: usize,
+    layer: usize,
     role: &str,
     suffix: &str,
     source: &str,
@@ -1246,7 +1246,16 @@ fn bind_inkling2_loop_block(
         ("ffn_gate_inp", "weight") => Some(format!("{p}.mlp.router.weight")),
         ("ffn_gate_inp", "bias") => Some(format!("{p}.mlp.router.bias")),
         ("exp_probs_b", "bias") => Some(format!("{p}.mlp.exp_probs_b.bias")),
-        ("ffn_down_exps", "weight") => Some(format!("{p}.mlp.experts.down_proj.weight")),
+        ("ffn_down_exps", "weight") => {
+            let scale = format!("blk.{layer}.ffn_down_exps.scale");
+            let binding = if archive.tensor_info(&scale).is_ok() {
+                GgufTensorBinding::scaled_by(source, scale)
+            } else {
+                GgufTensorBinding::tensor(source)
+            };
+            bindings.insert(format!("{p}.mlp.experts.down_proj.weight"), binding);
+            return Ok(());
+        }
         ("ffn_down_exps", "scale") => return Ok(()),
         ("ffn_gate_up_exps", "weight") => {
             let shape = archive.tensor_info(source)?.shape();
@@ -1254,16 +1263,26 @@ fn bind_inkling2_loop_block(
                 bail!("fused expert gate/up tensor `{source}` has invalid shape {shape:?}");
             }
             let intermediate = shape[1] / 2;
-            bind_slices(
-                bindings,
-                source,
-                1,
-                shape[1],
-                [
-                    (format!("{p}.mlp.experts.gate_proj.weight"), intermediate),
-                    (format!("{p}.mlp.experts.up_proj.weight"), intermediate),
-                ],
-            );
+            let scale = format!("blk.{layer}.ffn_gate_up_exps.scale");
+            let input = if archive.tensor_info(&scale).is_ok() {
+                GgufTensorBinding::scaled_by(source, scale)
+            } else {
+                GgufTensorBinding::tensor(source)
+            };
+            for (name, start) in [
+                (format!("{p}.mlp.experts.gate_proj.weight"), 0usize),
+                (format!("{p}.mlp.experts.up_proj.weight"), intermediate),
+            ] {
+                bindings.insert(
+                    name,
+                    GgufTensorBinding::Slice {
+                        input: Box::new(input.clone()),
+                        dim: 1,
+                        start,
+                        len: intermediate,
+                    },
+                );
+            }
             return Ok(());
         }
         ("ffn_gate_up_exps", "scale") => return Ok(()),
