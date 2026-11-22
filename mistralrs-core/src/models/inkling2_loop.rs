@@ -793,7 +793,7 @@ impl Model {
         seqlen_offsets: &[usize],
         kv_cache: &mut KvCache,
         _flash_params: &FlashParams,
-        phys: usize,
+        _phys: usize,
         _logical: usize,
         msgs: Option<&[Tensor; 4]>,
         loop_layer: Option<&LoopLayer>,
@@ -1128,7 +1128,6 @@ impl NormalModel for Model {
         input_ids: &Tensor,
         ctx: &mut crate::pipeline::ModelForwardContext<'_>,
     ) -> Result<Tensor> {
-        let this = self;
         let flash_params = ctx.flash_params().clone();
         let mut xs = self
             .embed_tokens

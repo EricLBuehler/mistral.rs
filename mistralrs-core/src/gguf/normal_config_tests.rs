@@ -399,6 +399,7 @@ fn assert_native_config_deserializes(loader: &NormalLoaderType, config: JsonValu
             assert_deserializes::<models::lfm2::Config>(loader, config)
         }
         NormalLoaderType::Lfm3 => assert_deserializes::<models::lfm3::Config>(loader, config),
+        NormalLoaderType::Inkling2Loop => assert_deserializes::<models::inkling2_loop::Config>(loader, config),
     }
 }
 
