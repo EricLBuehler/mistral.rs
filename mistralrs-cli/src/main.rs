@@ -32,8 +32,16 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    candle_core::utils::init_global_threadpool();
     let cli = Cli::parse();
+    if let Some(n) = cli.global.cpu_threads {
+        if n == 0 {
+            anyhow::bail!("--cpu-threads must be greater than zero");
+        }
+        std::env::set_var("RAYON_NUM_THREADS", n.to_string());
+        std::env::set_var("CANDLE_NUM_THREADS", n.to_string());
+        std::env::set_var("CANDLE_BARRIER_POOL_SPIN_LIMIT", "0");
+    }
+    candle_core::utils::init_global_threadpool();
     init_tracing(cli.global.verbose);
 
     match cli.command {
