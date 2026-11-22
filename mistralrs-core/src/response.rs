@@ -7,7 +7,7 @@ use std::{
 use candle_core::Tensor;
 #[cfg(feature = "pyo3_macros")]
 use pyo3::{pyclass, pymethods};
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 
 use crate::{sampler::TopLogprob, tools::ToolCallResponse};
 
@@ -101,7 +101,28 @@ pub struct ResponseLogprob {
     pub token: String,
     pub logprob: f32,
     pub bytes: Option<Vec<u8>>,
+    #[serde(serialize_with = "serialize_top_logprobs")]
     pub top_logprobs: Vec<TopLogprob>,
+}
+
+/// OpenAI layout: `token` is the decoded text, `bytes` its UTF-8 bytes.
+fn serialize_top_logprobs<S: Serializer>(
+    top_logprobs: &[TopLogprob],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    #[derive(Serialize)]
+    struct OpenAiTopLogprob<'a> {
+        token: String,
+        logprob: f32,
+        bytes: Option<&'a [u8]>,
+    }
+
+    serializer.collect_seq(top_logprobs.iter().map(|top| OpenAiTopLogprob {
+        // no tokenizer: the id is all we have
+        token: top.bytes.clone().unwrap_or_else(|| top.token.to_string()),
+        logprob: top.logprob,
+        bytes: top.bytes.as_deref().map(str::as_bytes),
+    }))
 }
 
 generate_repr!(ResponseLogprob);
@@ -632,5 +653,54 @@ impl Response {
             }),
             Self::File(f) => Ok(ResponseOk::File(f)),
         }
+    }
+}
+
+#[cfg(test)]
+mod logprob_json_tests {
+    use super::*;
+
+    #[test]
+    fn top_logprobs_serialize_in_openai_layout() {
+        let logprob = ResponseLogprob {
+            token: " Paris".to_string(),
+            logprob: -1.0,
+            bytes: Some(" Paris".as_bytes().to_vec()),
+            top_logprobs: vec![
+                TopLogprob {
+                    token: 12095,
+                    logprob: -1.0,
+                    bytes: Some(" Paris".to_string()),
+                },
+                TopLogprob {
+                    token: 7,
+                    logprob: -3.5,
+                    bytes: None,
+                },
+            ],
+        };
+        let json = serde_json::to_value(&logprob).unwrap();
+        let first = &json["top_logprobs"][0];
+        assert_eq!(first["token"], " Paris");
+        assert_eq!(first["bytes"], serde_json::json!(" Paris".as_bytes()));
+        assert_eq!(first["logprob"], -1.0);
+        // top-level entry already used this layout
+        assert_eq!(json["token"], " Paris");
+        assert_eq!(json["bytes"], serde_json::json!(" Paris".as_bytes()));
+        // no tokenizer: id only
+        let second = &json["top_logprobs"][1];
+        assert_eq!(second["token"], "7");
+        assert!(second["bytes"].is_null());
+    }
+
+    #[test]
+    fn top_logprob_keeps_its_sdk_fields() {
+        let top = TopLogprob {
+            token: 12095,
+            logprob: -1.0,
+            bytes: Some(" Paris".to_string()),
+        };
+        assert_eq!(top.token, 12095u32);
+        assert_eq!(top.bytes.as_deref(), Some(" Paris"));
     }
 }
