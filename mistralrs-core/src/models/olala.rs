@@ -545,9 +545,8 @@ impl Model {
             let alpha_b = alpha.reshape((h, 1, 1))?;
             let beta_b = beta.reshape((h, 1, 1))?;
             let gamma_b = gamma.reshape((h, 1, 1))?;
-            let s_new = k_state
-                .zeros_like()?
-                .add(&s_state.broadcast_mul(&alpha_b)?)?
+            let s_new = s_state
+                .broadcast_mul(&alpha_b)?
                 .add(&prev_kv.broadcast_mul(&beta_b)?)?
                 .add(&curr_kv.broadcast_mul(&gamma_b)?)?
                 .contiguous()?;
