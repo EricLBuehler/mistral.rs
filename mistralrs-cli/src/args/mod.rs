@@ -612,6 +612,12 @@ pub struct GlobalOptions {
     #[arg(short = 'v', long, global = true, action = clap::ArgAction::Count)]
     #[serde(default)]
     pub verbose: u8,
+
+    /// Cap CPU worker threads. On high-core hosts, 16 is often faster than using every core
+    /// for small-token decode.
+    #[arg(long, global = true)]
+    #[serde(default)]
+    pub cpu_threads: Option<usize>,
 }
 
 /// Runtime options for inference
@@ -1036,6 +1042,7 @@ impl Default for GlobalOptions {
             log: None,
             token_source: TokenSource::CacheToken,
             verbose: 0,
+            cpu_threads: None,
         }
     }
 }

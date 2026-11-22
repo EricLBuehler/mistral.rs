@@ -67,6 +67,8 @@ pub struct GlobalOptionsToml {
     pub log: Option<PathBuf>,
     #[serde(default)]
     pub token_source: Option<String>,
+    #[serde(default)]
+    pub cpu_threads: Option<usize>,
 }
 
 #[derive(Deserialize, Default, Clone, Copy)]
@@ -222,6 +224,7 @@ impl GlobalOptionsToml {
             log: self.log.clone(),
             token_source,
             verbose: 0,
+            cpu_threads: self.cpu_threads,
         })
     }
 }
