@@ -187,6 +187,8 @@ pub struct LoraExecution {
     weights: HashMap<(u32, LoraSlotId), Arc<LoraWeights>>,
     expert_weights: HashMap<(u32, LoraSlotId), Arc<LoraExpertWeights>>,
     row_indices: Mutex<HashMap<(DeviceLocation, LoraSlotId), Tensor>>,
+    #[cfg(feature = "cuda")]
+    grouped_rows: Mutex<HashMap<DeviceLocation, Tensor>>,
     row_remaps: Mutex<HashMap<LoraRowRemap, Arc<LoraExecution>>>,
     #[cfg(feature = "cuda")]
     prepared_expert_adapters: Mutex<HashMap<u32, Arc<PreparedExpertAdapters>>>,
@@ -236,6 +238,8 @@ impl LoraExecution {
             weights: HashMap::new(),
             expert_weights: HashMap::new(),
             row_indices: Mutex::new(HashMap::new()),
+            #[cfg(feature = "cuda")]
+            grouped_rows: Mutex::new(HashMap::new()),
             row_remaps: Mutex::new(HashMap::new()),
             #[cfg(feature = "cuda")]
             prepared_expert_adapters: Mutex::new(HashMap::new()),
@@ -380,6 +384,32 @@ impl LoraExecution {
         let indices = Tensor::from_vec(rows, row_count, device)?;
         cache.insert(key, indices.clone());
         Ok(Some(indices))
+    }
+
+    /// Rows then slot positions for every active row, one upload per execution.
+    #[cfg(feature = "cuda")]
+    pub(super) fn grouped_rows(&self, device: &Device) -> Result<Tensor> {
+        let key = device.location();
+        let mut cache = self
+            .grouped_rows
+            .lock()
+            .expect("LoRA grouped row cache poisoned");
+        if let Some(table) = cache.get(&key) {
+            return Ok(table.clone());
+        }
+        let total: usize = self.rows_by_slot.values().map(|rows| rows.len()).sum();
+        let mut table = Vec::with_capacity(total * 2);
+        for rows in self.rows_by_slot.values() {
+            for row in rows.iter() {
+                table.push(u32::try_from(*row).map_err(candle_core::Error::wrap)?);
+            }
+        }
+        for (position, rows) in self.rows_by_slot.values().enumerate() {
+            table.extend(std::iter::repeat_n(position as u32, rows.len()));
+        }
+        let table = Tensor::from_vec(table, 2 * total, device)?;
+        cache.insert(key, table.clone());
+        Ok(table)
     }
 
     pub fn insert(

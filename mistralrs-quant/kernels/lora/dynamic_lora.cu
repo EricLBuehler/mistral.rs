@@ -8,6 +8,7 @@ namespace mistralrs_dynamic_lora {
 constexpr int kWarpSize = 32;
 constexpr int kThreads = 256;
 constexpr int kWarps = kThreads / kWarpSize;
+constexpr int kMaxGroupedAdapters = 32;
 
 __device__ __forceinline__ float warp_sum(float value) {
 #pragma unroll
@@ -154,6 +155,135 @@ int launch(const T *input, const T *a, const T *b, const uint32_t *row_indices,
   return static_cast<int>(cudaGetLastError());
 }
 
+struct GroupedAdapters {
+  const void *a[kMaxGroupedAdapters];
+  const void *b[kMaxGroupedAdapters];
+  int rank[kMaxGroupedAdapters];
+  float scale[kMaxGroupedAdapters];
+};
+
+template <typename T>
+__global__ void
+shrink_grouped(const T *__restrict__ input, const uint32_t *__restrict__ rows,
+               const uint32_t *__restrict__ adapter_of_row,
+               GroupedAdapters adapters, T *__restrict__ hidden,
+               int input_features, int max_rank, uint32_t adapter_base) {
+  const int block = static_cast<int>(blockIdx.x);
+  const int selected_row = block / max_rank;
+  const int rank_row = block - selected_row * max_rank;
+  const uint32_t adapter = adapter_of_row[selected_row] - adapter_base;
+  if (rank_row >= adapters.rank[adapter]) {
+    return;
+  }
+  const T *a = static_cast<const T *>(adapters.a[adapter]);
+  const uint32_t input_row = rows[selected_row];
+  const int lane = threadIdx.x % kWarpSize;
+  const int warp = threadIdx.x / kWarpSize;
+  using Pair = typename PairOps<T>::Pair;
+  const Pair *input_pairs = reinterpret_cast<const Pair *>(
+      input + static_cast<size_t>(input_row) * input_features);
+  const Pair *a_pairs = reinterpret_cast<const Pair *>(
+      a + static_cast<size_t>(rank_row) * input_features);
+
+  float sum = 0.0f;
+  const int pair_count = input_features / 2;
+  for (int pair = threadIdx.x; pair < pair_count; pair += kThreads) {
+    sum += PairOps<T>::dot(__ldg(a_pairs + pair), __ldg(input_pairs + pair));
+  }
+  sum = warp_sum(sum);
+
+  __shared__ float warp_sums[kWarps];
+  if (lane == 0) {
+    warp_sums[warp] = sum;
+  }
+  __syncthreads();
+  if (warp == 0) {
+    sum = lane < kWarps ? warp_sums[lane] : 0.0f;
+    sum = warp_sum(sum);
+    if (lane == 0) {
+      hidden[static_cast<size_t>(selected_row) * max_rank + rank_row] =
+          PairOps<T>::from_float(sum);
+    }
+  }
+}
+
+template <typename T>
+__global__ void
+expand_add_grouped(const uint32_t *__restrict__ rows,
+                   const uint32_t *__restrict__ adapter_of_row,
+                   GroupedAdapters adapters, const T *__restrict__ hidden,
+                   T *__restrict__ output, int output_features, int max_rank,
+                   int output_blocks, uint32_t adapter_base) {
+  const int selected_row = static_cast<int>(blockIdx.x) / output_blocks;
+  const int output_block =
+      static_cast<int>(blockIdx.x) - selected_row * output_blocks;
+  const int warp = threadIdx.x / kWarpSize;
+  const int lane = threadIdx.x % kWarpSize;
+  const int output_col = output_block * kWarps + warp;
+  if (output_col >= output_features) {
+    return;
+  }
+  const uint32_t adapter = adapter_of_row[selected_row] - adapter_base;
+  const int rank = adapters.rank[adapter];
+  if (rank == 0) {
+    return;
+  }
+  const T *b = static_cast<const T *>(adapters.b[adapter]);
+
+  float sum = 0.0f;
+  for (int rank_col = lane; rank_col < rank; rank_col += kWarpSize) {
+    const size_t b_index = static_cast<size_t>(output_col) * rank + rank_col;
+    sum += PairOps<T>::to_float(b[b_index]) *
+           PairOps<T>::to_float(
+               hidden[static_cast<size_t>(selected_row) * max_rank + rank_col]);
+  }
+  sum = warp_sum(sum);
+  if (lane == 0) {
+    const float scale = adapters.scale[adapter];
+    const uint32_t output_row = rows[selected_row];
+    const size_t output_index =
+        static_cast<size_t>(output_row) * output_features + output_col;
+    const float base = PairOps<T>::to_float(output[output_index]);
+    T delta = PairOps<T>::from_float(sum);
+    if (scale != 1.0f) {
+      delta = PairOps<T>::from_float(PairOps<T>::to_float(delta) * scale);
+    }
+    output[output_index] =
+        PairOps<T>::from_float(base + PairOps<T>::to_float(delta));
+  }
+}
+
+template <typename T>
+int launch_grouped(const T *input, const uint32_t *rows,
+                   const uint32_t *adapter_of_row,
+                   const GroupedAdapters *adapters, T *hidden, T *output,
+                   int input_features, int output_features, int max_rank,
+                   int active_rows, uint32_t adapter_base,
+                   cudaStream_t stream) {
+  if (input_features <= 0 || output_features <= 0 || max_rank <= 0 ||
+      active_rows <= 0) {
+    return static_cast<int>(cudaErrorInvalidValue);
+  }
+
+  const unsigned int shrink_blocks = static_cast<unsigned int>(active_rows) *
+                                     static_cast<unsigned int>(max_rank);
+  shrink_grouped<T><<<shrink_blocks, kThreads, 0, stream>>>(
+      input, rows, adapter_of_row, *adapters, hidden, input_features, max_rank,
+      adapter_base);
+  cudaError_t status = cudaGetLastError();
+  if (status != cudaSuccess) {
+    return static_cast<int>(status);
+  }
+
+  const int output_blocks = 1 + (output_features - 1) / kWarps;
+  const unsigned int expand_blocks = static_cast<unsigned int>(active_rows) *
+                                     static_cast<unsigned int>(output_blocks);
+  expand_add_grouped<T><<<expand_blocks, kThreads, 0, stream>>>(
+      rows, adapter_of_row, *adapters, hidden, output, output_features,
+      max_rank, output_blocks, adapter_base);
+  return static_cast<int>(cudaGetLastError());
+}
+
 } // namespace mistralrs_dynamic_lora
 
 extern "C" int launch_dynamic_lora_f16(const __half *input, const __half *a,
@@ -177,4 +307,26 @@ launch_dynamic_lora_bf16(const __nv_bfloat16 *input, const __nv_bfloat16 *a,
   return mistralrs_dynamic_lora::launch(input, a, b, row_indices, hidden,
                                         output, input_features, output_features,
                                         rank, active_rows, scale, stream);
+}
+
+extern "C" int launch_dynamic_lora_grouped_f16(
+    const __half *input, const uint32_t *rows, const uint32_t *adapter_of_row,
+    const mistralrs_dynamic_lora::GroupedAdapters *adapters, __half *hidden,
+    __half *output, int input_features, int output_features, int max_rank,
+    int active_rows, uint32_t adapter_base, cudaStream_t stream) {
+  return mistralrs_dynamic_lora::launch_grouped(
+      input, rows, adapter_of_row, adapters, hidden, output, input_features,
+      output_features, max_rank, active_rows, adapter_base, stream);
+}
+
+extern "C" int launch_dynamic_lora_grouped_bf16(
+    const __nv_bfloat16 *input, const uint32_t *rows,
+    const uint32_t *adapter_of_row,
+    const mistralrs_dynamic_lora::GroupedAdapters *adapters,
+    __nv_bfloat16 *hidden, __nv_bfloat16 *output, int input_features,
+    int output_features, int max_rank, int active_rows, uint32_t adapter_base,
+    cudaStream_t stream) {
+  return mistralrs_dynamic_lora::launch_grouped(
+      input, rows, adapter_of_row, adapters, hidden, output, input_features,
+      output_features, max_rank, active_rows, adapter_base, stream);
 }

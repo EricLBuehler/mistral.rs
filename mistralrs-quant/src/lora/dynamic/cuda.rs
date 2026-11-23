@@ -125,6 +125,8 @@ use half::{bf16, f16};
 
 #[cfg(feature = "cuda")]
 use crate::utils::slice_ptr_on_stream;
+#[cfg(feature = "cuda")]
+use std::sync::Arc;
 
 #[cfg(feature = "cuda")]
 struct ActiveAdapter<'a> {
@@ -151,8 +153,25 @@ struct CudaLaunch {
 }
 
 #[cfg(feature = "cuda")]
+struct GroupedLaunch {
+    input: u64,
+    rows: u64,
+    adapter_of_row: u64,
+    adapters: *const super::cuda_ffi::GroupedAdapters,
+    hidden: u64,
+    output: u64,
+    input_features: i32,
+    output_features: i32,
+    max_rank: i32,
+    active_rows: i32,
+    adapter_base: u32,
+    stream: candle_core::cuda::cudarc::driver::sys::CUstream,
+}
+
+#[cfg(feature = "cuda")]
 trait CudaLoraElement: CudaDType + DeviceRepr + WithDType {
     unsafe fn launch(args: CudaLaunch) -> i32;
+    unsafe fn launch_grouped(args: GroupedLaunch) -> i32;
     fn rounded_scale(scale: f64) -> f32;
 }
 
@@ -178,6 +197,23 @@ impl CudaLoraElement for f16 {
             args.stream,
         )
     }
+
+    unsafe fn launch_grouped(args: GroupedLaunch) -> i32 {
+        super::cuda_ffi::launch_dynamic_lora_grouped_f16(
+            args.input as *const f16,
+            args.rows as *const u32,
+            args.adapter_of_row as *const u32,
+            args.adapters,
+            args.hidden as *mut f16,
+            args.output as *mut f16,
+            args.input_features,
+            args.output_features,
+            args.max_rank,
+            args.active_rows,
+            args.adapter_base,
+            args.stream,
+        )
+    }
 }
 
 #[cfg(feature = "cuda")]
@@ -199,6 +235,23 @@ impl CudaLoraElement for bf16 {
             args.rank,
             args.active_rows,
             args.scale,
+            args.stream,
+        )
+    }
+
+    unsafe fn launch_grouped(args: GroupedLaunch) -> i32 {
+        super::cuda_ffi::launch_dynamic_lora_grouped_bf16(
+            args.input as *const bf16,
+            args.rows as *const u32,
+            args.adapter_of_row as *const u32,
+            args.adapters,
+            args.hidden as *mut bf16,
+            args.output as *mut bf16,
+            args.input_features,
+            args.output_features,
+            args.max_rank,
+            args.active_rows,
+            args.adapter_base,
             args.stream,
         )
     }
@@ -291,6 +344,154 @@ fn run_cuda<T: CudaLoraElement>(
 }
 
 #[cfg(feature = "cuda")]
+struct GroupedCall<'a> {
+    device: &'a CudaDevice,
+    input: &'a Tensor,
+    base_output: &'a Tensor,
+    plan: CudaPlan,
+    execution: &'a LoraExecution,
+    weights: &'a [Option<&'a Arc<super::LoraWeights>>],
+}
+
+#[cfg(feature = "cuda")]
+fn run_cuda_grouped<T: CudaLoraElement>(call: GroupedCall<'_>) -> Result<Tensor> {
+    use super::cuda_ffi::{GroupedAdapters, MAX_GROUPED_ADAPTERS};
+
+    let GroupedCall {
+        device,
+        input,
+        base_output,
+        plan,
+        execution,
+        weights,
+    } = call;
+    let (input_storage, input_layout) = input.storage_and_layout();
+    let Storage::Cuda(input_storage) = &*input_storage else {
+        candle_core::bail!("dynamic LoRA CUDA input storage is not CUDA");
+    };
+    let input_slice = input_storage.as_cuda_slice::<T>()?;
+
+    let (base_storage, base_layout) = base_output.storage_and_layout();
+    let Storage::Cuda(base_storage) = &*base_storage else {
+        candle_core::bail!("dynamic LoRA CUDA output storage is not CUDA");
+    };
+    let base_slice = base_storage.as_cuda_slice::<T>()?;
+    let output_len = base_output.elem_count();
+    let base_view =
+        base_slice.slice(base_layout.start_offset()..base_layout.start_offset() + output_len);
+    let mut output = unsafe { device.alloc::<T>(output_len)? };
+    device.memcpy_dtod(&base_view, &mut output)?;
+
+    let table = execution.grouped_rows(input.device())?;
+    let (table_storage, table_layout) = table.storage_and_layout();
+    let Storage::Cuda(table_storage) = &*table_storage else {
+        candle_core::bail!("dynamic LoRA CUDA row table is not CUDA");
+    };
+    let table_slice = table_storage.as_cuda_slice::<u32>()?;
+    let total_rows = table.elem_count() / 2;
+    let row_counts = execution
+        .rows_by_slot()
+        .values()
+        .map(|rows| rows.len())
+        .collect::<Vec<_>>();
+
+    let stream = device.cuda_stream();
+    let (input_ptr, _input_guard) =
+        slice_ptr_on_stream(input_slice, input_layout.start_offset(), &stream);
+    let (table_ptr, _table_guard) =
+        slice_ptr_on_stream(table_slice, table_layout.start_offset(), &stream);
+    let (output_ptr, output_guard) = output.device_ptr_mut(&stream);
+
+    let mut row_start = 0usize;
+    for (chunk_index, chunk) in weights.chunks(MAX_GROUPED_ADAPTERS).enumerate() {
+        let first = chunk_index * MAX_GROUPED_ADAPTERS;
+        let chunk_rows = row_counts[first..first + chunk.len()].iter().sum::<usize>();
+        let present = chunk
+            .iter()
+            .enumerate()
+            .filter_map(|(index, weights)| weights.map(|weights| (index, weights)))
+            .collect::<Vec<_>>();
+        let a_storages = present
+            .iter()
+            .map(|(_, weights)| weights.a.storage_and_layout())
+            .collect::<Vec<_>>();
+        let b_storages = present
+            .iter()
+            .map(|(_, weights)| weights.b.storage_and_layout())
+            .collect::<Vec<_>>();
+
+        let mut adapters = GroupedAdapters::default();
+        let mut guards = Vec::with_capacity(present.len() * 2);
+        let mut max_rank = 0usize;
+        for (n, (index, weights)) in present.iter().enumerate() {
+            let (a_storage, a_layout) = &a_storages[n];
+            let Storage::Cuda(a_storage) = &**a_storage else {
+                candle_core::bail!("dynamic LoRA CUDA A storage is not CUDA");
+            };
+            let (a_ptr, a_guard) = slice_ptr_on_stream(
+                a_storage.as_cuda_slice::<T>()?,
+                a_layout.start_offset(),
+                &stream,
+            );
+            let (b_storage, b_layout) = &b_storages[n];
+            let Storage::Cuda(b_storage) = &**b_storage else {
+                candle_core::bail!("dynamic LoRA CUDA B storage is not CUDA");
+            };
+            let (b_ptr, b_guard) = slice_ptr_on_stream(
+                b_storage.as_cuda_slice::<T>()?,
+                b_layout.start_offset(),
+                &stream,
+            );
+            guards.push(a_guard);
+            guards.push(b_guard);
+            let rank = weights.a.dim(0)?;
+            adapters.a[*index] = a_ptr;
+            adapters.b[*index] = b_ptr;
+            adapters.rank[*index] = rank as i32;
+            adapters.scale[*index] = T::rounded_scale(weights.scale);
+            max_rank = max_rank.max(rank);
+        }
+        if max_rank == 0 {
+            row_start += chunk_rows;
+            continue;
+        }
+
+        let mut hidden = unsafe { device.alloc::<T>(chunk_rows * max_rank)? };
+        let (hidden_ptr, hidden_guard) = hidden.device_ptr_mut(&stream);
+        let status = unsafe {
+            T::launch_grouped(GroupedLaunch {
+                input: input_ptr,
+                rows: table_ptr + (row_start * std::mem::size_of::<u32>()) as u64,
+                adapter_of_row: table_ptr
+                    + ((total_rows + row_start) * std::mem::size_of::<u32>()) as u64,
+                adapters: &adapters,
+                hidden: hidden_ptr,
+                output: output_ptr,
+                input_features: plan.input_features as i32,
+                output_features: plan.output_features as i32,
+                max_rank: max_rank as i32,
+                active_rows: chunk_rows as i32,
+                adapter_base: first as u32,
+                stream: stream.cu_stream(),
+            })
+        };
+        drop(hidden_guard);
+        drop(guards);
+        if status != 0 {
+            candle_core::bail!("grouped dynamic LoRA CUDA launch failed with CUDA error {status}");
+        }
+        row_start += chunk_rows;
+    }
+    drop(output_guard);
+
+    let storage = CudaStorage::wrap_cuda_slice(output, device.clone());
+    Ok(Tensor::from((
+        Storage::Cuda(storage),
+        Shape::from(base_output.dims()),
+    )))
+}
+
+#[cfg(feature = "cuda")]
 pub(crate) fn try_add_delta_cuda(
     execution: &LoraExecution,
     site: &LoraSiteHandle,
@@ -313,8 +514,8 @@ pub(crate) fn try_add_delta_cuda(
         return Ok(None);
     };
 
-    let mut adapters = Vec::new();
-    for slot in execution.rows_by_slot().keys() {
+    let mut active = Vec::new();
+    for (position, slot) in execution.rows_by_slot().keys().enumerate() {
         let Some(weights) = execution.weights(site, *slot)? else {
             continue;
         };
@@ -338,21 +539,43 @@ pub(crate) fn try_add_delta_cuda(
         {
             return Ok(None);
         }
-        let row_indices = execution
-            .row_indices(*slot, input.device())?
-            .expect("active LoRA slot has cached rows");
-        adapters.push(ActiveAdapter {
-            weights,
-            row_indices,
-            rank: weights.a.dim(0)?,
-            scale: weights.scale,
-        });
+        active.push((position, *slot, weights));
     }
-    if adapters.is_empty() {
+    if active.is_empty() {
         return Ok(Some(base_output.clone()));
     }
 
     let device = input.device().as_cuda_device()?;
+    if active.len() > 1 {
+        let mut by_position = vec![None; execution.rows_by_slot().len()];
+        for (position, _, weights) in &active {
+            by_position[*position] = Some(*weights);
+        }
+        let call = GroupedCall {
+            device,
+            input,
+            base_output,
+            plan,
+            execution,
+            weights: &by_position,
+        };
+        return match input.dtype() {
+            DType::F16 => run_cuda_grouped::<f16>(call).map(Some),
+            DType::BF16 => run_cuda_grouped::<bf16>(call).map(Some),
+            _ => Ok(None),
+        };
+    }
+
+    let (_, slot, weights) = active[0];
+    let row_indices = execution
+        .row_indices(slot, input.device())?
+        .expect("active LoRA slot has cached rows");
+    let adapters = [ActiveAdapter {
+        weights,
+        row_indices,
+        rank: weights.a.dim(0)?,
+        scale: weights.scale,
+    }];
     match input.dtype() {
         DType::F16 => run_cuda::<f16>(device, input, base_output, plan, &adapters).map(Some),
         DType::BF16 => run_cuda::<bf16>(device, input, base_output, plan, &adapters).map(Some),
@@ -615,5 +838,117 @@ mod tests {
         assert_eq!(fast, fallback);
         assert_eq!(fast, vec![vec![192.]]);
         Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    fn grouped_matches_loop(
+        dtype: DType,
+        device: &candle_core::Device,
+        ranks: &[Option<usize>],
+        slots: &[Option<u32>],
+    ) -> candle_core::Result<()> {
+        use super::super::{LoraLayerRegistry, LoraLinearSpec, LoraSiteKey, LoraWeights};
+
+        const IN: usize = 8;
+        const OUT: usize = 6;
+        let registry = LoraLayerRegistry::new();
+        let site = registry.register(
+            LoraSiteKey::new("proj"),
+            LoraLinearSpec::replicated(IN, OUT),
+            dtype,
+            device.clone(),
+        )?;
+        registry.finalize()?;
+        let mut execution = LoraExecution::from_sequence_slots(registry.runtime_id(), slots, 1);
+        for (slot, rank) in ranks.iter().enumerate() {
+            let Some(rank) = *rank else { continue };
+            let a = (0..rank * IN)
+                .map(|i| ((i * 7 + slot * 3) % 11) as f32 / 8.0 - 0.5)
+                .collect::<Vec<_>>();
+            let b = (0..OUT * rank)
+                .map(|i| ((i * 5 + slot) % 13) as f32 / 8.0 - 0.7)
+                .collect::<Vec<_>>();
+            execution.insert(
+                &site,
+                slot as u32,
+                LoraWeights::new(
+                    cuda_tensor(&a, &[rank, IN], dtype, device)?,
+                    cuda_tensor(&b, &[OUT, rank], dtype, device)?,
+                    0.5 + slot as f64 / 16.0,
+                )?,
+            )?;
+        }
+
+        let rows = slots.len();
+        let input_data = (0..rows * IN)
+            .map(|i| (i % 9) as f32 / 4.0 - 1.0)
+            .collect::<Vec<_>>();
+        let input = cuda_tensor(&input_data, &[rows, IN], dtype, device)?;
+        let base = cuda_tensor(&vec![0.25; rows * OUT], &[rows, OUT], dtype, device)?;
+
+        let grouped =
+            try_add_delta_cuda(&execution, &site, &input, &base)?.expect("supported CUDA layout");
+
+        let plan = plan_cuda(CudaLayout {
+            input_dtype: dtype,
+            output_dtype: dtype,
+            input_dims: input.dims(),
+            output_dims: base.dims(),
+            route_rows: rows,
+            input_contiguous: true,
+            output_contiguous: true,
+            input_offset: 0,
+        })
+        .expect("plan");
+        let mut adapters = Vec::new();
+        for slot in execution.rows_by_slot().keys() {
+            let Some(weights) = execution.weights(&site, *slot)? else {
+                continue;
+            };
+            adapters.push(ActiveAdapter {
+                weights,
+                row_indices: execution.row_indices(*slot, device)?.expect("rows"),
+                rank: weights.a.dim(0)?,
+                scale: weights.scale,
+            });
+        }
+        let cuda = device.as_cuda_device()?;
+        let looped = match dtype {
+            DType::F16 => run_cuda::<f16>(cuda, &input, &base, plan, &adapters)?,
+            _ => run_cuda::<bf16>(cuda, &input, &base, plan, &adapters)?,
+        };
+        let to_f32 = |t: Tensor| t.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>();
+        assert_eq!(to_f32(grouped)?, to_f32(looped)?);
+        Ok(())
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn cuda_grouped_matches_per_adapter_loop() -> candle_core::Result<()> {
+        let device = candle_core::Device::cuda_if_available(0)?;
+        if !device.is_cuda() {
+            return Ok(());
+        }
+        // mixed ranks, an unrouted row, and slot 3 without weights at this site
+        let ranks = [Some(2), Some(1), Some(3), None];
+        let slots = [Some(0), None, Some(1), Some(2), Some(0), Some(3), Some(2)];
+        grouped_matches_loop(DType::F16, &device, &ranks, &slots)?;
+        grouped_matches_loop(DType::BF16, &device, &ranks, &slots)
+    }
+
+    #[cfg(feature = "cuda")]
+    #[test]
+    fn cuda_grouped_handles_more_adapters_than_one_launch_holds() -> candle_core::Result<()> {
+        let device = candle_core::Device::cuda_if_available(0)?;
+        if !device.is_cuda() {
+            return Ok(());
+        }
+        let count = super::super::cuda_ffi::MAX_GROUPED_ADAPTERS * 2 + 5;
+        let ranks = (0..count)
+            .map(|slot| Some(1 + slot % 4))
+            .collect::<Vec<_>>();
+        let slots = (0..count as u32).chain(0..9).map(Some).collect::<Vec<_>>();
+        grouped_matches_loop(DType::F16, &device, &ranks, &slots)?;
+        grouped_matches_loop(DType::BF16, &device, &ranks, &slots)
     }
 }
