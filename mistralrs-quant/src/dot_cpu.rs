@@ -7,51 +7,24 @@
 //! bf16 is widened as it loads rather than upcast into a temporary, which is the whole point on
 //! a bandwidth-bound decode: the weight is streamed once and never materialised as f32.
 
-/// `a . b` with four independent accumulators.
+/// `a . b` with one four-wide accumulator per row, matching gemm_f32's K order.
 #[cfg(target_arch = "aarch64")]
 pub(crate) fn dot_f32(a: &[f32], b: &[f32]) -> f32 {
     use core::arch::aarch64::*;
 
     debug_assert_eq!(a.len(), b.len());
     unsafe {
-        let mut s0 = vdupq_n_f32(0.0);
-        let mut s1 = vdupq_n_f32(0.0);
-        let mut s2 = vdupq_n_f32(0.0);
-        let mut s3 = vdupq_n_f32(0.0);
+        let mut acc = vdupq_n_f32(0.0);
         let mut i = 0;
-        while i + 16 <= a.len() {
-            s0 = vfmaq_f32(
-                s0,
-                vld1q_f32(a.as_ptr().add(i)),
-                vld1q_f32(b.as_ptr().add(i)),
-            );
-            s1 = vfmaq_f32(
-                s1,
-                vld1q_f32(a.as_ptr().add(i + 4)),
-                vld1q_f32(b.as_ptr().add(i + 4)),
-            );
-            s2 = vfmaq_f32(
-                s2,
-                vld1q_f32(a.as_ptr().add(i + 8)),
-                vld1q_f32(b.as_ptr().add(i + 8)),
-            );
-            s3 = vfmaq_f32(
-                s3,
-                vld1q_f32(a.as_ptr().add(i + 12)),
-                vld1q_f32(b.as_ptr().add(i + 12)),
-            );
-            i += 16;
-        }
-        let mut sum = vaddq_f32(vaddq_f32(s0, s1), vaddq_f32(s2, s3));
         while i + 4 <= a.len() {
-            sum = vfmaq_f32(
-                sum,
+            acc = vfmaq_f32(
+                acc,
                 vld1q_f32(a.as_ptr().add(i)),
                 vld1q_f32(b.as_ptr().add(i)),
             );
             i += 4;
         }
-        let mut out = vaddvq_f32(sum);
+        let mut out = vaddvq_f32(acc);
         while i < a.len() {
             out += *a.get_unchecked(i) * *b.get_unchecked(i);
             i += 1;
