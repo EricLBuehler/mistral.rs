@@ -306,6 +306,7 @@ normal_architectures! {
     Lfm2: "lfm2", "Lfm2ForCausalLM", "lfm2", Lfm2Loader;
     Lfm3: "lfm3", "Lfm3ForCausalLM", "lfm3", Lfm3Loader;
     Lfm2Moe: "lfm2_moe", "Lfm2MoeForCausalLM", "lfm2_moe", Lfm2Loader;
+    Olala: "olala", "OlalaForCausalLM", "olala", OlalaLoader;
 }
 
 impl Display for NormalLoaderType {
@@ -7004,6 +7005,175 @@ impl DeviceMappedModelLoader for Lfm2Loader {
         };
 
         Ok(Box::new(cfg))
+    }
+}
+
+/// [`NormalLoader`] for the Olala hybrid Mamba3-MIMO / TPA MoE model.
+pub struct OlalaLoader;
+
+impl NormalModelLoader for OlalaLoader {
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        _normal_loading_metadata: NormalLoadingMetadata,
+        _attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg: crate::models::olala::Config = serde_json::from_str(config)?;
+        let model_config = ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: Some(cfg.sliding_window),
+            k_head_dim: cfg.head_dim,
+            v_head_dim: cfg.head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+        };
+        let max_seq_len = cfg.max_position_embeddings;
+        Ok(Box::new(models::olala::Model::load(
+            cfg,
+            vb,
+            model_config,
+            DType::F32,
+            max_seq_len,
+        )?))
+    }
+
+    fn load_xlora(
+        &self,
+        _config: &str,
+        _vb: ShardedVarBuilder,
+        _lora_config: &[((String, String), LoraConfig)],
+        _xlora_config: Option<XLoraConfig>,
+        _xlora_ordering: Ordering,
+        _normal_loading_metadata: NormalLoadingMetadata,
+        _preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        anyhow::bail!("Olala does not support X-LoRA")
+    }
+
+    fn is_gptx(&self, _: &str) -> Result<bool> {
+        Ok(true)
+    }
+
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::models::olala::Config = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
+    }
+
+    fn supports_paged_attention(&self, _config: &str) -> Result<bool> {
+        Ok(false)
+    }
+}
+
+impl IsqModelLoader for OlalaLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![Regex::new(
+            r"^(model\.embed_tokens\.weight|lm_head\.weight)$",
+        )?])
+    }
+
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![Regex::new(
+            r"layers\.(\d+)\.(mixer|moe)\..*\.weight$",
+        )?])
+    }
+
+    fn immediate_isq_predicates(&self, config: &str) -> Result<Vec<Regex>> {
+        self.isq_layer_regexes(config)
+    }
+}
+
+impl DeviceMappedModelLoader for OlalaLoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: models::olala::Config = serde_json::from_str(config)?;
+        Ok(ActivationModelConfig {
+            intermediate_size: cfg
+                .expert_feed_forward_length
+                .max(cfg.expert_shared_feed_forward_length),
+            vocab_size: cfg.vocab_size,
+            ..Default::default()
+        })
+    }
+
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let AutoDeviceMapParams::Text {
+            max_seq_len,
+            max_batch_size,
+        } = params
+        else {
+            anyhow::bail!("Expected text AutoDeviceMapParams for Olala")
+        };
+        let cfg: models::olala::Config = serde_json::from_str(config)?;
+        Ok(max_batch_size * cfg.hidden_size * max_seq_len.min(&ATTENTION_CHUNK_SIZE))
+    }
+
+    fn non_mapped_max_act_size_elems(
+        &self,
+        _config: &str,
+        _params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        Ok(0)
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<usize> {
+        let cfg: models::olala::Config = serde_json::from_str(config)?;
+        let hidden = cfg.hidden_size;
+        let elems = cfg.vocab_size * hidden * 2 + hidden;
+        Ok(elems * dtype.size_in_bytes() / weight_pack_factor)
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        let cfg: models::olala::Config = serde_json::from_str(config)?;
+        let h = cfg.hidden_size;
+        let per_layer = h * h * 2
+            + h * cfg.expert_count
+            + cfg.expert_count * cfg.expert_feed_forward_length * cfg.moe_latent_size * 2
+            + h * cfg.expert_shared_feed_forward_length * 2
+            + cfg.ssm_inner_size * h * 2;
+        Ok(vec![
+            per_layer * dtype.size_in_bytes() / weight_pack_factor;
+            cfg.num_hidden_layers
+        ])
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg: models::olala::Config = serde_json::from_str(config)?;
+        Ok(cfg.num_hidden_layers)
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: models::olala::Config = serde_json::from_str(config)?;
+        Ok(Box::new(ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: cfg.num_hidden_layers,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: Some(cfg.sliding_window),
+            k_head_dim: cfg.head_dim,
+            v_head_dim: cfg.head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+        }))
     }
 }
 

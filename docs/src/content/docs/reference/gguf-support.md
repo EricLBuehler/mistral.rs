@@ -27,6 +27,7 @@ To find a file's row, match the architecture column against the file's `general.
 | Qwen3.5 and Qwen3.6 dense | `qwen35` |
 | Qwen3.5 and Qwen3.6 MoE | `qwen35moe` |
 | Qwen3.8-Flash-Next | `qwen4exp` |
+| Olala 1.0 mini | `olala` |
 | StarCoder2 | `starcoder2` |
 | DeepSeek-V2/V3, non-distill R1, GLM-4 MoE Lite | `deepseek2` |
 | GLM-4 dense | `glm4` |
@@ -72,6 +73,7 @@ A multimodal GGUF model comes as two files: the language model and a projector, 
 A listed family doesn't necessarily take every input type. Check the model card for whether it accepts images, audio, or video. Family notes:
 
 - **LFM3:** loads from the GGUF files alone. LFM3-VL takes images and video, LFM3-Audio takes audio and generates speech, and LFM3-Omni does both.
+- **Olala 1.0 mini:** loads from the GGUF files alone. This is a hybrid Mamba3-MIMO / attention model with a latent mixture of experts; the model's published quantizations require the OVH llama.cpp fork's quantization recipe (plain Q8_0 can produce NaNs). mistral.rs loads the published GGUF files directly.
 - **d1:** the GGUF files alone answer `noul` (yes/no), single-answer `choice`, and `score` questions. For every [question type](/reference/decisions/#question-types), also pass the original model with `--tok-model-id`. See [d1 with GGUF](/guides/models/use-decision-models/#use-gguf).
 - **Muse Glimmer:** published GGUFs need `--tok-model-id meta-models/Muse-Glimmer-30B`. Images work. Video doesn't, because the llama.cpp conversion irreversibly merges the projector weights that video needs.
 - **Qwen3.5 and Qwen3.6:** images and video, no audio.
