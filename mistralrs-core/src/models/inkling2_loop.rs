@@ -17,6 +17,7 @@ use crate::{
     amoe::AnyMoeBaseModelMixin,
     device_map::DeviceMapper,
     layers::{embedding, RmsNorm},
+    kv_cache::{HybridCache, HybridCacheConfig, HybridLayerCache, HybridLayerType, RecurrentLayerConfig, RecurrentStateSpec},
     moe::{ExpertProjNames, MoEExperts, MoEExpertsConfig},
     paged_attention::{AttentionImplementation, ModelConfigMetadata},
     pipeline::{
@@ -541,10 +542,25 @@ impl Model {
         let logical_layers = cfg.num_hidden_layers
             - (cfg.loop_config.core_end - cfg.loop_config.core_start)
             + (cfg.loop_config.core_end - cfg.loop_config.core_start) * cfg.loop_config.num_passes;
-        let cache = EitherCache::Normal(crate::pipeline::NormalCache::new(
-            logical_layers,
-            cfg.max_position_embeddings,
-        ));
+        let hybrid_layer_types = (0..logical_layers)
+            .flat_map(|_| [HybridLayerType::Attention, HybridLayerType::Recurrent])
+            .collect::<Vec<_>>();
+        let kv_dim = cfg.num_key_value_heads * cfg.head_dim;
+        let hidden = cfg.hidden_size;
+        let hybrid_recurrent = RecurrentLayerConfig {
+            conv_dim: kv_dim + kv_dim + hidden + hidden,
+            conv_width: cfg.sconv_kernel_size.saturating_sub(1),
+            state: RecurrentStateSpec::Opaque { dims: vec![1] },
+            recurrent_dtype: Some(DType::F32),
+        };
+        let hybrid_config = HybridCacheConfig {
+            layer_types: hybrid_layer_types,
+            max_seq_len: cfg.max_position_embeddings,
+            recurrent: hybrid_recurrent,
+        };
+        let layer_devices = vec![normal_loading_metadata.real_device.clone(); hybrid_config.layer_types.len()];
+        let hc = HybridCache::new(hybrid_config, DType::F32, &layer_devices)?;
+        let cache = EitherCache::Hybrid(Arc::new(Mutex::new(hc)));
 
         Ok(Self {
             embed_tokens,
@@ -791,13 +807,14 @@ impl Model {
         xs: &Tensor,
         attention_mask: Option<&Tensor>,
         seqlen_offsets: &[usize],
-        kv_cache: &mut KvCache,
+        kv_cache: &mut HybridLayerCache,
         _flash_params: &FlashParams,
         _phys: usize,
         _logical: usize,
         msgs: Option<&[Tensor; 4]>,
         loop_layer: Option<&LoopLayer>,
     ) -> Result<Tensor> {
+        let kv_cache = kv_cache.as_kv_cache_mut().unwrap();
         let (b_sz, q_len, _) = xs.dims3()?;
         let attn = &layer.attn;
         let mut inputs = [xs.clone(), xs.clone(), xs.clone()];
@@ -1137,9 +1154,8 @@ impl NormalModel for Model {
         }
         xs = self.embedding_norm.forward(&xs)?;
 
-        let cache = &mut self.cache.normal().0;
-
-        let kv_caches: &mut [KvCache] = cache;
+        let mut cache_guard = self.cache.hybrid();
+        let kv_caches: &mut [HybridLayerCache] = &mut cache_guard.caches;
         let start = self.loop_config.core_start;
         let end = self.loop_config.core_end;
         let n_passes = self.loop_config.num_passes;
@@ -1153,33 +1169,34 @@ impl NormalModel for Model {
                            blocks: &mut Vec<Tensor>,
                            msgs: Option<&[Tensor; 4]>,
                            ll: Option<&LoopLayer>,
-                           kv_caches: &mut [KvCache],
+                           kv_caches: &mut [HybridLayerCache],
                            flash_params: &FlashParams,
                            attention_mask: Option<&Tensor>|
          -> Result<()> {
             let layer = &this.layers[phys];
-            let kv_cache: &mut KvCache = &mut kv_caches[phys];
-            let mut attn_in = cur.clone();
-            if let (Some(msgs), Some(ll)) = (msgs, ll) {
-                attn_in = this.apply_loop_ctrl(&ll.q, &attn_in, &msgs[0])?;
+            let kv_cache: &mut HybridLayerCache = &mut kv_caches[phys];
+            if matches!(kv_cache, HybridLayerCache::Attention(_)) {
+                let mut attn_in = cur.clone();
+                if let (Some(msgs), Some(ll)) = (msgs, ll) {
+                    attn_in = this.apply_loop_ctrl(&ll.q, &attn_in, &msgs[0])?;
+                }
+                if let Some(rq) = &layer.attn.res_query {
+                    attn_in = this.attn_res_mix(blocks, &attn_in, rq)?;
+                }
+                let attn_out = this.forward_attn(
+                    layer,
+                    &attn_in,
+                    attention_mask,
+                    &[],
+                    kv_cache,
+                    flash_params,
+                    phys,
+                    logical,
+                    msgs,
+                    ll,
+                )?;
+                *cur = (&*cur + attn_out)?;
             }
-            if let Some(rq) = &layer.attn.res_query {
-                attn_in = this.attn_res_mix(blocks, &attn_in, rq)?;
-            }
-            let attn_out = this.forward_attn(
-                layer,
-                &attn_in,
-                attention_mask,
-                &[],
-                kv_cache,
-                flash_params,
-                phys,
-                logical,
-                msgs,
-                ll,
-            )?;
-            let _ = kv_cache;
-            *cur = (&*cur + attn_out)?;
             if phys % this.attn_res_block_size == 0 {
                 blocks.push(cur.clone());
             }
