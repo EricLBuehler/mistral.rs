@@ -287,7 +287,8 @@ pub(super) fn binding_sources(bindings: &GgufBindingMap) -> BTreeSet<String> {
             | GgufTensorBinding::Affine { input, .. }
             | GgufTensorBinding::Log { input }
             | GgufTensorBinding::InverseSoftplus { input }
-            | GgufTensorBinding::Cast { input, .. } => collect(input, sources),
+            | GgufTensorBinding::Cast { input, .. }
+            | GgufTensorBinding::ScaledBy { input, .. } => collect(input, sources),
             GgufTensorBinding::Concat { inputs, .. }
             | GgufTensorBinding::Stack { inputs, .. }
             | GgufTensorBinding::Interleave { inputs, .. } => {

@@ -158,6 +158,10 @@ pub(crate) const NORMAL_CONFIG_BUILDERS: &[NormalConfigBuilder; GGUF_NORMAL_LOAD
         loader: NormalLoaderType::Lfm3,
         build: build_lfm3,
     },
+    NormalConfigBuilder {
+        loader: NormalLoaderType::Inkling2Loop,
+        build: build_inkling2_loop,
+    },
 ];
 
 pub(crate) fn validate_lfm3_metadata(metadata: &HashMap<String, GgufValue>) -> SynthesisResult<()> {
@@ -553,6 +557,7 @@ fn copy_qwen35_rope_field(
 struct MetadataView<'a> {
     loader: &'a NormalLoaderType,
     architecture: CanonicalGgufArchitecture,
+    arch_prefix: String,
     metadata: &'a HashMap<String, GgufValue>,
     tensor_names: &'a [String],
 }
@@ -600,13 +605,14 @@ impl<'a> MetadataView<'a> {
         Ok(Self {
             loader,
             architecture,
+            arch_prefix: architecture_name.to_string(),
             metadata,
             tensor_names,
         })
     }
 
     fn key(&self, suffix: &str) -> String {
-        format!("{}.{suffix}", self.architecture.as_str())
+        format!("{}.{suffix}", self.arch_prefix)
     }
 
     fn value(&self, suffix: &str) -> Option<&GgufValue> {
@@ -2774,6 +2780,195 @@ fn ratio_f64(
         NormalConfigSynthesisError::new(format!("`{field}` denominator {denominator} is too large"))
     })?;
     Ok(f64::from(numerator) / f64::from(denominator))
+}
+
+fn build_inkling2_loop(metadata: &MetadataView<'_>) -> SynthesisResult<JsonValue> {
+    let block_count = metadata.required_usize("block_count")?;
+    let hidden_size = metadata.required_usize("embedding_length")?;
+    let vocab_size = metadata.required_usize("vocab_size")?;
+    let head_count_raw = metadata.value("attention.head_count");
+    let num_attention_heads = match head_count_raw {
+        Some(candle_core::quantized::gguf_file::Value::Array(a)) => a.first().and_then(|x| match x {
+            candle_core::quantized::gguf_file::Value::U32(n) => Some(*n as usize),
+            candle_core::quantized::gguf_file::Value::I32(n) => Some(*n as usize),
+            candle_core::quantized::gguf_file::Value::U64(n) => Some(*n as usize),
+            candle_core::quantized::gguf_file::Value::I64(n) => Some(*n as usize),
+            _ => None,
+        }).unwrap_or(0),
+        _ => metadata.optional_usize("attention.head_count")?.unwrap_or(0),
+    };
+    let kv_head_count_raw = metadata.value("attention.head_count_kv");
+    let num_key_value_heads = match kv_head_count_raw {
+        Some(candle_core::quantized::gguf_file::Value::Array(a)) => a.first().and_then(|x| match x {
+            candle_core::quantized::gguf_file::Value::U32(n) => Some(*n as usize),
+            candle_core::quantized::gguf_file::Value::I32(n) => Some(*n as usize),
+            candle_core::quantized::gguf_file::Value::U64(n) => Some(*n as usize),
+            candle_core::quantized::gguf_file::Value::I64(n) => Some(*n as usize),
+            _ => None,
+        }).unwrap_or(0),
+        _ => metadata.optional_usize("attention.head_count_kv")?.unwrap_or(0),
+    };
+    let head_dim = metadata
+        .optional_usize("attention.key_length")?
+        .or(metadata.optional_usize("attention.value_length")?)
+        .unwrap_or(hidden_size / num_attention_heads.max(1));
+    let rms_norm_eps = metadata.required_f64("attention.layer_norm_rms_epsilon")?;
+    let context_length = metadata.required_usize("context_length")?;
+    let expert_count = metadata.required_usize("expert_count")?;
+    let expert_used_count = metadata.required_usize("expert_used_count")?;
+    let expert_intermediate_size = metadata.required_usize("expert_feed_forward_length")?;
+    let intermediate_size = metadata
+        .optional_usize("feed_forward_length")?
+        .unwrap_or(expert_intermediate_size);
+
+    let sliding_window = metadata.optional_usize("attention.sliding_window")?;
+    let sliding_window_pattern = metadata.sliding_pattern(block_count)?;
+
+    let loop_count = metadata
+        .optional_usize("loop.count")?
+        .or(metadata.optional_usize("num_loops")?)
+        .ok_or_else(|| {
+            NormalConfigSynthesisError::new(format!(
+                "GGUF metadata `{}` or `{}` is required",
+                metadata.key("loop.count"),
+                metadata.key("num_loops")
+            ))
+        })?;
+    let core_start = metadata
+        .optional_usize("loop.start")?
+        .or(metadata.optional_usize("loop.core_start")?)
+        .ok_or_else(|| {
+            NormalConfigSynthesisError::new(format!(
+                "GGUF metadata `{}` or `{}` is required",
+                metadata.key("loop.start"),
+                metadata.key("loop.core_start")
+            ))
+        })?;
+    let core_end = metadata
+        .optional_usize("loop.end")?
+        .or(metadata.optional_usize("loop.core_end")?)
+        .ok_or_else(|| {
+            NormalConfigSynthesisError::new(format!(
+                "GGUF metadata `{}` or `{}` is required",
+                metadata.key("loop.end"),
+                metadata.key("loop.core_end")
+            ))
+        })?;
+    let gate_rank = metadata.optional_usize("loop.gate_rank")?.unwrap_or(64);
+    let is_varloop = metadata.optional_bool("loop.varying")?.unwrap_or(false);
+
+    let rope_dim = metadata
+        .optional_usize("rope.dimension_count")?
+        .unwrap_or(0);
+    let rope_theta = metadata.optional_f64("rope.freq_base")?.unwrap_or(10_000.0);
+
+    let mut config = JsonMap::new();
+    config.insert("hidden_size".into(), json!(hidden_size));
+    config.insert("intermediate_size".into(), json!(intermediate_size));
+    config.insert("vocab_size".into(), json!(vocab_size));
+    config.insert("num_hidden_layers".into(), json!(block_count));
+    config.insert("num_attention_heads".into(), json!(num_attention_heads));
+    config.insert("num_key_value_heads".into(), json!(num_key_value_heads));
+    config.insert("head_dim".into(), json!(head_dim));
+    config.insert("rms_norm_eps".into(), json!(rms_norm_eps));
+    config.insert("max_position_embeddings".into(), json!(context_length));
+    config.insert("rope_theta".into(), json!(rope_theta));
+    config.insert("rope_dim".into(), json!(rope_dim));
+    config.insert("n_routed_experts".into(), json!(expert_count));
+    config.insert("num_experts_per_tok".into(), json!(expert_used_count));
+    config.insert(
+        "expert_feed_forward_length".into(),
+        json!(expert_intermediate_size),
+    );
+    config.insert(
+        "final_logit_softcapping".into(),
+        json!(metadata
+            .optional_f64("final_logit_softcapping")?
+            .unwrap_or(30.0)),
+    );
+    config.insert(
+        "situ_beta".into(),
+        json!(metadata
+            .optional_f64("activation.situ_beta")?
+            .unwrap_or(4.0)),
+    );
+    config.insert(
+        "situ_linear_beta".into(),
+        json!(metadata
+            .optional_f64("activation.situ_linear_beta")?
+            .unwrap_or(25.0)),
+    );
+    config.insert(
+        "qk_l2_clip_threshold".into(),
+        json!(metadata
+            .optional_f64("attention.qk_clip")?
+            .unwrap_or(22.627416997969522)),
+    );
+    config.insert(
+        "rel_l2_clip_threshold".into(),
+        json!(metadata
+            .optional_f64("attention.relative_clip")?
+            .unwrap_or(8.0)),
+    );
+    config.insert(
+        "n_log_scale_floor".into(),
+        json!(metadata
+            .optional_usize("attention.log_scale_floor")?
+            .unwrap_or(8192)),
+    );
+    config.insert(
+        "f_log_scale_alpha".into(),
+        json!(metadata
+            .optional_f64("attention.log_scale_alpha")?
+            .unwrap_or(0.1)),
+    );
+    config.insert(
+        "attn_res_block_size".into(),
+        json!(metadata.optional_usize("attn_res.block_size")?.unwrap_or(6)),
+    );
+    config.insert("attn_res_normalize_values".into(), json!(true));
+    config.insert(
+        "route_scale".into(),
+        json!(metadata
+            .optional_f64("expert_weights_scale")?
+            .unwrap_or(8.0)),
+    );
+    config.insert(
+        "sconv_kernel_size".into(),
+        json!(metadata.optional_usize("shortconv.l_cache")?.unwrap_or(4)),
+    );
+    config.insert("sliding_window".into(), json!(sliding_window));
+    config.insert(
+        "sliding_window_pattern".into(),
+        json!(sliding_window_pattern),
+    );
+    config.insert(
+        "d_rel".into(),
+        json!(metadata
+            .optional_usize("attention.relative_length")?
+            .unwrap_or(16)),
+    );
+    config.insert(
+        "rel_extent".into(),
+        json!(metadata
+            .optional_usize("attention.relative_extent")?
+            .unwrap_or(1024)),
+    );
+    config.insert(
+        "tie_word_embeddings".into(),
+        json!(!metadata.has_tensor("output.weight")),
+    );
+    config.insert(
+        "loop_config".into(),
+        json!({
+            "core_start": core_start,
+            "core_end": core_end,
+            "num_passes": loop_count,
+            "gate_rank": gate_rank,
+            "is_varloop": is_varloop,
+        }),
+    );
+    Ok(JsonValue::Object(config))
 }
 
 #[cfg(test)]

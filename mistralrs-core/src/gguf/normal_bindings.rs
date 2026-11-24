@@ -99,6 +99,30 @@ fn bind_root_tensors(
             "model.embedding_norm.weight",
             "output_norm.weight",
         ),
+        NormalLoaderType::Inkling2Loop => {
+            bind(
+                archive,
+                bindings,
+                "model.embedding_norm.weight",
+                "token_embd_norm.weight",
+            );
+            bind(
+                archive,
+                bindings,
+                "model.output_res_query.weight",
+                "output_res_query.weight",
+            );
+            if archive.contains_tensor("output_norm.weight") {
+                bindings.insert(
+                    "model.norm.weight",
+                    norm_binding(
+                        architecture,
+                        "output_norm.weight",
+                        GgufTensorBinding::tensor("output_norm.weight"),
+                    ),
+                );
+            }
+        }
         _ if archive.contains_tensor("output_norm.weight") => {
             bindings.insert(
                 "model.norm.weight",
@@ -126,6 +150,9 @@ fn bind_block_tensor(
     bindings: &mut GgufBindingMap,
 ) -> Result<()> {
     let p = format!("model.layers.{layer}");
+    if matches!(loader, NormalLoaderType::Inkling2Loop) {
+        return bind_inkling2_loop_block(archive, &p, layer, role, suffix, source, bindings);
+    }
     let gpt_oss_mxfp4_expert = matches!(loader, NormalLoaderType::GptOss)
         && matches!(role, "ffn_gate_exps" | "ffn_up_exps" | "ffn_down_exps")
         && archive.tensor_info(source)?.dtype().raw() == 39;
@@ -1183,4 +1210,105 @@ mod tests {
         assert!(fused_qkv_default_head_dim(4096, 0).is_err());
         assert!(fused_qkv_default_head_dim(4097, 32).is_err());
     }
+}
+
+fn bind_inkling2_loop_block(
+    archive: &GgufArchive,
+    p: &str,
+    layer: usize,
+    role: &str,
+    suffix: &str,
+    source: &str,
+    bindings: &mut GgufBindingMap,
+) -> Result<()> {
+    let target = match (role, suffix) {
+        ("attn_norm", "weight") => Some(format!("{p}.input_layernorm.weight")),
+        ("ffn_norm", "weight") => Some(format!("{p}.post_attention_layernorm.weight")),
+        ("attn_q", "weight") => Some(format!("{p}.self_attn.q_proj.weight")),
+        ("attn_k", "weight") => Some(format!("{p}.self_attn.k_proj.weight")),
+        ("attn_v", "weight") => Some(format!("{p}.self_attn.v_proj.weight")),
+        ("attn_output", "weight") => Some(format!("{p}.self_attn.o_proj.weight")),
+        ("attn_gate", "weight") => Some(format!("{p}.self_attn.gate_proj.weight")),
+        ("attn_q_inp_norm", "weight") => Some(format!("{p}.self_attn.q_inp_norm.weight")),
+        ("attn_k_inp_norm", "weight") => Some(format!("{p}.self_attn.k_inp_norm.weight")),
+        ("attn_v_inp_norm", "weight") => Some(format!("{p}.self_attn.v_inp_norm.weight")),
+        ("attn_q_clip", "weight") => Some(format!("{p}.self_attn.q_clip.weight")),
+        ("attn_rel", "weight") => Some(format!("{p}.self_attn.rel.weight")),
+        ("attn_rel_bias", "weight") => Some(format!("{p}.self_attn.rel_bias.weight")),
+        ("attn_rel_clip", "weight") => Some(format!("{p}.self_attn.rel_clip.weight")),
+        ("attn_sink_proj", "weight") => Some(format!("{p}.self_attn.sink_proj.weight")),
+        ("attn_res_query", "weight") => Some(format!("{p}.self_attn.res_query.weight")),
+        ("attn_k_conv", "weight") => Some(format!("{p}.self_attn.k_conv.weight")),
+        ("attn_v_conv", "weight") => Some(format!("{p}.self_attn.v_conv.weight")),
+        ("attn_post_conv", "weight") => Some(format!("{p}.self_attn.post_conv.weight")),
+        ("attn_k_conv_proj", "weight") => Some(format!("{p}.self_attn.k_conv_proj.weight")),
+        ("attn_v_conv_proj", "weight") => Some(format!("{p}.self_attn.v_conv_proj.weight")),
+        ("ffn_gate_inp", "weight") => Some(format!("{p}.mlp.router.weight")),
+        ("ffn_gate_inp", "bias") => Some(format!("{p}.mlp.router.bias")),
+        ("exp_probs_b", "bias") => Some(format!("{p}.mlp.exp_probs_b.bias")),
+        ("ffn_down_exps", "weight") => {
+            let scale = format!("blk.{layer}.ffn_down_exps.scale");
+            let binding = if archive.tensor_info(&scale).is_ok() {
+                GgufTensorBinding::scaled_by(source, scale)
+            } else {
+                GgufTensorBinding::tensor(source)
+            };
+            bindings.insert(format!("{p}.mlp.experts.down_proj.weight"), binding);
+            return Ok(());
+        }
+        ("ffn_down_exps", "scale") => return Ok(()),
+        ("ffn_gate_up_exps", "weight") => {
+            let shape = archive.tensor_info(source)?.shape();
+            if shape.len() != 3 || !shape[1].is_multiple_of(2) {
+                bail!("fused expert gate/up tensor `{source}` has invalid shape {shape:?}");
+            }
+            let intermediate = shape[1] / 2;
+            let scale = format!("blk.{layer}.ffn_gate_up_exps.scale");
+            let input = if archive.tensor_info(&scale).is_ok() {
+                GgufTensorBinding::scaled_by(source, scale)
+            } else {
+                GgufTensorBinding::tensor(source)
+            };
+            for (name, start) in [
+                (format!("{p}.mlp.experts.gate_proj.weight"), 0usize),
+                (format!("{p}.mlp.experts.up_proj.weight"), intermediate),
+            ] {
+                bindings.insert(
+                    name,
+                    GgufTensorBinding::Slice {
+                        input: Box::new(input.clone()),
+                        dim: 1,
+                        start,
+                        len: intermediate,
+                    },
+                );
+            }
+            return Ok(());
+        }
+        ("ffn_gate_up_exps", "scale") => return Ok(()),
+        ("ffn_post_conv", "weight") => Some(format!("{p}.mlp.post_conv.weight")),
+        ("ffn_res_query", "weight") => Some(format!("{p}.mlp.res_query.weight")),
+        ("loop_msg_query", "weight") => Some(format!("{p}.loop.msg_query.weight")),
+        ("loop_q_ctrl_down", "weight") => Some(format!("{p}.loop.q_ctrl_down.weight")),
+        ("loop_q_ctrl_gain", "weight") => Some(format!("{p}.loop.q_ctrl_gain.weight")),
+        ("loop_q_ctrl_forget", "weight") => Some(format!("{p}.loop.q_ctrl_forget.weight")),
+        ("loop_k_ctrl_down", "weight") => Some(format!("{p}.loop.k_ctrl_down.weight")),
+        ("loop_k_ctrl_gain", "weight") => Some(format!("{p}.loop.k_ctrl_gain.weight")),
+        ("loop_k_ctrl_forget", "weight") => Some(format!("{p}.loop.k_ctrl_forget.weight")),
+        ("loop_v_ctrl_down", "weight") => Some(format!("{p}.loop.v_ctrl_down.weight")),
+        ("loop_v_ctrl_gain", "weight") => Some(format!("{p}.loop.v_ctrl_gain.weight")),
+        ("loop_v_ctrl_forget", "weight") => Some(format!("{p}.loop.v_ctrl_forget.weight")),
+        ("loop_ffn_ctrl_down", "weight") => Some(format!("{p}.loop.ffn_ctrl_down.weight")),
+        ("loop_ffn_ctrl_gain", "weight") => Some(format!("{p}.loop.ffn_ctrl_gain.weight")),
+        ("loop_ffn_ctrl_forget", "weight") => Some(format!("{p}.loop.ffn_ctrl_forget.weight")),
+        _ => None,
+    };
+    if let Some(target) = target {
+        let mut binding = GgufTensorBinding::tensor(source);
+        if matches!(role, "attn_norm" | "ffn_norm") {
+            binding = norm_binding(CanonicalGgufArchitecture::Inkling2Loop, source, binding);
+        }
+        bindings.insert(target, binding);
+    }
+    Ok(())
 }

@@ -808,3 +808,22 @@ fn big_endian_archives_are_rejected_at_construction() -> Result<()> {
     assert!(error.contains(&file.path().display().to_string()));
     Ok(())
 }
+
+#[test]
+fn scaled_by_binding_scales_each_slab() -> Result<()> {
+    let weight = Tensor::from_vec(
+        (0..2 * 3 * 4).map(|v| v as f32).collect::<Vec<_>>(),
+        (2, 3, 4),
+        &Device::Cpu,
+    )?;
+    let scale = Tensor::from_vec(vec![2.0f32, 0.5], 2, &Device::Cpu)?;
+    let got = weight
+        .broadcast_mul(&scale.reshape((2, 1, 1))?)?
+        .flatten_all()?
+        .to_vec1::<f32>()?;
+    let want = (0..2 * 3 * 4)
+        .map(|v| v as f32 * if v < 12 { 2.0 } else { 0.5 })
+        .collect::<Vec<_>>();
+    assert_eq!(got, want);
+    Ok(())
+}

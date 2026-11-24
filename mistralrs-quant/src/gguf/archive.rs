@@ -18,7 +18,7 @@ use candle_core::{
         },
         GgmlDType, QStorage, QTensor,
     },
-    Device, Error, Result,
+    Device, Error, Result, Shape, Tensor,
 };
 use half::{bf16, f16};
 use memmap2::{Mmap, MmapOptions};
@@ -585,6 +585,14 @@ impl GgufArchive {
         let info = data.info();
         if self.shards[info.shard_index].endian != GgufEndian::Little {
             candle_core::bail!("big-endian GGUF tensor loading is not supported");
+        }
+        if info.dtype.raw() == 40 {
+            let tensor = dequant_nvfp4_to_tensor(data.bytes(), &info.shape, device)?;
+            let qt = candle_core::quantized::QTensor::quantize(&tensor, GgmlDType::F32)?;
+            if device.is_cuda() {
+                self.mark_tensor_uploaded(name);
+            }
+            return Ok(qt);
         }
         let dtype = info.dtype.candle_dtype()?;
         #[cfg(all(feature = "cuda", target_os = "linux"))]
@@ -1377,6 +1385,31 @@ fn validate_component_type(component: &GgufArchive) -> Result<()> {
         Some(_) => candle_core::bail!("GGUF component `{GENERAL_TYPE}` must be a string"),
         None => candle_core::bail!("GGUF component is missing `{GENERAL_TYPE}`"),
     }
+}
+
+pub(super) fn dequant_nvfp4_to_tensor(bytes: &[u8], shape: &[usize], device: &Device) -> Result<Tensor> {
+    let elem_count = shape.iter().try_fold(1usize, |a, b| a.checked_mul(*b).ok_or_else(|| Error::msg("nvfp4 elem count overflow")))?;
+    let block_count = elem_count / 64;
+    const E2M1: [f32; 16] = [
+        0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
+        -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0,
+    ];
+    let mut out = vec![0f32; elem_count];
+    for (bi, block) in bytes.as_chunks::<36>().0.iter().enumerate().take(block_count) {
+        let scales = [
+            float8::F8E4M3::from_bits(block[0]).to_f32(),
+            float8::F8E4M3::from_bits(block[1]).to_f32(),
+            float8::F8E4M3::from_bits(block[2]).to_f32(),
+            float8::F8E4M3::from_bits(block[3]).to_f32(),
+        ];
+        let packed = &block[4..];
+        for i in 0..64 {
+            let byte = packed[i / 2];
+            let nib = if i % 2 == 0 { byte & 0x0f } else { byte >> 4 };
+            out[bi * 64 + i] = E2M1[nib as usize] * scales[i / 16];
+        }
+    }
+    Tensor::from_vec(out, Shape::from(shape.to_vec()), device)
 }
 
 fn metadata_usize(metadata: &HashMap<String, Value>, key: &str) -> Result<Option<usize>> {

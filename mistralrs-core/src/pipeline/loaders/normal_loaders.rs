@@ -306,6 +306,7 @@ normal_architectures! {
     Lfm2: "lfm2", "Lfm2ForCausalLM", "lfm2", Lfm2Loader;
     Lfm3: "lfm3", "Lfm3ForCausalLM", "lfm3", Lfm3Loader;
     Lfm2Moe: "lfm2_moe", "Lfm2MoeForCausalLM", "lfm2_moe", Lfm2Loader;
+    Inkling2Loop: "inkling2_loop", "Inkling2LoopForCausalLM", "inkling2_loop", Inkling2LoopLoader;
 }
 
 impl Display for NormalLoaderType {
@@ -7004,6 +7005,157 @@ impl DeviceMappedModelLoader for Lfm2Loader {
         };
 
         Ok(Box::new(cfg))
+    }
+}
+
+pub struct Inkling2LoopLoader;
+
+impl NormalModelLoader for Inkling2LoopLoader {
+    fn load(
+        &self,
+        config: &str,
+        vb: ShardedVarBuilder,
+        normal_loading_metadata: NormalLoadingMetadata,
+        attention_mechanism: AttentionImplementation,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        let cfg: crate::models::inkling2_loop::Config = serde_json::from_str(config)?;
+        Ok(Box::new(models::inkling2_loop::Model::new(
+            &cfg,
+            vb,
+            self.is_gptx_for(config, &normal_loading_metadata)?,
+            normal_loading_metadata,
+            attention_mechanism,
+        )?))
+    }
+
+    fn load_xlora(
+        &self,
+        _config: &str,
+        _vb: ShardedVarBuilder,
+        _lora_config: &[((String, String), LoraConfig)],
+        _xlora_config: Option<XLoraConfig>,
+        _xlora_ordering: Ordering,
+        _normal_loading_metadata: NormalLoadingMetadata,
+        _preload_adapters: &Option<HashMap<String, (ShardedVarBuilder, LoraConfig)>>,
+    ) -> Result<Box<dyn NormalModel + Send + Sync>> {
+        anyhow::bail!("Inkling2Loop does not support X-LoRA")
+    }
+
+    fn is_gptx(&self, _config: &str) -> Result<bool> {
+        Ok(true)
+    }
+    fn get_config_repr(&self, config: &str) -> Result<Box<dyn Debug>> {
+        let cfg: crate::models::inkling2_loop::Config = serde_json::from_str(config)?;
+        Ok(Box::new(cfg))
+    }
+    fn supports_paged_attention(&self, _config: &str) -> Result<bool> {
+        Ok(true)
+    }
+}
+
+impl IsqModelLoader for Inkling2LoopLoader {
+    fn promoted_isq_predicates(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"^model\.embed_tokens\.weight$")?,
+            Regex::new(r"^lm_head\.(weight|bias)$")?,
+        ])
+    }
+    fn isq_layer_regexes(&self, _config: &str) -> Result<Vec<Regex>> {
+        Ok(vec![
+            Regex::new(r"lm_head\.(weight|bias)$")?,
+            Regex::new(
+                r"layers\.(\d+)\.self_attn\.(q_proj|k_proj|v_proj|o_proj|gate_proj)\.weight$",
+            )?,
+            Regex::new(r"layers\.(\d+)\.self_attn\.(rel|sink_proj)\.weight$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.router\.weight$")?,
+            Regex::new(r"layers\.(\d+)\.mlp\.experts\.(gate_up_proj|down_proj)\.(weight|scale)$")?,
+        ])
+    }
+}
+
+impl DeviceMappedModelLoader for Inkling2LoopLoader {
+    fn activation_model_config(&self, config: &str) -> Result<ActivationModelConfig> {
+        let cfg: crate::models::inkling2_loop::Config = serde_json::from_str(config)?;
+        Ok(ActivationModelConfig {
+            intermediate_size: cfg.intermediate_size,
+            vocab_size: cfg.vocab_size,
+            ..Default::default()
+        })
+    }
+
+    fn non_mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        _params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let cfg: crate::models::inkling2_loop::Config = serde_json::from_str(config)?;
+        Ok(cfg.hidden_size * 2)
+    }
+
+    fn mapped_max_act_size_elems(
+        &self,
+        config: &str,
+        _params: &AutoDeviceMapParams,
+    ) -> Result<usize> {
+        let cfg: crate::models::inkling2_loop::Config = serde_json::from_str(config)?;
+        Ok(cfg.hidden_size * cfg.max_position_embeddings.min(4096))
+    }
+
+    fn non_mapped_size_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _quantization: Option<&super::AutoDeviceMapQuantization<'_>>,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<usize> {
+        let cfg: crate::models::inkling2_loop::Config = serde_json::from_str(config)?;
+        let h = cfg.hidden_size;
+        let v = cfg.vocab_size;
+        let embd_bytes = h * v * dtype.size_in_bytes();
+        let norm = h * dtype.size_in_bytes();
+        let out = h * v * dtype.size_in_bytes() / weight_pack_factor;
+        let extra = h * dtype.size_in_bytes();
+        Ok(embd_bytes + norm + out + extra)
+    }
+
+    fn layer_sizes_in_bytes(
+        &self,
+        config: &str,
+        dtype: DType,
+        weight_pack_factor: usize,
+        _matformer_config: Option<&MatformerSliceConfig>,
+    ) -> Result<Vec<usize>> {
+        let cfg: crate::models::inkling2_loop::Config = serde_json::from_str(config)?;
+        let h = cfg.hidden_size;
+        let per = (h * h * 6) * dtype.size_in_bytes() / weight_pack_factor;
+        let logical = cfg.num_hidden_layers - (cfg.loop_config.core_end - cfg.loop_config.core_start)
+            + (cfg.loop_config.core_end - cfg.loop_config.core_start) * cfg.loop_config.num_passes;
+        Ok(vec![per; logical])
+    }
+
+    fn num_layers(&self, config: &str) -> Result<usize> {
+        let cfg: crate::models::inkling2_loop::Config = serde_json::from_str(config)?;
+        let logical = cfg.num_hidden_layers - (cfg.loop_config.core_end - cfg.loop_config.core_start)
+            + (cfg.loop_config.core_end - cfg.loop_config.core_start) * cfg.loop_config.num_passes;
+        Ok(logical)
+    }
+
+    fn model_config(&self, config: &str) -> Result<Box<dyn ModelConfigLike>> {
+        let cfg: crate::models::inkling2_loop::Config = serde_json::from_str(config)?;
+        let logical = cfg.num_hidden_layers - (cfg.loop_config.core_end - cfg.loop_config.core_start)
+            + (cfg.loop_config.core_end - cfg.loop_config.core_start) * cfg.loop_config.num_passes;
+        Ok(Box::new(ModelConfigMetadata {
+            max_seq_len: cfg.max_position_embeddings,
+            num_layers: logical,
+            hidden_size: cfg.hidden_size,
+            num_kv_heads: cfg.num_key_value_heads,
+            num_attn_heads: cfg.num_attention_heads,
+            sliding_window: cfg.sliding_window,
+            k_head_dim: cfg.head_dim,
+            v_head_dim: cfg.head_dim,
+            kv_cache_layout: crate::paged_attention::KvCacheLayout::Standard,
+        }))
     }
 }
 

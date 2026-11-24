@@ -935,7 +935,8 @@ mod tests {
             | GgufTensorBinding::Affine { input, .. }
             | GgufTensorBinding::Log { input }
             | GgufTensorBinding::InverseSoftplus { input }
-            | GgufTensorBinding::Cast { input, .. } => collect_sources(input, sources),
+            | GgufTensorBinding::Cast { input, .. }
+            | GgufTensorBinding::ScaledBy { input, .. } => collect_sources(input, sources),
             GgufTensorBinding::Concat { inputs, .. }
             | GgufTensorBinding::Stack { inputs, .. }
             | GgufTensorBinding::Interleave { inputs, .. } => {

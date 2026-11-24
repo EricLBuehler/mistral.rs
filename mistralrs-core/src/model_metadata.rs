@@ -202,6 +202,11 @@ impl NormalLoaderType {
                     ex!("LiquidAI/LFM2-8B-A1B", "LFM2"),
                 ],
             },
+            Self::Inkling2Loop => ArchMetadata {
+                families: &["Inkling2"],
+                modalities: m,
+                examples: &[ex!("thinkingmachines/Inkling-2-Mini")],
+            },
         }
     }
 }
@@ -446,6 +451,7 @@ impl NormalLoaderType {
             Self::Lfm2 => "Lfm2ForCausalLM",
             Self::Lfm3 => "Lfm3ForCausalLM",
             Self::Lfm2Moe => "Lfm2MoeForCausalLM",
+            Self::Inkling2Loop => "Inkling2LoopForCausalLM",
         }
     }
 }
