@@ -1154,8 +1154,6 @@ impl NormalModel for Model {
         }
         xs = self.embedding_norm.forward(&xs)?;
 
-        let mut cache_guard = self.cache.hybrid();
-        let kv_caches: &mut [HybridLayerCache] = &mut cache_guard.caches;
         let start = self.loop_config.core_start;
         let end = self.loop_config.core_end;
         let n_passes = self.loop_config.num_passes;
@@ -1169,12 +1167,11 @@ impl NormalModel for Model {
                            blocks: &mut Vec<Tensor>,
                            msgs: Option<&[Tensor; 4]>,
                            ll: Option<&LoopLayer>,
-                           kv_caches: &mut [HybridLayerCache],
+                           kv_cache: &mut HybridLayerCache,
                            flash_params: &FlashParams,
                            attention_mask: Option<&Tensor>|
          -> Result<()> {
             let layer = &this.layers[phys];
-            let kv_cache: &mut HybridLayerCache = &mut kv_caches[phys];
             if matches!(kv_cache, HybridLayerCache::Attention(_)) {
                 let mut attn_in = cur.clone();
                 if let (Some(msgs), Some(ll)) = (msgs, ll) {
@@ -1215,6 +1212,10 @@ impl NormalModel for Model {
 
         let mut logical = 0usize;
         for phys in 0..start {
+            let mut cache_guard = self.cache.hybrid();
+            let kv_cache = cache_guard
+                .get_mut(phys)
+                .ok_or_else(|| candle_core::Error::msg(format!("hybrid cache has no layer {phys}")))?;
             build_layer(
                 self,
                 phys,
@@ -1223,7 +1224,7 @@ impl NormalModel for Model {
                 &mut blocks,
                 None,
                 None,
-                kv_caches,
+                kv_cache,
                 &flash_params,
                 None,
             )?;
@@ -1264,6 +1265,10 @@ impl NormalModel for Model {
                     None
                 };
                 let ll = layer.loop_layer.as_ref();
+                let mut cache_guard = self.cache.hybrid();
+                let kv_cache = cache_guard
+                    .get_mut(phys)
+                    .ok_or_else(|| candle_core::Error::msg(format!("hybrid cache has no layer {phys}")))?;
                 build_layer(
                     self,
                     phys,
@@ -1272,7 +1277,7 @@ impl NormalModel for Model {
                     &mut blocks,
                     msgs.as_ref(),
                     ll,
-                    kv_caches,
+                    kv_cache,
                     &flash_params,
                     None,
                 )?;
@@ -1280,6 +1285,10 @@ impl NormalModel for Model {
             }
         }
         for phys in end..self.layers.len() {
+            let mut cache_guard = self.cache.hybrid();
+            let kv_cache = cache_guard
+                .get_mut(phys)
+                .ok_or_else(|| candle_core::Error::msg(format!("hybrid cache has no layer {phys}")))?;
             build_layer(
                 self,
                 phys,
@@ -1288,7 +1297,7 @@ impl NormalModel for Model {
                 &mut blocks,
                 None,
                 None,
-                kv_caches,
+                kv_cache,
                 &flash_params,
                 None,
             )?;
