@@ -1376,3 +1376,30 @@ fn non_chunk_media_accessors_preserve_full_media() {
     assert_eq!(seq.video_hashes().unwrap().len(), 1);
     assert_eq!(seq.take_videos().unwrap().len(), 1);
 }
+
+#[test]
+fn usage_sums_completion_tokens_across_choices() {
+    let group = Arc::new(Mutex::new(SequenceGroup::new(2, false, true, None)));
+    let mut first = make_test_sequence();
+    first.caches.cache = vec![None];
+    first.group = group.clone();
+    first.response_index = 0;
+    let mut second = make_test_sequence();
+    second.caches.cache = vec![None];
+    second.group = group.clone();
+    second.response_index = 1;
+
+    for _ in 0..3 {
+        first.add_token(test_logprobs(9), Vec::new(), None);
+    }
+    for _ in 0..5 {
+        second.add_token(test_logprobs(9), Vec::new(), None);
+    }
+    first.update_time_info();
+    second.update_time_info();
+
+    let usage = second.get_mut_group().get_usage();
+    assert_eq!(usage.prompt_tokens, 8);
+    assert_eq!(usage.completion_tokens, 8);
+    assert_eq!(usage.total_tokens, 16);
+}
