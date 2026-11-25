@@ -21,7 +21,7 @@ use candle_core::Tensor;
 use rand::SeedableRng;
 use rand_isaac::Isaac64Rng;
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     fmt::Display,
     hash::{DefaultHasher, Hash, Hasher},
     ops::Range,
@@ -2012,8 +2012,20 @@ impl Sequence {
         group.total_time = prompt_time_ms.saturating_add(completion_time_ms);
         group.total_prompt_toks = self.prompt_len;
         group.total_cached_toks = self.prefix_cache_len();
-        group.total_toks = self.len();
-        group.reasoning_tokens = self.reasoning_tokens();
+        group.completion_toks_by_choice.insert(
+            self.response_index,
+            self.len().saturating_sub(self.prompt_len),
+        );
+        group.total_toks =
+            self.prompt_len + group.completion_toks_by_choice.values().sum::<usize>();
+        if let Some(reasoning) = self.reasoning_tokens() {
+            group
+                .reasoning_tokens_by_choice
+                .insert(self.response_index, reasoning);
+        }
+        let reasoning_sum: usize = group.reasoning_tokens_by_choice.values().sum();
+        group.reasoning_tokens =
+            (!group.reasoning_tokens_by_choice.is_empty()).then_some(reasoning_sum);
     }
 
     pub fn add_image_choice_to_group(&self, choice: ImageChoice) {
@@ -2445,6 +2457,8 @@ pub struct SequenceGroup {
     pub total_cached_toks: usize,
     pub total_toks: usize,
     pub reasoning_tokens: Option<usize>,
+    completion_toks_by_choice: HashMap<usize, usize>,
+    reasoning_tokens_by_choice: HashMap<usize, usize>,
     pub total_prompt_time: u128,
     pub total_time: u128,
     pub total_completion_time: u128,
@@ -2481,6 +2495,8 @@ impl SequenceGroup {
             total_cached_toks: 0,
             total_toks: 0,
             reasoning_tokens: None,
+            completion_toks_by_choice: HashMap::new(),
+            reasoning_tokens_by_choice: HashMap::new(),
             total_prompt_time: 0,
             total_time: 0,
             total_completion_time: 0,
