@@ -5,8 +5,7 @@
 //! <｜tool▁call▁begin｜>function<｜tool▁sep｜>NAME
 //! ```json
 //! {"key": "value"}
-//! ```
-//! <｜tool▁call▁end｜>
+//! ```<｜tool▁call▁end｜>
 //! ~~~
 
 use llguidance::api::{GrammarWithLexer, TopLevelGrammar};
@@ -40,7 +39,7 @@ impl ToolFormatParser for DeepSeekParser {
             .and_then(|t| t.function.strict_parameters_schema())
             .unwrap_or_else(|| json!({"type": "object"}));
 
-        let lark = r#"start: @json_body "\n```\n" <｜tool▁call▁end｜>"#.to_string();
+        let lark = r#"start: @json_body "\n```" <｜tool▁call▁end｜>"#.to_string();
         let top = GrammarWithLexer::from_lark(lark);
         let json_body = GrammarWithLexer {
             name: Some("json_body".to_string()),
@@ -63,7 +62,7 @@ impl ToolFormatParser for DeepSeekParser {
             let json_body = format!("json_body_{idx}");
             let tool_name = format!("{:?}", tool.function.name);
             rules.push(format!(
-                r#"{branch}: <｜tool▁call▁begin｜> "function" <｜tool▁sep｜> {tool_name} "\n```json\n" @{json_body} "\n```\n" <｜tool▁call▁end｜>"#
+                r#"{branch}: <｜tool▁call▁begin｜> "function" <｜tool▁sep｜> {tool_name} "\n```json\n" @{json_body} "\n```" <｜tool▁call▁end｜>"#
             ));
             branches.push(branch);
             grammars.push(GrammarWithLexer {
@@ -80,7 +79,7 @@ impl ToolFormatParser for DeepSeekParser {
         if branches.is_empty() {
             branches.push("deepseek_tool".to_string());
             rules.push(
-                r#"deepseek_tool: <｜tool▁call▁begin｜> "function" <｜tool▁sep｜> /[a-zA-Z_][a-zA-Z0-9_]*/ "\n```json\n" @json_body "\n```\n" <｜tool▁call▁end｜>"#
+                r#"deepseek_tool: <｜tool▁call▁begin｜> "function" <｜tool▁sep｜> /[a-zA-Z_][a-zA-Z0-9_]*/ "\n```json\n" @json_body "\n```" <｜tool▁call▁end｜>"#
                     .to_string(),
             );
             grammars.push(GrammarWithLexer {
@@ -103,7 +102,7 @@ impl ToolFormatParser for DeepSeekParser {
     fn parse(&self, message: &str) -> candle_core::Result<Option<String>> {
         let re = DEEPSEEK_REGEX.get_or_init(|| {
             Regex::new(
-                r"(?s)<｜tool▁call▁begin｜>function<｜tool▁sep｜>(?P<name>[^\n]+)\n```json\n(?P<json>.+?)\n```<｜tool▁call▁end｜>",
+                r"(?s)<｜tool▁call▁begin｜>function<｜tool▁sep｜>(?P<name>[^\n]+)\n```json\n(?P<json>.+?)\n```\n?<｜tool▁call▁end｜>",
             )
             .unwrap()
         });
@@ -152,4 +151,51 @@ fn extract_deepseek_tool_name(text: &str) -> Option<&str> {
     let after_sep = &text[sep_pos + sep.len()..];
     let name_end = after_sep.find('\n')?;
     Some(after_sep[..name_end].trim())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DeepSeekParser;
+    use crate::tools::parsers::{extract_model_specific_message, ToolFormatParser};
+
+    #[test]
+    fn parses_chat_template_format() {
+        let message = "<｜tool▁call▁begin｜>function<｜tool▁sep｜>get_weather\n```json\n{\"city\":\"Paris\"}\n```<｜tool▁call▁end｜>";
+        let parsed = DeepSeekParser.parse(message).unwrap().unwrap();
+
+        assert_eq!(
+            parsed,
+            r#"[{"name":"get_weather","arguments":{"city":"Paris"}}]"#
+        );
+    }
+
+    #[test]
+    fn parses_newline_before_call_end() {
+        let message = "before<｜tool▁call▁begin｜>function<｜tool▁sep｜>get_weather\n```json\n{\"city\":\"Paris\"}\n```\n<｜tool▁call▁end｜>";
+        let (calls, content) = extract_model_specific_message(message).unwrap().unwrap();
+
+        assert_eq!(
+            calls,
+            r#"[{"name":"get_weather","arguments":{"city":"Paris"}}]"#
+        );
+        assert_eq!(content, "before");
+    }
+
+    #[test]
+    fn grammars_close_fence_like_the_chat_template() {
+        let tools = Vec::new();
+        let continuation = DeepSeekParser.tool_call_grammar(
+            &tools,
+            "<｜tool▁call▁begin｜>function<｜tool▁sep｜>search\n```json\n",
+        );
+        let required = DeepSeekParser.required_tool_call_grammar(&tools);
+
+        for grammar in [continuation, required] {
+            let lark = grammar.grammars[0].lark_grammar.as_ref().unwrap();
+            assert!(
+                lark.contains("@json_body \"\\n```\" <｜tool▁call▁end｜>"),
+                "{lark}"
+            );
+        }
+    }
 }
