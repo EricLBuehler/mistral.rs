@@ -218,7 +218,12 @@ fn parse_gemma4_object(s: &str) -> std::result::Result<Value, String> {
     let inner = s
         .strip_prefix('{')
         .and_then(|s| s.strip_suffix('}'))
-        .ok_or_else(|| format!("Expected object braces: {}", &s[..s.len().min(50)]))?
+        .ok_or_else(|| {
+            format!(
+                "Expected object braces: {}",
+                &s[..s.floor_char_boundary(50)]
+            )
+        })?
         .trim();
 
     if inner.is_empty() {
@@ -237,7 +242,7 @@ fn parse_gemma4_object(s: &str) -> std::result::Result<Value, String> {
         let colon = find_colon_outside_strings(token).ok_or_else(|| {
             format!(
                 "Missing ':' in key-value pair: {}",
-                &token[..token.len().min(80)]
+                &token[..token.floor_char_boundary(80)]
             )
         })?;
 
@@ -262,7 +267,12 @@ fn parse_gemma4_array(s: &str) -> std::result::Result<Value, String> {
     let inner = s
         .strip_prefix('[')
         .and_then(|s| s.strip_suffix(']'))
-        .ok_or_else(|| format!("Expected array brackets: {}", &s[..s.len().min(50)]))?
+        .ok_or_else(|| {
+            format!(
+                "Expected array brackets: {}",
+                &s[..s.floor_char_boundary(50)]
+            )
+        })?
         .trim();
 
     if inner.is_empty() {
@@ -580,6 +590,17 @@ mod tests {
         assert_eq!(val["age"], 30);
         assert_eq!(val["active"], true);
         assert_eq!(val["data"]["score"], 9.5);
+    }
+
+    #[test]
+    fn malformed_args_with_multibyte_text_error_instead_of_panicking() {
+        // error snippets are cut at 50 / 80 bytes, which lands inside the 2-byte char here
+        let missing_colon = format!("{}\u{e9}", "a".repeat(79));
+        let unclosed_object = format!("key:{{{}\u{e9}", "a".repeat(48));
+        let unclosed_array = format!("key:[{}\u{e9}", "a".repeat(48));
+        for raw in [missing_colon, unclosed_object, unclosed_array] {
+            assert!(gemma4_args_to_json(&raw).is_err(), "{raw}");
+        }
     }
 
     #[test]
