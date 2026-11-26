@@ -386,8 +386,8 @@ fn find_matching_delimiter(s: &str, start: usize, open: u8, close: u8) -> Option
 
         match ch {
             '"' | '\'' => quote = Some(ch),
-            ch if ch as u8 == open => depth += 1,
-            ch if ch as u8 == close => {
+            ch if ch == open as char => depth += 1,
+            ch if ch == close as char => {
                 depth -= 1;
                 if depth == 0 {
                     return Some(idx);
@@ -479,6 +479,19 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].function.name, "get_weather");
         assert_eq!(calls[0].function.arguments, r#"{"location":"Paris"}"#);
+    }
+
+    #[test]
+    fn parses_unquoted_non_ascii_values() {
+        // U+0428 and U+0429 truncate to `(` and `)` when cast to u8
+        for value in ["\u{0429}", "\u{0428}"] {
+            let message = format!("<|tool_call_start|>[lookup(name={value})]<|tool_call_end|>");
+            let parsed = LiquidParser.parse(&message).unwrap().unwrap();
+            let parsed: Vec<CalledFunctionParameters> = serde_json::from_str(&parsed).unwrap();
+
+            assert_eq!(parsed[0].name, "lookup");
+            assert_eq!(parsed[0].parameters["name"], value);
+        }
     }
 
     #[test]
